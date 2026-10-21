@@ -1,0 +1,8 @@
+[
+  {
+    "name": "day6-current-100000-rerun",
+    "argv": [".venv/bin/python", "scripts/benchmark_day6_append.py", "--count", "100000", "--root", "/private/tmp/memfw-day6/perf/day6-100000-rerun", "--label", "day6-current-100000-rerun"],
+    "cwd": "<REPO_ROOT>",
+    "process_slots": 1
+  }
+]

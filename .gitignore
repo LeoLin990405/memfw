@@ -1,0 +1,77 @@
+# Local environments and generated caches
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local/private datasets and runtime outputs
+/localdata/
+/logs/
+/data/
+/datasets/
+/private/
+/vault/
+/vaults/
+**/vault/
+**/vaults/
+
+# Model weights, runtime caches, and generated artifacts
+/models/
+/model_cache/
+model_cache/
+.cache/
+**/.cache/
+*.safetensors
+*.gguf
+*.bin
+*.pt
+*.pth
+*.onnx
+
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*credentials*
+*secrets*
+
+# Sensitive local pilot inputs and generated vaults
+/pilot-vault/
+/pilot_vault/
+/memfw-data/
+**/pilot_vault/
+**/memories/
+/pilot_queries*.md
+/query_approval.json
+/events.jsonl
+/events.state.json
+
+# Non-reproducible report bundles and runtime traces
+/reports/*.zip
+/reports/*.tar
+/reports/*.tar.*
+/reports/*.gz
+/reports/*.log
+/reports/*.out
+/reports/*.time
+/reports/day6_runs/
+
+# Private pilot reports kept locally only
+reports/day8_pilot_report.md
+reports/day8_report.md
+reports/day9_report.md
+reports/portfolio_delivery.md
+reports/query_repair_status.md
+reports/query_repair_validation.txt
+# Large artifacts published as GitHub Release data-v1
+reports/day3_synthetic.jsonl
+reports/day3_synthetic.capture.jsonl
+reports/day7_official.json
+/docs/public_release_checklist.md

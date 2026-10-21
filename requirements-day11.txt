@@ -1,0 +1,2 @@
+# Pinned Mem0 version for the Day 11 local baseline (installed in .venv via uv).
+mem0ai==2.2.1

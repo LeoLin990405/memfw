@@ -1,0 +1,13 @@
+title = "memfw gitleaks config"
+
+[extend]
+useDefault = true
+
+# SHA-256 digests (64 lowercase hex) recorded under hash/file-name keys in reports and
+# CHANGE_MEMORY.jsonl are content checksums, not credentials.
+[[allowlists]]
+description = "SHA-256 content digests under hash or file-name JSON keys"
+regexTarget = "match"
+regexes = [
+  '''(?i)[a-z0-9_./-]*(sha256|_hash|digest|accesses|\.py|\.jsonl?|\.md|\.txt|\.log)"\s*:\s*"[0-9a-f]{64}"''',
+]

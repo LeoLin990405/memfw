@@ -1,0 +1,473 @@
+{
+  "algorithm": "sha256(concatenate(relative_posix_path + NUL + per_file_sha256_hex + LF))",
+  "archive": "reports/day7_day6_source.zip",
+  "archive_sha256": "e6e30107cabd73c9930a8a9babc48bfc71cd9365ea97349e8d2d4ab836aac8d4",
+  "capsule_tree_sha256": "c4f37e5b1ef240b95549cfb4e8af15151e0f903e92706940743d1ee1938f8db6",
+  "created_utc": "2026-10-18T11:53:08Z",
+  "file_count": 92,
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "size_bytes": 11358
+    },
+    {
+      "path": "README.md",
+      "sha256": "5fbf0c988d3ea2088657c0d8b65fb9f61d0dfe4508460e12fea76ac5f0e8b594",
+      "size_bytes": 61864
+    },
+    {
+      "path": "SOURCE_MANIFEST.json",
+      "sha256": "59eb19728ee24fb9fb6f73d41b92bf126076ed93ebde4b3d12662d734d56b51b",
+      "size_bytes": 27969
+    },
+    {
+      "path": "pyproject.toml",
+      "sha256": "5452808ee41cb49608f1fbd572b90e6379a21213f9c28909740ff161d65e3a78",
+      "size_bytes": 873
+    },
+    {
+      "path": "scripts/benchmark_day6_append.py",
+      "sha256": "eafe7e348ef3fb8f7cdcbe8d694a36389fa3a6559bcd77e6a436a69bdbdde780",
+      "size_bytes": 3027
+    },
+    {
+      "path": "scripts/compare_day6_matrices.py",
+      "sha256": "dfdd1c3da270ea1289e9124d08196314c667ca546537097f9c1f452b03656931",
+      "size_bytes": 1810
+    },
+    {
+      "path": "scripts/correct_locomo_baselines.py",
+      "sha256": "afa1c86c39e5bfe36b730c447947ed8cfe243d05a1e2ef0f84468b5cf1f1c9a3",
+      "size_bytes": 12658
+    },
+    {
+      "path": "scripts/day3_experiment.py",
+      "sha256": "051918f2806e6db079a808cf164ad098b423b770f9bb6811a248bd29f1094262",
+      "size_bytes": 27631
+    },
+    {
+      "path": "scripts/day4_experiment.py",
+      "sha256": "4de62a92e3189c8014c64ec1a20f5790bf8bd042f7da0135d3d140b157244768",
+      "size_bytes": 22072
+    },
+    {
+      "path": "scripts/day4_quick.py",
+      "sha256": "8307e7be588eb5da056669298dd0b843a1ddb379c4a4fccd36a7f0b1b5946afa",
+      "size_bytes": 2889
+    },
+    {
+      "path": "scripts/day4_storage_matrix.py",
+      "sha256": "0cb4ea494144d42b9d88ebce54940285050a12933bd71bd0c7ea39eeb049c539",
+      "size_bytes": 7906
+    },
+    {
+      "path": "scripts/day4_storage_probe.py",
+      "sha256": "11d9fefd33509f7f0da703a5309dc26c05cbc6c8376be2e3f528fc006ab25ffb",
+      "size_bytes": 6431
+    },
+    {
+      "path": "scripts/day5_experiment.py",
+      "sha256": "97f1bcb8fede370070af08d1afd375016d694d37a84c543b556c011011d334c8",
+      "size_bytes": 16136
+    },
+    {
+      "path": "scripts/day5_storage_matrix.py",
+      "sha256": "10d1daf63014fe8536305a1e4a8663007bda78dad65c6402d654f9d556d7f676",
+      "size_bytes": 27525
+    },
+    {
+      "path": "scripts/day5_storage_probe.py",
+      "sha256": "19ea050f6a0f5bab87daaf9ffba7979c31e55b22589fad70d00dbe29aecbf477",
+      "size_bytes": 12977
+    },
+    {
+      "path": "scripts/day6_capture_scan.py",
+      "sha256": "3ace7ef75544d7b06b778381a2c3a368fabefd76e6ca69dd0bfd6fb6a78492ff",
+      "size_bytes": 11716
+    },
+    {
+      "path": "scripts/day6_rho_diagnostic.py",
+      "sha256": "a1da0e2e5de65110306f9cc9985212a34451305d8f32b1d54cd83d61e889f2c3",
+      "size_bytes": 4714
+    },
+    {
+      "path": "scripts/day6_statistics.py",
+      "sha256": "b7038839485d21b270af3b9c3376c83a7e94d8570688e644f1a021a9a985bc35",
+      "size_bytes": 2658
+    },
+    {
+      "path": "scripts/day6_tail_compare.py",
+      "sha256": "01eace3f9a3e6ae88625e2646744aed79ba4b0e5e970e127077b626b59bbcf46",
+      "size_bytes": 2470
+    },
+    {
+      "path": "scripts/eval_locomo.py",
+      "sha256": "a5e2c47ec151242816a8f66c143735cecd3b09b6f62710b6fe17680b99c4a3b4",
+      "size_bytes": 36163
+    },
+    {
+      "path": "scripts/gen_day4.py",
+      "sha256": "b12790b36c5c9dd7f694fd8b3e5bb31291f4028c27d7ed39dce811460dc16aba",
+      "size_bytes": 8094
+    },
+    {
+      "path": "scripts/gen_day5.py",
+      "sha256": "f6f7d19aaba750091c958805d6157c0c732365b0f08baa088b2ddd9cb95a537c",
+      "size_bytes": 14897
+    },
+    {
+      "path": "scripts/gen_synthetic.py",
+      "sha256": "1d645b0ce61aa320c0831dc355bb382b3b89220b999845da87ef42ed2ae1632f",
+      "size_bytes": 12703
+    },
+    {
+      "path": "scripts/run_day6_jobs.py",
+      "sha256": "c9992685b8f8474f953280deb4f74d7b10a6ef5092b5be1ceece4329b04471c1",
+      "size_bytes": 14141
+    },
+    {
+      "path": "scripts/synthetic_experiment.py",
+      "sha256": "6765f62d41f58f70f51b66d2fba04bf5fed0bd015886552a41f4b1b1e08ab224",
+      "size_bytes": 7551
+    },
+    {
+      "path": "src/memfw/__init__.py",
+      "sha256": "17d85041a73004580f2f4d5183e65c3401566376b19b468c392a1f2ecd95b78f",
+      "size_bytes": 68
+    },
+    {
+      "path": "src/memfw/agents/__init__.py",
+      "sha256": "8fef3bd5ce6a993bbe3caef11d39b82e7531b8df88bb3675ed2eed1d2053fa09",
+      "size_bytes": 17081
+    },
+    {
+      "path": "src/memfw/agents/models.py",
+      "sha256": "277c436f73d841a741c7e5d9275f359802235453d35f6984ed09956c3e63a6c3",
+      "size_bytes": 5301
+    },
+    {
+      "path": "src/memfw/budget/__init__.py",
+      "sha256": "70df0f84972b1fff1e2d0e2238578fdc12b52af4fb7986273a92d3b8a5e3dbce",
+      "size_bytes": 2538
+    },
+    {
+      "path": "src/memfw/capture/__init__.py",
+      "sha256": "1cfb48245685f14f4f2e4cf6e2d56924592d146d5080a4060994d4bc9c23c0b7",
+      "size_bytes": 38471
+    },
+    {
+      "path": "src/memfw/capture/cli.py",
+      "sha256": "f8fe5243c52997ff8543b479efe51f8b024eff87a412d3f3010374be23ad9849",
+      "size_bytes": 8419
+    },
+    {
+      "path": "src/memfw/capture/confirm.py",
+      "sha256": "a2978b47bc9bbdefcdc5d96b343703684ca70ab82097653939d50fd9afd75485",
+      "size_bytes": 9446
+    },
+    {
+      "path": "src/memfw/capture/state_machine.py",
+      "sha256": "4707029a90867f9f9a2c30bd5c353913eadb75cb942af784edb639eb381ccac2",
+      "size_bytes": 410
+    },
+    {
+      "path": "src/memfw/cli.py",
+      "sha256": "94fc46179c070ed3cbb8fd169d98ffd89c972de8a700c273901517c19c30947e",
+      "size_bytes": 28861
+    },
+    {
+      "path": "src/memfw/core/common.py",
+      "sha256": "d6f0a047f7bfc101e08760aa8562103b0e2fe2fabad4b17edea53656b614f329",
+      "size_bytes": 193
+    },
+    {
+      "path": "src/memfw/core/context.py",
+      "sha256": "71e275a02a1c298fbcdc662e0ecb8ea807a7664045f96d8fead109c3fc5f89a7",
+      "size_bytes": 6286
+    },
+    {
+      "path": "src/memfw/core/errors.py",
+      "sha256": "2b9f95ed5db14f2039b30b5675b8cdbe8a25a3732a4b4767c7ee18f134c9734b",
+      "size_bytes": 234
+    },
+    {
+      "path": "src/memfw/core/models.py",
+      "sha256": "8d0b2747e4e9a8714478e44891abe5e022e7e36ef19b51ab702189cd84a0454d",
+      "size_bytes": 3616
+    },
+    {
+      "path": "src/memfw/core/policies.py",
+      "sha256": "bdd518912f637e163b75de5601419aefd20df56c41450b498371926784820a7e",
+      "size_bytes": 932
+    },
+    {
+      "path": "src/memfw/core/repository.py",
+      "sha256": "ef16e04eeeece0b4561360ada036a2e0a353c168ff61fb4254b4a3670a84a153",
+      "size_bytes": 47741
+    },
+    {
+      "path": "src/memfw/curation/__init__.py",
+      "sha256": "5da2b6d62a1d621b8c99fa30a4050897fd104d501c05076473eab4411dd05cd8",
+      "size_bytes": 270
+    },
+    {
+      "path": "src/memfw/curation/engine.py",
+      "sha256": "4ffee69979655f07ccfa1d33238a73cba6e5c96a7c1dca4fe9f913fb57f5a722",
+      "size_bytes": 45784
+    },
+    {
+      "path": "src/memfw/curation/review.py",
+      "sha256": "81af80c55bf0a67c443ca703e13f1d6a752ceae0650124efa6766d9c9ff38e59",
+      "size_bytes": 17822
+    },
+    {
+      "path": "src/memfw/curation/review_cli.py",
+      "sha256": "345d33c541535a5ee65e9b31d4723718bbc6f9b58f6a06c805f01e5f7dcd2abd",
+      "size_bytes": 6810
+    },
+    {
+      "path": "src/memfw/export/__init__.py",
+      "sha256": "1e252ea74dc365077793e400e034e9164432f9d7bdeabc17fb52992edd2a60a9",
+      "size_bytes": 211
+    },
+    {
+      "path": "src/memfw/index/__init__.py",
+      "sha256": "2d89be363db29e92202486a08b7fb2128cc4ee2e9420d592cf059e61399e0582",
+      "size_bytes": 9667
+    },
+    {
+      "path": "src/memfw/knowledge/__init__.py",
+      "sha256": "b3c36f3ecf97a69f022828367b8942d22ffa8e617f645f75179de1542c2dd411",
+      "size_bytes": 13726
+    },
+    {
+      "path": "src/memfw/layers/__init__.py",
+      "sha256": "ba96bf27fc3fa48428bc9a391f64b08161e233de4c4a9e44c093aecaab5820c2",
+      "size_bytes": 2029
+    },
+    {
+      "path": "src/memfw/log/__init__.py",
+      "sha256": "be7f2973b2de374358903151d45f53cb3ebd48f9a9f3899c891c033ace90f093",
+      "size_bytes": 2471
+    },
+    {
+      "path": "src/memfw/log/store.py",
+      "sha256": "ccf1c9f8061d033b998e7676a442e25eb8d4bb6167a5abee2f471fe5f894d77e",
+      "size_bytes": 50622
+    },
+    {
+      "path": "src/memfw/permissions/__init__.py",
+      "sha256": "c31dbc450a99efe591eaf095645d4418a5f6dd2bf95ca29855fdc035d1513b5c",
+      "size_bytes": 1643
+    },
+    {
+      "path": "src/memfw/policies/__init__.py",
+      "sha256": "8d125fc53e19b1cecc885bc6159363a17a926b513640e9c9773a605a4c610c25",
+      "size_bytes": 18818
+    },
+    {
+      "path": "src/memfw/retrieval/__init__.py",
+      "sha256": "0b36195ebbf0280e5e7b358cc57e6dbc7fc3255818c0f77df099612aad185c16",
+      "size_bytes": 2583
+    },
+    {
+      "path": "src/memfw/stats/__init__.py",
+      "sha256": "e4f2bc375c6b83e6009675a5f1946ff6fbcc9f8a4f956f1f07a97dc5b200e9e6",
+      "size_bytes": 6513
+    },
+    {
+      "path": "src/memfw/stats/keyness.py",
+      "sha256": "f61ec4043c699916cb1fd8e8d4ad78c8cfd55fad7a4adbc185e153b17306601e",
+      "size_bytes": 8330
+    },
+    {
+      "path": "src/memfw/stats/runtime.py",
+      "sha256": "e58003b9656296f3590aa5d198893dd0c779a0b6d9f9f89346f560b37f085fae",
+      "size_bytes": 4322
+    },
+    {
+      "path": "src/memfw/stats/tail_fit.py",
+      "sha256": "a07c5f7ab4020803a5b4cceda4bac0a9de5d01b2b32ef4d0c750524ea1610ecd",
+      "size_bytes": 13188
+    },
+    {
+      "path": "src/memfw/storage/__init__.py",
+      "sha256": "a90ae814b3a3730e696d1c441084eba2b4b74655f31ebc6d354e6ac21b17bf4c",
+      "size_bytes": 3166
+    },
+    {
+      "path": "src/memfw/storage/markdown.py",
+      "sha256": "bd492c1aef333abb115a4d3696e53c442f7d3b95eb6b206a10715cdc81de4b61",
+      "size_bytes": 18508
+    },
+    {
+      "path": "src/memfw/storage/operations.py",
+      "sha256": "d99857cf47e2e27dd9e634b6655d40e4c7ab39f0a929d03b4e16c5a00570b86c",
+      "size_bytes": 34790
+    },
+    {
+      "path": "src/memfw/storage/transactions.py",
+      "sha256": "a481f480e437fb89bf670e5137179e0d36ee80f00f13c325799247afd3bf85dc",
+      "size_bytes": 21654
+    },
+    {
+      "path": "src/memfw/tiers/__init__.py",
+      "sha256": "f187a8e77ce0002ceb4046e598661fd917755d0f7a6f79e20f2b116a1162c533",
+      "size_bytes": 7978
+    },
+    {
+      "path": "tests/conftest.py",
+      "sha256": "b6f0c20ef048d533cd3f78d5dc779af43caee49db36df1529ec4b052b31ac81e",
+      "size_bytes": 572
+    },
+    {
+      "path": "tests/test_capture.py",
+      "sha256": "b2baea5eb12b0f4f46c5de5f1dbdcb3059f8ea0933007e55878a6c11edb795a8",
+      "size_bytes": 17987
+    },
+    {
+      "path": "tests/test_cli_day2.py",
+      "sha256": "d4425c00279daa2e01d192eb09950ececb00da8829a620834d6388d68a21a380",
+      "size_bytes": 12494
+    },
+    {
+      "path": "tests/test_day2.py",
+      "sha256": "61a745e7462b77e143c333ebb524a83159565428422bbeab8b0ea93a3a277bfd",
+      "size_bytes": 25504
+    },
+    {
+      "path": "tests/test_day3_budget.py",
+      "sha256": "2c4b8d662654710c88d17f3de4fb198a0f74ee97108036972a95903be89e0bd5",
+      "size_bytes": 7064
+    },
+    {
+      "path": "tests/test_day4_experiment_determinism.py",
+      "sha256": "6f29a66c0632890cb2d05b90d1c9ad3207344551f1368693efba1fb88d7cbc69",
+      "size_bytes": 1106
+    },
+    {
+      "path": "tests/test_day4_experiment_generator.py",
+      "sha256": "8c3b3f874927cb3171ae75144a008cfbe7f5c3d7f56f822e8ea2fa594dabb0a1",
+      "size_bytes": 4616
+    },
+    {
+      "path": "tests/test_day4_experiment_locomo.py",
+      "sha256": "c410d55bad57b0b0ab33bf607efe1a862f76770a3d73008872572eb5d9e6c179",
+      "size_bytes": 3347
+    },
+    {
+      "path": "tests/test_day4_experiment_storage.py",
+      "sha256": "6ebfcc05d58e1c62f7c1cdb80738efbab5a7dc0f812a50a02ad7f0d39e29b702",
+      "size_bytes": 1053
+    },
+    {
+      "path": "tests/test_day4_storage.py",
+      "sha256": "ae59a15f731d81b0d261f48258d683298e047f9c160af621518777f3791072a5",
+      "size_bytes": 29952
+    },
+    {
+      "path": "tests/test_day5_generator.py",
+      "sha256": "5cce5ffd73d840299199a4e787c4600b61fbc5976c9ea79463b26701c137b076",
+      "size_bytes": 1599
+    },
+    {
+      "path": "tests/test_day5_locomo.py",
+      "sha256": "3b6debc56adbc4614374522e20999f744787913e955f3ff9e76a8ffcf6f6d109",
+      "size_bytes": 10910
+    },
+    {
+      "path": "tests/test_day5_storage_probe.py",
+      "sha256": "10edcf75f94433e2564f73889a03b74e2095820b19775dd4e054c0ea0b58b969",
+      "size_bytes": 2525
+    },
+    {
+      "path": "tests/test_day6_capture.py",
+      "sha256": "74bcc756506af13124b95b77ad9f89fac2b9c3e4ffcbfaf3dc352dcab863c425",
+      "size_bytes": 1184
+    },
+    {
+      "path": "tests/test_day6_core.py",
+      "sha256": "94490c4e6cfdbf77c2aeb4c2ecf57d3da65d15b504665ef311fd36f7fcd3b159",
+      "size_bytes": 24246
+    },
+    {
+      "path": "tests/test_day6_matrix.py",
+      "sha256": "ce9ad17407c6bf49f1d8b251f75d18b5749c5eda7a1a3fc90996be226d91d476",
+      "size_bytes": 2786
+    },
+    {
+      "path": "tests/test_day6_rho_diagnostic.py",
+      "sha256": "9d9b341893235825103896fcefda190a67d25e8ca4a5b50d6a7760897bb559b6",
+      "size_bytes": 1501
+    },
+    {
+      "path": "tests/test_day6_runner.py",
+      "sha256": "8743e6a3425a98cb20ab16f07f10657252e98ae1a616fae0d348912ac536a537",
+      "size_bytes": 3380
+    },
+    {
+      "path": "tests/test_day6_statistics.py",
+      "sha256": "67e01cc21e866639b2de15cebaa6956f4837c44948a51e380ae90ac23dfd5875",
+      "size_bytes": 2783
+    },
+    {
+      "path": "tests/test_index.py",
+      "sha256": "8901eea534a181c0f9e21766e8fbba0c7581d57daa96816f481f0337c894148e",
+      "size_bytes": 7339
+    },
+    {
+      "path": "tests/test_judges.py",
+      "sha256": "acef0f474706b4bb20797db8fbd1de13005d9dc8398cfe8b8593fcaf79c3143b",
+      "size_bytes": 6453
+    },
+    {
+      "path": "tests/test_keyness.py",
+      "sha256": "fd9a2675b9db7856651ba96a642c6e5eda7c8b9bbdf5739ac178c443c089283e",
+      "size_bytes": 5724
+    },
+    {
+      "path": "tests/test_knowledge_store.py",
+      "sha256": "37f379b996a27ac4f375f0d254cfb2546e00a1c13858247b74782c331b0e4720",
+      "size_bytes": 6239
+    },
+    {
+      "path": "tests/test_policies.py",
+      "sha256": "38b4c1e7f25b0f1f8be7b358a2620f58d8b832cfb9cca7d06197a9e72eca3b07",
+      "size_bytes": 10585
+    },
+    {
+      "path": "tests/test_repairs.py",
+      "sha256": "6116296f260c2272491c66556e792842d899c69cfb0e789bd33e7805bf713ccf",
+      "size_bytes": 29956
+    },
+    {
+      "path": "tests/test_review.py",
+      "sha256": "a62c18d91349a427c1e7699fc3ba36996c01c932056a4e02e4adda8251505ad9",
+      "size_bytes": 17188
+    },
+    {
+      "path": "tests/test_synthetic.py",
+      "sha256": "bd4ea0064104a9634fcb29b5d4a2809de6a18b67811a59e65d446ca7dee9d679",
+      "size_bytes": 4944
+    },
+    {
+      "path": "tests/test_tail_fit.py",
+      "sha256": "b8ed35ad56a9e3bc19a76f73c533e172614e52358126122ef611cb34f07385fd",
+      "size_bytes": 3058
+    },
+    {
+      "path": "tests/test_vault.py",
+      "sha256": "bfce61e3f2a773ebda1a2803ac3132472485a433c21bc3cf53b651c5fb6e5770",
+      "size_bytes": 11655
+    },
+    {
+      "path": "uv.lock",
+      "sha256": "a1d0800f708e4780e12affc611fe931c324afccb1922204a28eab96767001eeb",
+      "size_bytes": 169535
+    }
+  ],
+  "included_scope": "src/**/*.py, scripts/**/*.py, tests/**/*.py, pyproject.toml, uv.lock, LICENSE, README.md, SOURCE_MANIFEST.json; no datasets or reports beyond the source manifest.",
+  "purpose": "Day 7 baseline capsule of the exact Day 6 code, tests, dependency definitions, README, and source manifest before Day 7 gating changes.",
+  "source_tree_sha256": "8d7d9f79472d76a7c72a48006b6e53baa3bfcbe99e502483c0377262c5389af6"
+}

@@ -1,0 +1,133 @@
+{
+  "command": {
+    "code": "import hashlib,json,sys\nfrom datetime import UTC,datetime\nfrom pathlib import Path\nfrom memfw.core.repository import Repository\nfrom memfw.curation.engine import enforce_budget\nroot=Path(sys.argv[1])\nsequence=iter(range(1,10000))\nrepo=Repository(root,clock=lambda: datetime(2026,10,18,tzinfo=UTC),id_factory=lambda:f\"control-event-{next(sequence):05d}\")\nrepo.init()\nfor index in range(20):\n    repo.add(f\"memory {index:02d}\",f\"small body {index:02d}\",memory_id=f\"control-{index:02d}\")\nconfig=repo.read_config()\nconfig.update(budget_mode=\"total\",max_count=10,max_bytes=1000000,forget_policy=\"fifo\",forget_action=\"hard\",budget_scope=\"all\",log_keep_recent=5)\nrepo.configure(config)\nresult=enforce_budget(repo)\nrepo.compact_log(keep_recent=5)\nfiles={path.relative_to(root).as_posix():hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(root.rglob(\"*\")) if path.is_file()}\nprint(json.dumps({\"module\":str(Path(__import__(\"memfw.curation.engine\",fromlist=[\"x\"]).__file__).resolve()),\"remaining_ids\":sorted(document.id for document in repo.list()),\"applied_ids\":list(result.applied_ids),\"satisfied\":result.satisfied_after_apply,\"files\":files},sort_keys=True))\n",
+    "current_argv": [
+      ".venv/bin/python",
+      "-c",
+      "import hashlib,json,sys\nfrom datetime import UTC,datetime\nfrom pathlib import Path\nfrom memfw.core.repository import Repository\nfrom memfw.curation.engine import enforce_budget\nroot=Path(sys.argv[1])\nsequence=iter(range(1,10000))\nrepo=Repository(root,clock=lambda: datetime(2026,10,18,tzinfo=UTC),id_factory=lambda:f\"control-event-{next(sequence):05d}\")\nrepo.init()\nfor index in range(20):\n    repo.add(f\"memory {index:02d}\",f\"small body {index:02d}\",memory_id=f\"control-{index:02d}\")\nconfig=repo.read_config()\nconfig.update(budget_mode=\"total\",max_count=10,max_bytes=1000000,forget_policy=\"fifo\",forget_action=\"hard\",budget_scope=\"all\",log_keep_recent=5)\nrepo.configure(config)\nresult=enforce_budget(repo)\nrepo.compact_log(keep_recent=5)\nfiles={path.relative_to(root).as_posix():hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(root.rglob(\"*\")) if path.is_file()}\nprint(json.dumps({\"module\":str(Path(__import__(\"memfw.curation.engine\",fromlist=[\"x\"]).__file__).resolve()),\"remaining_ids\":sorted(document.id for document in repo.list()),\"applied_ids\":list(result.applied_ids),\"satisfied\":result.satisfied_after_apply,\"files\":files},sort_keys=True))\n",
+      "/private/tmp/day6-total-guard-current-20261018"
+    ],
+    "current_environment": {
+      "PYTHONPATH": "src"
+    },
+    "patched_argv": [
+      ".venv/bin/python",
+      "-c",
+      "import hashlib,json,sys\nfrom datetime import UTC,datetime\nfrom pathlib import Path\nfrom memfw.core.repository import Repository\nfrom memfw.curation.engine import enforce_budget\nroot=Path(sys.argv[1])\nsequence=iter(range(1,10000))\nrepo=Repository(root,clock=lambda: datetime(2026,10,18,tzinfo=UTC),id_factory=lambda:f\"control-event-{next(sequence):05d}\")\nrepo.init()\nfor index in range(20):\n    repo.add(f\"memory {index:02d}\",f\"small body {index:02d}\",memory_id=f\"control-{index:02d}\")\nconfig=repo.read_config()\nconfig.update(budget_mode=\"total\",max_count=10,max_bytes=1000000,forget_policy=\"fifo\",forget_action=\"hard\",budget_scope=\"all\",log_keep_recent=5)\nrepo.configure(config)\nresult=enforce_budget(repo)\nrepo.compact_log(keep_recent=5)\nfiles={path.relative_to(root).as_posix():hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(root.rglob(\"*\")) if path.is_file()}\nprint(json.dumps({\"module\":str(Path(__import__(\"memfw.curation.engine\",fromlist=[\"x\"]).__file__).resolve()),\"remaining_ids\":sorted(document.id for document in repo.list()),\"applied_ids\":list(result.applied_ids),\"satisfied\":result.satisfied_after_apply,\"files\":files},sort_keys=True))\n",
+      "/private/tmp/day6-total-guard-patched-20261018"
+    ],
+    "patched_environment": {
+      "PYTHONPATH": "/private/tmp/day6-total-fix-validation/src"
+    }
+  },
+  "comparison": {
+    "all_relative_file_paths_and_sha256_match": true,
+    "current_only_paths": [],
+    "different_paths": [],
+    "file_count": 16,
+    "patched_only_paths": []
+  },
+  "match": true,
+  "purpose": "zero-knowledge control: total hard budget without knowledge cards",
+  "source_hashes": {
+    "control_code_sha256": "e7dca281368f012bc884e86f188dc908b676c66dcd3ec22c3e61620b53be3ca2",
+    "current_unpatched_engine_sha256": "3410ad217a33182f485e07b5556dd320bea375ac6c02d02728ca46a9d1370ba7",
+    "isolated_patched_engine_sha256": "4ffee69979655f07ccfa1d33238a73cba6e5c96a7c1dca4fe9f913fb57f5a722"
+  },
+  "vaults": {
+    "current": {
+      "applied_ids": [
+        "control-00",
+        "control-01",
+        "control-02",
+        "control-03",
+        "control-04",
+        "control-05",
+        "control-06",
+        "control-07",
+        "control-08",
+        "control-09"
+      ],
+      "files": {
+        ".log/catalog.json": "94108c7e4f5ddad3c873c537839d09d8f2efadb2ecadaebedc9b534cf7303a9b",
+        ".log/segments/summary-container-c9bafced5de450f53a64caaa.tar.zst": "c9bafced5de450f53a64caaa9c5888b4d3369588b55664a03cc997755082c257",
+        ".memfw.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "events.head": "7d726f74d248f390c2c20010a5b34a3d2cf1ddfd82f264695bc56eb8be6f3363",
+        "events.jsonl": "eeffc0e26da67a7aa7dce85aac21a8a310145364cd4c123cc56b2e605a85120b",
+        "memories/control-10.md": "d14ef048fdd106fad6798cccab1f250d26a3f6f3c7fcb44a9b6aaea797c1633a",
+        "memories/control-11.md": "99635b3b237d8e95b25de02b380432c03abfeb825e1b29efe55d61163eac0386",
+        "memories/control-12.md": "91be573bd6fdeb1aa27a06e7581cb073161b661d6ea9163a285fb2453a2634a3",
+        "memories/control-13.md": "4ecdd2f5872fe65ae7de46b2b3f6feb5eeb33828ca5191bb02595f5e26f3b476",
+        "memories/control-14.md": "f0112e873fb7c569291ca10f8304cfb67ec6a5f29947cdfed58ca6f2f589b14a",
+        "memories/control-15.md": "ce645eaabe9d87148abdcfa8e43bc86d92e1a53c4af6173a7fb84ab484281815",
+        "memories/control-16.md": "b93e5ac8a8e258cd255f2bc7b21db021fa658444b8df91411320b0ef1f796321",
+        "memories/control-17.md": "f1f7b09c10c9d0ea81b54c13f039fa74591098b3a32d8c5661e549bd3df6e36c",
+        "memories/control-18.md": "b09ecba97fea99d3eedee4337fedebcebe59b6b7ac249e6af062910b981ad271",
+        "memories/control-19.md": "8a1d931d23edc608fa42ae80c512d4c873281cb59b01d22159fed2c4d7970332",
+        "vault.yaml": "ab8fb5e49ae6092443e69adcea78f8ca387dadb80cc7236ace95f27ed421b842"
+      },
+      "module": "<REPO_ROOT>/src/memfw/curation/engine.py",
+      "remaining_ids": [
+        "control-10",
+        "control-11",
+        "control-12",
+        "control-13",
+        "control-14",
+        "control-15",
+        "control-16",
+        "control-17",
+        "control-18",
+        "control-19"
+      ],
+      "root": "/private/tmp/day6-total-guard-current-20261018",
+      "satisfied": true
+    },
+    "patched": {
+      "applied_ids": [
+        "control-00",
+        "control-01",
+        "control-02",
+        "control-03",
+        "control-04",
+        "control-05",
+        "control-06",
+        "control-07",
+        "control-08",
+        "control-09"
+      ],
+      "files": {
+        ".log/catalog.json": "94108c7e4f5ddad3c873c537839d09d8f2efadb2ecadaebedc9b534cf7303a9b",
+        ".log/segments/summary-container-c9bafced5de450f53a64caaa.tar.zst": "c9bafced5de450f53a64caaa9c5888b4d3369588b55664a03cc997755082c257",
+        ".memfw.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "events.head": "7d726f74d248f390c2c20010a5b34a3d2cf1ddfd82f264695bc56eb8be6f3363",
+        "events.jsonl": "eeffc0e26da67a7aa7dce85aac21a8a310145364cd4c123cc56b2e605a85120b",
+        "memories/control-10.md": "d14ef048fdd106fad6798cccab1f250d26a3f6f3c7fcb44a9b6aaea797c1633a",
+        "memories/control-11.md": "99635b3b237d8e95b25de02b380432c03abfeb825e1b29efe55d61163eac0386",
+        "memories/control-12.md": "91be573bd6fdeb1aa27a06e7581cb073161b661d6ea9163a285fb2453a2634a3",
+        "memories/control-13.md": "4ecdd2f5872fe65ae7de46b2b3f6feb5eeb33828ca5191bb02595f5e26f3b476",
+        "memories/control-14.md": "f0112e873fb7c569291ca10f8304cfb67ec6a5f29947cdfed58ca6f2f589b14a",
+        "memories/control-15.md": "ce645eaabe9d87148abdcfa8e43bc86d92e1a53c4af6173a7fb84ab484281815",
+        "memories/control-16.md": "b93e5ac8a8e258cd255f2bc7b21db021fa658444b8df91411320b0ef1f796321",
+        "memories/control-17.md": "f1f7b09c10c9d0ea81b54c13f039fa74591098b3a32d8c5661e549bd3df6e36c",
+        "memories/control-18.md": "b09ecba97fea99d3eedee4337fedebcebe59b6b7ac249e6af062910b981ad271",
+        "memories/control-19.md": "8a1d931d23edc608fa42ae80c512d4c873281cb59b01d22159fed2c4d7970332",
+        "vault.yaml": "ab8fb5e49ae6092443e69adcea78f8ca387dadb80cc7236ace95f27ed421b842"
+      },
+      "module": "/private/tmp/day6-total-fix-validation/src/memfw/curation/engine.py",
+      "remaining_ids": [
+        "control-10",
+        "control-11",
+        "control-12",
+        "control-13",
+        "control-14",
+        "control-15",
+        "control-16",
+        "control-17",
+        "control-18",
+        "control-19"
+      ],
+      "root": "/private/tmp/day6-total-guard-patched-20261018",
+      "satisfied": true
+    }
+  }
+}
