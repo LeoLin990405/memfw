@@ -32,10 +32,12 @@ verbatim source text is nevertheless recorded as if it were the user's own words
   memory namespace and mem0 exposes no per-memory inference/derived label. Step G also
   passes Mem0's public `prompt=` custom-instructions knob, which asks the extractor to
   emit `"attributed_to": "user"`. In the audited run this request was only partly
-  followed: most derived memories are explicitly user-attributed (R3), while a minority
-  are returned as assistant-attributed or without an attribution field (R4). The flag
-  rate is therefore partly prompt-forced and partly model behaviour; it must not be read
-  as an independent quality measurement.
+  followed: most derived memories are explicitly user-attributed, while a minority are
+  explicitly assistant-attributed. Under the **Step-G rule**, a record with no
+  `attributed_to` field defaults to the user namespace and therefore counts as R3; only
+  an explicit non-user value (`assistant`) falls to R4. Under the **Day-11 rule**, a
+  missing attribution is R4. Consequently the R3 flag rate is partly prompt-forced and
+  partly model behaviour, not an independent quality measurement.
 - **Difference from the Day 11 audit**: Day 11 sampled 30 memories uniformly and applied
   R3 only when `attributed_to == "user"` exactly. Step G's primary `derived_frame` samples
   only inferred memories, and its `all_frame` is a uniform fallback; a `day11_frame`

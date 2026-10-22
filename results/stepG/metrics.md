@@ -40,6 +40,6 @@ All numbers are computed from `results/stepG/runs/*/*/questions.jsonl`.
 - Paired tests have 18 pairs; the minimum detectable difference is reported and is larger than several observed gaps.
 - mean_token_f1 and the paired token-F1 test exclude category-5 adversarial questions, whose gold answer is a trick answer; they use the abstention rule.
 - Two evidence-recall definitions are reported: pre-fit top-k macro recall and post-fit (128-token context) macro/micro recall; only the post-fit micro value matches the Day 11 metric definition.
-- Provenance audit uses run rep1 only; mem0's custom extraction instructions force attributed_to='user', so its R3 flag is by construction (rubric R3).
+- Provenance audit uses run rep1 only. mem0's custom extraction instructions request attributed_to='user', but the extraction output mixed explicit user attribution, assistant attribution and missing fields, so the R3 flag rate is partly prompt-forced and partly model behaviour (not an independent quality measure).
 - Four paired tests are reported without family correction; treat secondary tests as exploratory.
 - Model identity is evidenced by env.txt digests, not by a cryptographic receipt from the model server.

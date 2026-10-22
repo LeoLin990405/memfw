@@ -22,6 +22,11 @@
         "novel_numbers": 15,
         "sampled": 30
       },
+      "attribution_counts": {
+        "assistant": 10,
+        "missing": 9,
+        "user": 31
+      },
       "day11_frame": {
         "derived": 30,
         "flagged": 19,
@@ -56,6 +61,7 @@
         "novel_numbers": 0,
         "sampled": 30
       },
+      "attribution_counts": {},
       "day11_frame": {
         "derived": 0,
         "flagged": 0,

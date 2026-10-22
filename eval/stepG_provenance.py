@@ -71,10 +71,12 @@ verbatim source text is nevertheless recorded as if it were the user's own words
   memory namespace and mem0 exposes no per-memory inference/derived label. Step G also
   passes Mem0's public `prompt=` custom-instructions knob, which asks the extractor to
   emit `"attributed_to": "user"`. In the audited run this request was only partly
-  followed: most derived memories are explicitly user-attributed (R3), while a minority
-  are returned as assistant-attributed or without an attribution field (R4). The flag
-  rate is therefore partly prompt-forced and partly model behaviour; it must not be read
-  as an independent quality measurement.
+  followed: most derived memories are explicitly user-attributed, while a minority are
+  explicitly assistant-attributed. Under the **Step-G rule**, a record with no
+  `attributed_to` field defaults to the user namespace and therefore counts as R3; only
+  an explicit non-user value (`assistant`) falls to R4. Under the **Day-11 rule**, a
+  missing attribution is R4. Consequently the R3 flag rate is partly prompt-forced and
+  partly model behaviour, not an independent quality measurement.
 - **Difference from the Day 11 audit**: Day 11 sampled 30 memories uniformly and applied
   R3 only when `attributed_to == "user"` exactly. Step G's primary `derived_frame` samples
   only inferred memories, and its `all_frame` is a uniform fallback; a `day11_frame`
@@ -254,6 +256,12 @@ def run_audit(config: dict[str, Any], *, run_id: str = "rep1") -> dict[str, Any]
         derived = [row for row in classified if row["derived"]]
         derived_sample = rng.sample(derived, min(AUDIT_SAMPLE_SIZE, len(derived)))
         all_sample = rng.sample(classified, min(AUDIT_SAMPLE_SIZE, len(classified)))
+        attribution_counts: dict[str, int] = {}
+        if system == "mem0":
+            for item in memories:
+                value = item.get("attributed_to")
+                key = str(value).lower() if isinstance(value, str) else "missing"
+                attribution_counts[key] = attribution_counts.get(key, 0) + 1
         day11_classified = classify_system(system, memories, turn_index, day11_attribution=True)
         day11_sample = rng.sample(day11_classified, min(AUDIT_SAMPLE_SIZE, len(day11_classified)))
         summary["systems"][system] = {
@@ -263,6 +271,7 @@ def run_audit(config: dict[str, Any], *, run_id: str = "rep1") -> dict[str, Any]
             "all_frame": summarize_frame(all_sample),
             "day11_frame": summarize_frame(day11_sample),
             "derived_shortfall": max(0, AUDIT_SAMPLE_SIZE - len(derived)),
+            "attribution_counts": attribution_counts,
         }
         summary["source_files"][system] = str(memories_path.relative_to(REPO_ROOT))
         for frame_name, sample in (

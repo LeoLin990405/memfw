@@ -156,7 +156,7 @@ zstandard==0.25.0
 
 - `derived_frame`：每个系统最多抽 30 条“派生/推断”记忆（非源轮次逐字文本）；`FLAGGED` 表示派生文本被记录成用户原话（rubric R3）。
 - `all_frame`：固定 30 条均匀抽样，作为无派生记忆系统的分母兜底；`day11_frame`：与 Day 11 相同的均匀抽样 + R3 规则，仅用于方向性对照。三个 frame 的分母都在 summary 中明确给出。
-- 审计仅使用 `rep1` 的记忆导出（见 `provenance_summary.json` → `audited_run_id`）；mem0 的 custom extraction instructions *请求* `attributed_to=user`，实际输出中大部分派生记忆被显式标为用户、少数被标为 assistant 或缺失该字段（R4）。因此 R3 FLAGGED 是**部分由 prompt 强制、部分来自模型行为**，不能当作独立质量测量。
+- 审计仅使用 `rep1` 的记忆导出（见 `provenance_summary.json` → `audited_run_id`）；mem0 的 custom extraction instructions *请求* `attributed_to=user`，实际输出为显式 user、显式 assistant 与缺失字段的混合（rep1 记忆库中 attributed_to 分布：user=31、assistant=10、missing=9）。按 Step-G 规则，缺失字段默认归入用户命名空间（R3），仅显式 assistant 落入 R4；按 Day-11 规则缺失字段为 R4。因此 R3 FLAGGED 是**部分由 prompt 强制、部分来自模型行为**，不能当作独立质量测量。
 
 ## 4. 显著性检验与局限
 
@@ -182,7 +182,7 @@ zstandard==0.25.0
 - Paired tests have 18 pairs; the minimum detectable difference is reported and is larger than several observed gaps.
 - mean_token_f1 and the paired token-F1 test exclude category-5 adversarial questions, whose gold answer is a trick answer; they use the abstention rule.
 - Two evidence-recall definitions are reported: pre-fit top-k macro recall and post-fit (128-token context) macro/micro recall; only the post-fit micro value matches the Day 11 metric definition.
-- Provenance audit uses run rep1 only; mem0's custom extraction instructions force attributed_to='user', so its R3 flag is by construction (rubric R3).
+- Provenance audit uses run rep1 only. mem0's custom extraction instructions request attributed_to='user', but the extraction output mixed explicit user attribution, assistant attribution and missing fields, so the R3 flag rate is partly prompt-forced and partly model behaviour (not an independent quality measure).
 - Four paired tests are reported without family correction; treat secondary tests as exploratory.
 - Model identity is evidenced by env.txt digests, not by a cryptographic receipt from the model server.
 
@@ -208,7 +208,7 @@ zstandard==0.25.0
 - **确认**：H4 主指标未检测到显著差异（精确置换 p > 0.05）（p=0.9688）。
 - **确认**：H5 memfw post-fit micro recall 与初步值接近（|Δ| ≤ 0.05）（|Δ|=0.0000）。
 - **未确认**：H6 两系统 recall 差距方向与初步一致（初步 memfw−mem0=+0.0417；正式=-0.1667）。
-- **无法归因**：Mem0 的 answer_score 与初步值差异较大，但 Mem0 在本次运行中使用了 custom extraction instructions，且机器/运行时不同；该差异不能归因于Mem0 或 memfw 的系统设计。
+- **无法归因**：Mem0 的 answer_score 与初步值差异较大，但 Mem0 在本次运行中使用了 custom extraction instructions，写入配置/运行时与 Day 11 不同（环境与模型 digest 已匹配）；该差异不能归因于 Mem0 或 memfw 的系统设计。
 - 正式结论以上表与 §4 的统计结果为准；初步数字仅作为参照，不构成正式结论。
 
 ## 6. 未完成项和原因
