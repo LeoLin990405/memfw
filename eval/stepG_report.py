@@ -482,12 +482,23 @@ def write_report(config: dict[str, Any]) -> Path:
                 "`day11_frame`：与 Day 11 相同的均匀抽样 + R3 规则，仅用于方向性对照。"
                 "三个 frame 的分母都在 summary 中明确给出。"
             )
+            attribution_note = ""
+            if provenance:
+                counts = (provenance["systems"].get("mem0") or {}).get("attribution_counts") or {}
+                if counts:
+                    attribution_note = (
+                        f"（rep1 记忆库中 attributed_to 分布：user={counts.get('user', 0)}、"
+                        f"assistant={counts.get('assistant', 0)}、"
+                        f"missing={counts.get('missing', 0)}）"
+                    )
             lines.append(
                 "- 审计仅使用 `rep1` 的记忆导出（见 `provenance_summary.json` → "
                 "`audited_run_id`）；mem0 的 custom extraction instructions *请求* "
-                "`attributed_to=user`，实际输出中大部分派生记忆被显式标为用户、"
-                "少数被标为 assistant 或缺失该字段（R4）。因此 R3 FLAGGED 是"
-                "**部分由 prompt 强制、部分来自模型行为**，不能当作独立质量测量。"
+                "`attributed_to=user`，实际输出为显式 user、显式 assistant 与缺失字段的混合"
+                f"{attribution_note}。按 Step-G 规则，缺失字段默认归入用户命名空间"
+                "（R3），"
+                "仅显式 assistant 落入 R4；按 Day-11 规则缺失字段为 R4。因此 R3 FLAGGED "
+                "是**部分由 prompt 强制、部分来自模型行为**，不能当作独立质量测量。"
             )
         else:
             lines.append("未生成 provenance 汇总（G6 未完成）。")
@@ -652,8 +663,8 @@ def write_report(config: dict[str, Any]) -> Path:
                 lines.append(f"- **{mark}**：{label}（{detail}）。")
             lines.append(
                 "- **无法归因**：Mem0 的 answer_score 与初步值差异较大，但 Mem0 在本次运行中"
-                "使用了 custom extraction instructions，且机器/运行时不同；该差异不能归因于"
-                "Mem0 或 memfw 的系统设计。"
+                "使用了 custom extraction instructions，写入配置/运行时与 Day 11 不同"
+                "（环境与模型 digest 已匹配）；该差异不能归因于 Mem0 或 memfw 的系统设计。"
             )
             lines.append(
                 "- 正式结论以上表与 §4 的统计结果为准；初步数字仅作为参照，不构成正式结论。"
