@@ -1,0 +1,552 @@
+[
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D1:4"
+    ],
+    "memory": "Evan's old Prius broke down, was repaired and sold, and he replaced it with a new Prius around May 18, 2023",
+    "memory_id": "01f9d7ae-41b0-4c36-9636-fb2d173f1453",
+    "metadata": {
+      "dia_id": "D1:4"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D4:1"
+    ],
+    "memory": "Sam was mocked by friends regarding their weight on a Friday in July 2023 (around July 21, 2023), which caused emotional pain and motivated Sam to realize the need for lifestyle changes.",
+    "memory_id": "0cef212b-8393-4bc2-9fee-c0402c5518ad",
+    "metadata": {
+      "dia_id": "D4:1"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D5:5"
+    ],
+    "memory": "Evan admits that ginger snaps are his weakness and acknowledges that dealing with health issues has made him appreciate joyful moments more.",
+    "memory_id": "0d82189c-c514-4403-9cb4-5f9aa4237027",
+    "metadata": {
+      "dia_id": "D5:5"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D2:11"
+    ],
+    "memory": "Evan has been painting for a few years and finds it helpful for finding peace, though he notes it won't directly help with weight loss.",
+    "memory_id": "13a6f6fa-44c4-41f3-b51e-166a49e10daa",
+    "metadata": {
+      "dia_id": "D2:11"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D4:8"
+    ],
+    "memory": "Evan is reading a new mystery novel that he finds very gripping around July 27, 2023.",
+    "memory_id": "15db4280-c961-446d-8832-4d1e91ced0e3",
+    "metadata": {
+      "dia_id": "D4:8"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D3:6"
+    ],
+    "memory": "Sam agreed to try swapping soda for flavored seltzer water and replacing candy with dark chocolate having high cocoa content around June 6, 2023.",
+    "memory_id": "1698cf43-fc28-467f-8f4b-cb4980956f59",
+    "metadata": {
+      "dia_id": "D3:6"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D3:4"
+    ],
+    "memory": "Sam is still enjoying soda and candy around June 6, 2023, despite knowing it is not the best habit to have.",
+    "memory_id": "17222e44-d059-4ff9-9804-ed5d986f1838",
+    "metadata": {
+      "dia_id": "D3:4"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:3"
+    ],
+    "memory": "Evan's family went on a trip in his new Prius around May 18, 2023",
+    "memory_id": "1c054c4d-367f-4348-8c33-eaa456d229ad",
+    "metadata": {
+      "dia_id": "D1:3"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D2:4"
+    ],
+    "memory": "Sam has been having a tough week and values taking time for themselves to find peace.",
+    "memory_id": "1cbc7da2-b40d-4cab-ac8a-7b8d249bce99",
+    "metadata": {
+      "dia_id": "D2:4"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D3:14"
+    ],
+    "memory": "Sam requested assistance from Evan to get started on their health journey around June 6, 2023.",
+    "memory_id": "1eddd509-092b-4c1e-9c2b-dab347493088",
+    "metadata": {
+      "dia_id": "D3:14"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D5:1"
+    ],
+    "memory": "Evan went on a trip to Canada around August 1, 2023 (last week relative to the conversation date of August 7, 2023) and met an incredible Canadian woman whom he describes as making him feel alive.",
+    "memory_id": "1f4a3499-3c4d-4e89-8915-da38b7943f6d",
+    "metadata": {
+      "dia_id": "D5:1"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D1:4"
+    ],
+    "memory": "Evan and his family went on a trip to the Rockies in his new Prius around May 18, 2023",
+    "memory_id": "224301b6-fc81-4f17-b11b-88ec7056d829",
+    "metadata": {
+      "dia_id": "D1:4"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D1:17"
+    ],
+    "memory": "Sam hopes to find a hobby they are as passionate about as Evan is with watercolor painting.",
+    "memory_id": "33972238-1696-49f2-ab92-205d34b2e258",
+    "metadata": {
+      "dia_id": "D1:17"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D1:13"
+    ],
+    "memory": "Sam has not tried painting yet but is keen to give it a go, viewing it as a nice way to chill and get creative.",
+    "memory_id": "33ca5f36-0266-4089-af76-1b62f1131332",
+    "metadata": {
+      "dia_id": "D1:13"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D3:3"
+    ],
+    "memory": "Evan loves ginger snaps but is currently trying to avoid them as part of his healthier lifestyle changes around June 6, 2023.",
+    "memory_id": "34644a0c-7ccf-4ab2-8513-88cf4bed118f",
+    "metadata": {
+      "dia_id": "D3:3"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:3"
+    ],
+    "memory": "Evan replaced his old car with a new Prius and recently took a family trip in it",
+    "memory_id": "3501adca-5dca-4908-989c-08a7f568b90a",
+    "metadata": {
+      "dia_id": "D1:3"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D1:11"
+    ],
+    "memory": "Sam is considering trying painting as a new hobby.",
+    "memory_id": "3962ddb8-c6a7-4f3f-bd48-6fc66d3ff270",
+    "metadata": {
+      "dia_id": "D1:11"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D3:3"
+    ],
+    "memory": "Evan is trying to eat less processed food and sugary snacks around June 6, 2023, following his heart palpitation incident.",
+    "memory_id": "3c030c0c-49f6-45c8-8991-4777966c1979",
+    "metadata": {
+      "dia_id": "D3:3"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D3:5"
+    ],
+    "memory": "Evan recommended that Sam swap soda for flavored seltzer water and replace candy with dark chocolate having high cocoa content as healthier alternatives around June 6, 2023.",
+    "memory_id": "42c943ca-28fa-4909-8b68-b7b930d15c51",
+    "metadata": {
+      "dia_id": "D3:5"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D2:9"
+    ],
+    "memory": "Sam was advised by Evan to find a fitness routine they enjoy, make smarter dietary choices, and remember that they can succeed in their health journey.",
+    "memory_id": "49b071fa-9632-42fa-b6d3-84801c790e47",
+    "metadata": {
+      "dia_id": "D2:9"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D1:6"
+    ],
+    "memory": "Evan and his family hiked trails in the Rockies around early May 2023, shortly after their trip, and found the views amazing",
+    "memory_id": "539a861c-f901-477f-8841-99360691ed42",
+    "metadata": {
+      "dia_id": "D1:6"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:9"
+    ],
+    "memory": "Evan's family motivates him to stay healthy, helping him track his progress and serving as a constant reminder to keep going on his health journey.",
+    "memory_id": "541c9fac-0b3f-4ba0-b331-b855f01674f3",
+    "metadata": {
+      "dia_id": "D5:9"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D1:9"
+    ],
+    "memory": "Sam hiked a significant distance during their hike with their father when they were ten years old, describing it as a great memory and a feat for them at the time.",
+    "memory_id": "56424f8e-9ef1-443e-876e-7befa0766056",
+    "metadata": {
+      "dia_id": "D1:9"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D3:2"
+    ],
+    "memory": "Sam is trying to eat healthier around June 6, 2023, following Evan's advice and his own health scare.",
+    "memory_id": "576ac225-32c6-4867-94b2-29c986acf53f",
+    "metadata": {
+      "dia_id": "D3:2"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D1:16"
+    ],
+    "memory": "Evan started watercolor painting a few years ago after a friend introduced him to it and gave advice, which hooked him immediately.",
+    "memory_id": "577b5338-3646-4357-8d53-3b830c888e1c",
+    "metadata": {
+      "dia_id": "D1:16"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D2:10"
+    ],
+    "memory": "Sam is looking for a hobby to stay motivated and has been thinking about trying painting, wondering if it will help them de-stress.",
+    "memory_id": "67f1d18b-1225-4d07-aa9f-bbb994f5d116",
+    "metadata": {
+      "dia_id": "D2:10"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D4:6"
+    ],
+    "memory": "Evan made dietary changes by cutting down on sugary snacks and eating more vegetables and fruit, which he says had a big impact on his health.",
+    "memory_id": "6c3f0249-b763-470e-9680-e82c335a1b98",
+    "metadata": {
+      "dia_id": "D4:6"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:2"
+    ],
+    "memory": "Sam expressed sympathy to Evan regarding his recent health issues and acknowledged that it can be tough to fully enjoy things when dealing with such challenges.",
+    "memory_id": "756f5fb8-4f62-494a-af0b-e8dcf96eb27a",
+    "metadata": {
+      "dia_id": "D5:2"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D4:4"
+    ],
+    "memory": "Evan shared his gym membership card as a reminder of his commitment to health, noting that exercise, diet, and lifestyle changes all play a big role.",
+    "memory_id": "767f9ded-1bab-49d3-891a-4f195eb2bf35",
+    "metadata": {
+      "dia_id": "D4:4"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D3:1"
+    ],
+    "memory": "Evan experienced a sudden heart palpitation incident last week (around June 1, 2023) which served as a serious wake-up call about his lifestyle.",
+    "memory_id": "836e15a8-91de-4556-ac04-7628d759183c",
+    "metadata": {
+      "dia_id": "D3:1"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D4:15"
+    ],
+    "memory": "Sam plans to start going to the gym and exercising regularly starting from August 28, 2023 (the day after July 27, 2023).",
+    "memory_id": "86391e07-d6c5-4f09-80e3-e4448a266945",
+    "metadata": {
+      "dia_id": "D4:15"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D2:6"
+    ],
+    "memory": "Sam had a doctor's check-up a few days before May 24, 2023 (around early May 2023) and found their weight was not great.",
+    "memory_id": "8951aa64-7c95-4149-b499-b8dcb808ee94",
+    "metadata": {
+      "dia_id": "D2:6"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:3"
+    ],
+    "memory": "Evan's family road trip to Jasper around October 18, 2023 was relaxing and peaceful, featuring fresh air, a cozy cabin surrounded by mountains and forests, which Evan felt made it feel like a real retreat.",
+    "memory_id": "a59eebec-4fda-4f86-9ee7-e9a160da5342",
+    "metadata": {
+      "dia_id": "D2:3"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D5:7"
+    ],
+    "memory": "Evan has been working on his health journey for two years, acknowledging that the process has involved ups and downs.",
+    "memory_id": "a782306f-42e4-4af1-98e5-9f0466917554",
+    "metadata": {
+      "dia_id": "D5:7"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D4:7"
+    ],
+    "memory": "Sam is reducing their soda and candy intake around July 27, 2023, acknowledging it is tough but expressing determination to make the change.",
+    "memory_id": "aca2be54-2734-464e-82eb-c1bde85ec6ab",
+    "metadata": {
+      "dia_id": "D4:7"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D2:11"
+    ],
+    "memory": "Evan recommends exercising in addition to painting as a way to address Sam's weight concerns.",
+    "memory_id": "b08da0d8-0b4a-413f-bb54-f3269798f0c6",
+    "metadata": {
+      "dia_id": "D2:11"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D1:14"
+    ],
+    "memory": "Evan started hiking a few years ago and describes it as a great stress-buster.",
+    "memory_id": "b4a343af-329e-4150-a6b8-c17a6503a6e5",
+    "metadata": {
+      "dia_id": "D1:14"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:2"
+    ],
+    "memory": "Evan recently returned from a family trip in his new Prius",
+    "memory_id": "b4e00346-d9f5-407f-aca7-eef9da2e7c1f",
+    "metadata": {
+      "dia_id": "D1:2"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D3:10"
+    ],
+    "memory": "Sam is committed to making small, incremental changes to their lifestyle and health habits around June 6, 2023.",
+    "memory_id": "b7f647ce-9b70-4ab0-b500-45abd3b060e3",
+    "metadata": {
+      "dia_id": "D3:10"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D5:13"
+    ],
+    "memory": "Evan is motivated by a thirst for adventure on interesting hikes.",
+    "memory_id": "c6be8663-926b-4b35-a255-980f7b9085f7",
+    "metadata": {
+      "dia_id": "D5:13"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:13"
+    ],
+    "memory": "Sam was inspired by Evan's reminder to focus on progress rather than perfection in their health journey around July 27, 2023.",
+    "memory_id": "c8585978-5584-41e0-a922-1e52b20a668f",
+    "metadata": {
+      "dia_id": "D4:13"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:6"
+    ],
+    "memory": "Evan has children who are having a great time, and he has been prioritizing his health for an unspecified duration.",
+    "memory_id": "c878bed0-08c0-4303-95ba-1ee8a66f3b50",
+    "metadata": {
+      "dia_id": "D5:6"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D5:3"
+    ],
+    "memory": "Evan finds the experience of being with his new Canadian woman a nice change, especially after dealing with recent health issues.",
+    "memory_id": "c8b8b31d-b6c4-4efd-8180-6cb325fad440",
+    "metadata": {
+      "dia_id": "D5:3"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D1:7"
+    ],
+    "memory": "User loves hiking but hasn't done it in a long time; their first memory of hiking was with their dad when they were ten years old, which they describe as great fun and really special.",
+    "memory_id": "c90894e4-17de-43aa-a4fd-c2a934684e4e",
+    "metadata": {
+      "dia_id": "D1:7"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D4:10"
+    ],
+    "memory": "Evan recommended pairing flavored seltzer water with air-popped popcorn or fruit as low-calorie snacks around July 27, 2023.",
+    "memory_id": "c9193743-bed0-440a-b28c-caac64b6e7b8",
+    "metadata": {
+      "dia_id": "D4:10"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D3:16"
+    ],
+    "memory": "Sam had a frustrating experience at the supermarket around June 6, 2023, where all self-checkout machines were broken, leaving them in a terrible mood.",
+    "memory_id": "cc5f1f4c-cee9-4994-a1d0-5df9b2d1c0b6",
+    "metadata": {
+      "dia_id": "D3:16"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:17"
+    ],
+    "memory": "Evan got a plant (implied by context of 'taking care of it') because it symbolizes strength and resilience, and he uses caring for it as motivation to keep going through tough times.",
+    "memory_id": "ea079fb0-af4e-4012-9990-fa0894824860",
+    "metadata": {
+      "dia_id": "D5:17"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D2:1"
+    ],
+    "memory": "Evan took his family on a road trip to Jasper around October 18, 2023 (last weekend relative to May 24, 2023), driving through the Icefields Parkway and viewing glaciers and lakes.",
+    "memory_id": "f6838133-790c-4c54-9bfc-2f4e9450ce03",
+    "metadata": {
+      "dia_id": "D2:1"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D5:3"
+    ],
+    "memory": "Evan met an incredible Canadian woman during his trip to Canada around August 1, 2023, and describes every moment with her as fun and energizing.",
+    "memory_id": "f873dd1c-2121-4239-95a3-61b31d4cef15",
+    "metadata": {
+      "dia_id": "D5:3"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D4:10"
+    ],
+    "memory": "Evan is reading the mystery novel 'The Great Gatsby' around July 27, 2023.",
+    "memory_id": "fb8986fa-ad4c-4650-a66a-55c9e1d50566",
+    "metadata": {
+      "dia_id": "D4:10"
+    }
+  }
+]

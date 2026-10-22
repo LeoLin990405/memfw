@@ -1,0 +1,1 @@
+{"ingest_seconds": 1003.4533517080126, "run_id": "rep3", "schema_version": "stepg-ingest-v1", "system": "mem0", "turn_count": 100, "write_latency": {"count": 100, "mean_seconds": 10.034199467500148, "p50_seconds": 9.49006410400034, "p95_seconds": 12.371816677103926, "total_seconds": 1003.4199467500148}}

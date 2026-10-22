@@ -1,0 +1,21 @@
+{
+  "api_cost_usd": 0.0,
+  "elapsed_seconds": 7462.0,
+  "finished_at_utc": "2026-10-22T09:10:09Z",
+  "hardware": "Apple M5 Max, 18 cores, 128 GB unified memory, macOS 26.7.1 (Mac17,7)",
+  "note": "All model calls used the local Ollama loopback endpoint; no paid API calls were made. The mem0 re-ingest phase reran the mem0 ingest after a retrieval-normalization fix so that per-add token usage is recorded in write_turns.jsonl; memfw results were not regenerated.",
+  "phases": {
+    "mem0_token_reingest_and_refresh": {
+      "elapsed_seconds": 3285.0,
+      "finished_at_utc": "2026-10-22T09:10:09Z",
+      "started_at_utc": "2026-10-22T08:15:24Z"
+    },
+    "primary_formal_run": {
+      "elapsed_seconds": 3311.0,
+      "finished_at_utc": "2026-10-22T08:00:58Z",
+      "started_at_utc": "2026-10-22T07:05:47Z"
+    }
+  },
+  "schema_version": "stepg-runtime-v2",
+  "started_at_utc": "2026-10-22T07:05:47Z"
+}
