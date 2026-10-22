@@ -4,8 +4,8 @@ All numbers are computed from `results/stepG/runs/*/*/questions.jsonl`.
 
 ## Answer quality (per-question mean across repeats)
 
-| system | answer_score | token_f1 | judge_accuracy | questions |
-|---|---|---|---|---|
+| system | answer_score | token_f1(cat1-4) | judge_accuracy(per-question) | evidence_recall(post-fit macro) | questions |
+|---|---|---|---|---|---|
 | memfw | 0.4591 | 0.3759 | 38.9% | 69.4% | 18 |
 | mem0 | 0.4652 | 0.3123 | 44.4% | 81.5% | 18 |
 

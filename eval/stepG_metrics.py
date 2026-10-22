@@ -625,7 +625,7 @@ def render_markdown(metrics: dict[str, Any]) -> str:
     for system in ("memfw", "mem0"):
         aggregate = metrics["systems"].get(system)
         if not aggregate:
-            rows.append([system, "n/a", "n/a", "n/a", "n/a"])
+            rows.append([system, "n/a", "n/a", "n/a", "n/a", "n/a"])
             continue
         rows.append(
             [
@@ -638,7 +638,17 @@ def render_markdown(metrics: dict[str, Any]) -> str:
             ]
         )
     lines.append(
-        _table(["system", "answer_score", "token_f1", "judge_accuracy", "questions"], rows)
+        _table(
+            [
+                "system",
+                "answer_score",
+                "token_f1(cat1-4)",
+                "judge_accuracy(per-question)",
+                "evidence_recall(post-fit macro)",
+                "questions",
+            ],
+            rows,
+        )
     )
     lines.append("")
     lines.append("## Efficiency")

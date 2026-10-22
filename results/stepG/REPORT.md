@@ -156,7 +156,7 @@ zstandard==0.25.0
 
 - `derived_frame`：每个系统最多抽 30 条“派生/推断”记忆（非源轮次逐字文本）；`FLAGGED` 表示派生文本被记录成用户原话（rubric R3）。
 - `all_frame`：固定 30 条均匀抽样，作为无派生记忆系统的分母兜底；`day11_frame`：与 Day 11 相同的均匀抽样 + R3 规则，仅用于方向性对照。三个 frame 的分母都在 summary 中明确给出。
-- 审计仅使用 `rep1` 的记忆导出（见 `provenance_summary.json` → `audited_run_id`）；mem0 的 custom extraction instructions 强制 `attributed_to=user`，因此其 R3 FLAGGED 属于**构造性质**，不应解读为语言模型的独立测量。
+- 审计仅使用 `rep1` 的记忆导出（见 `provenance_summary.json` → `audited_run_id`）；mem0 的 custom extraction instructions *请求* `attributed_to=user`，实际输出中大部分派生记忆被显式标为用户、少数被标为 assistant 或缺失该字段（R4）。因此 R3 FLAGGED 是**部分由 prompt 强制、部分来自模型行为**，不能当作独立质量测量。
 
 ## 4. 显著性检验与局限
 
@@ -188,7 +188,7 @@ zstandard==0.25.0
 
 ## 5. 与初步结果的对比
 
-初步结果（来源 `reports/day11_baseline_comparison.json`，Day 11，仅作参考，**不是正式结论**）与本次正式实验使用**同一模型**（`qwen3.5:9b` + `nomic-embed-text`）与**同一固定子集**（conv-49 前 100 轮 / 18 题 / seed 20261021），因此 answer_score 与 **post-fit micro evidence recall** 可以直接对照；但 Mem0 的写入提示（custom extraction instructions）、机器与运行时不同，Mem0 侧数字不是同一配置的严格复现。
+初步结果（来源 `reports/day11_baseline_comparison.json`，Day 11，仅作参考，**不是正式结论**）与本次正式实验使用**同一模型**（`qwen3.5:9b` + `nomic-embed-text`）与**同一固定子集**（conv-49 前 100 轮 / 18 题 / seed 20261021），因此 answer_score 与 **post-fit micro evidence recall** 可以直接对照；但 Mem0 的写入提示（custom extraction instructions）与运行时配置不同，Mem0 侧数字不是同一配置的严格复现（环境与模型 digest 与 Day 11 相同）。
 
 | 指标 | 初步结果（Day 11） | 本次正式实验 | 正式值来源 |
 |---|---|---|---|
@@ -214,11 +214,12 @@ zstandard==0.25.0
 ## 6. 未完成项和原因
 
 - memfw 的 derived_frame 只有 0 条派生记忆（缺口 30），无法凑满 30 条；已在 summary 中如实记录。
-- 重复确定性：3 个 repeat 的 per-run answer_score 完全相同（[0.459061]），因此“跨重复方差”为 0；这来自 temperature=0 的确定性解码，不能当作独立样本推断方差。
+- 重复确定性（观测）：3 个 repeat 的 per-run answer_score 完全相同（memfw 0.459061; mem0 0.465151），因此“跨重复方差”为 0；这是本机 temperature=0 解码下观测到的确定性，不能当作独立样本推断方差。
 - provenance 审计仅取 `rep1` 的记忆导出；三个 repeat 的写入内容一致，但未对每个 repeat 分别抽样。
-- mem0 的 R3 FLAGGED 由 custom extraction instructions 的 `attributed_to=user` 强制产生（构造性质），不是独立测量。
+- mem0 的 R3 FLAGGED 部分来自 custom extraction instructions 请求的 `attributed_to=user`，部分来自模型把部分记忆标为 assistant/缺失字段；因此它是“prompt + 模型行为”的混合，不是独立质量测量。
 - 数据更新说明：mem0 的最终数字来自 `finalize3` 重跑——修复检索结果 dia_ids 归一化后，重新 ingest 3 个 repeat 并重跑题目/评审；此前试跑的数字未用于本报告。
 - 模型同一性由 `env.txt` 中记录的 Ollama model digest 佐证，没有模型服务端的密码学回执；judge 与被测模型相同，属于次要诊断。
+- 运行代码快照：`env.txt` 的 `git_head` 是运行开始时的 HEAD（`c55d1fe`，此时 eval/ 与 results/ 尚未入库）；实际运行代码由本次报告的提交保存，这是“运行快照 vs 提交快照”的正常差异。
 - pytest 结果见 `results/stepG/test-results.txt`。
 - 测试环境说明：worktree 使用仓库既有 `.venv`（memfw editable 指向主工作树）会导致 2 个 Day5/Day6 测试的 source-root 断言失败，因此测试改用 worktree 内独立 `.venv-stepg`（同一 Python 3.11.16 / mem0ai 2.2.1）。
 
