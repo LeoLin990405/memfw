@@ -669,3 +669,16 @@ def test_mem0_add_kwargs_only_passes_prompt_for_custom_arm() -> None:
     assert custom["prompt"] == "Return JSON only."
     assert stock["metadata"] == {"dia_id": "D1:1"}
     assert stock["infer"] is True
+
+
+def test_metrics_rows_normalize_legacy_arm_name(tmp_path: Path) -> None:
+    from eval.stepG_metrics import load_rows
+
+    run_dir = tmp_path / "runs" / "rep1" / "mem0_custom"
+    run_dir.mkdir(parents=True)
+    (run_dir / "questions.jsonl").write_text(
+        json.dumps({"run_id": "rep1", "system": "mem0", "question_id": "q1"}) + "\n"
+    )
+    rows = load_rows(tmp_path)
+    assert list(rows) == ["mem0_custom"]
+    assert rows["mem0_custom"]["rep1"][0]["system"] == "mem0_custom"

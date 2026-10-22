@@ -621,7 +621,7 @@
       "ok": true
     },
     {
-      "detail": "482 passed, 2 skipped in 164.36s (0:02:44)",
+      "detail": "483 passed, 2 skipped in 161.62s (0:02:41)",
       "name": "pytest summary records passes",
       "ok": true
     }
