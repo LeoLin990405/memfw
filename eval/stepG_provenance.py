@@ -241,8 +241,9 @@ def run_audit(config: dict[str, Any], *, run_id: str = "rep1") -> dict[str, Any]
             "all_frame is a fixed-denominator fallback over uniformly sampled memories; "
             "day11_frame re-uses the Day 11 uniform frame and R3 rule for direction checks. "
             "mem0 R3 is partly prompt-forced: the custom extraction prompt requests "
-            "attributed_to='user', but some derived memories are still returned as "
-            "assistant-attributed or without attribution (R4)."
+            "attributed_to='user'; explicit assistant attribution falls to R4, while a "
+            "missing attribution defaults to the user namespace and is R3 under the "
+            "Step-G rule (R4 only under the Day-11 rule)."
         ),
         "audited_run_id": run_id,
         "systems": {},
