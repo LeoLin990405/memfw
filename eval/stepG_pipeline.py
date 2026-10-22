@@ -31,6 +31,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from eval.stepG_expanded import run_expanded  # noqa: E402
 from eval.stepG_metrics import build_metrics  # noqa: E402
 from eval.stepG_provenance import run_audit  # noqa: E402
 from eval.stepG_report import write_report  # noqa: E402
@@ -176,6 +177,7 @@ def run_pipeline(
     stages: set[str],
     repeats: int | None = None,
     run_ids: list[str] | None = None,
+    systems: list[str] | None = None,
     dry_run: bool = False,
     no_judge: bool = False,
     limit_turns: int | None = None,
@@ -220,6 +222,7 @@ def run_pipeline(
         manifest = execute(
             config,
             run_ids=run_ids,
+            systems=systems,
             dry_run=dry_run,
             limit_turns=limit_turns,
         )
@@ -235,6 +238,14 @@ def run_pipeline(
         }
         status["artifacts"]["metrics"] = str(results_dir / "metrics.json")
         status["artifacts"]["metrics_md"] = str(results_dir / "metrics.md")
+    if "expanded" in stages:
+        expanded = run_expanded(config, judge=not no_judge)
+        status["expanded"] = {
+            "n_questions": expanded.get("n_questions"),
+            "arms": expanded.get("arms"),
+        }
+        status["artifacts"]["expanded_metrics"] = str(results_dir / "expanded_metrics.json")
+        status["artifacts"]["expanded_metrics_md"] = str(results_dir / "expanded_metrics.md")
     if "provenance" in stages:
         summary = run_audit(config, run_id="rep1")
         status["provenance"] = {
@@ -257,17 +268,34 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--stage",
         default="all",
-        choices=["data", "subset", "env", "check", "run", "metrics", "provenance", "report", "all"],
+        choices=[
+            "data",
+            "subset",
+            "env",
+            "check",
+            "run",
+            "metrics",
+            "expanded",
+            "provenance",
+            "report",
+            "all",
+        ],
     )
     parser.add_argument("--repeats", type=int, default=None)
     parser.add_argument("--run-ids", type=str, default=None)
+    parser.add_argument(
+        "--systems",
+        type=str,
+        default=None,
+        help="comma separated arms (memfw,mem0_stock,mem0_custom); default: config runs.systems",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-judge", action="store_true")
     parser.add_argument("--limit-turns", type=int, default=None, help="debug only")
     args = parser.parse_args(argv)
     config = load_config(args.config)
     stages = (
-        {"data", "subset", "env", "check", "run", "metrics", "provenance", "report"}
+        {"data", "subset", "env", "check", "run", "metrics", "expanded", "provenance", "report"}
         if args.stage == "all"
         else {args.stage}
     )
@@ -276,6 +304,7 @@ def main(argv: list[str] | None = None) -> int:
         stages=stages,
         repeats=args.repeats,
         run_ids=args.run_ids.split(",") if args.run_ids else None,
+        systems=args.systems.split(",") if args.systems else None,
         dry_run=args.dry_run,
         no_judge=args.no_judge,
         limit_turns=args.limit_turns,

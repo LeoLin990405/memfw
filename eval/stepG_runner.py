@@ -382,6 +382,55 @@ class MemfwSystem:
         self.vectors: dict[str, list[float]] = {}
         self.dia_by_id: dict[str, str] = {}
         self.title_by_id: dict[str, str] = {}
+        self._dia_map_path = self.repository.root / ".dia_map.json"
+        self._load_dia_map()
+
+    def _load_dia_map(self) -> None:
+        if not self._dia_map_path.exists():
+            return
+        try:
+            payload = json.loads(self._dia_map_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        for memory_id, record in payload.items():
+            if isinstance(record, dict):
+                self.dia_by_id[memory_id] = str(record.get("dia_id") or "")
+                self.title_by_id[memory_id] = str(record.get("title") or "")
+
+    def _save_dia_map(self) -> None:
+        payload = json.dumps(
+            {
+                memory_id: {
+                    "dia_id": self.dia_by_id.get(memory_id, ""),
+                    "title": self.title_by_id.get(memory_id, ""),
+                }
+                for memory_id in self.dia_by_id
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+        temporary = self._dia_map_path.with_name(self._dia_map_path.name + ".tmp")
+        temporary.write_bytes(payload)
+        os.replace(temporary, self._dia_map_path)
+
+    def hydrate_from_export(self, memories: Sequence[dict[str, Any]]) -> None:
+        """Fill the memory-id -> dia_id/title maps from a run's memories.json export."""
+        for item in memories:
+            memory_id = str(item.get("memory_id") or "")
+            dia_ids = item.get("dia_ids") or []
+            if not memory_id or not dia_ids:
+                continue
+            self.dia_by_id[memory_id] = str(dia_ids[0])
+            if item.get("title"):
+                self.title_by_id[memory_id] = str(item["title"])
+
+    def ensure_vectors(self) -> None:
+        """Rebuild retrieval vectors for a resumed/expanded run from stored Markdown."""
+        if self.vectors:
+            return
+        for document in self.repository.list():
+            title = self.title_by_id.get(document.id) or f"speaker {document.title}"
+            self.title_by_id[document.id] = title
+            self.vectors[document.id] = self.embedder.embed([f"{title} {document.body}"])[0]
 
     def add(self, turn: dict[str, str]) -> None:
         timestamp = datetime.fromisoformat(turn["created_at"]).astimezone(UTC)
@@ -398,8 +447,10 @@ class MemfwSystem:
         self.vectors[memory_id] = self.embedder.embed([f"{title} {turn['text']}"])[0]
         self.dia_by_id[memory_id] = turn["dia_id"]
         self.title_by_id[memory_id] = title
+        self._save_dia_map()
 
     def search(self, query: str, *, top_k: int) -> list[dict[str, Any]]:
+        self.ensure_vectors()
         vector = self.embedder.embed([query])[0]
         documents = {row.id: row for row in self.repository.list()}
         scored = sorted(
@@ -414,7 +465,7 @@ class MemfwSystem:
             {
                 "id": key,
                 "memory": f"{documents[key].title} {documents[key].body}",
-                "dia_ids": [self.dia_by_id[key]],
+                "dia_ids": [self.dia_by_id.get(key, "")] if self.dia_by_id.get(key) else [],
                 "score": score,
             }
             for score, key in scored[:top_k]
@@ -442,13 +493,29 @@ class MemfwSystem:
         return {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0}
 
 
+def mem0_add_kwargs(
+    turn: dict[str, str], user_id: str, custom_instructions: str | None
+) -> dict[str, Any]:
+    """Build Mem0 add() kwargs; custom instructions are only used by the custom arm."""
+    kwargs: dict[str, Any] = {
+        "user_id": user_id,
+        "metadata": {"dia_id": turn["dia_id"]},
+        "infer": True,
+    }
+    if custom_instructions:
+        kwargs["prompt"] = custom_instructions
+    return kwargs
+
+
 class Mem0System:
     """Thin wrapper over open-source mem0.Memory using only the local model stack."""
 
     name = "mem0"
     user_id = "stepg-locomo-public"
 
-    def __init__(self, root: Path, config: dict[str, Any]) -> None:
+    def __init__(
+        self, root: Path, config: dict[str, Any], *, custom_instructions: bool = True
+    ) -> None:
         os.environ["MEM0_TELEMETRY"] = "False"
         from mem0 import Memory
 
@@ -499,9 +566,8 @@ class Mem0System:
         }
         self.root = root
         self._num_ctx = int(llm.get("num_ctx", 8192))
-        self._custom_instructions = (
-            str((config.get("mem0") or {}).get("custom_instructions") or "").strip() or None
-        )
+        instructions = str((config.get("mem0") or {}).get("custom_instructions") or "").strip()
+        self._custom_instructions = instructions if custom_instructions and instructions else None
         self.memory: Any = Memory.from_config(mem0_config)
         self._usage = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0}
         self._instrument_llm(llm["transport"])
@@ -555,14 +621,7 @@ class Mem0System:
         raise last_error
 
     def _add_kwargs(self, turn: dict[str, str], content: str) -> dict[str, Any]:
-        kwargs: dict[str, Any] = {
-            "user_id": self.user_id,
-            "metadata": {"dia_id": turn["dia_id"]},
-            "infer": True,
-        }
-        if self._custom_instructions:
-            kwargs["prompt"] = self._custom_instructions
-        return kwargs
+        return mem0_add_kwargs(turn, self.user_id, self._custom_instructions)
 
     def search(self, query: str, *, top_k: int) -> list[dict[str, Any]]:
         result = self.memory.search(
@@ -607,7 +666,19 @@ class Mem0System:
         return dict(self._usage)
 
 
-SYSTEMS = {"memfw": MemfwSystem, "mem0": Mem0System}
+# Arms: memfw, stock Mem0, and the custom-extraction-prompt Mem0 arm used in the
+# first Step G pass. "mem0" remains an alias for the custom arm for compatibility.
+SYSTEMS = {
+    "memfw": "memfw",
+    "mem0": "mem0_custom",
+    "mem0_custom": "mem0_custom",
+    "mem0_stock": "mem0_stock",
+}
+ARM_LABELS = {
+    "memfw": "memfw (verbatim + shared-embedding cosine retrieval)",
+    "mem0_stock": "Mem0 stock (add(infer=True), default extraction prompt)",
+    "mem0_custom": "Mem0 + custom extraction instructions (schema-compat arm)",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -983,6 +1054,11 @@ def run_system(
             "llm_transport": config["llm"]["transport"],
             "embedding": config["embedding"]["model"],
         },
+        "arm": SYSTEMS.get(system_name, system_name),
+        "custom_instructions_used": bool(
+            SYSTEMS.get(system_name) == "mem0_custom"
+            and (config.get("mem0") or {}).get("custom_instructions")
+        ),
         "seed": int(config["seed"]),
         "turn_count": len(turns),
         "ingest_seconds": ingest_seconds,
@@ -1032,10 +1108,15 @@ def _make_system(
     system_name: str, config: dict[str, Any], run_id: str, embedder: Embedder
 ) -> MemorySystem:
     root = _runtime_dir(config, run_id, system_name)
-    if system_name == "memfw":
+    arm = SYSTEMS.get(system_name)
+    if arm is None:
+        raise ValueError(f"unknown system: {system_name!r}")
+    if arm == "memfw":
         return MemfwSystem(root, embedder)
-    if system_name == "mem0":
-        return Mem0System(root, config)
+    if arm == "mem0_custom":
+        return Mem0System(root, config, custom_instructions=True)
+    if arm == "mem0_stock":
+        return Mem0System(root, config, custom_instructions=False)
     raise ValueError(f"unknown system: {system_name!r}")
 
 

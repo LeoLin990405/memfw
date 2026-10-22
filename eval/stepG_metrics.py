@@ -8,6 +8,7 @@ value in the outputs is computed from the run files.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -24,6 +25,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from eval.stepG_runner import (  # noqa: E402
+    SYSTEMS,
     _read_rows,
     _resolve,
     _write_json,
@@ -444,8 +446,11 @@ def paired_comparison(
 
 
 # ---------------------------------------------------------------------------
-# LLM judge
+# LLM judge (multiple judge models; primary judge differs from the answerer)
 # ---------------------------------------------------------------------------
+
+JUDGE_SCHEMA_VERSION = "stepg-judge-v2"
+JUDGE_PROMPT_VERSION = "judge-v1"
 
 
 def _parse_verdict(text: str) -> str | None:
@@ -461,6 +466,7 @@ def _parse_verdict(text: str) -> str | None:
 
 
 def judge_is_correct(row: dict[str, Any], verdict: str) -> bool:
+    """Verdict first; fall back only for the same abstention markers as answer_score."""
     if verdict == "correct":
         return True
     if int(row["category"]) == 5:
@@ -469,62 +475,93 @@ def judge_is_correct(row: dict[str, Any], verdict: str) -> bool:
     return False
 
 
+def _prediction_hash(row: dict[str, Any]) -> str:
+    payload = f"{row.get('answer', '')}\x00{row.get('gold_answer', '')}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def judge_model_config(config: dict[str, Any], key: str) -> dict[str, Any] | None:
+    block = config.get(key) or {}
+    if not block or block.get("enabled") is False:
+        return None
+    return dict(block)
+
+
 def run_judge(
     config: dict[str, Any],
     rows: dict[str, dict[str, list[dict[str, Any]]]],
     *,
     out_path: Path,
+    judge_config: dict[str, Any],
+    label: str,
     chat: Any | None = None,
     log: Callable[[str], None] = lambda _message: None,
 ) -> list[dict[str, Any]]:
-    judge_config = dict(config.get("judge") or {})
+    """Run one judge model over every row; resume keyed by prediction hash."""
+    judge_cfg = dict(judge_config)
     if chat is None:
-        judge_config.setdefault("transport", "ollama")
-        virtual = {"llm": judge_config, "seed": config["seed"]}
-        chat = make_chat(virtual)
-    existing = _read_rows(out_path)
-    done = {(row["run_id"], row["system"], row["question_id"]) for row in existing}
+        chat = make_chat({"llm": judge_cfg, "seed": config["seed"]})
+    existing: list[dict[str, Any]] = []
+    if out_path.exists():
+        raw_lines = [
+            line for line in out_path.read_text(encoding="utf-8").splitlines() if line.strip()
+        ]
+        parsed = [json.loads(line) for line in raw_lines]
+        if all(row.get("schema_version") == JUDGE_SCHEMA_VERSION for row in parsed):
+            existing = parsed
+        else:  # stale schema: re-judge everything
+            out_path.write_text("", encoding="utf-8")
+    done = {
+        (row["run_id"], row["system"], row["question_id"], row.get("prediction_sha256"))
+        for row in existing
+    }
     verdicts: list[dict[str, Any]] = list(existing)
-    for system, by_run in sorted(rows.items()):
-        for run_id, run_rows in sorted(by_run.items()):
-            for row in run_rows:
-                key = (run_id, system, row["question_id"])
-                if key in done:
-                    continue
-                prompt = JUDGE_PROMPT.format(
-                    question=row["question"],
-                    reference=row["gold_answer"],
-                    prediction=row["answer"],
-                    category=row["category"],
-                )
-                try:
-                    text, usage = chat.chat(
-                        prompt, max_tokens=int(judge_config.get("max_tokens", 96))
+    judge_model = str(judge_cfg.get("model"))
+    with out_path.open("a", encoding="utf-8") as stream:
+        for system, by_run in sorted(rows.items()):
+            for run_id, run_rows in sorted(by_run.items()):
+                for row in run_rows:
+                    prediction_sha = _prediction_hash(row)
+                    key = (run_id, system, row["question_id"], prediction_sha)
+                    if key in done:
+                        continue
+                    prompt = JUDGE_PROMPT.format(
+                        question=row["question"],
+                        reference=row["gold_answer"],
+                        prediction=row["answer"],
+                        category=row["category"],
                     )
-                except Exception as error:  # noqa: BLE001 - recorded honestly
-                    text, usage = (
-                        f'{{"verdict": "incorrect", "error": "{type(error).__name__}"}}',
-                        {},
-                    )
-                verdict = _parse_verdict(text)
-                record = {
-                    "schema_version": "stepg-judge-v1",
-                    "run_id": run_id,
-                    "system": system,
-                    "question_id": row["question_id"],
-                    "category": row["category"],
-                    "verdict": verdict,
-                    "correct": bool(verdict == "correct"),
-                    "raw": text[:400],
-                    "usage": usage,
-                }
-                with out_path.open("a", encoding="utf-8") as stream:
+                    try:
+                        text, usage = chat.chat(
+                            prompt, max_tokens=int(judge_cfg.get("max_tokens", 96))
+                        )
+                    except Exception as error:  # noqa: BLE001 - recorded honestly
+                        text = f'{{"verdict": "incorrect", "error": "{type(error).__name__}"}}'
+                        usage = {}
+                    verdict = _parse_verdict(text)
+                    record = {
+                        "schema_version": JUDGE_SCHEMA_VERSION,
+                        "judge_label": label,
+                        "judge_model": judge_model,
+                        "prompt_version": JUDGE_PROMPT_VERSION,
+                        "run_id": run_id,
+                        "system": system,
+                        "question_id": row["question_id"],
+                        "category": row["category"],
+                        "prediction_sha256": prediction_sha,
+                        "verdict": verdict,
+                        "correct": bool(verdict == "correct"),
+                        "raw": text[:400],
+                        "usage": usage,
+                    }
                     stream.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
                     stream.flush()
                     os.fsync(stream.fileno())
-                verdicts.append(record)
-                done.add(key)
-                log(f"[judge] {system} {run_id} q={row['question_id'][:8]} -> {verdict}")
+                    verdicts.append(record)
+                    done.add(key)
+                    log(
+                        f"[judge:{label}] {system} {run_id} q={row['question_id'][:8]} -> {verdict}"
+                    )
     return verdicts
 
 
@@ -532,7 +569,7 @@ def judge_per_question(
     rows: dict[str, dict[str, list[dict[str, Any]]]],
     verdicts: Sequence[dict[str, Any]],
 ) -> dict[str, dict[str, float]]:
-    """Per-question mean judge correctness across repeats (paired-test input)."""
+    """Per-question mean judge correctness across repeats, per arm."""
     lookup = {
         (row["run_id"], row["system"], row["question_id"]): row
         for system in rows
@@ -543,6 +580,8 @@ def judge_per_question(
     for verdict in verdicts:
         row = lookup.get((verdict["run_id"], verdict["system"], verdict["question_id"]))
         if row is None:
+            continue
+        if verdict.get("prediction_sha256") not in (None, _prediction_hash(row)):
             continue
         correct = float(judge_is_correct(row, str(verdict.get("verdict"))))
         collected.setdefault(verdict["system"], {}).setdefault(row["question_id"], []).append(
@@ -558,7 +597,6 @@ def judge_accuracy(
     rows: dict[str, dict[str, list[dict[str, Any]]]],
     verdicts: Sequence[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Return per-question mean accuracy (analysis unit) plus row-level accuracy."""
     lookup = {
         (row["run_id"], row["system"], row["question_id"]): row
         for system in rows
@@ -566,26 +604,63 @@ def judge_accuracy(
         for row in run
     }
     row_values: dict[str, list[float]] = {}
-    per_question: dict[str, dict[str, list[float]]] = {}
     for verdict in verdicts:
         row = lookup.get((verdict["run_id"], verdict["system"], verdict["question_id"]))
         if row is None:
             continue
-        correct = float(judge_is_correct(row, str(verdict.get("verdict"))))
-        row_values.setdefault(verdict["system"], []).append(correct)
-        per_question.setdefault(verdict["system"], {}).setdefault(row["question_id"], []).append(
-            correct
+        if verdict.get("prediction_sha256") not in (None, _prediction_hash(row)):
+            continue
+        row_values.setdefault(verdict["system"], []).append(
+            float(judge_is_correct(row, str(verdict.get("verdict"))))
         )
     result: dict[str, Any] = {}
-    for system, by_question in sorted(per_question.items()):
-        question_means = [statistics.fmean(values) for values in by_question.values()]
+    for system, values in sorted(row_values.items()):
         result[system] = {
-            "judged": len(row_values[system]),
-            "answered_questions": len(question_means),
-            "accuracy": statistics.fmean(question_means) if question_means else None,
-            "row_accuracy": statistics.fmean(row_values[system]) if row_values[system] else None,
+            "judged": len(values),
+            "accuracy": statistics.fmean(values) if values else None,
         }
     return result
+
+
+# ---------------------------------------------------------------------------
+# comparison helpers
+# ---------------------------------------------------------------------------
+
+
+def _comparison_pair(
+    systems: dict[str, Any],
+    judge_per_question_by_label: dict[str, dict[str, dict[str, float]]],
+    a: str,
+    b: str,
+    label: str,
+    seed: int,
+) -> dict[str, Any] | None:
+    if a not in systems or b not in systems:
+        return None
+    comparison: dict[str, Any] = {
+        "label": label,
+        "a": a,
+        "b": b,
+        "answer_score": paired_comparison(
+            systems[a]["per_question_answer_score"],
+            systems[b]["per_question_answer_score"],
+            seed=seed,
+        ),
+        "token_f1": paired_comparison(
+            systems[a]["per_question_token_f1"], systems[b]["per_question_token_f1"], seed=seed
+        ),
+        "evidence_recall": paired_comparison(
+            systems[a]["per_question_evidence_recall_postfit"],
+            systems[b]["per_question_evidence_recall_postfit"],
+            seed=seed,
+        ),
+    }
+    for judge_label, per_question in judge_per_question_by_label.items():
+        if a in per_question and b in per_question:
+            comparison[f"judge_{judge_label}"] = paired_comparison(
+                per_question[a], per_question[b], seed=seed
+            )
+    return comparison
 
 
 # ---------------------------------------------------------------------------
@@ -612,6 +687,63 @@ def _table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
     return "\n".join(lines)
 
 
+def _comparison_table(comparison: dict[str, Any]) -> str:
+    rows = []
+    for metric_key, metric_label in (
+        ("answer_score", "answer_score"),
+        ("token_f1", "token_f1(cat1-4)"),
+        ("evidence_recall", "evidence_recall(post-fit macro)"),
+    ):
+        pair = comparison.get(metric_key)
+        if not pair:
+            continue
+        ci = pair.get("difference_ci95") or [None, None]
+        rows.append(
+            [
+                metric_label,
+                _fmt(pair.get("mean_memfw") if "mean_memfw" in pair else pair.get("mean_a")),
+                _fmt(pair.get("mean_mem0") if "mean_mem0" in pair else pair.get("mean_b")),
+                _fmt(pair.get("mean_difference")),
+                f"[{_fmt(ci[0])}, {_fmt(ci[1])}]",
+                _fmt((pair.get("exact_sign_flip") or {}).get("p_value")),
+                _fmt((pair.get("exact_wilcoxon") or {}).get("p_value")),
+                _fmt(pair.get("cohen_dz")),
+                _fmt(pair.get("minimum_detectable_difference")),
+            ]
+        )
+    for key, pair in sorted(comparison.items()):
+        if not key.startswith("judge_"):
+            continue
+        ci = pair.get("difference_ci95") or [None, None]
+        rows.append(
+            [
+                f"{key}",
+                _fmt(pair.get("mean_memfw") if "mean_memfw" in pair else pair.get("mean_a")),
+                _fmt(pair.get("mean_mem0") if "mean_mem0" in pair else pair.get("mean_b")),
+                _fmt(pair.get("mean_difference")),
+                f"[{_fmt(ci[0])}, {_fmt(ci[1])}]",
+                _fmt((pair.get("exact_sign_flip") or {}).get("p_value")),
+                _fmt((pair.get("exact_wilcoxon") or {}).get("p_value")),
+                _fmt(pair.get("cohen_dz")),
+                _fmt(pair.get("minimum_detectable_difference")),
+            ]
+        )
+    return _table(
+        [
+            "指标",
+            "A 均值",
+            "B 均值",
+            "均值差(A-B)",
+            "95% CI",
+            "精确置换 p",
+            "Wilcoxon p",
+            "Cohen dz",
+            "MDE",
+        ],
+        rows,
+    )
+
+
 def render_markdown(metrics: dict[str, Any]) -> str:
     lines = [
         "# Step G metrics",
@@ -619,55 +751,63 @@ def render_markdown(metrics: dict[str, Any]) -> str:
         "All numbers are computed from `results/stepG/runs/*/*/questions.jsonl`.",
         "",
     ]
+    arms = metrics.get("arms", [])
+    lines.append("## Arms")
+    lines.append("")
+    lines.append(", ".join(arms))
+    lines.append("")
     lines.append("## Answer quality (per-question mean across repeats)")
     lines.append("")
     rows = []
-    for system in ("memfw", "mem0"):
-        aggregate = metrics["systems"].get(system)
+    judge_models = metrics.get("judge", {}).get("models", [])
+    for arm in arms:
+        aggregate = metrics["systems"].get(arm)
         if not aggregate:
-            rows.append([system, "n/a", "n/a", "n/a", "n/a", "n/a"])
+            rows.append([arm] + ["n/a"] * 7)
             continue
+        judge_values = [
+            _pct(model.get("accuracy", {}).get(arm, {}).get("accuracy")) for model in judge_models
+        ]
         rows.append(
             [
-                system,
+                arm,
                 _fmt(aggregate["mean_answer_score"]),
                 _fmt(aggregate["mean_token_f1"]),
-                _pct(metrics.get("judge", {}).get("accuracy", {}).get(system, {}).get("accuracy")),
-                _pct(aggregate.get("mean_evidence_recall_postfit")),
+                _pct(aggregate["mean_evidence_recall_postfit"]),
+                _pct(aggregate.get("micro_evidence_recall_postfit")),
+                *judge_values,
                 str(aggregate["question_count"]),
             ]
         )
-    lines.append(
-        _table(
-            [
-                "system",
-                "answer_score",
-                "token_f1(cat1-4)",
-                "judge_accuracy(per-question)",
-                "evidence_recall(post-fit macro)",
-                "questions",
-            ],
-            rows,
-        )
-    )
+    headers = [
+        "arm",
+        "answer_score",
+        "token_f1(cat1-4)",
+        "recall(post-fit macro)",
+        "recall(post-fit micro)",
+    ]
+    headers += [f"judge:{model['label']}" for model in judge_models]
+    headers += ["questions"]
+    lines.append(_table(headers, rows))
     lines.append("")
     lines.append("## Efficiency")
     lines.append("")
     rows = []
-    for system in ("memfw", "mem0"):
-        aggregate = metrics["systems"].get(system)
+    for arm in arms:
+        aggregate = metrics["systems"].get(arm)
         if not aggregate:
             continue
         write = aggregate.get("write_latency") or {}
         rows.append(
             [
-                system,
+                arm,
                 _fmt(aggregate.get("ingest_seconds_mean"), 2),
                 _fmt(write.get("mean_seconds"), 4),
                 _fmt((aggregate.get("write_latency_turns") or {}).get("p50_seconds"), 4),
                 _fmt((aggregate.get("write_latency_turns") or {}).get("p95_seconds"), 4),
                 _fmt(aggregate["retrieval_latency"].get("p50_seconds"), 4),
                 _fmt(aggregate["retrieval_latency"].get("p95_seconds"), 4),
+                _fmt(aggregate["answer_latency"].get("p50_seconds"), 4),
                 str(aggregate["total_token_usage"]["prompt_tokens"]),
                 str(aggregate["total_token_usage"]["completion_tokens"]),
                 _fmt(aggregate.get("memory_count_mean"), 1),
@@ -677,13 +817,14 @@ def render_markdown(metrics: dict[str, Any]) -> str:
     lines.append(
         _table(
             [
-                "system",
+                "arm",
                 "ingest_s",
                 "write_mean_s",
                 "write_p50_s",
                 "write_p95_s",
                 "retrieval_p50_s",
                 "retrieval_p95_s",
+                "answer_p50_s",
                 "prompt_tokens",
                 "completion_tokens",
                 "memories",
@@ -693,85 +834,12 @@ def render_markdown(metrics: dict[str, Any]) -> str:
         )
     )
     lines.append("")
-    lines.append("## Paired comparison (primary metric: answer_score)")
+    lines.append("## Paired comparisons")
     lines.append("")
-    paired = metrics.get("paired") or {}
-    lines.append(
-        _table(
-            [
-                "n pairs",
-                "memfw",
-                "mem0",
-                "mean diff",
-                "95% CI",
-                "exact p",
-                "Wilcoxon p",
-                "Cohen dz",
-                "rank-biserial",
-                "MDE",
-            ],
-            [
-                [
-                    str(paired.get("n_pairs")),
-                    _fmt(paired.get("mean_memfw")),
-                    _fmt(paired.get("mean_mem0")),
-                    _fmt(paired.get("mean_difference")),
-                    "[{} , {}]".format(
-                        _fmt((paired.get("difference_ci95") or [None])[0]),
-                        _fmt((paired.get("difference_ci95") or [None, None])[1]),
-                    ),
-                    _fmt((paired.get("exact_sign_flip") or {}).get("p_value")),
-                    _fmt((paired.get("exact_wilcoxon") or {}).get("p_value")),
-                    _fmt(paired.get("cohen_dz")),
-                    _fmt(paired.get("rank_biserial")),
-                    _fmt(paired.get("minimum_detectable_difference")),
-                ]
-            ],
-        )
-    )
-    lines.append("")
-    secondary = []
-    for key, label in (
-        ("paired_token_f1", "token_f1(cat1-4)"),
-        ("paired_judge", "LLM judge(per-question)"),
-        ("paired_recall", "evidence_recall(post-fit macro)"),
-    ):
-        pair = metrics.get(key)
-        if not pair:
-            continue
-        ci = pair.get("difference_ci95") or [None, None]
-        secondary.append(
-            [
-                label,
-                _fmt(pair.get("mean_memfw")),
-                _fmt(pair.get("mean_mem0")),
-                _fmt(pair.get("mean_difference")),
-                f"[{_fmt(ci[0])}, {_fmt(ci[1])}]",
-                _fmt((pair.get("exact_sign_flip") or {}).get("p_value")),
-                _fmt((pair.get("exact_wilcoxon") or {}).get("p_value")),
-                _fmt(pair.get("cohen_dz")),
-                _fmt(pair.get("minimum_detectable_difference")),
-            ]
-        )
-    if secondary:
-        lines.append("### Secondary paired comparisons")
+    for comparison in metrics.get("comparisons", []):
+        lines.append(f"### {comparison['label']}")
         lines.append("")
-        lines.append(
-            _table(
-                [
-                    "metric",
-                    "memfw",
-                    "mem0",
-                    "mean diff",
-                    "95% CI",
-                    "exact p",
-                    "Wilcoxon p",
-                    "Cohen dz",
-                    "MDE",
-                ],
-                secondary,
-            )
-        )
+        lines.append(_comparison_table(comparison))
         lines.append("")
     lines.append("## Limits")
     lines.append("")
@@ -790,6 +858,10 @@ def _validate_runs(
     results_dir = _resolve(config["paths"]["results_dir"])
     expected_questions = 18
     repeats = int(config["runs"].get("repeats", 3))
+    expected_arms = [SYSTEMS.get(name, name) for name in config["runs"].get("systems", [])]
+    for arm in expected_arms:
+        if arm not in rows:
+            raise ValueError(f"missing arm in results: {arm}")
     for system, by_run in rows.items():
         if len(by_run) != repeats:
             raise ValueError(
@@ -801,47 +873,149 @@ def _validate_runs(
                     f"{system}/{run_id}: expected {expected_questions} question rows, "
                     f"found {len(run_rows)}"
                 )
-        write_turns = results_dir / "runs" / run_id / system / "write_turns.jsonl"
-        if not write_turns.exists():
-            raise ValueError(f"{system}/{run_id}: missing write_turns.jsonl")
-        dia_ids = [
-            json.loads(line)["dia_id"]
-            for line in write_turns.read_text().splitlines()
-            if line.strip()
-        ]
-        if len(dia_ids) != 100 or len(set(dia_ids)) != 100:
-            raise ValueError(
-                f"{system}/{run_id}: expected 100 unique ingested turns, "
-                f"found {len(dia_ids)} lines / {len(set(dia_ids))} unique"
-            )
+            write_turns = results_dir / "runs" / run_id / system / "write_turns.jsonl"
+            if not write_turns.exists():
+                raise ValueError(f"{system}/{run_id}: missing write_turns.jsonl")
+            dia_ids = [
+                json.loads(line)["dia_id"]
+                for line in write_turns.read_text().splitlines()
+                if line.strip()
+            ]
+            if len(dia_ids) != 100 or len(set(dia_ids)) != 100:
+                raise ValueError(
+                    f"{system}/{run_id}: expected 100 unique ingested turns, "
+                    f"found {len(dia_ids)} lines / {len(set(dia_ids))} unique"
+                )
         if int(systems[system].get("run_errors") or 0):
             raise ValueError(f"{system}: run recorded {systems[system]['run_errors']} errors")
 
 
-def build_metrics(config: dict[str, Any], *, judge: bool = True) -> dict[str, Any]:
+def build_metrics(
+    config: dict[str, Any],
+    *,
+    judge: bool = True,
+    judge_sensitivity: bool = True,
+) -> dict[str, Any]:
     results_dir = _resolve(config["paths"]["results_dir"])
     rows = load_rows(results_dir)
     summaries = load_summaries(results_dir)
-    systems: dict[str, Any] = {}
     write_values = load_write_latencies(results_dir)
     ingest_tokens = load_ingest_token_usage(results_dir)
-    for system in sorted(rows):
-        systems[system] = aggregate_system(
-            rows[system],
-            summaries.get(system),
-            write_values.get(system),
-            ingest_tokens.get(system),
+    systems: dict[str, Any] = {}
+    for arm in sorted(rows):
+        systems[arm] = aggregate_system(
+            rows[arm], summaries.get(arm), write_values.get(arm), ingest_tokens.get(arm)
         )
+    _validate_runs(config, rows, systems)
+    run_errors = sum(int(systems[arm].get("run_errors") or 0) for arm in systems)
+
+    judge_blocks: dict[str, dict[str, Any]] = {}
+    judge_per_question_by_label: dict[str, dict[str, dict[str, float]]] = {}
+    for label, key, enabled in (
+        ("primary", "judge", judge),
+        ("same_model", "judge_sensitivity", judge_sensitivity),
+    ):
+        judge_cfg = judge_model_config(config, key)
+        if judge_cfg is None or not enabled:
+            continue
+        out_path = results_dir / f"judge_{label}.jsonl"
+        verdicts = run_judge(
+            config,
+            rows,
+            out_path=out_path,
+            judge_config=judge_cfg,
+            label=label,
+        )
+        accuracy = judge_accuracy(rows, verdicts)
+        per_question = judge_per_question(rows, verdicts)
+        judge_per_question_by_label[label] = per_question
+        judge_blocks[label] = {
+            "label": label,
+            "model": judge_cfg.get("model"),
+            "accuracy": accuracy,
+            "judged_rows": len(verdicts),
+            "source": str(out_path),
+            "paired": {
+                a: paired_comparison(per_question[a], per_question[b], seed=int(config["seed"]))
+                for a, b in (
+                    (idx_a, idx_b)
+                    for idx_a in per_question
+                    for idx_b in per_question
+                    if idx_a < idx_b
+                )
+            }
+            if per_question
+            else {},
+        }
+
+    comparisons: list[dict[str, Any]] = []
+    reference = "memfw"
+    primary_arm = (
+        "mem0_stock"
+        if "mem0_stock" in systems
+        else next((arm for arm in systems if arm != reference), "")
+    )
+    if reference in systems and primary_arm in systems:
+        comparison = _comparison_pair(
+            systems,
+            judge_per_question_by_label,
+            reference,
+            primary_arm,
+            f"{reference} vs {primary_arm}（primary）",
+            int(config["seed"]),
+        )
+        if comparison:
+            comparisons.append(comparison)
+    if "mem0_custom" in systems and reference in systems:
+        comparison = _comparison_pair(
+            systems,
+            judge_per_question_by_label,
+            reference,
+            "mem0_custom",
+            f"{reference} vs mem0_custom（sensitivity）",
+            int(config["seed"]),
+        )
+        if comparison:
+            comparisons.append(comparison)
+    if "mem0_stock" in systems and "mem0_custom" in systems:
+        comparison = _comparison_pair(
+            systems,
+            judge_per_question_by_label,
+            "mem0_stock",
+            "mem0_custom",
+            "mem0_stock vs mem0_custom（configuration effect）",
+            int(config["seed"]),
+        )
+        if comparison:
+            comparisons.append(comparison)
+
     metrics: dict[str, Any] = {
-        "schema_version": "stepg-metrics-v1",
+        "schema_version": "stepg-metrics-v2",
         "config": {
             "seed": config["seed"],
             "llm": config["llm"],
             "embedding": config["embedding"],
             "retrieval": config["retrieval"],
             "repeats": config["runs"].get("repeats"),
+            "arms": [SYSTEMS.get(name, name) for name in config["runs"].get("systems", [])],
         },
+        "arms": [SYSTEMS.get(name, name) for name in config["runs"].get("systems", [])],
         "systems": systems,
+        "comparisons": comparisons,
+        "judge": {
+            "models": [
+                {
+                    "label": block["label"],
+                    "model": block["model"],
+                    "judged_rows": block["judged_rows"],
+                    "accuracy": block["accuracy"],
+                    "source": block["source"],
+                }
+                for block in judge_blocks.values()
+            ],
+            "paired": {label: block["paired"] for label, block in judge_blocks.items()},
+        },
+        "run_errors": run_errors,
         "sources": {
             "runs_dir": str(results_dir / "runs"),
             "questions_glob": str(results_dir / "runs" / "*" / "*" / "questions.jsonl"),
@@ -850,71 +1024,42 @@ def build_metrics(config: dict[str, Any], *, judge: bool = True) -> dict[str, An
         "limitations": [
             "Small fixed subset: one public LoCoMo conversation, first 100 turns, "
             "18 questions; results do not represent full LoCoMo.",
-            "Single dataset (LoCoMo) and a single local model; absolute scores are "
+            "Single dataset (LoCoMo) and a single local answer model; absolute scores are "
             "model-dependent.",
             "All retention is 100% for the primary comparison; forgetting is not exercised "
             "in this formal run.",
-            "memfw stores verbatim turns by design in this protocol; Mem0 runs its "
-            "extraction/update pipeline (infer=True), so write costs are not symmetric.",
-            "The judge uses the same local model as the answerer; judge accuracy is a "
-            "secondary diagnostic, not ground truth.",
-            "Paired tests have 18 pairs; the minimum detectable difference is reported and "
-            "is larger than several observed gaps.",
-            "mean_token_f1 and the paired token-F1 test exclude category-5 adversarial "
-            "questions, whose gold answer is a trick answer; they use the abstention rule.",
-            "Two evidence-recall definitions are reported: pre-fit top-k macro recall and "
-            "post-fit (128-token context) macro/micro recall; only the post-fit micro value "
-            "matches the Day 11 metric definition.",
-            "Provenance audit uses run rep1 only. mem0's custom extraction instructions "
-            "request attributed_to='user', but the extraction output mixed explicit user "
-            "attribution, assistant attribution and missing fields, so the R3 flag rate is "
-            "partly prompt-forced and partly model behaviour (not an independent quality "
-            "measure).",
-            "Four paired tests are reported without family correction; treat secondary "
-            "tests as exploratory.",
-            "Model identity is evidenced by env.txt digests, not by a cryptographic "
-            "receipt from the model server.",
+            "memfw stores verbatim turns by design in this protocol; Mem0 arms run extraction "
+            "pipelines, so write costs are not symmetric.",
+            "Mean token-F1 and paired token-F1 exclude category-5 adversarial questions "
+            "(abstention rule instead).",
+            "Two evidence-recall definitions are reported: pre-fit top-k and post-fit "
+            "(128-token context). The post-fit micro value matches the Day 11 metric "
+            "definition; the macro value is the paired-analysis unit.",
+            "Primary judge is a different model (qwen3.5:4b); the same-model judge is a "
+            "sensitivity diagnostic, not ground truth.",
+            "Provenance audit uses run rep1 only; mem0_custom's custom instructions request "
+            "attributed_to='user', so its R3 rate is partly prompt-forced (mem0_stock is "
+            "not prompt-forced).",
+            "Paired tests use 18 fixed-subset pairs; the minimum detectable difference is "
+            "reported. Secondary arms/tests are exploratory and not family-corrected.",
+            "Memory-text form differs by protocol: memfw stores verbatim turns (speaker "
+            "prefix, long sentences) while Mem0 stores extracted short statements; under "
+            "the same 128-token budget the information density differs, so recall/answer "
+            "gaps partly reflect this asymmetry rather than retrieval quality alone.",
+            "Model identity is evidenced by env.txt digests, not by a cryptographic receipt "
+            "from the model server.",
         ],
     }
-    _validate_runs(config, rows, systems)
-    errors_total = sum(int(systems[system].get("run_errors") or 0) for system in systems)
-    metrics["run_errors"] = errors_total
-    paired = None
-    if "memfw" in systems and "mem0" in systems:
-        paired = paired_comparison(
-            systems["memfw"]["per_question_answer_score"],
-            systems["mem0"]["per_question_answer_score"],
-            seed=int(config["seed"]),
-        )
-        metrics["paired"] = paired
-        metrics["paired_token_f1"] = paired_comparison(
-            systems["memfw"]["per_question_token_f1"],
-            systems["mem0"]["per_question_token_f1"],
-            seed=int(config["seed"]),
-        )
-        metrics["paired_recall"] = paired_comparison(
-            systems["memfw"]["per_question_evidence_recall_postfit"],
-            systems["mem0"]["per_question_evidence_recall_postfit"],
-            seed=int(config["seed"]),
-        )
-    judge_config = config.get("judge") or {}
-    if judge and judge_config.get("enabled", False):
-        judge_path = results_dir / "judge.jsonl"
-        verdicts = run_judge(config, rows, out_path=judge_path)
-        metrics["judge"] = {
-            "enabled": True,
-            "model": judge_config.get("model"),
-            "accuracy": judge_accuracy(rows, verdicts),
-            "judged_rows": len(verdicts),
-            "source": str(judge_path),
-        }
-        per_question = judge_per_question(rows, verdicts)
-        if "memfw" in per_question and "mem0" in per_question:
-            metrics["paired_judge"] = paired_comparison(
-                per_question["memfw"], per_question["mem0"], seed=int(config["seed"])
-            )
-    else:
-        metrics["judge"] = {"enabled": False}
+    primary_answer = next(
+        (
+            comparison["answer_score"]
+            for comparison in comparisons
+            if "primary" in comparison["label"]
+        ),
+        None,
+    )
+    if primary_answer:
+        metrics["paired"] = primary_answer  # legacy field
     _write_json(results_dir / "metrics.json", metrics)
     (results_dir / "metrics.md").write_text(render_markdown(metrics), encoding="utf-8")
     return metrics
@@ -926,13 +1071,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--config", type=Path, default=REPO_ROOT / "results" / "stepG" / "config.yaml"
     )
     parser.add_argument("--no-judge", action="store_true")
+    parser.add_argument("--no-judge-sensitivity", action="store_true")
     args = parser.parse_args(argv)
     config = load_config(args.config)
-    metrics = build_metrics(config, judge=not args.no_judge)
+    metrics = build_metrics(
+        config,
+        judge=not args.no_judge,
+        judge_sensitivity=not args.no_judge_sensitivity,
+    )
     print(
         json.dumps(
-            {"systems": list(metrics["systems"]), "judge": metrics["judge"].get("enabled")},
-            sort_keys=True,
+            {"arms": metrics["arms"], "comparisons": len(metrics["comparisons"])}, sort_keys=True
         )
     )
     return 0

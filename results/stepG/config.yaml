@@ -31,7 +31,17 @@ retrieval:
   top_k: 5
   context_token_budget: 128
 
+# Primary judge: deliberately a DIFFERENT model from the answerer (qwen3.5:9b).
 judge:
+  enabled: true
+  transport: ollama
+  base_url: http://127.0.0.1:11434
+  model: qwen3.5:4b
+  temperature: 0.0
+  max_tokens: 96
+
+# Sensitivity judge: same model as the answerer (the first Step G configuration).
+judge_sensitivity:
   enabled: true
   transport: ollama
   base_url: http://127.0.0.1:11434
@@ -49,7 +59,9 @@ mem0:
     never return memory items as plain strings.
 
 runs:
-  systems: [memfw, mem0]
+  # Primary comparison arm is mem0_stock (stock Mem0, Day-11 comparable).
+  # mem0_custom keeps the schema-compat extraction instructions as a sensitivity arm.
+  systems: [memfw, mem0_stock, mem0_custom]
   repeats: 3
   mem0:
     collection_name: stepg_locomo
