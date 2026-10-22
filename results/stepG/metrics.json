@@ -1,0 +1,544 @@
+{
+  "config": {
+    "embedding": {
+      "base_url": "http://127.0.0.1:11434",
+      "dims": 768,
+      "model": "nomic-embed-text",
+      "transport": "ollama"
+    },
+    "llm": {
+      "base_url": "http://127.0.0.1:11434",
+      "max_tokens": 64,
+      "model": "qwen3.5:9b",
+      "num_ctx": 16384,
+      "temperature": 0.0,
+      "transport": "ollama"
+    },
+    "repeats": 3,
+    "retrieval": {
+      "context_token_budget": 128,
+      "top_k": 5
+    },
+    "seed": 20261021
+  },
+  "judge": {
+    "accuracy": {
+      "mem0": {
+        "accuracy": 0.4444444444444444,
+        "answered_questions": 18,
+        "judged": 54,
+        "row_accuracy": 0.4444444444444444
+      },
+      "memfw": {
+        "accuracy": 0.3888888888888889,
+        "answered_questions": 18,
+        "judged": 54,
+        "row_accuracy": 0.3888888888888889
+      }
+    },
+    "enabled": true,
+    "judged_rows": 108,
+    "model": "qwen3.5:9b",
+    "source": "$HOME/Documents/Codex/2026-10-18/memfw-stepG-worktree/results/stepG/judge.jsonl"
+  },
+  "limitations": [
+    "Small fixed subset: one public LoCoMo conversation, first 100 turns, 18 questions; results do not represent full LoCoMo.",
+    "Single dataset (LoCoMo) and a single local model; absolute scores are model-dependent.",
+    "All retention is 100% for the primary comparison; forgetting is not exercised in this formal run.",
+    "memfw stores verbatim turns by design in this protocol; Mem0 runs its extraction/update pipeline (infer=True), so write costs are not symmetric.",
+    "The judge uses the same local model as the answerer; judge accuracy is a secondary diagnostic, not ground truth.",
+    "Paired tests have 18 pairs; the minimum detectable difference is reported and is larger than several observed gaps.",
+    "mean_token_f1 and the paired token-F1 test exclude category-5 adversarial questions, whose gold answer is a trick answer; they use the abstention rule.",
+    "Two evidence-recall definitions are reported: pre-fit top-k macro recall and post-fit (128-token context) macro/micro recall; only the post-fit micro value matches the Day 11 metric definition.",
+    "Provenance audit uses run rep1 only; mem0's custom extraction instructions force attributed_to='user', so its R3 flag is by construction (rubric R3).",
+    "Four paired tests are reported without family correction; treat secondary tests as exploratory.",
+    "Model identity is evidenced by env.txt digests, not by a cryptographic receipt from the model server."
+  ],
+  "paired": {
+    "cohen_dz": -0.014138441721070328,
+    "difference_ci95": [
+      -0.19140777400703868,
+      0.18930048151739326
+    ],
+    "exact_sign_flip": {
+      "mean_difference": -0.0060899830017477,
+      "method": "exact_sign_flip",
+      "n": 18,
+      "p_value": 0.96875,
+      "sign_flips": 262144
+    },
+    "exact_wilcoxon": {
+      "method": "exact_wilcoxon",
+      "n": 9,
+      "p_value": 0.6796875,
+      "signed_rank_combinations": 512,
+      "statistic": 18.5
+    },
+    "mean_difference": -0.0060899830017477,
+    "mean_mem0": 0.46515082956259424,
+    "mean_memfw": 0.45906084656084656,
+    "median_difference": 0.0,
+    "minimum_detectable_difference": 0.2842734585099594,
+    "n_pairs": 18,
+    "per_question_differences": {
+      "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": -1.0,
+      "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.05882352941176483,
+      "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+      "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+      "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+      "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": -0.4000000000000001,
+      "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+      "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+      "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.9,
+      "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+      "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": -0.33333333333333337,
+      "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": -0.195,
+      "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+      "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": -0.17582417582417575,
+      "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+      "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+      "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+      "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.035714285714285754
+    },
+    "rank_biserial": -0.17777777777777778
+  },
+  "paired_judge": {
+    "cohen_dz": -0.10301327744925143,
+    "difference_ci95": [
+      -0.2777777777777778,
+      0.16666666666666666
+    ],
+    "exact_sign_flip": {
+      "mean_difference": -0.05555555555555555,
+      "method": "exact_sign_flip",
+      "n": 18,
+      "p_value": 1.0,
+      "sign_flips": 262144
+    },
+    "exact_wilcoxon": {
+      "method": "exact_wilcoxon",
+      "n": 5,
+      "p_value": 1.0,
+      "signed_rank_combinations": 32,
+      "statistic": 6.0
+    },
+    "mean_difference": -0.05555555555555555,
+    "mean_mem0": 0.4444444444444444,
+    "mean_memfw": 0.3888888888888889,
+    "median_difference": 0.0,
+    "minimum_detectable_difference": 0.3559230127357832,
+    "n_pairs": 18,
+    "per_question_differences": {
+      "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": -1.0,
+      "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.0,
+      "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+      "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+      "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+      "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+      "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+      "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+      "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 1.0,
+      "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+      "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": -1.0,
+      "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": -1.0,
+      "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+      "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.0,
+      "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+      "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+      "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+      "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+    },
+    "rank_biserial": -0.2
+  },
+  "paired_recall": {
+    "cohen_dz": -0.27694627002035777,
+    "difference_ci95": [
+      -0.32407407407407407,
+      0.07407407407407407
+    ],
+    "exact_sign_flip": {
+      "mean_difference": -0.12037037037037036,
+      "method": "exact_sign_flip",
+      "n": 18,
+      "p_value": 0.3125,
+      "sign_flips": 262144
+    },
+    "exact_wilcoxon": {
+      "method": "exact_wilcoxon",
+      "n": 6,
+      "p_value": 0.3125,
+      "signed_rank_combinations": 64,
+      "statistic": 5.0
+    },
+    "mean_difference": -0.12037037037037036,
+    "mean_mem0": 0.8148148148148148,
+    "mean_memfw": 0.6944444444444444,
+    "median_difference": 0.0,
+    "minimum_detectable_difference": 0.2868440562885982,
+    "n_pairs": 18,
+    "per_question_differences": {
+      "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 1.0,
+      "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.0,
+      "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": -0.5,
+      "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+      "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": -1.0,
+      "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+      "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": -1.0,
+      "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+      "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.0,
+      "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+      "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": -0.33333333333333337,
+      "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": -0.3333333333333333,
+      "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+      "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.0,
+      "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+      "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 0.0,
+      "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+      "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+    },
+    "rank_biserial": -0.5238095238095238
+  },
+  "paired_token_f1": {
+    "cohen_dz": 0.1583069508979914,
+    "difference_ci95": [
+      -0.11683508018592051,
+      0.2836947278911564
+    ],
+    "exact_sign_flip": {
+      "mean_difference": 0.06359859328346724,
+      "method": "exact_sign_flip",
+      "n": 14,
+      "p_value": 0.5546875,
+      "sign_flips": 16384
+    },
+    "exact_wilcoxon": {
+      "method": "exact_wilcoxon",
+      "n": 8,
+      "p_value": 1.0,
+      "signed_rank_combinations": 256,
+      "statistic": 18.0
+    },
+    "mean_difference": 0.06359859328346724,
+    "mean_mem0": 0.31233678086619265,
+    "mean_memfw": 0.3759353741496599,
+    "median_difference": 0.0,
+    "minimum_detectable_difference": 0.30063638393345626,
+    "n_pairs": 14,
+    "per_question_differences": {
+      "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.05882352941176483,
+      "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+      "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+      "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+      "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": -0.4000000000000001,
+      "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+      "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.9,
+      "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": -0.33333333333333337,
+      "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": -0.195,
+      "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+      "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": -0.17582417582417575,
+      "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+      "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+      "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.035714285714285754
+    },
+    "rank_biserial": 0.0
+  },
+  "run_errors": 0,
+  "schema_version": "stepg-metrics-v1",
+  "sources": {
+    "questions_glob": "$HOME/Documents/Codex/2026-10-18/memfw-stepG-worktree/results/stepG/runs/*/*/questions.jsonl",
+    "runs_dir": "$HOME/Documents/Codex/2026-10-18/memfw-stepG-worktree/results/stepG/runs",
+    "summaries_glob": "$HOME/Documents/Codex/2026-10-18/memfw-stepG-worktree/results/stepG/runs/*/*/summary.json"
+  },
+  "systems": {
+    "mem0": {
+      "answer_latency": {
+        "count": 54,
+        "mean_seconds": 1.2810317036869323,
+        "p50_seconds": 1.2312218959996244,
+        "p95_seconds": 1.4746241857545102,
+        "total_seconds": 69.17571199909435
+      },
+      "answer_token_usage": {
+        "completion_tokens": 366,
+        "prompt_tokens": 11898
+      },
+      "error_samples": [],
+      "ingest_seconds_mean": 999.7283415000032,
+      "llm_token_usage": {
+        "calls": 300,
+        "completion_tokens": 11628,
+        "prompt_tokens": 2733069
+      },
+      "mean_answer_score": 0.46515082956259424,
+      "mean_evidence_recall": 0.8148148148148148,
+      "mean_evidence_recall_postfit": 0.8148148148148148,
+      "mean_evidence_recall_prefit": 0.8148148148148148,
+      "mean_token_f1": 0.31233678086619265,
+      "memory_count_mean": 50.0,
+      "micro_evidence_recall_postfit": 0.8333333333333334,
+      "micro_evidence_recall_prefit": 0.8333333333333334,
+      "per_question_answer_score": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 1.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.9411764705882352,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.4000000000000001,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 1.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.0,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 1.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 1.0,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.32,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.4615384615384615,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 1.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 0.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.25
+      },
+      "per_question_evidence_recall_postfit": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 0.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 1.0,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 1.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 1.0,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 1.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 1.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 1.0,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 1.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 1.0,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.6666666666666666,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 1.0,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 1.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 1.0
+      },
+      "per_question_evidence_recall_prefit": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 0.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 1.0,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 1.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 1.0,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 1.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 1.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 1.0,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 1.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 1.0,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.6666666666666666,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 1.0,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 1.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 1.0
+      },
+      "per_question_token_f1": {
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.9411764705882352,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.4000000000000001,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 1.0,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.32,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.4615384615384615,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 0.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.25
+      },
+      "per_run_mean_answer_score": {
+        "rep1": 0.46515082956259424,
+        "rep2": 0.46515082956259424,
+        "rep3": 0.46515082956259424
+      },
+      "question_count": 18,
+      "repeats": 3,
+      "retrieval_latency": {
+        "count": 54,
+        "mean_seconds": 0.30282704240784775,
+        "p50_seconds": 0.3033157294994453,
+        "p95_seconds": 0.30725924144644523,
+        "total_seconds": 16.352660290023778
+      },
+      "run_errors": 0,
+      "run_ids": [
+        "rep1",
+        "rep2",
+        "rep3"
+      ],
+      "scored_question_count_non_adversarial": 14,
+      "storage_bytes_mean": 459350.0,
+      "total_token_usage": {
+        "completion_tokens": 11994,
+        "prompt_tokens": 2744967
+      },
+      "write_latency": {
+        "mean_seconds": 9.99696284151384,
+        "per_run_means": {
+          "rep1": 9.800345074551588,
+          "rep2": 10.15634398248978,
+          "rep3": 10.034199467500148
+        }
+      },
+      "write_latency_turns": {
+        "count": 300,
+        "mean_seconds": 9.996962841513838,
+        "p50_seconds": 9.528069103995222,
+        "p95_seconds": 12.515438918118889,
+        "total_seconds": 2999.0888524541515
+      }
+    },
+    "memfw": {
+      "answer_latency": {
+        "count": 54,
+        "mean_seconds": 1.269889644298625,
+        "p50_seconds": 1.2397593750065425,
+        "p95_seconds": 1.4090476626850432,
+        "total_seconds": 68.57404079212574
+      },
+      "answer_token_usage": {
+        "completion_tokens": 267,
+        "prompt_tokens": 11484
+      },
+      "error_samples": [],
+      "ingest_seconds_mean": 2.200655583331051,
+      "llm_token_usage": {
+        "calls": 0,
+        "completion_tokens": 0,
+        "prompt_tokens": 0
+      },
+      "mean_answer_score": 0.45906084656084656,
+      "mean_evidence_recall": 0.6944444444444444,
+      "mean_evidence_recall_postfit": 0.6944444444444444,
+      "mean_evidence_recall_prefit": 0.6944444444444444,
+      "mean_token_f1": 0.3759353741496599,
+      "memory_count_mean": 100.0,
+      "micro_evidence_recall_postfit": 0.6666666666666666,
+      "micro_evidence_recall_prefit": 0.6666666666666666,
+      "per_question_answer_score": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 0.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 1.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.9,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 1.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.6666666666666666,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.125,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.28571428571428575,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 1.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.28571428571428575
+      },
+      "per_question_evidence_recall_postfit": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 1.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.5,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 1.0,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 1.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 1.0,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 1.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.6666666666666666,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.3333333333333333,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 1.0,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 1.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 1.0
+      },
+      "per_question_evidence_recall_prefit": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 1.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.5,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 1.0,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 1.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 1.0,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 1.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.6666666666666666,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.3333333333333333,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 1.0,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 1.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 1.0
+      },
+      "per_question_token_f1": {
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.9,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.6666666666666666,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.125,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.28571428571428575,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.28571428571428575
+      },
+      "per_run_mean_answer_score": {
+        "rep1": 0.45906084656084656,
+        "rep2": 0.45906084656084656,
+        "rep3": 0.45906084656084656
+      },
+      "question_count": 18,
+      "repeats": 3,
+      "retrieval_latency": {
+        "count": 54,
+        "mean_seconds": 0.38147112192355387,
+        "p50_seconds": 0.4026938125025481,
+        "p95_seconds": 0.41417037258652273,
+        "total_seconds": 20.59944058387191
+      },
+      "run_errors": 0,
+      "run_ids": [
+        "rep1",
+        "rep2",
+        "rep3"
+      ],
+      "scored_question_count_non_adversarial": 14,
+      "storage_bytes_mean": 99633.0,
+      "total_token_usage": {
+        "completion_tokens": 267,
+        "prompt_tokens": 11484
+      },
+      "write_latency": {
+        "mean_seconds": 0.021863502516741087,
+        "per_run_means": {
+          "rep1": 0.023365854599978773,
+          "rep2": 0.021005063769989646,
+          "rep3": 0.021219589180254843
+        }
+      },
+      "write_latency_turns": {
+        "count": 300,
+        "mean_seconds": 0.021863502516741087,
+        "p50_seconds": 0.019286145514342934,
+        "p95_seconds": 0.022646260412875565,
+        "total_seconds": 6.5590507550223265
+      }
+    }
+  }
+}

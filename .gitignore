@@ -75,3 +75,13 @@ reports/day3_synthetic.jsonl
 reports/day3_synthetic.capture.jsonl
 reports/day7_official.json
 /docs/public_release_checklist.md
+
+# Step G local experiment artifacts
+.venv-stepg/
+.tools/
+.models/
+.hf-cache/
+.ollama-home/
+.ollama-models/
+results/stepG/data/
+results/stepG/runtime/
