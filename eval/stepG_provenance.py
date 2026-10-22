@@ -70,9 +70,11 @@ verbatim source text is nevertheless recorded as if it were the user's own words
 - **mem0**: `Memory.add(..., user_id=...)` stores every produced memory in the user's
   memory namespace and mem0 exposes no per-memory inference/derived label. Step G also
   passes Mem0's public `prompt=` custom-instructions knob, which asks the extractor to
-  emit `"attributed_to": "user"`; therefore every derived mem0 record is R3 **by
-  construction** in this configuration. This is stated explicitly so the flag rate is
-  not over-interpreted as an emergent measurement.
+  emit `"attributed_to": "user"`. In the audited run this request was only partly
+  followed: most derived memories are explicitly user-attributed (R3), while a minority
+  are returned as assistant-attributed or without an attribution field (R4). The flag
+  rate is therefore partly prompt-forced and partly model behaviour; it must not be read
+  as an independent quality measurement.
 - **Difference from the Day 11 audit**: Day 11 sampled 30 memories uniformly and applied
   R3 only when `attributed_to == "user"` exactly. Step G's primary `derived_frame` samples
   only inferred memories, and its `all_frame` is a uniform fallback; a `day11_frame`
@@ -236,8 +238,9 @@ def run_audit(config: dict[str, Any], *, run_id: str = "rep1") -> dict[str, Any]
             "derived_frame is the primary G6 frame (up to 30 inferred memories per system); "
             "all_frame is a fixed-denominator fallback over uniformly sampled memories; "
             "day11_frame re-uses the Day 11 uniform frame and R3 rule for direction checks. "
-            "mem0 R3 is by construction because the custom extraction prompt requests "
-            "attributed_to='user'."
+            "mem0 R3 is partly prompt-forced: the custom extraction prompt requests "
+            "attributed_to='user', but some derived memories are still returned as "
+            "assistant-attributed or without attribution (R4)."
         ),
         "audited_run_id": run_id,
         "systems": {},

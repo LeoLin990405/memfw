@@ -484,9 +484,10 @@ def write_report(config: dict[str, Any]) -> Path:
             )
             lines.append(
                 "- 审计仅使用 `rep1` 的记忆导出（见 `provenance_summary.json` → "
-                "`audited_run_id`）；mem0 的 custom extraction instructions 强制 "
-                "`attributed_to=user`，因此其 R3 FLAGGED 属于**构造性质**，"
-                "不应解读为语言模型的独立测量。"
+                "`audited_run_id`）；mem0 的 custom extraction instructions *请求* "
+                "`attributed_to=user`，实际输出中大部分派生记忆被显式标为用户、"
+                "少数被标为 assistant 或缺失该字段（R4）。因此 R3 FLAGGED 是"
+                "**部分由 prompt 强制、部分来自模型行为**，不能当作独立质量测量。"
             )
         else:
             lines.append("未生成 provenance 汇总（G6 未完成）。")
@@ -530,8 +531,8 @@ def write_report(config: dict[str, Any]) -> Path:
                 f"使用**同一模型**（`{prelim['model']}` + `{prelim['embedding']}`）与"
                 "**同一固定子集**（conv-49 前 100 轮 / 18 题 / seed 20261021），"
                 "因此 answer_score 与 **post-fit micro evidence recall** 可以直接对照；"
-                "但 Mem0 的写入提示（custom extraction instructions）、机器与运行时不同，"
-                "Mem0 侧数字不是同一配置的严格复现。"
+                "但 Mem0 的写入提示（custom extraction instructions）与运行时配置不同，"
+                "Mem0 侧数字不是同一配置的严格复现（环境与模型 digest 与 Day 11 相同）。"
             )
             lines.append("")
             prov_formal: dict[str, str] = {}
@@ -679,13 +680,20 @@ def write_report(config: dict[str, Any]) -> Path:
                         "已在 summary 中如实记录。"
                     )
         if metrics:
-            per_run = metrics["systems"].get("memfw", {}).get("per_run_mean_answer_score") or {}
-            if len(set(round(float(value), 9) for value in per_run.values())) == 1:
+            per_run_by_system: dict[str, list[float]] = {}
+            for system in ("memfw", "mem0"):
+                per_run = metrics["systems"].get(system, {}).get("per_run_mean_answer_score") or {}
+                per_run_by_system[system] = sorted(
+                    set(round(float(v), 6) for v in per_run.values())
+                )
+            if all(len(values) == 1 for values in per_run_by_system.values()):
+                detail = "; ".join(
+                    f"{system} {values[0]}" for system, values in per_run_by_system.items()
+                )
                 unfinished.append(
-                    "重复确定性：3 个 repeat 的 per-run answer_score 完全相同"
-                    f"（{sorted(set(round(float(v), 6) for v in per_run.values()))}），"
-                    "因此“跨重复方差”为 0；这来自 temperature=0 的确定性解码，"
-                    "不能当作独立样本推断方差。"
+                    "重复确定性（观测）：3 个 repeat 的 per-run answer_score 完全相同"
+                    f"（{detail}），因此“跨重复方差”为 0；这是本机 temperature=0 解码下"
+                    "观测到的确定性，不能当作独立样本推断方差。"
                 )
             if int(metrics.get("run_errors") or 0):
                 unfinished.append(
@@ -697,8 +705,9 @@ def write_report(config: dict[str, Any]) -> Path:
                 "但未对每个 repeat 分别抽样。"
             )
             unfinished.append(
-                "mem0 的 R3 FLAGGED 由 custom extraction instructions 的 "
-                "`attributed_to=user` 强制产生（构造性质），不是独立测量。"
+                "mem0 的 R3 FLAGGED 部分来自 custom extraction instructions 请求的 "
+                "`attributed_to=user`，部分来自模型把部分记忆标为 assistant/缺失字段；"
+                "因此它是“prompt + 模型行为”的混合，不是独立质量测量。"
             )
         unfinished.append(
             "数据更新说明：mem0 的最终数字来自 `finalize3` 重跑——修复检索结果 dia_ids "
@@ -707,6 +716,11 @@ def write_report(config: dict[str, Any]) -> Path:
         unfinished.append(
             "模型同一性由 `env.txt` 中记录的 Ollama model digest 佐证，没有模型服务端的"
             "密码学回执；judge 与被测模型相同，属于次要诊断。"
+        )
+        unfinished.append(
+            "运行代码快照：`env.txt` 的 `git_head` 是运行开始时的 HEAD（`c55d1fe`，"
+            "此时 eval/ 与 results/ 尚未入库）；实际运行代码由本次报告的提交保存，"
+            "这是“运行快照 vs 提交快照”的正常差异。"
         )
         if (results_dir / "test-results.txt").exists():
             unfinished.append("pytest 结果见 `results/stepG/test-results.txt`。")
