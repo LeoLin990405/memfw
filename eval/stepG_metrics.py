@@ -79,6 +79,10 @@ def load_rows(results_dir: Path) -> dict[str, dict[str, list[dict[str, Any]]]]:
             rows = _read_rows(rows_path)
             if not rows:
                 continue
+            # Arm directory name is canonical; legacy rows may still say "mem0" for the
+            # custom arm after a directory rename.
+            for row in rows:
+                row["system"] = system_dir.name
             collected.setdefault(system_dir.name, {})[run_dir.name] = rows
     return collected
 
