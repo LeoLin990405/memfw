@@ -484,53 +484,74 @@ def test_provenance_day11_attribution_rule_differs_from_stepg_rule() -> None:
 
 
 def test_report_tables_have_matching_header_and_row_width() -> None:
-    from eval.stepG_report import _main_results, _provenance_table, _secondary_table
+    from eval.stepG_report import _comparison_table, _provenance_table, _quality_and_efficiency
+
+    def _aggregate(score: float) -> dict[str, Any]:
+        return {
+            "mean_answer_score": score,
+            "mean_token_f1": 0.3,
+            "mean_evidence_recall_postfit": 0.7,
+            "micro_evidence_recall_postfit": 0.6,
+            "mean_evidence_recall_prefit": 0.7,
+            "question_count": 18,
+            "repeats": 3,
+            "ingest_seconds_mean": 2.0,
+            "write_latency": {"mean_seconds": 0.02},
+            "write_latency_turns": {"p50_seconds": 0.019, "p95_seconds": 0.03},
+            "retrieval_latency": {"p50_seconds": 0.4, "p95_seconds": 0.5},
+            "answer_latency": {"p50_seconds": 1.2},
+            "total_token_usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            "memory_count_mean": 100,
+            "storage_bytes_mean": 1000,
+        }
 
     metrics = {
-        "systems": {
-            "memfw": {
-                "mean_answer_score": 0.4,
-                "mean_token_f1": 0.3,
-                "mean_evidence_recall_postfit": 0.7,
-                "question_count": 18,
-                "repeats": 3,
-                "ingest_seconds_mean": 2.0,
-                "write_latency": {"mean_seconds": 0.02},
-                "write_latency_turns": {"p50_seconds": 0.019, "p95_seconds": 0.03},
-                "retrieval_latency": {"p50_seconds": 0.4, "p95_seconds": 0.5},
-                "answer_latency": {"p50_seconds": 1.2},
-                "total_token_usage": {"prompt_tokens": 1, "completion_tokens": 1},
-                "memory_count_mean": 100,
-                "storage_bytes_mean": 1000,
-            },
-            "mem0": {
-                "mean_answer_score": 0.5,
-                "mean_token_f1": 0.2,
-                "mean_evidence_recall_postfit": 0.8,
-                "question_count": 18,
-                "repeats": 3,
-                "ingest_seconds_mean": 900,
-                "write_latency": {"mean_seconds": 9.0},
-                "write_latency_turns": {"p50_seconds": 9.0, "p95_seconds": 12.0},
-                "retrieval_latency": {"p50_seconds": 0.3, "p95_seconds": 0.4},
-                "answer_latency": {"p50_seconds": 1.2},
-                "total_token_usage": {"prompt_tokens": 1, "completion_tokens": 1},
-                "memory_count_mean": 50,
-                "storage_bytes_mean": 2000,
-            },
+        "arms": ["memfw", "mem0_stock"],
+        "systems": {"memfw": _aggregate(0.4), "mem0_stock": _aggregate(0.5)},
+        "judge": {
+            "models": [
+                {
+                    "label": "primary",
+                    "model": "qwen3.5:4b",
+                    "accuracy": {
+                        "memfw": {"accuracy": 0.4},
+                        "mem0_stock": {"accuracy": 0.5},
+                    },
+                }
+            ]
         },
-        "judge": {"accuracy": {"memfw": {"accuracy": 0.4}, "mem0": {"accuracy": 0.5}}},
-        "paired": {},
-        "paired_token_f1": {},
-        "paired_judge": {},
-        "paired_recall": {},
+        "comparisons": [],
     }
-    text = _main_results(metrics)
-    # Structural check: every well-formed row in the quality table has the same width.
+    text = _quality_and_efficiency(metrics)
     quality_block = text.split("### 效率")[0]
     widths = {len(line.split("|")) for line in quality_block.splitlines() if line.startswith("|")}
     assert len(widths) == 1, widths
-    assert _secondary_table(metrics) == ""
+
+    pair = {
+        "mean_memfw": 0.4,
+        "mean_mem0": 0.5,
+        "mean_difference": -0.1,
+        "difference_ci95": [-0.3, 0.1],
+        "exact_sign_flip": {"p_value": 0.5},
+        "exact_wilcoxon": {"p_value": 0.6},
+        "cohen_dz": -0.1,
+        "minimum_detectable_difference": 0.2,
+    }
+    comparison = {
+        "label": "memfw vs mem0_stock",
+        "a": "memfw",
+        "b": "mem0_stock",
+        "answer_score": pair,
+        "token_f1": pair,
+        "evidence_recall": pair,
+        "judge_primary": pair,
+    }
+    comparison_text = _comparison_table(comparison)
+    comparison_widths = {
+        len(line.split("|")) for line in comparison_text.splitlines() if line.startswith("|")
+    }
+    assert len(comparison_widths) == 1, comparison_widths
+
     provenance = {
         "systems": {
             "memfw": {
@@ -540,12 +561,29 @@ def test_report_tables_have_matching_header_and_row_width() -> None:
                 "all_frame": {"sampled": 30, "derived": 0, "flagged": 0},
                 "day11_frame": {"sampled": 30, "derived": 0, "flagged": 0},
                 "derived_shortfall": 30,
-            }
+            },
+            "mem0_stock": {
+                "memories_total": 94,
+                "derived_total": 94,
+                "derived_frame": {"sampled": 30, "derived": 30, "flagged": 21},
+                "all_frame": {"sampled": 30, "derived": 30, "flagged": 21},
+                "day11_frame": {"sampled": 30, "derived": 30, "flagged": 21},
+                "derived_shortfall": 0,
+            },
         }
     }
     prov_text = _provenance_table(provenance)
     prov_widths = {len(line.split("|")) for line in prov_text.splitlines() if line.startswith("|")}
     assert len(prov_widths) == 1, prov_widths
+
+
+def test_arm_mapping_includes_stock_and_custom_mem0() -> None:
+    from eval.stepG_runner import SYSTEMS
+
+    assert SYSTEMS["memfw"] == "memfw"
+    assert SYSTEMS["mem0_stock"] == "mem0_stock"
+    assert SYSTEMS["mem0_custom"] == "mem0_custom"
+    assert SYSTEMS["mem0"] == "mem0_custom"  # backwards-compatible alias
 
 
 def test_report_loads_preliminary_numbers_from_committed_json() -> None:
@@ -556,3 +594,78 @@ def test_report_loads_preliminary_numbers_from_committed_json() -> None:
     assert preliminary["answer_memfw"] == pytest.approx(0.45906084656084656)
     assert preliminary["recall_micro_memfw"] == pytest.approx(2 / 3)
     assert preliminary["prov_flagged_mem0"] == 21
+
+
+def test_expanded_subset_selects_all_eligible_questions(tmp_path: Path) -> None:
+    from eval.stepG_expanded import build_expanded_subset
+
+    data = [
+        {
+            "sample_id": "conv-x",
+            "conversation": {
+                "session_1": [
+                    {"dia_id": "D1:1", "speaker": "Sam", "text": "I like tea."},
+                    {"dia_id": "D1:2", "speaker": "Evan", "text": "Tea is fine."},
+                ],
+                "session_2": [{"dia_id": "D9:1", "speaker": "Sam", "text": "Later."}],
+            },
+            "qa": [
+                {"question": "q1?", "answer": "a1", "category": 1, "evidence": ["D1:1"]},
+                {"question": "q2?", "answer": "a2", "category": 1, "evidence": ["D1:2"]},
+                {"question": "q3?", "answer": "a3", "category": 1, "evidence": ["D9:1"]},
+            ],
+        }
+    ]
+    data_path = tmp_path / "locomo.json"
+    data_path.write_text(json.dumps(data), encoding="utf-8")
+    manifest = {
+        "source": {"sample_index": 0, "sample_id": "conv-x"},
+        "scope": {
+            "input_turn_ids": ["D1:1", "D1:2"],
+            "input_turn_count": 2,
+            "eligible_question_counts_by_category": {"1": 2},
+        },
+    }
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    config = {
+        "seed": 20261021,
+        "paths": {
+            "data": str(data_path),
+            "subset": str(tmp_path / "subset.json"),
+            "subset_manifest": str(manifest_path),
+            "results_dir": str(tmp_path),
+        },
+        "data": {"sha256": hashlib.sha256(data_path.read_bytes()).hexdigest()},
+    }
+    subset = build_expanded_subset(config)
+    assert subset["scope"]["question_count"] == 2
+    assert subset["scope"]["eligible_counts_by_category"] == {
+        "1": 2,
+        "2": 0,
+        "3": 0,
+        "4": 0,
+        "5": 0,
+    }
+    assert (tmp_path / "subset_expanded.json").exists()
+
+
+def test_judge_prediction_hash_changes_with_answer() -> None:
+    from eval.stepG_metrics import _prediction_hash
+
+    row_a = {"answer": "tea", "gold_answer": "tea"}
+    row_b = {"answer": "coffee", "gold_answer": "tea"}
+    assert _prediction_hash(row_a) != _prediction_hash(row_b)
+    assert _prediction_hash(row_a) == _prediction_hash(dict(row_a))
+
+
+def test_mem0_add_kwargs_only_passes_prompt_for_custom_arm() -> None:
+    from eval.stepG_runner import mem0_add_kwargs
+
+    turn = {"dia_id": "D1:1"}
+    stock = mem0_add_kwargs(turn, "u", None)
+    custom = mem0_add_kwargs(turn, "u", "Return JSON only.")
+    assert "prompt" not in stock
+    assert custom["prompt"] == "Return JSON only."
+    assert stock["metadata"] == {"dia_id": "D1:1"}
+    assert stock["infer"] is True

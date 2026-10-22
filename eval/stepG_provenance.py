@@ -237,19 +237,25 @@ def run_audit(config: dict[str, Any], *, run_id: str = "rep1") -> dict[str, Any]
         "seed": seed,
         "run_id": run_id,
         "framing": (
-            "derived_frame is the primary G6 frame (up to 30 inferred memories per system); "
+            "derived_frame is the primary G6 frame (up to 30 inferred memories per arm); "
             "all_frame is a fixed-denominator fallback over uniformly sampled memories; "
             "day11_frame re-uses the Day 11 uniform frame and R3 rule for direction checks. "
-            "mem0 R3 is partly prompt-forced: the custom extraction prompt requests "
-            "attributed_to='user'; explicit assistant attribution falls to R4, while a "
-            "missing attribution defaults to the user namespace and is R3 under the "
-            "Step-G rule (R4 only under the Day-11 rule)."
+            "Step-G arms: memfw, mem0_stock (default extraction prompt) and mem0_custom "
+            "(schema-compat extraction instructions). Under the Step-G rule, missing "
+            "attributed_to defaults to the user namespace (R3) and only explicit assistant "
+            "attribution is R4; under the Day-11 rule missing attribution is R4."
         ),
         "audited_run_id": run_id,
         "systems": {},
         "source_files": {},
     }
-    for system in ("memfw", "mem0"):
+    run_root = results_dir / "runs" / run_id
+    arms = (
+        sorted(path.name for path in run_root.iterdir() if path.is_dir())
+        if run_root.exists()
+        else []
+    )
+    for system in arms:
         memories_path = results_dir / "runs" / run_id / system / "memories.json"
         memories = _load_memories(memories_path)
         classified = classify_system(system, memories, turn_index)
@@ -258,7 +264,7 @@ def run_audit(config: dict[str, Any], *, run_id: str = "rep1") -> dict[str, Any]
         derived_sample = rng.sample(derived, min(AUDIT_SAMPLE_SIZE, len(derived)))
         all_sample = rng.sample(classified, min(AUDIT_SAMPLE_SIZE, len(classified)))
         attribution_counts: dict[str, int] = {}
-        if system == "mem0":
+        if system.startswith("mem0"):
             for item in memories:
                 value = item.get("attributed_to")
                 key = str(value).lower() if isinstance(value, str) else "missing"

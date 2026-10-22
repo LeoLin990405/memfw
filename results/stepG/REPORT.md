@@ -1,36 +1,41 @@
-# Step G：memfw vs Mem0 正式对比实验报告
+# Step G：memfw vs Mem0 正式对比实验报告（迭代版）
 
-> 本报告由 `eval/stepG_report.py` 从 `results/stepG/` 下的运行产物自动生成；所有数字均可在括号标注的来源文件中核对。实验仅使用公开 LoCoMo 数据。
+> 本报告由 `eval/stepG_report.py` 从 `results/stepG/` 下的运行产物自动生成；所有数字均可在标注的来源文件中核对。实验仅使用公开 LoCoMo 数据。
 
-## 1. 执行状态（G1–G7）
+- 迭代内容：新增 **mem0_stock** arm（与 Day 11 的 stock Mem0 配置一致）作为主比较；首轮的 **mem0_custom** 保留为敏感性 arm；主 judge 换成不同模型（qwen3.5:4b），同模型 judge 保留为诊断；新增**扩题集**（exploratory）提高统计功效。
+
+## 1. 执行状态
 
 | 步骤 | 状态 | 依据 |
 |---|---|---|
 | G1 环境 | 完成 | env.txt=True, pip-freeze.txt=True |
-| G2 统一模型 | 完成 | llm=qwen3.5:9b, embedding=nomic-embed-text, judge=qwen3.5:9b, smoke_check=env-recorded |
-| G3 runner + 单测 | 完成 | runner=True, pytest_log=True |
-| G4 正式运行 | 完成 | complete 18-question run summaries: 6/6 |
+| G2 统一模型 | 完成 | llm=qwen3.5:9b, embedding=nomic-embed-text, judge(primary)=qwen3.5:4b, judge(sensitivity)=qwen3.5:9b |
+| G3 runner + 单测 | 完成 | pytest_log=True |
+| G4 正式运行 | 完成 | arms complete 3×18: 3/3 |
 | G5 指标 | 完成 | metrics.json=True |
-| G6 provenance | 完成 | provenance_summary.json=True |
-| G7 报告 | 完成 | results/stepG/REPORT.md（本文件） |
+| G6 provenance | 完成 | arms audited: 3 |
+| G7 报告 | 完成 | REPORT.md（本文件） |
+| 附加：扩题集 | 完成 | n=41（exploratory, 非固定 18 题子集） |
 
 ## 2. 实验设置
 
 | 项目 | 值 |
 |---|---|
 | 数据 | 公开 LoCoMo `locomo10.json`，SHA-256 `79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4` |
-| 子集 | `conv-49`，前 100 轮，18 题（来源 `results/stepG/subset.json`） |
+| 子集 | `conv-49`，前 100 轮，18 题（`results/stepG/subset.json`） |
 | seed | 20261021 |
-| LLM（两系统相同） | `qwen3.5:9b` via ollama @ `http://127.0.0.1:11434`，temperature=0.0 |
-| Embedding（两系统相同） | `nomic-embed-text`，dims=768 |
+| arms | `memfw`, `mem0_stock`, `mem0_custom`（每 arm 3 次重复） |
+| Answer LLM（各 arm 相同） | `qwen3.5:9b` via ollama，temperature=0.0 |
+| Answer embedding（各 arm 相同） | `nomic-embed-text`，dims=768 |
+| Primary judge（不同模型） | `qwen3.5:4b`（与 answer 模型不同） |
+| Sensitivity judge（同模型） | `qwen3.5:9b`（仅作诊断） |
 | 检索 | top_k=5，上下文预算 128 tokens |
-| 重复次数 | 每系统 3 次（run ids: rep1..rep3） |
-| 内存协议 | memfw 仅作为“逐字写入 + 共享 embedding 余弦检索”的基线；Mem0 使用 `add(infer=True)` |
+| Mem0 配置 | mem0_stock 使用默认抽取提示；mem0_custom 额外传入 schema 兼容的 custom instructions（敏感性 arm） |
+| 与 Day 11 的配置差异 | Day 11 mem0 `num_ctx`=8192；本轮 `num_ctx`=16384。模型/embedding/seed/子集与硬件平台相同；更小的 Day 11 上下文窗口会截断 mem0 抽取 prompt，因此 Mem0 抽取结果只作近似复现 |
 | 硬件 | Apple M5 Max, 18 cores, 128 GB unified memory, macOS 26.7.1 (Mac17,7) |
-| 总耗时 | 2h04m22s |
-| 模型 digest | nimble:9b=9b953de7a5336756ece1cb1e8632e374b3dbdabe3d02d405cf8291da2d43a131, nomic-embed-text:latest=0a109f422b47e3a30ba2b10eca18548e944e8a23073ee3f3e947efcf3c45e59f, qwen3.5:4b=d8b0f5e9760cd1682034f292d7ef72ec46f432149be0df7574bf2d6e92e38c04, qwen3.5:9b=56671c2ab9385f9cfcb404638e32cd62d88e3501d44822208363c010179a3c90, qwen3:4b=359d7dd4bcdab3d86b87d73ac27966f4dbb9f5efdfcc75d34a8764a09474fae7 |
+| 总耗时 | 4h50m58s |
 | API 花费 | $0.00（本地 Ollama，无外部 API） |
-| 运行环境 | 正式运行使用仓库既有 `.venv`（Python 3.11.16 / mem0ai 2.2.1）；测试使用独立 `.venv-stepg`（worktree 内 editable 安装），依赖版本相同 |
+| 模型 digest | nimble:9b=9b953de7a5336756ece1cb1e8632e374b3dbdabe3d02d405cf8291da2d43a131, nomic-embed-text:latest=0a109f422b47e3a30ba2b10eca18548e944e8a23073ee3f3e947efcf3c45e59f, qwen3.5:4b=d8b0f5e9760cd1682034f292d7ef72ec46f432149be0df7574bf2d6e92e38c04, qwen3.5:9b=56671c2ab9385f9cfcb404638e32cd62d88e3501d44822208363c010179a3c90, qwen3:4b=359d7dd4bcdab3d86b87d73ac27966f4dbb9f5efdfcc75d34a8764a09474fae7 |
 
 `env.txt`：
 
@@ -46,11 +51,41 @@ mem0_version: 2.2.1
 ollama_server_version: 0.40.3
 ollama_local_models: nimble:9b, nomic-embed-text:latest, qwen3.5:4b, qwen3.5:9b, qwen3:4b
 ollama_model_digests: nimble:9b=9b953de7a5336756ece1cb1e8632e374b3dbdabe3d02d405cf8291da2d43a131, nomic-embed-text:latest=0a109f422b47e3a30ba2b10eca18548e944e8a23073ee3f3e947efcf3c45e59f, qwen3.5:4b=d8b0f5e9760cd1682034f292d7ef72ec46f432149be0df7574bf2d6e92e38c04, qwen3.5:9b=56671c2ab9385f9cfcb404638e32cd62d88e3501d44822208363c010179a3c90, qwen3:4b=359d7dd4bcdab3d86b87d73ac27966f4dbb9f5efdfcc75d34a8764a09474fae7
-git_head: c55d1febc9ca3b638b53c497d37eb94b23eecbeb
-git_status_porcelain: M .gitignore
-?? eval/
-?? results/
-?? tests/test_stepG_runner.py
+git_head: 577e3ca1c2abdf0cd3afaf1e66567c100a5517d0
+git_status_porcelain: M eval/stepG_metrics.py
+ M eval/stepG_pipeline.py
+ M eval/stepG_provenance.py
+ M eval/stepG_report.py
+ M eval/stepG_runner.py
+ M results/stepG/config.yaml
+ D results/stepG/judge.jsonl
+ D results/stepG/pipeline_status.json
+ D results/stepG/run_manifest.json
+ D results/stepG/runs/rep1/mem0/.ingested
+ D results/stepG/runs/rep1/mem0/memories.json
+ D results/stepG/runs/rep1/mem0/questions.jsonl
+ D results/stepG/runs/rep1/mem0/summary.json
+ D results/stepG/runs/rep1/mem0/write_turns.jsonl
+ D results/stepG/runs/rep2/mem0/.ingested
+ D results/stepG/runs/rep2/mem0/memories.json
+ D results/stepG/runs/rep2/mem0/questions.jsonl
+ D results/stepG/runs/rep2/mem0/summary.json
+ D results/stepG/runs/rep2/mem0/write_turns.jsonl
+ D results/stepG/runs/rep3/mem0/.ingested
+ D results/stepG/runs/rep3/mem0/memories.json
+ D results/stepG/runs/rep3/mem0/questions.jsonl
+ D results/stepG/runs/rep3/mem0/summary.json
+ D results/stepG/runs/rep3/mem0/write_turns.jsonl
+ M results/stepG/runtime_info.json
+ M tests/test_stepG_runner.py
+?? eval/stepG_expanded.py
+?? results/stepG/runs/rep1/mem0_custom/
+?? results/stepG/runs/rep1/mem0_stock/
+?? results/stepG/runs/rep2/mem0_custom/
+?? results/stepG/runs/rep2/mem0_stock/
+?? results/stepG/runs/rep3/mem0_custom/
+?? results/stepG/runs/rep3/mem0_stock/
+?? results/stepG/stepg_validate.py
 model_config: results/stepG/config.yaml
 
 ## pip freeze
@@ -131,125 +166,172 @@ zstandard==0.25.0
 
 ## 3. 主结果
 
-### 质量（每题跨重复均值；来源 `results/stepG/metrics.json` → `systems.<name>`）
+### 质量（每题跨重复均值；来源 `results/stepG/metrics.json` → `systems.<arm>`）
 
-| system | answer_score | token_f1（cat1–4） | LLM-judge 正确率（每题跨重复均值） | evidence recall（post-fit macro） | 题数 | 重复数 |
-|---|---|---|---|---|---|---|
-| memfw | 0.4591 | 0.3759 | 38.9% | 69.4% | 18 | 3 |
-| mem0 | 0.4652 | 0.3123 | 44.4% | 81.5% | 18 | 3 |
+| arm | answer_score | token_f1（cat1–4） | evidence recall（post-fit macro） | evidence recall（post-fit micro） | judge：primary | judge：same_model | 题数 | 重复数 |
+|---|---|---|---|---|---|---|---|---|
+| memfw | 0.4591 | 0.3759 | 69.4% | 66.7% | 44.4% | 38.9% | 18 | 3 |
+| mem0_stock | 0.4393 | 0.2791 | 65.7% | 66.7% | 38.9% | 38.9% | 18 | 3 |
+| mem0_custom | 0.4652 | 0.3123 | 81.5% | 83.3% | n/a | n/a | 18 | 3 |
 
-### 效率与规模（来源同上；写入延迟为每轮 add 的均值/题级检索与回答延迟）
+### 效率与规模（来源同上；每轮写入 = 一次 add/写入操作）
 
-| system | 总写入耗时(s) | 单轮写入均值(s) | 写入 P50(s) | 写入 P95(s) | 检索 P50(s) | 检索 P95(s) | 回答 P50(s) | prompt tokens | completion tokens | 记忆条数 | 存储字节 |
+| arm | 总写入耗时(s) | 单轮均值(s) | 写入 P50(s) | 写入 P95(s) | 检索 P50(s) | 检索 P95(s) | 回答 P50(s) | prompt tokens | completion tokens | 记忆条数 | 存储字节 |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | memfw | 2.20 | 0.0219 | 0.0193 | 0.0226 | 0.4027 | 0.4142 | 1.2398 | 11484 | 267 | 100.0 | 99633 |
-| mem0 | 999.73 | 9.9970 | 9.5281 | 12.5154 | 0.3033 | 0.3073 | 1.2312 | 2744967 | 11994 | 50.0 | 459350 |
+| mem0_stock | 1004.45 | 10.0442 | 10.0720 | 12.6570 | 0.3066 | 0.3260 | 1.2334 | 2716128 | 17667 | 79.0 | 709206 |
+| mem0_custom | 999.73 | 9.9970 | 9.5281 | 12.5154 | 0.3033 | 0.3073 | 1.2312 | 2744967 | 11994 | 50.0 | 459350 |
 
-> 注：memfw 采用逐字写入协议，无 LLM 调用开销；Mem0 使用 `add(infer=True)` 跑抽取/更新流水线，因此写入成本天然不对称。memfw 的“存储字节”只统计 vault 目录，内存中的 float32 向量不计入；Mem0 统计 Qdrant + history DB 所在运行目录。
+> 注：memfw 逐字写入、无 LLM 抽取调用；Mem0 两个 arm 都跑 `add(infer=True)` 抽取。写入/存储差异同时反映“是否调用 LLM 抽取”和“存储形态”，不能单独解读为工程实现效率。
 
-### Provenance 审计（G6；来源 `results/stepG/provenance_summary.json` 与 `provenance_audit.csv`）
+### LLM judge（每题跨重复均值）
 
-| system | 记忆总数 | 派生记忆数 | derived_frame (样本/派生/FLAGGED) | all_frame (样本/派生/FLAGGED) | day11_frame (样本/派生/FLAGGED) | 派生样本缺口 |
+| label | judge model | judged rows | per-arm accuracy（每题跨重复均值） |
+|---|---|---|---|
+| primary | qwen3.5:4b | 162 | mem0_stock:38.9%, memfw:44.4% |
+| same_model | qwen3.5:9b | 183 | mem0_stock:38.9%, memfw:38.9% |
+
+### Provenance 审计（G6；来源 `provenance_summary.json` / `provenance_audit.csv`）
+
+| arm | 记忆总数 | 派生记忆数 | derived_frame (样本/派生/FLAGGED) | all_frame (样本/派生/FLAGGED) | day11_frame (样本/派生/FLAGGED) | 派生样本缺口 |
 |---|---|---|---|---|---|---|
+| mem0_custom | 50 | 50 | 30 / 30 / 22 | 30 / 30 / 23 | 30 / 30 / 19 | 0 |
+| mem0_stock | 79 | 79 | 30 / 30 / 21 | 30 / 30 / 23 | 30 / 30 / 21 | 0 |
 | memfw | 100 | 0 | 0 / 0 / 0 | 30 / 0 / 0 | 30 / 0 / 0 | 30 |
-| mem0 | 50 | 50 | 30 / 30 / 22 | 30 / 30 / 23 | 30 / 30 / 19 | 0 |
 
-- `derived_frame`：每个系统最多抽 30 条“派生/推断”记忆（非源轮次逐字文本）；`FLAGGED` 表示派生文本被记录成用户原话（rubric R3）。
-- `all_frame`：固定 30 条均匀抽样，作为无派生记忆系统的分母兜底；`day11_frame`：与 Day 11 相同的均匀抽样 + R3 规则，仅用于方向性对照。三个 frame 的分母都在 summary 中明确给出。
-- 审计仅使用 `rep1` 的记忆导出（见 `provenance_summary.json` → `audited_run_id`）；mem0 的 custom extraction instructions *请求* `attributed_to=user`，实际输出为显式 user、显式 assistant 与缺失字段的混合（rep1 记忆库中 attributed_to 分布：user=31、assistant=10、missing=9）。按 Step-G 规则，缺失字段默认归入用户命名空间（R3），仅显式 assistant 落入 R4；按 Day-11 规则缺失字段为 R4。因此 R3 FLAGGED 是**部分由 prompt 强制、部分来自模型行为**，不能当作独立质量测量。
+- `derived_frame`：每个 arm 最多抽 30 条派生记忆；`FLAGGED` 表示派生文本被记录成用户原话（R3）。
+- `all_frame`：30 条均匀抽样（固定分母兜底）；`day11_frame`：Day 11 的均匀抽样 + R3 规则。
+- 审计只取 `rep1`；mem0_custom 的 custom instructions 请求 `attributed_to=user`，其 R3 含 prompt 强制成分；mem0_stock 无此强制。
 
-## 4. 显著性检验与局限
+## 4. 显著性检验
 
-主指标为每题 `answer_score`（类别 1–4 为 token F1，类别 5 为弃答得分），先在重复内取均值，再做配对检验。
+### 主比较（固定 18 题）
 
-| 配对题数 | memfw 均值 | mem0 均值 | 均值差 | 95% bootstrap CI | 精确置换 p | Wilcoxon p | Cohen dz | rank-biserial | MDE(80%) |
-|---|---|---|---|---|---|---|---|---|---|
-| 18 | 0.4591 | 0.4652 | -0.0061 | [-0.1914, 0.1893] | 0.9688 | 0.6797 | -0.0141 | -0.1778 | 0.2843 |
+memfw vs mem0_stock；每题跨重复均值后做配对检验。
 
-次要指标（同样为 18 题配对、精确检验）：
-
-| 指标 | memfw | mem0 | 均值差 | 95% bootstrap CI | 精确置换 p | Wilcoxon p | Cohen dz | MDE(80%) |
+| 指标 | A 均值 | B 均值 | 均值差 (A−B) | 95% bootstrap CI | 精确置换 p | Wilcoxon p | Cohen dz | MDE(80%) |
 |---|---|---|---|---|---|---|---|---|
+| answer_score | 0.4591 | 0.4393 | 0.0198 | [-0.1678, 0.2156] | 0.8867 | 0.9414 | 0.0458 | 0.2851 |
+| token_f1（cat1–4） | 0.3759 | 0.2791 | 0.0969 | [-0.0844, 0.3150] | 0.4141 | 0.7422 | 0.2441 | 0.2970 |
+| evidence recall（post-fit macro） | 0.6944 | 0.6574 | 0.0370 | [-0.1481, 0.2222] | 1.0000 | 1.0000 | 0.0869 | 0.2812 |
+| LLM judge（primary） | 0.4444 | 0.3889 | 0.0556 | [-0.1111, 0.2778] | 1.0000 | 1.0000 | 0.1335 | 0.2747 |
+| LLM judge（same_model） | 0.3889 | 0.3889 | 0.0000 | [-0.2222, 0.2222] | 1.0000 | 1.0000 | 0.0000 | 0.3201 |
+
+### memfw vs mem0_custom（sensitivity）
+
+| 指标 | A 均值 | B 均值 | 均值差 (A−B) | 95% bootstrap CI | 精确置换 p | Wilcoxon p | Cohen dz | MDE(80%) |
+|---|---|---|---|---|---|---|---|---|
+| answer_score | 0.4591 | 0.4652 | -0.0061 | [-0.1914, 0.1893] | 0.9688 | 0.6797 | -0.0141 | 0.2843 |
 | token_f1（cat1–4） | 0.3759 | 0.3123 | 0.0636 | [-0.1168, 0.2837] | 0.5547 | 1.0000 | 0.1583 | 0.3006 |
-| LLM judge（每题跨重复均值） | 0.3889 | 0.4444 | -0.0556 | [-0.2778, 0.1667] | 1.0000 | 1.0000 | -0.1030 | 0.3559 |
 | evidence recall（post-fit macro） | 0.6944 | 0.8148 | -0.1204 | [-0.3241, 0.0741] | 0.3125 | 0.3125 | -0.2769 | 0.2868 |
 
-- Small fixed subset: one public LoCoMo conversation, first 100 turns, 18 questions; results do not represent full LoCoMo.
-- Single dataset (LoCoMo) and a single local model; absolute scores are model-dependent.
-- All retention is 100% for the primary comparison; forgetting is not exercised in this formal run.
-- memfw stores verbatim turns by design in this protocol; Mem0 runs its extraction/update pipeline (infer=True), so write costs are not symmetric.
-- The judge uses the same local model as the answerer; judge accuracy is a secondary diagnostic, not ground truth.
-- Paired tests have 18 pairs; the minimum detectable difference is reported and is larger than several observed gaps.
-- mean_token_f1 and the paired token-F1 test exclude category-5 adversarial questions, whose gold answer is a trick answer; they use the abstention rule.
-- Two evidence-recall definitions are reported: pre-fit top-k macro recall and post-fit (128-token context) macro/micro recall; only the post-fit micro value matches the Day 11 metric definition.
-- Provenance audit uses run rep1 only. mem0's custom extraction instructions request attributed_to='user', but the extraction output mixed explicit user attribution, assistant attribution and missing fields, so the R3 flag rate is partly prompt-forced and partly model behaviour (not an independent quality measure).
-- Four paired tests are reported without family correction; treat secondary tests as exploratory.
-- Model identity is evidenced by env.txt digests, not by a cryptographic receipt from the model server.
+### mem0_stock vs mem0_custom（configuration effect）
 
-## 5. 与初步结果的对比
+| 指标 | A 均值 | B 均值 | 均值差 (A−B) | 95% bootstrap CI | 精确置换 p | Wilcoxon p | Cohen dz | MDE(80%) |
+|---|---|---|---|---|---|---|---|---|
+| answer_score | 0.4393 | 0.4652 | -0.0259 | [-0.0593, -0.0023] | 0.1250 | 0.1250 | -0.3960 | 0.0431 |
+| token_f1（cat1–4） | 0.2791 | 0.3123 | -0.0333 | [-0.0759, -0.0029] | 0.1250 | 0.1250 | -0.4562 | 0.0546 |
+| evidence recall（post-fit macro） | 0.6574 | 0.8148 | -0.1574 | [-0.3241, -0.0185] | 0.1250 | 0.1250 | -0.4690 | 0.2215 |
 
-初步结果（来源 `reports/day11_baseline_comparison.json`，Day 11，仅作参考，**不是正式结论**）与本次正式实验使用**同一模型**（`qwen3.5:9b` + `nomic-embed-text`）与**同一固定子集**（conv-49 前 100 轮 / 18 题 / seed 20261021），因此 answer_score 与 **post-fit micro evidence recall** 可以直接对照；但 Mem0 的写入提示（custom extraction instructions）与运行时配置不同，Mem0 侧数字不是同一配置的严格复现（环境与模型 digest 与 Day 11 相同）。
 
-| 指标 | 初步结果（Day 11） | 本次正式实验 | 正式值来源 |
+## 5. 与 Day 11 的可复现性核对
+
+以 Day 11 报告 JSON（`reports/day11_baseline_comparison.json`）的逐题结果为参照：`memfw` 与 Day 11 `memfw` 同实现；`mem0_stock` 与 Day 11 `mem0` 同为 stock 抽取配置；`mem0_custom` 没有 Day 11 对应项（本轮新增的敏感性 arm）。
+
+| arm | Day 11 对应系统 | 逐题 answer_score 相同 | 检索集合 Jaccard | 本次记忆数 | Day 11 记忆数 |
+|---|---|---|---|---|---|
+| mem0_stock | mem0 | 13/18 | 0.396 | 79 | 94 |
+| memfw | memfw | 18/18 | 0.967 | 100 | 100 |
+
+## 6. 扩题集（exploratory）
+
+扩题集：同一 100 轮窗口内全部 41 道有完整 gold evidence 的题（固定 18 题子集之外的 exploratory 补充，不替代主结果）。
+
+| arm | answer_score | token_f1(cat1-4) | recall(macro) | recall(micro) | 题数 |
+|---|---|---|---|---|---|
+| mem0_custom | 0.5535 | 0.4417 | 79.7% | 81.2% | 41 |
+| mem0_stock | 0.4962 | 0.3660 | 75.2% | 75.0% | 41 |
+| memfw | 0.5220 | 0.4324 | 67.1% | 64.6% | 41 |
+
+主比较（memfw vs mem0_stock，n=41）：
+
+| 指标 | A 均值 | B 均值 | 均值差 (A−B) | 95% bootstrap CI | 精确置换 p | Wilcoxon p | Cohen dz | MDE(80%) |
+|---|---|---|---|---|---|---|---|---|
+| answer_score | 0.5220 | 0.4962 | 0.0258 | [-0.0962, 0.1482] | 0.6809 | 0.8798 | 0.0639 | 0.1766 |
+| token_f1（cat1–4） | 0.4324 | 0.3660 | 0.0664 | [-0.0736, 0.2184] | 0.3939 | 0.6047 | 0.1563 | 0.2136 |
+| evidence recall（post-fit macro） | 0.6707 | 0.7520 | -0.0813 | [-0.2439, 0.0732] | 0.3882 | 0.3877 | -0.1562 | 0.2276 |
+| LLM judge（primary） | 0.5366 | 0.5122 | 0.0244 | [-0.0976, 0.1463] | 1.0000 | 1.0000 | 0.0584 | 0.1826 |
+
+> 扩题集复用同一批已写入的记忆，只新增“回答+judge”，用于提高统计功效；属于探索性分析，不做族错误校正。
+
+## 7. 与初步结果的对比
+
+| 项目 | Day 11 初步 | 本轮正式 | 来源 |
 |---|---|---|---|
-| answer_score memfw | 0.4591 | 0.4591 | metrics.json → systems.memfw.mean_answer_score |
-| answer_score mem0 | 0.5267 | 0.4652 | metrics.json → systems.mem0.mean_answer_score |
-| evidence recall（post-fit micro）memfw | 66.7% | 66.7% | metrics.json → systems.memfw.micro_evidence_recall_postfit |
-| evidence recall（post-fit micro）mem0 | 62.5% | 83.3% | metrics.json → systems.mem0.micro_evidence_recall_postfit |
-| 写入 P50 memfw | 0.0323s | 0.0193s | runs/*/memfw/write_turns.jsonl |
-| 写入 P50 mem0 | 5.3758s | 9.5281s | runs/*/mem0/write_turns.jsonl |
-| provenance FLAGGED（Day-11 同框架：均匀抽样 + R3） | memfw 0/30；mem0 21/30 | memfw 0/30；mem0 19/30 | provenance_summary.json → day11_frame |
+| answer_score memfw | 0.4591 | 0.4591 | metrics.json |
+| answer_score mem0（stock） | 0.5267 | 0.4393 | metrics.json |
+| evidence recall micro memfw | 66.7% | 66.7% | metrics.json |
+| evidence recall micro mem0（stock） | 62.5% | 66.7% | metrics.json |
+| 写入 P50 memfw | 0.0323s | 0.0193s | write_turns.jsonl |
+| 写入 P50 mem0（stock） | 5.3758s | 10.0720s | write_turns.jsonl |
+| provenance FLAGGED（day11_frame） | memfw 0/30；mem0 21/30 | memfw 0/30；mem0_stock 21/30 | provenance_summary.json |
 
-按预先设定的判定阈值逐项核对（阈值写死在本函数中，结果由数据计算）：
+判定（阈值写死在本函数中，结果由数据计算）：
 
-- **确认**：H1 memfw answer_score 复现（与初步值绝对差 ≤ 0.02）（|Δ|=0.0000）。
-- **确认**：H2 mem0 派生记忆多数被记为无标注用户记忆（Day-11 同框架 FLAGGED ≥ 半数）（19/30（初步 21/30））。
-- **确认**：H3 memfw 写入显著快于 Mem0（P50 比值 ≥ 10×）（比值=494.0×）。
-- **确认**：H4 主指标未检测到显著差异（精确置换 p > 0.05）（p=0.9688）。
-- **确认**：H5 memfw post-fit micro recall 与初步值接近（|Δ| ≤ 0.05）（|Δ|=0.0000）。
-- **未确认**：H6 两系统 recall 差距方向与初步一致（初步 memfw−mem0=+0.0417；正式=-0.1667）。
-- **无法归因**：Mem0 的 answer_score 与初步值差异较大，但 Mem0 在本次运行中使用了 custom extraction instructions，写入配置/运行时与 Day 11 不同（环境与模型 digest 已匹配）；该差异不能归因于 Mem0 或 memfw 的系统设计。
-- 正式结论以上表与 §4 的统计结果为准；初步数字仅作为参照，不构成正式结论。
+- **确认**：H1 memfw answer_score 与 Day 11 接近（|Δ|≤0.02）（|Δ|=0.0000）。
+- **未确认**：H2 mem0_stock answer_score 与 Day 11 接近（|Δ|≤0.02）（|Δ|=0.0874）。
+- **未确认**：H3 mem0_stock 逐题复现 Day 11（≥16/18 题分数相同）（13/18）。
+- **确认**：H4 memfw 写入 P50 显著低于 mem0_stock（比值 ≥10×）（比值=522.2×）。
+- **确认**：H5 主比较未检测到显著差异（精确置换 p>0.05）（p=0.8867）。
+- **确认**：H6 memfw post-fit micro recall 复现（|Δ|≤0.05）（|Δ|=0.0000）。
+- **确认**：H7 两系统 recall 差距方向与 Day 11 一致（Day11 memfw−mem0=+0.0417；本轮=+0.0000）。
+- **确认**：H8 mem0 的派生记忆多数被记为无标注用户记忆（stock arm day11_frame FLAGGED ≥ 半数）（stock 21/30；Day11 21/30）。
+- **配置敏感性**：mem0_custom answer_score=0.4652、记忆数=50.0，与 stock 不同；因此两套 Mem0 数字不能混用。
+- **复现解释**：mem0_stock 与 Day 11 mem0 的逐题分数一致率 13/18，记忆数 79 vs 94；本轮 mem0 wrapper 使用 num_ctx=16384，Day 11 使用 8192，抽取 prompt 是否被截断会改变抽取文本，因此 stock arm 是“同默认抽取提示 + 本机协议”的近似复现，而非逐字节复现。
+- 正式结论以 §3–§5 与 `metrics.json` 为准；初步数字仅作参照。
 
-## 6. 未完成项和原因
+## 8. 未完成项与局限
 
-- memfw 的 derived_frame 只有 0 条派生记忆（缺口 30），无法凑满 30 条；已在 summary 中如实记录。
-- 重复确定性（观测）：3 个 repeat 的 per-run answer_score 完全相同（memfw 0.459061; mem0 0.465151），因此“跨重复方差”为 0；这是本机 temperature=0 解码下观测到的确定性，不能当作独立样本推断方差。
-- provenance 审计仅取 `rep1` 的记忆导出；三个 repeat 的写入内容一致，但未对每个 repeat 分别抽样。
-- mem0 的 R3 FLAGGED 部分来自 custom extraction instructions 请求的 `attributed_to=user`，部分来自模型把部分记忆标为 assistant/缺失字段；因此它是“prompt + 模型行为”的混合，不是独立质量测量。
-- 数据更新说明：mem0 的最终数字来自 `finalize3` 重跑——修复检索结果 dia_ids 归一化后，重新 ingest 3 个 repeat 并重跑题目/评审；此前试跑的数字未用于本报告。
-- 模型同一性由 `env.txt` 中记录的 Ollama model digest 佐证，没有模型服务端的密码学回执；judge 与被测模型相同，属于次要诊断。
-- 运行代码快照：`env.txt` 的 `git_head` 是运行开始时的 HEAD（`c55d1fe`，此时 eval/ 与 results/ 尚未入库）；实际运行代码由本次报告的提交保存，这是“运行快照 vs 提交快照”的正常差异。
-- pytest 结果见 `results/stepG/test-results.txt`。
-- 测试环境说明：worktree 使用仓库既有 `.venv`（memfw editable 指向主工作树）会导致 2 个 Day5/Day6 测试的 source-root 断言失败，因此测试改用 worktree 内独立 `.venv-stepg`（同一 Python 3.11.16 / mem0ai 2.2.1）。
+- Small fixed subset: one public LoCoMo conversation, first 100 turns, 18 questions; results do not represent full LoCoMo.
+- Single dataset (LoCoMo) and a single local answer model; absolute scores are model-dependent.
+- All retention is 100% for the primary comparison; forgetting is not exercised in this formal run.
+- memfw stores verbatim turns by design in this protocol; Mem0 arms run extraction pipelines, so write costs are not symmetric.
+- Mean token-F1 and paired token-F1 exclude category-5 adversarial questions (abstention rule instead).
+- Two evidence-recall definitions are reported: pre-fit top-k and post-fit (128-token context). The post-fit micro value matches the Day 11 metric definition; the macro value is the paired-analysis unit.
+- Primary judge is a different model (qwen3.5:4b); the same-model judge is a sensitivity diagnostic, not ground truth.
+- Provenance audit uses run rep1 only; mem0_custom's custom instructions request attributed_to='user', so its R3 rate is partly prompt-forced (mem0_stock is not prompt-forced).
+- Paired tests use 18 fixed-subset pairs; the minimum detectable difference is reported. Secondary arms/tests are exploratory and not family-corrected.
+- Memory-text form differs by protocol: memfw stores verbatim turns (speaker prefix, long sentences) while Mem0 stores extracted short statements; under the same 128-token budget the information density differs, so recall/answer gaps partly reflect this asymmetry rather than retrieval quality alone.
+- Model identity is evidenced by env.txt digests, not by a cryptographic receipt from the model server.
+- memfw: derived_frame 只有 0 条派生记忆（缺口 30），该 arm 无对象可审计。
+- 重复确定性为观测结果（temperature=0），不能代替独立样本方差；judge/模型身份见 §2。
+- 运行快照：`env.txt` 的 git_head 是运行开始时 HEAD；实际运行代码由本报告对应的提交保存。
 
-## 7. 复现命令
+## 9. 复现命令
 
 ```sh
-# 0) 一次性环境：本地 Ollama server + 两个模型（均只监听 127.0.0.1）
-ollama serve  # OLLAMA_MODELS 指向本机模型目录
-ollama pull qwen3.5:9b
-ollama pull nomic-embed-text
+cd ~/Documents/Codex/2026-10-18/memfw-stepG-worktree
+MEM0_DIR=$PWD/results/stepG/runtime/mem0_home \
+  .venv-stepg/bin/python eval/stepG_pipeline.py --stage all
 
-# 1) 从公开数据到报告的一条命令
-python eval/stepG_pipeline.py --stage all
-
-# 可选：只重跑某个阶段
-python eval/stepG_pipeline.py --stage metrics
-python eval/stepG_pipeline.py --stage provenance
+# 只重跑某个阶段
+  .venv-stepg/bin/python eval/stepG_pipeline.py --stage metrics
+  .venv-stepg/bin/python eval/stepG_pipeline.py --stage provenance
+  .venv-stepg/bin/python eval/stepG_expanded.py   # 扩题集（exploratory）
 ```
 
-## 8. 产物清单
+## 10. 产物清单
 
 | 文件 | 内容 |
 |---|---|
-| results/stepG/config.yaml | 实验配置（模型/端点/seed/重复次数） |
-| results/stepG/subset.json | 固定子集（100 轮 / 18 题 / seed 20261021） |
-| results/stepG/env.txt | Python/OS/mem0/ollama 版本 |
-| results/stepG/pip-freeze.txt | 依赖快照 |
-| results/stepG/runs/rep*/ | 原始每题 JSONL、每轮写入延迟、记忆导出、run summary |
-| results/stepG/metrics.json / metrics.md | 质量、效率、显著性 |
-| results/stepG/provenance_rubric.md | provenance 判定规则（先于判定写入） |
-| results/stepG/provenance_audit.csv | 逐条抽样判定表 |
-| results/stepG/provenance_summary.json | provenance 汇总分母 |
+| results/stepG/config.yaml | arms、模型、judge(s)、seed、repeats |
+| results/stepG/subset.json | 固定 18 题子集（conv-49 前 100 轮） |
+| results/stepG/subset_expanded.json | 扩题集（exploratory） |
+| results/stepG/env.txt / pip-freeze.txt | 环境、模型 digest、git HEAD |
+| results/stepG/runs/rep*/<arm>/ | 每题 JSONL、每轮写入、记忆导出、run summary |
+| results/stepG/judge_*.jsonl | primary（qwen3.5:4b）与 sensitivity（qwen3.5:9b）judge 逐条判定 |
+| results/stepG/metrics.json / metrics.md | 质量、效率、规模、配对检验 |
+| results/stepG/expanded_metrics.json / md | 扩题集指标（exploratory） |
+| results/stepG/provenance_rubric.md / audit.csv / summary.json | provenance 规则、逐条判定、汇总 |
+| results/stepG/validation.json | 产物完整性校验 |
 | results/stepG/REPORT.md | 本报告 |

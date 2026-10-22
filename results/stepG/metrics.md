@@ -2,44 +2,64 @@
 
 All numbers are computed from `results/stepG/runs/*/*/questions.jsonl`.
 
+## Arms
+
+memfw, mem0_stock, mem0_custom
+
 ## Answer quality (per-question mean across repeats)
 
-| system | answer_score | token_f1(cat1-4) | judge_accuracy(per-question) | evidence_recall(post-fit macro) | questions |
-|---|---|---|---|---|---|
-| memfw | 0.4591 | 0.3759 | 38.9% | 69.4% | 18 |
-| mem0 | 0.4652 | 0.3123 | 44.4% | 81.5% | 18 |
+| arm | answer_score | token_f1(cat1-4) | recall(post-fit macro) | recall(post-fit micro) | judge:primary | judge:same_model | questions |
+|---|---|---|---|---|---|---|---|
+| memfw | 0.4591 | 0.3759 | 69.4% | 66.7% | 44.4% | 38.9% | 18 |
+| mem0_stock | 0.4393 | 0.2791 | 65.7% | 66.7% | 38.9% | 38.9% | 18 |
+| mem0_custom | 0.4652 | 0.3123 | 81.5% | 83.3% | n/a | n/a | 18 |
 
 ## Efficiency
 
-| system | ingest_s | write_mean_s | write_p50_s | write_p95_s | retrieval_p50_s | retrieval_p95_s | prompt_tokens | completion_tokens | memories | storage_bytes |
-|---|---|---|---|---|---|---|---|---|---|---|
-| memfw | 2.20 | 0.0219 | 0.0193 | 0.0226 | 0.4027 | 0.4142 | 11484 | 267 | 100.0 | 99633 |
-| mem0 | 999.73 | 9.9970 | 9.5281 | 12.5154 | 0.3033 | 0.3073 | 2744967 | 11994 | 50.0 | 459350 |
+| arm | ingest_s | write_mean_s | write_p50_s | write_p95_s | retrieval_p50_s | retrieval_p95_s | answer_p50_s | prompt_tokens | completion_tokens | memories | storage_bytes |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| memfw | 2.20 | 0.0219 | 0.0193 | 0.0226 | 0.4027 | 0.4142 | 1.2398 | 11484 | 267 | 100.0 | 99633 |
+| mem0_stock | 1004.45 | 10.0442 | 10.0720 | 12.6570 | 0.3066 | 0.3260 | 1.2334 | 2716128 | 17667 | 79.0 | 709206 |
+| mem0_custom | 999.73 | 9.9970 | 9.5281 | 12.5154 | 0.3033 | 0.3073 | 1.2312 | 2744967 | 11994 | 50.0 | 459350 |
 
-## Paired comparison (primary metric: answer_score)
+## Paired comparisons
 
-| n pairs | memfw | mem0 | mean diff | 95% CI | exact p | Wilcoxon p | Cohen dz | rank-biserial | MDE |
-|---|---|---|---|---|---|---|---|---|---|
-| 18 | 0.4591 | 0.4652 | -0.0061 | [-0.1914 , 0.1893] | 0.9688 | 0.6797 | -0.0141 | -0.1778 | 0.2843 |
+### memfw vs mem0_stock（primary）
 
-### Secondary paired comparisons
-
-| metric | memfw | mem0 | mean diff | 95% CI | exact p | Wilcoxon p | Cohen dz | MDE |
+| 指标 | A 均值 | B 均值 | 均值差(A-B) | 95% CI | 精确置换 p | Wilcoxon p | Cohen dz | MDE |
 |---|---|---|---|---|---|---|---|---|
+| answer_score | 0.4591 | 0.4393 | 0.0198 | [-0.1678, 0.2156] | 0.8867 | 0.9414 | 0.0458 | 0.2851 |
+| token_f1(cat1-4) | 0.3759 | 0.2791 | 0.0969 | [-0.0844, 0.3150] | 0.4141 | 0.7422 | 0.2441 | 0.2970 |
+| evidence_recall(post-fit macro) | 0.6944 | 0.6574 | 0.0370 | [-0.1481, 0.2222] | 1.0000 | 1.0000 | 0.0869 | 0.2812 |
+| judge_primary | 0.4444 | 0.3889 | 0.0556 | [-0.1111, 0.2778] | 1.0000 | 1.0000 | 0.1335 | 0.2747 |
+| judge_same_model | 0.3889 | 0.3889 | 0.0000 | [-0.2222, 0.2222] | 1.0000 | 1.0000 | 0.0000 | 0.3201 |
+
+### memfw vs mem0_custom（sensitivity）
+
+| 指标 | A 均值 | B 均值 | 均值差(A-B) | 95% CI | 精确置换 p | Wilcoxon p | Cohen dz | MDE |
+|---|---|---|---|---|---|---|---|---|
+| answer_score | 0.4591 | 0.4652 | -0.0061 | [-0.1914, 0.1893] | 0.9688 | 0.6797 | -0.0141 | 0.2843 |
 | token_f1(cat1-4) | 0.3759 | 0.3123 | 0.0636 | [-0.1168, 0.2837] | 0.5547 | 1.0000 | 0.1583 | 0.3006 |
-| LLM judge(per-question) | 0.3889 | 0.4444 | -0.0556 | [-0.2778, 0.1667] | 1.0000 | 1.0000 | -0.1030 | 0.3559 |
 | evidence_recall(post-fit macro) | 0.6944 | 0.8148 | -0.1204 | [-0.3241, 0.0741] | 0.3125 | 0.3125 | -0.2769 | 0.2868 |
+
+### mem0_stock vs mem0_custom（configuration effect）
+
+| 指标 | A 均值 | B 均值 | 均值差(A-B) | 95% CI | 精确置换 p | Wilcoxon p | Cohen dz | MDE |
+|---|---|---|---|---|---|---|---|---|
+| answer_score | 0.4393 | 0.4652 | -0.0259 | [-0.0593, -0.0023] | 0.1250 | 0.1250 | -0.3960 | 0.0431 |
+| token_f1(cat1-4) | 0.2791 | 0.3123 | -0.0333 | [-0.0759, -0.0029] | 0.1250 | 0.1250 | -0.4562 | 0.0546 |
+| evidence_recall(post-fit macro) | 0.6574 | 0.8148 | -0.1574 | [-0.3241, -0.0185] | 0.1250 | 0.1250 | -0.4690 | 0.2215 |
 
 ## Limits
 
 - Small fixed subset: one public LoCoMo conversation, first 100 turns, 18 questions; results do not represent full LoCoMo.
-- Single dataset (LoCoMo) and a single local model; absolute scores are model-dependent.
+- Single dataset (LoCoMo) and a single local answer model; absolute scores are model-dependent.
 - All retention is 100% for the primary comparison; forgetting is not exercised in this formal run.
-- memfw stores verbatim turns by design in this protocol; Mem0 runs its extraction/update pipeline (infer=True), so write costs are not symmetric.
-- The judge uses the same local model as the answerer; judge accuracy is a secondary diagnostic, not ground truth.
-- Paired tests have 18 pairs; the minimum detectable difference is reported and is larger than several observed gaps.
-- mean_token_f1 and the paired token-F1 test exclude category-5 adversarial questions, whose gold answer is a trick answer; they use the abstention rule.
-- Two evidence-recall definitions are reported: pre-fit top-k macro recall and post-fit (128-token context) macro/micro recall; only the post-fit micro value matches the Day 11 metric definition.
-- Provenance audit uses run rep1 only. mem0's custom extraction instructions request attributed_to='user', but the extraction output mixed explicit user attribution, assistant attribution and missing fields, so the R3 flag rate is partly prompt-forced and partly model behaviour (not an independent quality measure).
-- Four paired tests are reported without family correction; treat secondary tests as exploratory.
+- memfw stores verbatim turns by design in this protocol; Mem0 arms run extraction pipelines, so write costs are not symmetric.
+- Mean token-F1 and paired token-F1 exclude category-5 adversarial questions (abstention rule instead).
+- Two evidence-recall definitions are reported: pre-fit top-k and post-fit (128-token context). The post-fit micro value matches the Day 11 metric definition; the macro value is the paired-analysis unit.
+- Primary judge is a different model (qwen3.5:4b); the same-model judge is a sensitivity diagnostic, not ground truth.
+- Provenance audit uses run rep1 only; mem0_custom's custom instructions request attributed_to='user', so its R3 rate is partly prompt-forced (mem0_stock is not prompt-forced).
+- Paired tests use 18 fixed-subset pairs; the minimum detectable difference is reported. Secondary arms/tests are exploratory and not family-corrected.
+- Memory-text form differs by protocol: memfw stores verbatim turns (speaker prefix, long sentences) while Mem0 stores extracted short statements; under the same 128-token budget the information density differs, so recall/answer gaps partly reflect this asymmetry rather than retrieval quality alone.
 - Model identity is evidenced by env.txt digests, not by a cryptographic receipt from the model server.
