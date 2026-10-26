@@ -40,6 +40,33 @@ for _proxy_var in ("NO_PROXY", "no_proxy"):
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
+
+# Machine-specific paths must not leak into committed experiment artifacts. Generated
+# JSON/text is redacted at write time so regenerating artifacts cannot reintroduce
+# absolute local paths into the public bundle.
+REDACT_PREFIXES = (
+    (str(REPO_ROOT), "$PROJECT_ROOT"),
+    (str(Path.home()), "$HOME"),
+)
+
+
+def redact_text(text: str) -> str:
+    for prefix, replacement in REDACT_PREFIXES:
+        if prefix:
+            text = text.replace(prefix, replacement)
+    return text
+
+
+def redact_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return redact_text(value)
+    if isinstance(value, dict):
+        return {key: redact_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [redact_value(item) for item in value]
+    return value
+
+
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
@@ -514,7 +541,12 @@ class Mem0System:
     user_id = "stepg-locomo-public"
 
     def __init__(
-        self, root: Path, config: dict[str, Any], *, custom_instructions: bool = True
+        self,
+        root: Path,
+        config: dict[str, Any],
+        *,
+        custom_instructions: bool = True,
+        num_ctx: int | None = None,
     ) -> None:
         os.environ["MEM0_TELEMETRY"] = "False"
         from mem0 import Memory
@@ -565,7 +597,7 @@ class Mem0System:
             "history_db_path": str(root / "history.db"),
         }
         self.root = root
-        self._num_ctx = int(llm.get("num_ctx", 8192))
+        self._num_ctx = int(num_ctx if num_ctx is not None else llm.get("num_ctx", 8192))
         instructions = str((config.get("mem0") or {}).get("custom_instructions") or "").strip()
         self._custom_instructions = instructions if custom_instructions and instructions else None
         self.memory: Any = Memory.from_config(mem0_config)
@@ -673,11 +705,13 @@ SYSTEMS = {
     "mem0": "mem0_custom",
     "mem0_custom": "mem0_custom",
     "mem0_stock": "mem0_stock",
+    "mem0_stock_day11ctx": "mem0_stock_day11ctx",
 }
 ARM_LABELS = {
     "memfw": "memfw (verbatim + shared-embedding cosine retrieval)",
     "mem0_stock": "Mem0 stock (add(infer=True), default extraction prompt)",
     "mem0_custom": "Mem0 + custom extraction instructions (schema-compat arm)",
+    "mem0_stock_day11ctx": "Mem0 stock at Day-11 num_ctx=8192 (byte-compatibility arm)",
 }
 
 
@@ -864,7 +898,8 @@ def _append_row(path: Path, row: dict[str, Any]) -> None:
 def _write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True, default=str) + "\n",
+        json.dumps(redact_value(value), ensure_ascii=False, indent=2, sort_keys=True, default=str)
+        + "\n",
         encoding="utf-8",
     )
 
@@ -1117,6 +1152,13 @@ def _make_system(
         return Mem0System(root, config, custom_instructions=True)
     if arm == "mem0_stock":
         return Mem0System(root, config, custom_instructions=False)
+    if arm == "mem0_stock_day11ctx":
+        return Mem0System(
+            root,
+            config,
+            custom_instructions=False,
+            num_ctx=int((config.get("mem0") or {}).get("day11_num_ctx", 8192)),
+        )
     raise ValueError(f"unknown system: {system_name!r}")
 
 

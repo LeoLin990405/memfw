@@ -18,10 +18,20 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from eval.stepG_runner import SYSTEMS, _resolve, load_config, load_subset  # noqa: E402
+from eval.stepG_runner import (  # noqa: E402
+    SYSTEMS,
+    _resolve,
+    load_config,
+    load_subset,
+    redact_text,
+)
 
 PRELIMINARY_SOURCE = "reports/day11_baseline_comparison.md"
-DAY11_ARM_MAP = {"memfw": "memfw", "mem0_stock": "mem0"}
+DAY11_ARM_MAP = {
+    "memfw": "memfw",
+    "mem0_stock": "mem0",
+    "mem0_stock_day11ctx": "mem0",
+}
 
 
 def _fmt(value: Any, digits: int = 4) -> str:
@@ -547,8 +557,10 @@ def write_report(config: dict[str, Any]) -> Path:
     )
     lines.append("")
     lines.append(
-        "- 迭代内容：新增 **mem0_stock** arm（与 Day 11 的 stock Mem0 配置一致）作为主比较；"
-        "首轮的 **mem0_custom** 保留为敏感性 arm；主 judge 换成不同模型（qwen3.5:4b），"
+        "- 迭代内容：新增 **mem0_stock** arm（stock Mem0）作为主比较；"
+        "**mem0_custom**（schema 兼容 instructions）保留为敏感性 arm；"
+        "**mem0_stock_day11ctx** 用 Day 11 的 `num_ctx=8192` 复刻 Mem0 抽取，"
+        "用于逐字节可复现性核对；主 judge 换成不同模型（qwen3.5:4b），"
         "同模型 judge 保留为诊断；新增**扩题集**（exploratory）提高统计功效。"
     )
     lines.append("")
@@ -604,15 +616,17 @@ def write_report(config: dict[str, Any]) -> Path:
                 [
                     "Mem0 配置",
                     "mem0_stock 使用默认抽取提示；mem0_custom 额外传入 schema 兼容的 "
-                    "custom instructions（敏感性 arm）",
+                    "custom instructions（敏感性 arm）；mem0_stock_day11ctx 为默认提示 + "
+                    "Day 11 的 num_ctx=8192（复现 arm）",
                 ],
                 [
                     "与 Day 11 的配置差异",
                     "Day 11 mem0 `num_ctx`="
                     f"{preliminary.get('num_ctx') if preliminary else 'n/a'}；"
-                    f"本轮 `num_ctx`={config['llm'].get('num_ctx')}。"
-                    "模型/embedding/seed/子集与硬件平台相同；更小的 Day 11 上下文窗口会"
-                    "截断 mem0 抽取 prompt，因此 Mem0 抽取结果只作近似复现",
+                    f"本轮默认 `num_ctx`={config['llm'].get('num_ctx')}。"
+                    "mem0_stock 使用本机默认窗口（抽取结果只作近似复现）；"
+                    "mem0_stock_day11ctx 使用 Day 11 的 8192 窗口，用于逐题复现核对。"
+                    "两臂的答案生成 prompt 很短，窗口差异不影响回答阶段",
                 ],
                 ["硬件", runtime_info.get("hardware") or "见 env.txt（platform/machine）"],
                 ["总耗时", _seconds(runtime_info.get("elapsed_seconds"))],
@@ -672,8 +686,10 @@ def write_report(config: dict[str, Any]) -> Path:
         lines.append("")
         lines.append(
             "以 Day 11 报告 JSON（`reports/day11_baseline_comparison.json`）的逐题结果为参照："
-            "`memfw` 与 Day 11 `memfw` 同实现；`mem0_stock` 与 Day 11 `mem0` 同为 stock 抽取配置；"
-            "`mem0_custom` 没有 Day 11 对应项（本轮新增的敏感性 arm）。"
+            "`memfw` 与 Day 11 `memfw` 同实现；`mem0_stock` 与 Day 11 `mem0` 同为 stock 抽取配置"
+            "（但本机 16k 上下文会改变抽取）；`mem0_stock_day11ctx` 使用 Day 11 的 "
+            "`num_ctx=8192`，是用于逐题核对 Mem0 抽取复现的臂；"
+            "`mem0_custom` 没有 Day 11 对应项（敏感性 arm）。"
         )
         lines.append("")
         if reproducibility:
@@ -766,6 +782,29 @@ def write_report(config: dict[str, Any]) -> Path:
                     f"Day11 {preliminary['prov_flagged_mem0']}/{preliminary['prov_sample']}",
                 ),
             ]
+            repro_day11ctx = reproducibility.get("mem0_stock_day11ctx") or {}
+            day11ctx = metrics["systems"].get("mem0_stock_day11ctx") or {}
+            if repro_day11ctx:
+                day11ctx_delta = abs(
+                    float(day11ctx.get("mean_answer_score") or 0) - preliminary["answer_mem0"]
+                )
+                checks.extend(
+                    [
+                        (
+                            "H9 mem0_stock_day11ctx 逐题复现 Day 11（≥16/18 题分数相同）",
+                            int(repro_day11ctx.get("identical_scores") or 0) >= 16,
+                            f"{repro_day11ctx.get('identical_scores')}/"
+                            f"{repro_day11ctx.get('comparable')}；记忆数 "
+                            f"{repro_day11ctx.get('formal_memories')} vs "
+                            f"{repro_day11ctx.get('day11_memories')}",
+                        ),
+                        (
+                            "H10 mem0_stock_day11ctx answer_score 与 Day 11 接近（|Δ|≤0.02）",
+                            day11ctx_delta <= 0.02,
+                            f"|Δ|={day11ctx_delta:.4f}",
+                        ),
+                    ]
+                )
             lines.append(
                 _table(
                     ["项目", "Day 11 初步", "本轮正式", "来源"],
@@ -917,7 +956,7 @@ def write_report(config: dict[str, Any]) -> Path:
         lines.append("尚未生成 `metrics.json`，无法汇总主结果。")
         lines.append("")
     report_path = results_dir / "REPORT.md"
-    report_path.write_text("\n".join(lines), encoding="utf-8")
+    report_path.write_text(redact_text("\n".join(lines)), encoding="utf-8")
     return report_path
 
 

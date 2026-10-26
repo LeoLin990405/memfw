@@ -992,6 +992,28 @@ def build_metrics(
         )
         if comparison:
             comparisons.append(comparison)
+    if "mem0_stock_day11ctx" in systems and reference in systems:
+        comparison = _comparison_pair(
+            systems,
+            judge_per_question_by_label,
+            reference,
+            "mem0_stock_day11ctx",
+            f"{reference} vs mem0_stock_day11ctx（Day-11 context replication）",
+            int(config["seed"]),
+        )
+        if comparison:
+            comparisons.append(comparison)
+    if "mem0_stock" in systems and "mem0_stock_day11ctx" in systems:
+        comparison = _comparison_pair(
+            systems,
+            judge_per_question_by_label,
+            "mem0_stock",
+            "mem0_stock_day11ctx",
+            "mem0_stock vs mem0_stock_day11ctx（context-window effect）",
+            int(config["seed"]),
+        )
+        if comparison:
+            comparisons.append(comparison)
 
     metrics: dict[str, Any] = {
         "schema_version": "stepg-metrics-v2",

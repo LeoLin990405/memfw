@@ -43,6 +43,7 @@ from eval.stepG_runner import (  # noqa: E402
     data_path,
     execute,
     load_config,
+    redact_text,
     sha256_file,
     subset_path,
 )
@@ -165,9 +166,12 @@ def write_env(results_dir: Path) -> Path:
                 if dist.metadata.get("Name")
             )
             freeze = "\n".join(rows) + "\n"
-    (results_dir / "pip-freeze.txt").write_text(freeze, encoding="utf-8")
-    freeze_text = freeze
-    env_path.write_text("\n".join(lines) + "\n\n## pip freeze\n" + freeze_text, encoding="utf-8")
+    (results_dir / "pip-freeze.txt").write_text(redact_text(freeze), encoding="utf-8")
+    freeze_text = redact_text(freeze)
+    env_path.write_text(
+        redact_text("\n".join(lines) + "\n\n## pip freeze\n") + freeze_text,
+        encoding="utf-8",
+    )
     return env_path
 
 

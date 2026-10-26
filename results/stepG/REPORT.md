@@ -41,12 +41,12 @@
 
 ```
 python_version: 3.11.16
-python_executable: $PROJECT_ROOT/.venv/bin/python
+python_executable: $HOME/Documents/Codex/2026-10-18/python-keyness-agent-claude-gpt-deepseek/.venv/bin/python
 platform: macOS-26.7.1-arm64-arm-64bit
 machine: arm64
 processor: arm
 memfw_version: 0.1.0
-memfw_module_path: $PROJECT_ROOT/src/memfw/__init__.py
+memfw_module_path: $HOME/Documents/Codex/2026-10-18/python-keyness-agent-claude-gpt-deepseek/src/memfw/__init__.py
 mem0_version: 2.2.1
 ollama_server_version: 0.40.3
 ollama_local_models: nimble:9b, nomic-embed-text:latest, qwen3.5:4b, qwen3.5:9b, qwen3:4b

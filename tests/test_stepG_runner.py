@@ -583,6 +583,7 @@ def test_arm_mapping_includes_stock_and_custom_mem0() -> None:
     assert SYSTEMS["memfw"] == "memfw"
     assert SYSTEMS["mem0_stock"] == "mem0_stock"
     assert SYSTEMS["mem0_custom"] == "mem0_custom"
+    assert SYSTEMS["mem0_stock_day11ctx"] == "mem0_stock_day11ctx"
     assert SYSTEMS["mem0"] == "mem0_custom"  # backwards-compatible alias
 
 
@@ -682,3 +683,46 @@ def test_metrics_rows_normalize_legacy_arm_name(tmp_path: Path) -> None:
     rows = load_rows(tmp_path)
     assert list(rows) == ["mem0_custom"]
     assert rows["mem0_custom"]["rep1"][0]["system"] == "mem0_custom"
+
+
+def test_redaction_hides_machine_paths() -> None:
+    from pathlib import Path
+
+    from eval.stepG_runner import REPO_ROOT, redact_text
+
+    assert redact_text(f"{REPO_ROOT}/results/stepG") == "$PROJECT_ROOT/results/stepG"
+    assert "python-keyness" not in redact_text(f"{REPO_ROOT}/src/memfw/__init__.py")
+    assert str(Path.home()) not in redact_text(f"{Path.home()}/Documents/private.txt")
+
+
+def test_day11ctx_factory_uses_day11_num_ctx(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import eval.stepG_runner as runner
+
+    captured: dict[str, object] = {}
+
+    class FakeMem0:
+        def __init__(
+            self,
+            root: Path,
+            config: dict[str, object],
+            *,
+            custom_instructions: bool = True,
+            num_ctx: int | None = None,
+        ) -> None:
+            captured.update(
+                root=root,
+                custom_instructions=custom_instructions,
+                num_ctx=num_ctx,
+            )
+
+    monkeypatch.setattr(runner, "Mem0System", FakeMem0)
+    config = {
+        "paths": {"results_dir": str(tmp_path)},
+        "mem0": {"day11_num_ctx": 8192},
+        "runs": {"mem0": {"collection_name": "x"}},
+    }
+    runner._make_system("mem0_stock_day11ctx", config, "rep1", object())  # type: ignore[arg-type]
+    assert captured["num_ctx"] == 8192
+    assert captured["custom_instructions"] is False

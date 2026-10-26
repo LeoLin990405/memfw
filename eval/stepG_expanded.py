@@ -308,6 +308,16 @@ def build_expanded_metrics(
                 "mem0_stock vs mem0_custom",
             )
         )
+    if "memfw" in systems and "mem0_stock_day11ctx" in systems:
+        comparisons.append(
+            _expanded_comparison(
+                systems,
+                per_question_judge,
+                "memfw",
+                "mem0_stock_day11ctx",
+                "memfw vs mem0_stock_day11ctx（Day-11 context replication）",
+            )
+        )
     metrics = {
         "schema_version": "stepg-expanded-metrics-v1",
         "n_questions": len(rows_by_arm.get("memfw") or next(iter(rows_by_arm.values()), [])),

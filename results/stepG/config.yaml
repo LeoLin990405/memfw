@@ -52,6 +52,9 @@ judge_sensitivity:
 # Mem0 public API knob: custom extraction instructions enforce Mem0's own documented
 # output schema on smaller local models. Applied identically to every Mem0 write.
 mem0:
+  # Day 11 ran Mem0/answer models with num_ctx=8192; the reproduction arm uses that value
+  # for extraction so it can be compared with the committed Day 11 JSON.
+  day11_num_ctx: 8192
   custom_instructions: >-
     Return exactly one JSON object of the form
     {"memory": [{"id": "0", "text": "self-contained factual statement", "attributed_to": "user"}]}.
@@ -59,9 +62,10 @@ mem0:
     never return memory items as plain strings.
 
 runs:
-  # Primary comparison arm is mem0_stock (stock Mem0, Day-11 comparable).
+  # Primary comparison arm is mem0_stock (stock Mem0, this machine's 16k context).
   # mem0_custom keeps the schema-compat extraction instructions as a sensitivity arm.
-  systems: [memfw, mem0_stock, mem0_custom]
+  # mem0_stock_day11ctx repeats stock Mem0 at Day 11's num_ctx=8192 (reproduction arm).
+  systems: [memfw, mem0_stock, mem0_custom, mem0_stock_day11ctx]
   repeats: 3
   mem0:
     collection_name: stepg_locomo
