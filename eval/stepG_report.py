@@ -694,6 +694,18 @@ def write_report(config: dict[str, Any]) -> Path:
         lines.append("")
         if reproducibility:
             lines.append(_reproducibility_table(reproducibility))
+            day11ctx_repro = reproducibility.get("mem0_stock_day11ctx")
+            if day11ctx_repro:
+                lines.append("")
+                lines.append(
+                    "- 即使对齐 `num_ctx`，day11ctx 也未逐题复现 Day 11："
+                    f"{day11ctx_repro.get('identical_scores')}/"
+                    f"{day11ctx_repro.get('comparable')} 题分数相同，"
+                    f"记忆数 {day11ctx_repro.get('formal_memories')} vs "
+                    f"{day11ctx_repro.get('day11_memories')}。剩余差异可能来自 mem0/LLM "
+                    "版本、seed 配置细节与重复运行的非确定性；因此 **跨运行的 Day 11 Mem0 "
+                    "数字只作参考**，实验结论以同一轮内的配对比较为准。"
+                )
         else:
             lines.append("缺少 Day 11 JSON 或本轮 runs，无法核对。")
         lines.append("")

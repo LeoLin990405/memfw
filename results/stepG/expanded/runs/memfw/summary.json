@@ -1,10 +1,9 @@
 {
   "answer_latency": {
-    "count": 41,
-    "mean_seconds": 1.2881104380471586,
-    "p50_seconds": 1.2534167080011684,
-    "p95_seconds": 1.4345374169934075,
-    "total_seconds": 52.812527959933504
+    "count": 0,
+    "mean_seconds": null,
+    "p50_seconds": null,
+    "p95_seconds": null
   },
   "arm": "memfw",
   "mean_answer_score": 0.5220427946037702,
@@ -12,11 +11,10 @@
   "question_count": 41,
   "question_set": "expanded",
   "retrieval_latency": {
-    "count": 41,
-    "mean_seconds": 0.4304733435153427,
-    "p50_seconds": 0.41073862501070835,
-    "p95_seconds": 0.416364499978954,
-    "total_seconds": 17.649407084129052
+    "count": 0,
+    "mean_seconds": null,
+    "p50_seconds": null,
+    "p95_seconds": null
   },
   "rows": 41,
   "schema_version": "stepg-expanded-summary-v1",

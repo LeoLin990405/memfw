@@ -70,6 +70,15 @@ def download_data(config: dict[str, Any]) -> Path:
     return target
 
 
+def _portable_path(path: str) -> str:
+    """Render a path without exposing machine-specific absolute prefixes."""
+    resolved = Path(path).resolve()
+    try:
+        return "$PROJECT_ROOT/" + str(resolved.relative_to(REPO_ROOT.resolve()))
+    except ValueError:
+        return "$EXTERNAL_PYTHON"
+
+
 def write_env(results_dir: Path) -> Path:
     """Record the interpreter and model stack used for the formal runs."""
     env_path = results_dir / "env.txt"
@@ -127,12 +136,12 @@ def write_env(results_dir: Path) -> Path:
     digest_text = ", ".join(f"{name}={digest}" for name, digest in sorted(model_digests.items()))
     lines = [
         f"python_version: {sys.version.split()[0]}",
-        f"python_executable: {sys.executable}",
+        f"python_executable: {_portable_path(sys.executable)}",
         f"platform: {platform.platform()}",
         f"machine: {platform.machine()}",
         f"processor: {platform.processor() or 'arm64'}",
         f"memfw_version: {memfw_version}",
-        f"memfw_module_path: {memfw_path}",
+        f"memfw_module_path: {_portable_path(memfw_path)}",
         f"mem0_version: {mem0_version}",
         f"ollama_server_version: {ollama_version}",
         f"ollama_local_models: {', '.join(sorted(set(llm_models + embed_models))) or 'n/a'}",

@@ -54,6 +54,8 @@ def redact_text(text: str) -> str:
     for prefix, replacement in REDACT_PREFIXES:
         if prefix:
             text = text.replace(prefix, replacement)
+    # Editable-install URLs can point outside the project root (e.g. a shared venv).
+    text = re.sub(r"file:///\S+", "file://<editable-install>", text)
     return text
 
 

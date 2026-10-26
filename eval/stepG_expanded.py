@@ -151,6 +151,13 @@ def _make_system(arm: str, config: dict[str, Any], embedder: Any) -> Any:
         return Mem0System(root, config, custom_instructions=True)
     if SYSTEMS.get(arm) == "mem0_stock":
         return Mem0System(root, config, custom_instructions=False)
+    if SYSTEMS.get(arm) == "mem0_stock_day11ctx":
+        return Mem0System(
+            root,
+            config,
+            custom_instructions=False,
+            num_ctx=int((config.get("mem0") or {}).get("day11_num_ctx", 8192)),
+        )
     raise ValueError(f"unknown arm: {arm!r}")
 
 

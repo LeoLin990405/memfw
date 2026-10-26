@@ -126,7 +126,7 @@ def main() -> int:
 
     # Generated aggregates
     expected_judge_rows = 18 * repeats * len(expected_systems)
-    for judge_name in ("judge_primary.jsonl", "judge_sensitivity.jsonl"):
+    for judge_name in ("judge_primary.jsonl", "judge_same_model.jsonl"):
         judge_path = results_dir / judge_name
         check(f"{judge_name} exists", judge_path.exists())
         if judge_path.exists():
@@ -161,8 +161,18 @@ def main() -> int:
             int(metrics.get("run_errors") or 0) == 0,
             metrics.get("run_errors"),
         )
-        check("metrics: primary paired test present", bool(metrics.get("paired")))
-        check("metrics: recall paired test present", bool(metrics.get("paired_recall")))
+        comparisons = metrics.get("comparisons") or []
+        check(
+            "metrics: primary comparison present",
+            any("primary" in item.get("label", "") for item in comparisons),
+        )
+        primary = next((item for item in comparisons if "primary" in item.get("label", "")), {})
+        check("metrics: primary answer_score present", bool((primary or {}).get("answer_score")))
+        check("metrics: primary recall present", bool((primary or {}).get("evidence_recall")))
+        check(
+            "metrics: judge models recorded",
+            len((metrics.get("judge") or {}).get("models") or []) == 2,
+        )
     provenance_path = results_dir / "provenance_summary.json"
     check("provenance_summary.json exists", provenance_path.exists())
     if provenance_path.exists():
@@ -172,6 +182,23 @@ def main() -> int:
             for frame in ("derived_frame", "all_frame", "day11_frame"):
                 check(f"provenance/{system}: {frame} present", frame in info)
         check("provenance audited run == rep1", provenance.get("audited_run_id") == "rep1")
+    leaky = []
+    for path in results_dir.rglob("*"):
+        if not path.is_file() or path.suffix not in {".md", ".txt", ".json", ".jsonl", ".csv"}:
+            continue
+        relative = path.relative_to(results_dir)
+        if relative.parts[:1] and relative.parts[0] in {"runtime", "data"}:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        home_marker = "/" + "Users/"
+        project_marker = "python" + "-keyness" + "-agent-claude-gpt-deepseek"
+        if home_marker in text or project_marker in text:
+            leaky.append(str(relative))
+    check("no absolute machine paths in committed artifacts", not leaky, leaky[:5])
+
     report_path = results_dir / "REPORT.md"
     check("REPORT.md exists", report_path.exists())
     test_results = results_dir / "test-results.txt"

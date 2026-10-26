@@ -691,7 +691,9 @@ def test_redaction_hides_machine_paths() -> None:
     from eval.stepG_runner import REPO_ROOT, redact_text
 
     assert redact_text(f"{REPO_ROOT}/results/stepG") == "$PROJECT_ROOT/results/stepG"
-    assert "python-keyness" not in redact_text(f"{REPO_ROOT}/src/memfw/__init__.py")
+    external = redact_text(f"file://{Path.home()}/Documents/Codex/project-name/.venv")
+    assert str(Path.home()) not in external
+    assert "file://" in external
     assert str(Path.home()) not in redact_text(f"{Path.home()}/Documents/private.txt")
 
 

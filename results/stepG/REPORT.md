@@ -2,7 +2,7 @@
 
 > 本报告由 `eval/stepG_report.py` 从 `results/stepG/` 下的运行产物自动生成；所有数字均可在标注的来源文件中核对。实验仅使用公开 LoCoMo 数据。
 
-- 迭代内容：新增 **mem0_stock** arm（与 Day 11 的 stock Mem0 配置一致）作为主比较；首轮的 **mem0_custom** 保留为敏感性 arm；主 judge 换成不同模型（qwen3.5:4b），同模型 judge 保留为诊断；新增**扩题集**（exploratory）提高统计功效。
+- 迭代内容：新增 **mem0_stock** arm（stock Mem0）作为主比较；**mem0_custom**（schema 兼容 instructions）保留为敏感性 arm；**mem0_stock_day11ctx** 用 Day 11 的 `num_ctx=8192` 复刻 Mem0 抽取，用于逐字节可复现性核对；主 judge 换成不同模型（qwen3.5:4b），同模型 judge 保留为诊断；新增**扩题集**（exploratory）提高统计功效。
 
 ## 1. 执行状态
 
@@ -11,9 +11,9 @@
 | G1 环境 | 完成 | env.txt=True, pip-freeze.txt=True |
 | G2 统一模型 | 完成 | llm=qwen3.5:9b, embedding=nomic-embed-text, judge(primary)=qwen3.5:4b, judge(sensitivity)=qwen3.5:9b |
 | G3 runner + 单测 | 完成 | pytest_log=True |
-| G4 正式运行 | 完成 | arms complete 3×18: 3/3 |
+| G4 正式运行 | 完成 | arms complete 3×18: 4/4 |
 | G5 指标 | 完成 | metrics.json=True |
-| G6 provenance | 完成 | arms audited: 3 |
+| G6 provenance | 完成 | arms audited: 4 |
 | G7 报告 | 完成 | REPORT.md（本文件） |
 | 附加：扩题集 | 完成 | n=41（exploratory, 非固定 18 题子集） |
 
@@ -24,14 +24,14 @@
 | 数据 | 公开 LoCoMo `locomo10.json`，SHA-256 `79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4` |
 | 子集 | `conv-49`，前 100 轮，18 题（`results/stepG/subset.json`） |
 | seed | 20261021 |
-| arms | `memfw`, `mem0_stock`, `mem0_custom`（每 arm 3 次重复） |
+| arms | `memfw`, `mem0_stock`, `mem0_custom`, `mem0_stock_day11ctx`（每 arm 3 次重复） |
 | Answer LLM（各 arm 相同） | `qwen3.5:9b` via ollama，temperature=0.0 |
 | Answer embedding（各 arm 相同） | `nomic-embed-text`，dims=768 |
 | Primary judge（不同模型） | `qwen3.5:4b`（与 answer 模型不同） |
 | Sensitivity judge（同模型） | `qwen3.5:9b`（仅作诊断） |
 | 检索 | top_k=5，上下文预算 128 tokens |
-| Mem0 配置 | mem0_stock 使用默认抽取提示；mem0_custom 额外传入 schema 兼容的 custom instructions（敏感性 arm） |
-| 与 Day 11 的配置差异 | Day 11 mem0 `num_ctx`=8192；本轮 `num_ctx`=16384。模型/embedding/seed/子集与硬件平台相同；更小的 Day 11 上下文窗口会截断 mem0 抽取 prompt，因此 Mem0 抽取结果只作近似复现 |
+| Mem0 配置 | mem0_stock 使用默认抽取提示；mem0_custom 额外传入 schema 兼容的 custom instructions（敏感性 arm）；mem0_stock_day11ctx 为默认提示 + Day 11 的 num_ctx=8192（复现 arm） |
+| 与 Day 11 的配置差异 | Day 11 mem0 `num_ctx`=8192；本轮默认 `num_ctx`=16384。mem0_stock 使用本机默认窗口（抽取结果只作近似复现）；mem0_stock_day11ctx 使用 Day 11 的 8192 窗口，用于逐题复现核对。两臂的答案生成 prompt 很短，窗口差异不影响回答阶段 |
 | 硬件 | Apple M5 Max, 18 cores, 128 GB unified memory, macOS 26.7.1 (Mac17,7) |
 | 总耗时 | 4h50m58s |
 | API 花费 | $0.00（本地 Ollama，无外部 API） |
@@ -41,51 +41,29 @@
 
 ```
 python_version: 3.11.16
-python_executable: $HOME/Documents/Codex/2026-10-18/python-keyness-agent-claude-gpt-deepseek/.venv/bin/python
+python_executable: $EXTERNAL_PYTHON
 platform: macOS-26.7.1-arm64-arm-64bit
 machine: arm64
 processor: arm
 memfw_version: 0.1.0
-memfw_module_path: $HOME/Documents/Codex/2026-10-18/python-keyness-agent-claude-gpt-deepseek/src/memfw/__init__.py
+memfw_module_path: $EXTERNAL_PYTHON
 mem0_version: 2.2.1
 ollama_server_version: 0.40.3
 ollama_local_models: nimble:9b, nomic-embed-text:latest, qwen3.5:4b, qwen3.5:9b, qwen3:4b
 ollama_model_digests: nimble:9b=9b953de7a5336756ece1cb1e8632e374b3dbdabe3d02d405cf8291da2d43a131, nomic-embed-text:latest=0a109f422b47e3a30ba2b10eca18548e944e8a23073ee3f3e947efcf3c45e59f, qwen3.5:4b=d8b0f5e9760cd1682034f292d7ef72ec46f432149be0df7574bf2d6e92e38c04, qwen3.5:9b=56671c2ab9385f9cfcb404638e32cd62d88e3501d44822208363c010179a3c90, qwen3:4b=359d7dd4bcdab3d86b87d73ac27966f4dbb9f5efdfcc75d34a8764a09474fae7
-git_head: 577e3ca1c2abdf0cd3afaf1e66567c100a5517d0
-git_status_porcelain: M eval/stepG_metrics.py
+git_head: 5413127a9944ec942fd9844d7c003dd8e6accc86
+git_status_porcelain: M eval/stepG_expanded.py
+ M eval/stepG_metrics.py
  M eval/stepG_pipeline.py
- M eval/stepG_provenance.py
  M eval/stepG_report.py
  M eval/stepG_runner.py
  M results/stepG/config.yaml
- D results/stepG/judge.jsonl
- D results/stepG/pipeline_status.json
- D results/stepG/run_manifest.json
- D results/stepG/runs/rep1/mem0/.ingested
- D results/stepG/runs/rep1/mem0/memories.json
- D results/stepG/runs/rep1/mem0/questions.jsonl
- D results/stepG/runs/rep1/mem0/summary.json
- D results/stepG/runs/rep1/mem0/write_turns.jsonl
- D results/stepG/runs/rep2/mem0/.ingested
- D results/stepG/runs/rep2/mem0/memories.json
- D results/stepG/runs/rep2/mem0/questions.jsonl
- D results/stepG/runs/rep2/mem0/summary.json
- D results/stepG/runs/rep2/mem0/write_turns.jsonl
- D results/stepG/runs/rep3/mem0/.ingested
- D results/stepG/runs/rep3/mem0/memories.json
- D results/stepG/runs/rep3/mem0/questions.jsonl
- D results/stepG/runs/rep3/mem0/summary.json
- D results/stepG/runs/rep3/mem0/write_turns.jsonl
- M results/stepG/runtime_info.json
+ M results/stepG/pipeline_status.json
+ M results/stepG/run_manifest.json
  M tests/test_stepG_runner.py
-?? eval/stepG_expanded.py
-?? results/stepG/runs/rep1/mem0_custom/
-?? results/stepG/runs/rep1/mem0_stock/
-?? results/stepG/runs/rep2/mem0_custom/
-?? results/stepG/runs/rep2/mem0_stock/
-?? results/stepG/runs/rep3/mem0_custom/
-?? results/stepG/runs/rep3/mem0_stock/
-?? results/stepG/stepg_validate.py
+?? results/stepG/runs/rep1/mem0_stock_day11ctx/
+?? results/stepG/runs/rep2/mem0_stock_day11ctx/
+?? results/stepG/runs/rep3/mem0_stock_day11ctx/
 model_config: results/stepG/config.yaml
 
 ## pip freeze
@@ -173,6 +151,7 @@ zstandard==0.25.0
 | memfw | 0.4591 | 0.3759 | 69.4% | 66.7% | 44.4% | 38.9% | 18 | 3 |
 | mem0_stock | 0.4393 | 0.2791 | 65.7% | 66.7% | 38.9% | 38.9% | 18 | 3 |
 | mem0_custom | 0.4652 | 0.3123 | 81.5% | 83.3% | 44.4% | 44.4% | 18 | 3 |
+| mem0_stock_day11ctx | 0.5050 | 0.3636 | 75.9% | 79.2% | 50.0% | 50.0% | 18 | 3 |
 
 ### 效率与规模（来源同上；每轮写入 = 一次 add/写入操作）
 
@@ -181,6 +160,7 @@ zstandard==0.25.0
 | memfw | 2.20 | 0.0219 | 0.0193 | 0.0226 | 0.4027 | 0.4142 | 1.2398 | 11484 | 267 | 100.0 | 99633 |
 | mem0_stock | 1004.45 | 10.0442 | 10.0720 | 12.6570 | 0.3066 | 0.3260 | 1.2334 | 2716128 | 17667 | 79.0 | 709206 |
 | mem0_custom | 999.73 | 9.9970 | 9.5281 | 12.5154 | 0.3033 | 0.3073 | 1.2312 | 2744967 | 11994 | 50.0 | 459350 |
+| mem0_stock_day11ctx | 526.68 | 5.2665 | 5.1039 | 7.4684 | 0.3041 | 0.3393 | 1.2377 | 1239423 | 16893 | 87.0 | 778838 |
 
 > 注：memfw 逐字写入、无 LLM 抽取调用；Mem0 两个 arm 都跑 `add(infer=True)` 抽取。写入/存储差异同时反映“是否调用 LLM 抽取”和“存储形态”，不能单独解读为工程实现效率。
 
@@ -188,8 +168,8 @@ zstandard==0.25.0
 
 | label | judge model | judged rows | per-arm accuracy（每题跨重复均值） |
 |---|---|---|---|
-| primary | qwen3.5:4b | 162 | mem0_custom:44.4%, mem0_stock:38.9%, memfw:44.4% |
-| same_model | qwen3.5:9b | 162 | mem0_custom:44.4%, mem0_stock:38.9%, memfw:38.9% |
+| primary | qwen3.5:4b | 216 | mem0_custom:44.4%, mem0_stock:38.9%, mem0_stock_day11ctx:50.0%, memfw:44.4% |
+| same_model | qwen3.5:9b | 216 | mem0_custom:44.4%, mem0_stock:38.9%, mem0_stock_day11ctx:50.0%, memfw:38.9% |
 
 ### Provenance 审计（G6；来源 `provenance_summary.json` / `provenance_audit.csv`）
 
@@ -197,6 +177,7 @@ zstandard==0.25.0
 |---|---|---|---|---|---|---|
 | mem0_custom | 50 | 50 | 30 / 30 / 22 | 30 / 30 / 23 | 30 / 30 / 19 | 0 |
 | mem0_stock | 79 | 79 | 30 / 30 / 21 | 30 / 30 / 23 | 30 / 30 / 21 | 0 |
+| mem0_stock_day11ctx | 87 | 87 | 30 / 30 / 25 | 30 / 30 / 24 | 30 / 30 / 18 | 0 |
 | memfw | 100 | 0 | 0 / 0 / 0 | 30 / 0 / 0 | 30 / 0 / 0 | 30 |
 
 - `derived_frame`：每个 arm 最多抽 30 条派生记忆；`FLAGGED` 表示派生文本被记录成用户原话（R3）。
@@ -237,15 +218,38 @@ memfw vs mem0_stock；每题跨重复均值后做配对检验。
 | LLM judge（primary） | 0.3889 | 0.4444 | -0.0556 | [-0.1667, 0.0000] | 1.0000 | 1.0000 | -0.2357 | 0.1556 |
 | LLM judge（same_model） | 0.3889 | 0.4444 | -0.0556 | [-0.1667, 0.0000] | 1.0000 | 1.0000 | -0.2357 | 0.1556 |
 
+### memfw vs mem0_stock_day11ctx（Day-11 context replication）
+
+| 指标 | A 均值 | B 均值 | 均值差 (A−B) | 95% bootstrap CI | 精确置换 p | Wilcoxon p | Cohen dz | MDE(80%) |
+|---|---|---|---|---|---|---|---|---|
+| answer_score | 0.4591 | 0.5050 | -0.0459 | [-0.2713, 0.1747] | 0.7422 | 0.7422 | -0.0913 | 0.3320 |
+| token_f1（cat1–4） | 0.3759 | 0.3636 | 0.0124 | [-0.2397, 0.2727] | 0.8906 | 0.9844 | 0.0244 | 0.3792 |
+| evidence recall（post-fit macro） | 0.6944 | 0.7593 | -0.0648 | [-0.2963, 0.1667] | 0.6562 | 0.6562 | -0.1275 | 0.3356 |
+| LLM judge（primary） | 0.4444 | 0.5000 | -0.0556 | [-0.2778, 0.1667] | 1.0000 | 1.0000 | -0.1030 | 0.3559 |
+| LLM judge（same_model） | 0.3889 | 0.5000 | -0.1111 | [-0.3889, 0.1667] | 0.6875 | 0.6875 | -0.1906 | 0.3847 |
+
+### mem0_stock vs mem0_stock_day11ctx（context-window effect）
+
+| 指标 | A 均值 | B 均值 | 均值差 (A−B) | 95% bootstrap CI | 精确置换 p | Wilcoxon p | Cohen dz | MDE(80%) |
+|---|---|---|---|---|---|---|---|---|
+| answer_score | 0.4393 | 0.5050 | -0.0657 | [-0.1838, 0.0318] | 0.3125 | 0.3750 | -0.2691 | 0.1612 |
+| token_f1（cat1–4） | 0.2791 | 0.3636 | -0.0845 | [-0.2323, 0.0405] | 0.3125 | 0.3750 | -0.3059 | 0.2067 |
+| evidence recall（post-fit macro） | 0.6574 | 0.7593 | -0.1019 | [-0.2963, 0.0926] | 0.4375 | 0.4375 | -0.2357 | 0.2852 |
+| LLM judge（primary） | 0.3889 | 0.5000 | -0.1111 | [-0.3333, 0.1111] | 0.6250 | 0.6250 | -0.2357 | 0.3111 |
+| LLM judge（same_model） | 0.3889 | 0.5000 | -0.1111 | [-0.3333, 0.1111] | 0.6250 | 0.6250 | -0.2357 | 0.3111 |
+
 
 ## 5. 与 Day 11 的可复现性核对
 
-以 Day 11 报告 JSON（`reports/day11_baseline_comparison.json`）的逐题结果为参照：`memfw` 与 Day 11 `memfw` 同实现；`mem0_stock` 与 Day 11 `mem0` 同为 stock 抽取配置；`mem0_custom` 没有 Day 11 对应项（本轮新增的敏感性 arm）。
+以 Day 11 报告 JSON（`reports/day11_baseline_comparison.json`）的逐题结果为参照：`memfw` 与 Day 11 `memfw` 同实现；`mem0_stock` 与 Day 11 `mem0` 同为 stock 抽取配置（但本机 16k 上下文会改变抽取）；`mem0_stock_day11ctx` 使用 Day 11 的 `num_ctx=8192`，是用于逐题核对 Mem0 抽取复现的臂；`mem0_custom` 没有 Day 11 对应项（敏感性 arm）。
 
 | arm | Day 11 对应系统 | 逐题 answer_score 相同 | 检索集合 Jaccard | 本次记忆数 | Day 11 记忆数 |
 |---|---|---|---|---|---|
 | mem0_stock | mem0 | 13/18 | 0.396 | 79 | 94 |
+| mem0_stock_day11ctx | mem0 | 12/18 | 0.543 | 87 | 94 |
 | memfw | memfw | 18/18 | 0.967 | 100 | 100 |
+
+- 即使对齐 `num_ctx`，day11ctx 也未逐题复现 Day 11：12/18 题分数相同，记忆数 87 vs 94。剩余差异可能来自 mem0/LLM 版本、seed 配置细节与重复运行的非确定性；因此 **跨运行的 Day 11 Mem0 数字只作参考**，实验结论以同一轮内的配对比较为准。
 
 ## 6. 扩题集（exploratory）
 
@@ -255,6 +259,7 @@ memfw vs mem0_stock；每题跨重复均值后做配对检验。
 |---|---|---|---|---|---|
 | mem0_custom | 0.5535 | 0.4417 | 79.7% | 81.2% | 41 |
 | mem0_stock | 0.4962 | 0.3660 | 75.2% | 75.0% | 41 |
+| mem0_stock_day11ctx | 0.5168 | 0.3932 | 73.6% | 75.0% | 41 |
 | memfw | 0.5220 | 0.4324 | 67.1% | 64.6% | 41 |
 
 主比较（memfw vs mem0_stock，n=41）：
@@ -290,6 +295,8 @@ memfw vs mem0_stock；每题跨重复均值后做配对检验。
 - **确认**：H6 memfw post-fit micro recall 复现（|Δ|≤0.05）（|Δ|=0.0000）。
 - **确认**：H7 两系统 recall 差距方向与 Day 11 一致（Day11 memfw−mem0=+0.0417；本轮=+0.0000）。
 - **确认**：H8 mem0 的派生记忆多数被记为无标注用户记忆（stock arm day11_frame FLAGGED ≥ 半数）（stock 21/30；Day11 21/30）。
+- **未确认**：H9 mem0_stock_day11ctx 逐题复现 Day 11（≥16/18 题分数相同）（12/18；记忆数 87 vs 94）。
+- **未确认**：H10 mem0_stock_day11ctx answer_score 与 Day 11 接近（|Δ|≤0.02）（|Δ|=0.0217）。
 - **配置敏感性**：mem0_custom answer_score=0.4652、记忆数=50.0，与 stock 不同；因此两套 Mem0 数字不能混用。
 - **复现解释**：mem0_stock 与 Day 11 mem0 的逐题分数一致率 13/18，记忆数 79 vs 94；本轮 mem0 wrapper 使用 num_ctx=16384，Day 11 使用 8192，抽取 prompt 是否被截断会改变抽取文本，因此 stock arm 是“同默认抽取提示 + 本机协议”的近似复现，而非逐字节复现。
 - 正式结论以 §3–§5 与 `metrics.json` 为准；初步数字仅作参照。

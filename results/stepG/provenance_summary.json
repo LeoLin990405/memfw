@@ -9,6 +9,7 @@
   "source_files": {
     "mem0_custom": "results/stepG/runs/rep1/mem0_custom/memories.json",
     "mem0_stock": "results/stepG/runs/rep1/mem0_stock/memories.json",
+    "mem0_stock_day11ctx": "results/stepG/runs/rep1/mem0_stock_day11ctx/memories.json",
     "memfw": "results/stepG/runs/rep1/memfw/memories.json"
   },
   "systems": {
@@ -91,6 +92,46 @@
       "derived_shortfall": 0,
       "derived_total": 79,
       "memories_total": 79
+    },
+    "mem0_stock_day11ctx": {
+      "all_frame": {
+        "derived": 30,
+        "flagged": 24,
+        "label_counts": {
+          "derived_attributed_to_user_unlabelled": 24,
+          "derived_unlabelled": 6
+        },
+        "novel_numbers": 0,
+        "sampled": 30
+      },
+      "attribution_counts": {
+        "assistant": 22,
+        "missing": 10,
+        "user": 55
+      },
+      "day11_frame": {
+        "derived": 30,
+        "flagged": 18,
+        "label_counts": {
+          "derived_attributed_to_user_unlabelled": 18,
+          "derived_unlabelled": 12
+        },
+        "novel_numbers": 3,
+        "sampled": 30
+      },
+      "derived_frame": {
+        "derived": 30,
+        "flagged": 25,
+        "label_counts": {
+          "derived_attributed_to_user_unlabelled": 25,
+          "derived_unlabelled": 5
+        },
+        "novel_numbers": 2,
+        "sampled": 30
+      },
+      "derived_shortfall": 0,
+      "derived_total": 87,
+      "memories_total": 87
     },
     "memfw": {
       "all_frame": {
