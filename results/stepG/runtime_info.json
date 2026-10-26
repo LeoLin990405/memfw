@@ -1,0 +1,31 @@
+{
+  "api_cost_usd": 0.0,
+  "elapsed_seconds": 17458.0,
+  "finished_at_utc": "2026-10-22T11:56:45Z",
+  "hardware": "Apple M5 Max, 18 cores, 128 GB unified memory, macOS 26.7.1 (Mac17,7)",
+  "note": "All model calls used the local Ollama loopback endpoint; no paid API calls were made. The stock-Mem0 arm was added in the second iteration so the Mem0 side matches the Day 11 default configuration; the first-pass custom-instruction Mem0 arm is retained as a sensitivity arm. The expanded question set is exploratory.",
+  "phases": {
+    "cross_judge_expanded_and_freeze": {
+      "elapsed_seconds": 425.0,
+      "finished_at_utc": "2026-10-22T11:56:45Z",
+      "started_at_utc": "2026-10-22T11:49:40Z"
+    },
+    "mem0_stock_arm": {
+      "elapsed_seconds": 3100.0,
+      "finished_at_utc": "2026-10-22T11:49:24Z",
+      "started_at_utc": "2026-10-22T10:57:44Z"
+    },
+    "mem0_token_reingest_and_refresh": {
+      "elapsed_seconds": 3285.0,
+      "finished_at_utc": "2026-10-22T09:10:09Z",
+      "started_at_utc": "2026-10-22T08:15:24Z"
+    },
+    "primary_formal_run": {
+      "elapsed_seconds": 3311.0,
+      "finished_at_utc": "2026-10-22T08:00:58Z",
+      "started_at_utc": "2026-10-22T07:05:47Z"
+    }
+  },
+  "schema_version": "stepg-runtime-v3",
+  "started_at_utc": "2026-10-22T07:05:47Z"
+}

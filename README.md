@@ -102,3 +102,27 @@ The JSON result is deterministic for the same input. On the public first-sample 
 The project provides local storage, retrieval, retention planning, review, and recovery primitives. The LoCoMo result is bounded evidence about one dataset and these evaluation settings; it is not a claim of production quality or user-level generalization. Next work should focus on clearer adapter boundaries and broader evaluation before making quality claims. Optional adapters can use an external service only when the caller injects a transport; that choice can send data outside the local process and should be explicit.
 
 Older detailed design notes and historical benchmark snapshots remain in [docs/legacy-design-notes.md](docs/legacy-design-notes.md). Use the linked reports for evidence and limitations.
+
+## Step G experiment: memfw vs Mem0 on a fixed public LoCoMo subset
+
+[`results/stepG/REPORT.md`](results/stepG/REPORT.md) is a reproducible, bounded comparison on the
+public LoCoMo corpus: one fixed conversation window (`conv-49`, first 100 turns), the 18 questions
+defined by the Day 11 manifest, and seed `20261021`. It is an experiment artifact, not a product
+claim; read the report's limitations before citing numbers.
+
+- **Arms:** `memfw` (verbatim writes + shared-embedding cosine retrieval), `mem0_stock`
+  (stock Mem0 `add(infer=True)`; same default extraction prompt as Day 11, but the context window
+  differs — see the report's reproduction section), and `mem0_custom` (a sensitivity arm with
+  schema-compatibility extraction instructions).
+- **Same answer model and embedder for every arm:** `qwen3.5:9b` + `nomic-embed-text`,
+  temperature 0, top-k 5, 128-token context budget.
+- **Judging:** primary judge is a different local model (`qwen3.5:4b`); a same-model judge is kept
+  as a diagnostic.
+- **Bounded result on this subset:** no statistically detectable answer-quality difference between
+  the arms (paired exact tests, n=18, MDE ≈ 28 pp); `memfw` writes cost orders of magnitude less;
+  Mem0 records derived text as user memories without inference labels in the observed samples.
+  An exploratory expanded question set (41 questions in the same window) is reported separately.
+- **Expanded check:** an exploratory 41-question set inside the same window (tighter MDE, still no
+  significant differences) is included in the report.
+- **Reproduce:** `python eval/stepG_pipeline.py --stage all` (local Ollama models required; see the
+  report for the exact environment). Implementation: [`eval/stepG_runner.py`](eval/stepG_runner.py).

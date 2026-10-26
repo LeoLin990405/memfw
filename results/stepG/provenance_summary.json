@@ -1,0 +1,127 @@
+{
+  "audited_run_id": "rep1",
+  "csv": "results/stepG/provenance_audit.csv",
+  "framing": "derived_frame is the primary G6 frame (up to 30 inferred memories per arm); all_frame is a fixed-denominator fallback over uniformly sampled memories; day11_frame re-uses the Day 11 uniform frame and R3 rule for direction checks. Step-G arms: memfw, mem0_stock (default extraction prompt) and mem0_custom (schema-compat extraction instructions). Under the Step-G rule, missing attributed_to defaults to the user namespace (R3) and only explicit assistant attribution is R4; under the Day-11 rule missing attribution is R4.",
+  "rubric": "results/stepG/provenance_rubric.md",
+  "run_id": "rep1",
+  "schema_version": "stepg-provenance-v1",
+  "seed": 20261021,
+  "source_files": {
+    "mem0_custom": "results/stepG/runs/rep1/mem0_custom/memories.json",
+    "mem0_stock": "results/stepG/runs/rep1/mem0_stock/memories.json",
+    "memfw": "results/stepG/runs/rep1/memfw/memories.json"
+  },
+  "systems": {
+    "mem0_custom": {
+      "all_frame": {
+        "derived": 30,
+        "flagged": 23,
+        "label_counts": {
+          "derived_attributed_to_user_unlabelled": 23,
+          "derived_unlabelled": 7
+        },
+        "novel_numbers": 15,
+        "sampled": 30
+      },
+      "attribution_counts": {
+        "assistant": 10,
+        "missing": 9,
+        "user": 31
+      },
+      "day11_frame": {
+        "derived": 30,
+        "flagged": 19,
+        "label_counts": {
+          "derived_attributed_to_user_unlabelled": 19,
+          "derived_unlabelled": 11
+        },
+        "novel_numbers": 14,
+        "sampled": 30
+      },
+      "derived_frame": {
+        "derived": 30,
+        "flagged": 22,
+        "label_counts": {
+          "derived_attributed_to_user_unlabelled": 22,
+          "derived_unlabelled": 8
+        },
+        "novel_numbers": 18,
+        "sampled": 30
+      },
+      "derived_shortfall": 0,
+      "derived_total": 50,
+      "memories_total": 50
+    },
+    "mem0_stock": {
+      "all_frame": {
+        "derived": 30,
+        "flagged": 23,
+        "label_counts": {
+          "derived_attributed_to_user_unlabelled": 23,
+          "derived_unlabelled": 7
+        },
+        "novel_numbers": 7,
+        "sampled": 30
+      },
+      "attribution_counts": {
+        "assistant": 17,
+        "missing": 1,
+        "user": 61
+      },
+      "day11_frame": {
+        "derived": 30,
+        "flagged": 21,
+        "label_counts": {
+          "derived_attributed_to_user_unlabelled": 21,
+          "derived_unlabelled": 9
+        },
+        "novel_numbers": 8,
+        "sampled": 30
+      },
+      "derived_frame": {
+        "derived": 30,
+        "flagged": 21,
+        "label_counts": {
+          "derived_attributed_to_user_unlabelled": 21,
+          "derived_unlabelled": 9
+        },
+        "novel_numbers": 6,
+        "sampled": 30
+      },
+      "derived_shortfall": 0,
+      "derived_total": 79,
+      "memories_total": 79
+    },
+    "memfw": {
+      "all_frame": {
+        "derived": 0,
+        "flagged": 0,
+        "label_counts": {
+          "verbatim_source_text": 30
+        },
+        "novel_numbers": 0,
+        "sampled": 30
+      },
+      "attribution_counts": {},
+      "day11_frame": {
+        "derived": 0,
+        "flagged": 0,
+        "label_counts": {
+          "verbatim_source_text": 30
+        },
+        "novel_numbers": 0,
+        "sampled": 30
+      },
+      "derived_frame": {
+        "derived": 0,
+        "flagged": 0,
+        "label_counts": {},
+        "novel_numbers": 0,
+        "sampled": 0
+      },
+      "derived_shortfall": 30,
+      "derived_total": 0,
+      "memories_total": 100
+    }
+  }
+}

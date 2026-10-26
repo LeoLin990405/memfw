@@ -1,0 +1,631 @@
+{
+  "checks": [
+    {
+      "detail": "",
+      "name": "subset has 100 turns / 18 questions",
+      "ok": true
+    },
+    {
+      "detail": 20261021,
+      "name": "seed matches config",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep1/memfw: questions.jsonl exists",
+      "ok": true
+    },
+    {
+      "detail": 18,
+      "name": "rep1/memfw: 18 question rows",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep1/memfw: question ids match subset",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep1/memfw: no answer errors",
+      "ok": true
+    },
+    {
+      "detail": 100,
+      "name": "rep1/memfw: 100 write turns",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep1/memfw: unique write turns",
+      "ok": true
+    },
+    {
+      "detail": {
+        "embedding": "nomic-embed-text",
+        "llm": "qwen3.5:9b",
+        "llm_transport": "ollama"
+      },
+      "name": "rep1/memfw: summary model matches config",
+      "ok": true
+    },
+    {
+      "detail": 18,
+      "name": "rep1/memfw: summary has 18 questions",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep1/mem0_stock: questions.jsonl exists",
+      "ok": true
+    },
+    {
+      "detail": 18,
+      "name": "rep1/mem0_stock: 18 question rows",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep1/mem0_stock: question ids match subset",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep1/mem0_stock: no answer errors",
+      "ok": true
+    },
+    {
+      "detail": 100,
+      "name": "rep1/mem0_stock: 100 write turns",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep1/mem0_stock: unique write turns",
+      "ok": true
+    },
+    {
+      "detail": {
+        "embedding": "nomic-embed-text",
+        "llm": "qwen3.5:9b",
+        "llm_transport": "ollama"
+      },
+      "name": "rep1/mem0_stock: summary model matches config",
+      "ok": true
+    },
+    {
+      "detail": 18,
+      "name": "rep1/mem0_stock: summary has 18 questions",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep1/mem0_custom: questions.jsonl exists",
+      "ok": true
+    },
+    {
+      "detail": 18,
+      "name": "rep1/mem0_custom: 18 question rows",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep1/mem0_custom: question ids match subset",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep1/mem0_custom: no answer errors",
+      "ok": true
+    },
+    {
+      "detail": 100,
+      "name": "rep1/mem0_custom: 100 write turns",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep1/mem0_custom: unique write turns",
+      "ok": true
+    },
+    {
+      "detail": {
+        "embedding": "nomic-embed-text",
+        "llm": "qwen3.5:9b",
+        "llm_transport": "ollama"
+      },
+      "name": "rep1/mem0_custom: summary model matches config",
+      "ok": true
+    },
+    {
+      "detail": 18,
+      "name": "rep1/mem0_custom: summary has 18 questions",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep2/memfw: questions.jsonl exists",
+      "ok": true
+    },
+    {
+      "detail": 18,
+      "name": "rep2/memfw: 18 question rows",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep2/memfw: question ids match subset",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep2/memfw: no answer errors",
+      "ok": true
+    },
+    {
+      "detail": 100,
+      "name": "rep2/memfw: 100 write turns",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep2/memfw: unique write turns",
+      "ok": true
+    },
+    {
+      "detail": {
+        "embedding": "nomic-embed-text",
+        "llm": "qwen3.5:9b",
+        "llm_transport": "ollama"
+      },
+      "name": "rep2/memfw: summary model matches config",
+      "ok": true
+    },
+    {
+      "detail": 18,
+      "name": "rep2/memfw: summary has 18 questions",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep2/mem0_stock: questions.jsonl exists",
+      "ok": true
+    },
+    {
+      "detail": 18,
+      "name": "rep2/mem0_stock: 18 question rows",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep2/mem0_stock: question ids match subset",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep2/mem0_stock: no answer errors",
+      "ok": true
+    },
+    {
+      "detail": 100,
+      "name": "rep2/mem0_stock: 100 write turns",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep2/mem0_stock: unique write turns",
+      "ok": true
+    },
+    {
+      "detail": {
+        "embedding": "nomic-embed-text",
+        "llm": "qwen3.5:9b",
+        "llm_transport": "ollama"
+      },
+      "name": "rep2/mem0_stock: summary model matches config",
+      "ok": true
+    },
+    {
+      "detail": 18,
+      "name": "rep2/mem0_stock: summary has 18 questions",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep2/mem0_custom: questions.jsonl exists",
+      "ok": true
+    },
+    {
+      "detail": 18,
+      "name": "rep2/mem0_custom: 18 question rows",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep2/mem0_custom: question ids match subset",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep2/mem0_custom: no answer errors",
+      "ok": true
+    },
+    {
+      "detail": 100,
+      "name": "rep2/mem0_custom: 100 write turns",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep2/mem0_custom: unique write turns",
+      "ok": true
+    },
+    {
+      "detail": {
+        "embedding": "nomic-embed-text",
+        "llm": "qwen3.5:9b",
+        "llm_transport": "ollama"
+      },
+      "name": "rep2/mem0_custom: summary model matches config",
+      "ok": true
+    },
+    {
+      "detail": 18,
+      "name": "rep2/mem0_custom: summary has 18 questions",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep3/memfw: questions.jsonl exists",
+      "ok": true
+    },
+    {
+      "detail": 18,
+      "name": "rep3/memfw: 18 question rows",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep3/memfw: question ids match subset",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep3/memfw: no answer errors",
+      "ok": true
+    },
+    {
+      "detail": 100,
+      "name": "rep3/memfw: 100 write turns",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep3/memfw: unique write turns",
+      "ok": true
+    },
+    {
+      "detail": {
+        "embedding": "nomic-embed-text",
+        "llm": "qwen3.5:9b",
+        "llm_transport": "ollama"
+      },
+      "name": "rep3/memfw: summary model matches config",
+      "ok": true
+    },
+    {
+      "detail": 18,
+      "name": "rep3/memfw: summary has 18 questions",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep3/mem0_stock: questions.jsonl exists",
+      "ok": true
+    },
+    {
+      "detail": 18,
+      "name": "rep3/mem0_stock: 18 question rows",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep3/mem0_stock: question ids match subset",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep3/mem0_stock: no answer errors",
+      "ok": true
+    },
+    {
+      "detail": 100,
+      "name": "rep3/mem0_stock: 100 write turns",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep3/mem0_stock: unique write turns",
+      "ok": true
+    },
+    {
+      "detail": {
+        "embedding": "nomic-embed-text",
+        "llm": "qwen3.5:9b",
+        "llm_transport": "ollama"
+      },
+      "name": "rep3/mem0_stock: summary model matches config",
+      "ok": true
+    },
+    {
+      "detail": 18,
+      "name": "rep3/mem0_stock: summary has 18 questions",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep3/mem0_custom: questions.jsonl exists",
+      "ok": true
+    },
+    {
+      "detail": 18,
+      "name": "rep3/mem0_custom: 18 question rows",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep3/mem0_custom: question ids match subset",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep3/mem0_custom: no answer errors",
+      "ok": true
+    },
+    {
+      "detail": 100,
+      "name": "rep3/mem0_custom: 100 write turns",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "rep3/mem0_custom: unique write turns",
+      "ok": true
+    },
+    {
+      "detail": {
+        "embedding": "nomic-embed-text",
+        "llm": "qwen3.5:9b",
+        "llm_transport": "ollama"
+      },
+      "name": "rep3/mem0_custom: summary model matches config",
+      "ok": true
+    },
+    {
+      "detail": 18,
+      "name": "rep3/mem0_custom: summary has 18 questions",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "subset_expanded.json exists",
+      "ok": true
+    },
+    {
+      "detail": 41,
+      "name": "expanded subset has 41 questions",
+      "ok": true
+    },
+    {
+      "detail": 41,
+      "name": "expanded/memfw: 41 question rows",
+      "ok": true
+    },
+    {
+      "detail": 41,
+      "name": "expanded/mem0_stock: 41 question rows",
+      "ok": true
+    },
+    {
+      "detail": 41,
+      "name": "expanded/mem0_custom: 41 question rows",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "expanded_metrics.json exists",
+      "ok": true
+    },
+    {
+      "detail": [
+        "mem0_custom",
+        "mem0_stock",
+        "memfw"
+      ],
+      "name": "expanded metrics covers all arms",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "expanded metrics has a primary comparison",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "expanded rows complete",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "judge_primary.jsonl exists",
+      "ok": true
+    },
+    {
+      "detail": 162,
+      "name": "judge_primary.jsonl rows == 162",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "judge_primary.jsonl verdicts valid",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "judge_primary.jsonl schema v2",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "judge_same_model.jsonl exists",
+      "ok": true
+    },
+    {
+      "detail": 162,
+      "name": "judge_same_model.jsonl rows == 162",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "judge_same_model.jsonl verdicts valid",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "judge_same_model.jsonl schema v2",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "metrics.json exists",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "metrics/memfw: repeats == 3",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "metrics/memfw: 18 questions",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "metrics/mem0_stock: repeats == 3",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "metrics/mem0_stock: 18 questions",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "metrics/mem0_custom: repeats == 3",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "metrics/mem0_custom: 18 questions",
+      "ok": true
+    },
+    {
+      "detail": 0,
+      "name": "metrics: run errors == 0",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "metrics: primary comparison present",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "metrics: primary answer_score present",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "metrics: primary recall present",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "metrics: judge models recorded",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "provenance_summary.json exists",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "provenance/memfw: derived_frame present",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "provenance/memfw: all_frame present",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "provenance/memfw: day11_frame present",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "provenance/mem0_stock: derived_frame present",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "provenance/mem0_stock: all_frame present",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "provenance/mem0_stock: day11_frame present",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "provenance/mem0_custom: derived_frame present",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "provenance/mem0_custom: all_frame present",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "provenance/mem0_custom: day11_frame present",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "provenance audited run == rep1",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "REPORT.md exists",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "test-results.txt exists",
+      "ok": true
+    },
+    {
+      "detail": "483 passed, 2 skipped in 161.62s (0:02:41)",
+      "name": "pytest summary records passes",
+      "ok": true
+    }
+  ],
+  "ok": true,
+  "schema_version": "stepg-validation-v1"
+}

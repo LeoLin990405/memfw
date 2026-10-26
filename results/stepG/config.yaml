@@ -1,0 +1,67 @@
+schema_version: stepg-config-v1
+seed: 20261021
+
+# Fixed public LoCoMo subset (Day 11 manifest: conv-49, first 100 turns, 18 questions).
+paths:
+  results_dir: results/stepG
+  data: results/stepG/data/locomo10.json
+  subset: results/stepG/subset.json
+  subset_manifest: reports/day11_baseline_manifest.json
+
+data:
+  url: https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json
+  sha256: 79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4
+
+# Both systems use exactly the same LLM and embedding model, temperature and top_k.
+llm:
+  transport: ollama
+  base_url: http://127.0.0.1:11434
+  model: qwen3.5:9b
+  temperature: 0.0
+  num_ctx: 16384
+  max_tokens: 64          # answer generation (both systems); Mem0 uses its own num_predict
+
+embedding:
+  transport: ollama
+  base_url: http://127.0.0.1:11434
+  model: nomic-embed-text
+  dims: 768
+
+retrieval:
+  top_k: 5
+  context_token_budget: 128
+
+# Primary judge: deliberately a DIFFERENT model from the answerer (qwen3.5:9b).
+judge:
+  enabled: true
+  transport: ollama
+  base_url: http://127.0.0.1:11434
+  model: qwen3.5:4b
+  temperature: 0.0
+  max_tokens: 96
+
+# Sensitivity judge: same model as the answerer (the first Step G configuration).
+judge_sensitivity:
+  enabled: true
+  transport: ollama
+  base_url: http://127.0.0.1:11434
+  model: qwen3.5:9b
+  temperature: 0.0
+  max_tokens: 96
+
+# Mem0 public API knob: custom extraction instructions enforce Mem0's own documented
+# output schema on smaller local models. Applied identically to every Mem0 write.
+mem0:
+  custom_instructions: >-
+    Return exactly one JSON object of the form
+    {"memory": [{"id": "0", "text": "self-contained factual statement", "attributed_to": "user"}]}.
+    Every item in the "memory" array MUST be an object with a non-empty "text" string;
+    never return memory items as plain strings.
+
+runs:
+  # Primary comparison arm is mem0_stock (stock Mem0, Day-11 comparable).
+  # mem0_custom keeps the schema-compat extraction instructions as a sensitivity arm.
+  systems: [memfw, mem0_stock, mem0_custom]
+  repeats: 3
+  mem0:
+    collection_name: stepg_locomo

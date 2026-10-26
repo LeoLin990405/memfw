@@ -1,0 +1,1506 @@
+{
+  "arms": [
+    "memfw",
+    "mem0_stock",
+    "mem0_custom"
+  ],
+  "comparisons": [
+    {
+      "a": "memfw",
+      "answer_score": {
+        "cohen_dz": 0.04579890402015031,
+        "difference_ci95": [
+          -0.1678027296777297,
+          0.2156292665667665
+        ],
+        "exact_sign_flip": {
+          "mean_difference": 0.019783457283457293,
+          "method": "exact_sign_flip",
+          "n": 18,
+          "p_value": 0.88671875,
+          "sign_flips": 262144
+        },
+        "exact_wilcoxon": {
+          "method": "exact_wilcoxon",
+          "n": 9,
+          "p_value": 0.94140625,
+          "signed_rank_combinations": 512,
+          "statistic": 21.5
+        },
+        "mean_difference": 0.019783457283457293,
+        "mean_mem0": 0.4392773892773893,
+        "mean_memfw": 0.45906084656084656,
+        "median_difference": 0.0,
+        "minimum_detectable_difference": 0.2850814000848746,
+        "n_pairs": 18,
+        "per_question_differences": {
+          "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": -1.0,
+          "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.09999999999999998,
+          "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+          "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+          "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+          "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": -0.3636363636363636,
+          "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+          "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+          "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.9,
+          "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+          "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": -0.33333333333333337,
+          "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": -0.056818181818181795,
+          "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+          "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": -0.17582417582417575,
+          "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+          "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+          "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+          "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.28571428571428575
+        },
+        "rank_biserial": -0.044444444444444446
+      },
+      "b": "mem0_stock",
+      "evidence_recall": {
+        "cohen_dz": 0.08692269873603531,
+        "difference_ci95": [
+          -0.14814814814814817,
+          0.2222222222222222
+        ],
+        "exact_sign_flip": {
+          "mean_difference": 0.037037037037037035,
+          "method": "exact_sign_flip",
+          "n": 18,
+          "p_value": 1.0,
+          "sign_flips": 262144
+        },
+        "exact_wilcoxon": {
+          "method": "exact_wilcoxon",
+          "n": 4,
+          "p_value": 1.0,
+          "signed_rank_combinations": 16,
+          "statistic": 6.0
+        },
+        "mean_difference": 0.037037037037037035,
+        "mean_mem0": 0.6574074074074074,
+        "mean_memfw": 0.6944444444444444,
+        "median_difference": 0.0,
+        "minimum_detectable_difference": 0.28120614902418395,
+        "n_pairs": 18,
+        "per_question_differences": {
+          "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 1.0,
+          "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.0,
+          "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+          "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+          "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+          "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+          "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": -1.0,
+          "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+          "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 1.0,
+          "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+          "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": -0.33333333333333337,
+          "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.0,
+          "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+          "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.0,
+          "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+          "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 0.0,
+          "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+          "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+        },
+        "rank_biserial": 0.2
+      },
+      "judge_primary": {
+        "cohen_dz": 0.13349047343893788,
+        "difference_ci95": [
+          -0.1111111111111111,
+          0.2777777777777778
+        ],
+        "exact_sign_flip": {
+          "mean_difference": 0.05555555555555555,
+          "method": "exact_sign_flip",
+          "n": 18,
+          "p_value": 1.0,
+          "sign_flips": 262144
+        },
+        "exact_wilcoxon": {
+          "method": "exact_wilcoxon",
+          "n": 3,
+          "p_value": 1.0,
+          "signed_rank_combinations": 8,
+          "statistic": 4.0
+        },
+        "mean_difference": 0.05555555555555555,
+        "mean_mem0": 0.3888888888888889,
+        "mean_memfw": 0.4444444444444444,
+        "median_difference": 0.0,
+        "minimum_detectable_difference": 0.27466226702908614,
+        "n_pairs": 18,
+        "per_question_differences": {
+          "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 0.0,
+          "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.0,
+          "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+          "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+          "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+          "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+          "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+          "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+          "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 1.0,
+          "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+          "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": -1.0,
+          "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.0,
+          "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+          "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.0,
+          "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+          "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+          "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+          "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+        },
+        "rank_biserial": 0.3333333333333333
+      },
+      "judge_same_model": {
+        "cohen_dz": 0.0,
+        "difference_ci95": [
+          -0.2222222222222222,
+          0.2222222222222222
+        ],
+        "exact_sign_flip": {
+          "mean_difference": 0.0,
+          "method": "exact_sign_flip",
+          "n": 18,
+          "p_value": 1.0,
+          "sign_flips": 262144
+        },
+        "exact_wilcoxon": {
+          "method": "exact_wilcoxon",
+          "n": 4,
+          "p_value": 1.0,
+          "signed_rank_combinations": 16,
+          "statistic": 5.0
+        },
+        "mean_difference": 0.0,
+        "mean_mem0": 0.3888888888888889,
+        "mean_memfw": 0.3888888888888889,
+        "median_difference": 0.0,
+        "minimum_detectable_difference": 0.3201306922660165,
+        "n_pairs": 18,
+        "per_question_differences": {
+          "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": -1.0,
+          "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.0,
+          "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+          "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+          "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+          "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+          "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+          "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+          "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 1.0,
+          "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+          "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": -1.0,
+          "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.0,
+          "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+          "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.0,
+          "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+          "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+          "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+          "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+        },
+        "rank_biserial": 0.0
+      },
+      "label": "memfw vs mem0_stock（primary）",
+      "token_f1": {
+        "cohen_dz": 0.24405999247293766,
+        "difference_ci95": [
+          -0.08442509871081298,
+          0.3150005797773654
+        ],
+        "exact_sign_flip": {
+          "mean_difference": 0.09686444507873081,
+          "method": "exact_sign_flip",
+          "n": 14,
+          "p_value": 0.4140625,
+          "sign_flips": 16384
+        },
+        "exact_wilcoxon": {
+          "method": "exact_wilcoxon",
+          "n": 8,
+          "p_value": 0.7421875,
+          "signed_rank_combinations": 256,
+          "statistic": 21.0
+        },
+        "mean_difference": 0.09686444507873081,
+        "mean_mem0": 0.27907092907092906,
+        "mean_memfw": 0.3759353741496599,
+        "median_difference": 0.0,
+        "minimum_detectable_difference": 0.29700366928002747,
+        "n_pairs": 14,
+        "per_question_differences": {
+          "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.09999999999999998,
+          "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+          "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+          "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+          "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": -0.3636363636363636,
+          "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+          "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.9,
+          "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": -0.33333333333333337,
+          "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": -0.056818181818181795,
+          "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+          "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": -0.17582417582417575,
+          "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+          "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+          "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.28571428571428575
+        },
+        "rank_biserial": 0.16666666666666666
+      }
+    },
+    {
+      "a": "memfw",
+      "answer_score": {
+        "cohen_dz": -0.014138441721070328,
+        "difference_ci95": [
+          -0.19140777400703868,
+          0.18930048151739326
+        ],
+        "exact_sign_flip": {
+          "mean_difference": -0.0060899830017477,
+          "method": "exact_sign_flip",
+          "n": 18,
+          "p_value": 0.96875,
+          "sign_flips": 262144
+        },
+        "exact_wilcoxon": {
+          "method": "exact_wilcoxon",
+          "n": 9,
+          "p_value": 0.6796875,
+          "signed_rank_combinations": 512,
+          "statistic": 18.5
+        },
+        "mean_difference": -0.0060899830017477,
+        "mean_mem0": 0.46515082956259424,
+        "mean_memfw": 0.45906084656084656,
+        "median_difference": 0.0,
+        "minimum_detectable_difference": 0.2842734585099594,
+        "n_pairs": 18,
+        "per_question_differences": {
+          "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": -1.0,
+          "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.05882352941176483,
+          "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+          "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+          "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+          "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": -0.4000000000000001,
+          "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+          "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+          "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.9,
+          "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+          "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": -0.33333333333333337,
+          "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": -0.195,
+          "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+          "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": -0.17582417582417575,
+          "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+          "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+          "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+          "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.035714285714285754
+        },
+        "rank_biserial": -0.17777777777777778
+      },
+      "b": "mem0_custom",
+      "evidence_recall": {
+        "cohen_dz": -0.27694627002035777,
+        "difference_ci95": [
+          -0.32407407407407407,
+          0.07407407407407407
+        ],
+        "exact_sign_flip": {
+          "mean_difference": -0.12037037037037036,
+          "method": "exact_sign_flip",
+          "n": 18,
+          "p_value": 0.3125,
+          "sign_flips": 262144
+        },
+        "exact_wilcoxon": {
+          "method": "exact_wilcoxon",
+          "n": 6,
+          "p_value": 0.3125,
+          "signed_rank_combinations": 64,
+          "statistic": 5.0
+        },
+        "mean_difference": -0.12037037037037036,
+        "mean_mem0": 0.8148148148148148,
+        "mean_memfw": 0.6944444444444444,
+        "median_difference": 0.0,
+        "minimum_detectable_difference": 0.2868440562885982,
+        "n_pairs": 18,
+        "per_question_differences": {
+          "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 1.0,
+          "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.0,
+          "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": -0.5,
+          "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+          "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": -1.0,
+          "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+          "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": -1.0,
+          "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+          "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.0,
+          "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+          "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": -0.33333333333333337,
+          "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": -0.3333333333333333,
+          "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+          "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.0,
+          "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+          "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 0.0,
+          "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+          "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+        },
+        "rank_biserial": -0.5238095238095238
+      },
+      "judge_primary": {
+        "cohen_dz": 0.0,
+        "difference_ci95": [
+          -0.2222222222222222,
+          0.2222222222222222
+        ],
+        "exact_sign_flip": {
+          "mean_difference": 0.0,
+          "method": "exact_sign_flip",
+          "n": 18,
+          "p_value": 1.0,
+          "sign_flips": 262144
+        },
+        "exact_wilcoxon": {
+          "method": "exact_wilcoxon",
+          "n": 4,
+          "p_value": 1.0,
+          "signed_rank_combinations": 16,
+          "statistic": 5.0
+        },
+        "mean_difference": 0.0,
+        "mean_mem0": 0.4444444444444444,
+        "mean_memfw": 0.4444444444444444,
+        "median_difference": 0.0,
+        "minimum_detectable_difference": 0.3201306922660165,
+        "n_pairs": 18,
+        "per_question_differences": {
+          "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 0.0,
+          "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.0,
+          "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+          "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+          "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+          "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+          "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+          "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+          "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 1.0,
+          "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+          "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": -1.0,
+          "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": -1.0,
+          "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+          "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.0,
+          "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+          "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+          "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+          "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+        },
+        "rank_biserial": 0.0
+      },
+      "judge_same_model": {
+        "cohen_dz": -0.10301327744925143,
+        "difference_ci95": [
+          -0.2777777777777778,
+          0.16666666666666666
+        ],
+        "exact_sign_flip": {
+          "mean_difference": -0.05555555555555555,
+          "method": "exact_sign_flip",
+          "n": 18,
+          "p_value": 1.0,
+          "sign_flips": 262144
+        },
+        "exact_wilcoxon": {
+          "method": "exact_wilcoxon",
+          "n": 5,
+          "p_value": 1.0,
+          "signed_rank_combinations": 32,
+          "statistic": 6.0
+        },
+        "mean_difference": -0.05555555555555555,
+        "mean_mem0": 0.4444444444444444,
+        "mean_memfw": 0.3888888888888889,
+        "median_difference": 0.0,
+        "minimum_detectable_difference": 0.3559230127357832,
+        "n_pairs": 18,
+        "per_question_differences": {
+          "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": -1.0,
+          "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.0,
+          "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+          "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+          "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+          "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+          "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+          "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+          "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 1.0,
+          "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+          "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": -1.0,
+          "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": -1.0,
+          "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+          "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.0,
+          "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+          "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+          "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+          "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+        },
+        "rank_biserial": -0.2
+      },
+      "label": "memfw vs mem0_custom（sensitivity）",
+      "token_f1": {
+        "cohen_dz": 0.1583069508979914,
+        "difference_ci95": [
+          -0.11683508018592051,
+          0.2836947278911564
+        ],
+        "exact_sign_flip": {
+          "mean_difference": 0.06359859328346724,
+          "method": "exact_sign_flip",
+          "n": 14,
+          "p_value": 0.5546875,
+          "sign_flips": 16384
+        },
+        "exact_wilcoxon": {
+          "method": "exact_wilcoxon",
+          "n": 8,
+          "p_value": 1.0,
+          "signed_rank_combinations": 256,
+          "statistic": 18.0
+        },
+        "mean_difference": 0.06359859328346724,
+        "mean_mem0": 0.31233678086619265,
+        "mean_memfw": 0.3759353741496599,
+        "median_difference": 0.0,
+        "minimum_detectable_difference": 0.30063638393345626,
+        "n_pairs": 14,
+        "per_question_differences": {
+          "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.05882352941176483,
+          "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+          "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+          "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+          "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": -0.4000000000000001,
+          "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+          "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.9,
+          "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": -0.33333333333333337,
+          "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": -0.195,
+          "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+          "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": -0.17582417582417575,
+          "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+          "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+          "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.035714285714285754
+        },
+        "rank_biserial": 0.0
+      }
+    },
+    {
+      "a": "mem0_stock",
+      "answer_score": {
+        "cohen_dz": -0.3960257381634356,
+        "difference_ci95": [
+          -0.05930778371954842,
+          -0.002287581699346397
+        ],
+        "exact_sign_flip": {
+          "mean_difference": -0.02587344028520499,
+          "method": "exact_sign_flip",
+          "n": 18,
+          "p_value": 0.125,
+          "sign_flips": 262144
+        },
+        "exact_wilcoxon": {
+          "method": "exact_wilcoxon",
+          "n": 4,
+          "p_value": 0.125,
+          "signed_rank_combinations": 16,
+          "statistic": 0
+        },
+        "mean_difference": -0.02587344028520499,
+        "mean_mem0": 0.46515082956259424,
+        "mean_memfw": 0.4392773892773893,
+        "median_difference": 0.0,
+        "minimum_detectable_difference": 0.043117398090324346,
+        "n_pairs": 18,
+        "per_question_differences": {
+          "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 0.0,
+          "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": -0.04117647058823515,
+          "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+          "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+          "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+          "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": -0.03636363636363649,
+          "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+          "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+          "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.0,
+          "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+          "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.0,
+          "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": -0.1381818181818182,
+          "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+          "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.0,
+          "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+          "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 0.0,
+          "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+          "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": -0.25
+        },
+        "rank_biserial": -1.0
+      },
+      "b": "mem0_custom",
+      "evidence_recall": {
+        "cohen_dz": -0.4689766702080085,
+        "difference_ci95": [
+          -0.32407407407407407,
+          -0.018518518518518517
+        ],
+        "exact_sign_flip": {
+          "mean_difference": -0.1574074074074074,
+          "method": "exact_sign_flip",
+          "n": 18,
+          "p_value": 0.125,
+          "sign_flips": 262144
+        },
+        "exact_wilcoxon": {
+          "method": "exact_wilcoxon",
+          "n": 4,
+          "p_value": 0.125,
+          "signed_rank_combinations": 16,
+          "statistic": 0
+        },
+        "mean_difference": -0.1574074074074074,
+        "mean_mem0": 0.8148148148148148,
+        "mean_memfw": 0.6574074074074074,
+        "median_difference": 0.0,
+        "minimum_detectable_difference": 0.221511208211936,
+        "n_pairs": 18,
+        "per_question_differences": {
+          "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 0.0,
+          "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.0,
+          "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": -0.5,
+          "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+          "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": -1.0,
+          "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+          "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+          "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+          "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": -1.0,
+          "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+          "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.0,
+          "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": -0.3333333333333333,
+          "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+          "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.0,
+          "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+          "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 0.0,
+          "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+          "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+        },
+        "rank_biserial": -1.0
+      },
+      "judge_primary": {
+        "cohen_dz": -0.23570226039551584,
+        "difference_ci95": [
+          -0.16666666666666666,
+          0.0
+        ],
+        "exact_sign_flip": {
+          "mean_difference": -0.05555555555555555,
+          "method": "exact_sign_flip",
+          "n": 18,
+          "p_value": 1.0,
+          "sign_flips": 262144
+        },
+        "exact_wilcoxon": {
+          "method": "exact_wilcoxon",
+          "n": 1,
+          "p_value": 1.0,
+          "signed_rank_combinations": 2,
+          "statistic": 0
+        },
+        "mean_difference": -0.05555555555555555,
+        "mean_mem0": 0.4444444444444444,
+        "mean_memfw": 0.3888888888888889,
+        "median_difference": 0.0,
+        "minimum_detectable_difference": 0.15555555555555556,
+        "n_pairs": 18,
+        "per_question_differences": {
+          "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 0.0,
+          "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.0,
+          "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+          "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+          "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+          "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+          "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+          "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+          "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.0,
+          "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+          "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.0,
+          "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": -1.0,
+          "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+          "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.0,
+          "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+          "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 0.0,
+          "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+          "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+        },
+        "rank_biserial": -1.0
+      },
+      "judge_same_model": {
+        "cohen_dz": -0.23570226039551584,
+        "difference_ci95": [
+          -0.16666666666666666,
+          0.0
+        ],
+        "exact_sign_flip": {
+          "mean_difference": -0.05555555555555555,
+          "method": "exact_sign_flip",
+          "n": 18,
+          "p_value": 1.0,
+          "sign_flips": 262144
+        },
+        "exact_wilcoxon": {
+          "method": "exact_wilcoxon",
+          "n": 1,
+          "p_value": 1.0,
+          "signed_rank_combinations": 2,
+          "statistic": 0
+        },
+        "mean_difference": -0.05555555555555555,
+        "mean_mem0": 0.4444444444444444,
+        "mean_memfw": 0.3888888888888889,
+        "median_difference": 0.0,
+        "minimum_detectable_difference": 0.15555555555555556,
+        "n_pairs": 18,
+        "per_question_differences": {
+          "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 0.0,
+          "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.0,
+          "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+          "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+          "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+          "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+          "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+          "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+          "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.0,
+          "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+          "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.0,
+          "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": -1.0,
+          "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+          "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.0,
+          "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+          "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 0.0,
+          "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+          "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+        },
+        "rank_biserial": -1.0
+      },
+      "label": "mem0_stock vs mem0_custom（configuration effect）",
+      "token_f1": {
+        "cohen_dz": -0.45621584327911446,
+        "difference_ci95": [
+          -0.07590909090909093,
+          -0.002941176470588225
+        ],
+        "exact_sign_flip": {
+          "mean_difference": -0.033265851795263555,
+          "method": "exact_sign_flip",
+          "n": 14,
+          "p_value": 0.125,
+          "sign_flips": 16384
+        },
+        "exact_wilcoxon": {
+          "method": "exact_wilcoxon",
+          "n": 4,
+          "p_value": 0.125,
+          "signed_rank_combinations": 16,
+          "statistic": 0
+        },
+        "mean_difference": -0.033265851795263555,
+        "mean_mem0": 0.31233678086619265,
+        "mean_memfw": 0.27907092907092906,
+        "median_difference": 0.0,
+        "minimum_detectable_difference": 0.054566022610014545,
+        "n_pairs": 14,
+        "per_question_differences": {
+          "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": -0.04117647058823515,
+          "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+          "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+          "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+          "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": -0.03636363636363649,
+          "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+          "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.0,
+          "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.0,
+          "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": -0.1381818181818182,
+          "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+          "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.0,
+          "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 0.0,
+          "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+          "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": -0.25
+        },
+        "rank_biserial": -1.0
+      }
+    }
+  ],
+  "config": {
+    "arms": [
+      "memfw",
+      "mem0_stock",
+      "mem0_custom"
+    ],
+    "embedding": {
+      "base_url": "http://127.0.0.1:11434",
+      "dims": 768,
+      "model": "nomic-embed-text",
+      "transport": "ollama"
+    },
+    "llm": {
+      "base_url": "http://127.0.0.1:11434",
+      "max_tokens": 64,
+      "model": "qwen3.5:9b",
+      "num_ctx": 16384,
+      "temperature": 0.0,
+      "transport": "ollama"
+    },
+    "repeats": 3,
+    "retrieval": {
+      "context_token_budget": 128,
+      "top_k": 5
+    },
+    "seed": 20261021
+  },
+  "judge": {
+    "models": [
+      {
+        "accuracy": {
+          "mem0_custom": {
+            "accuracy": 0.4444444444444444,
+            "judged": 54
+          },
+          "mem0_stock": {
+            "accuracy": 0.3888888888888889,
+            "judged": 54
+          },
+          "memfw": {
+            "accuracy": 0.4444444444444444,
+            "judged": 54
+          }
+        },
+        "judged_rows": 162,
+        "label": "primary",
+        "model": "qwen3.5:4b",
+        "source": "$HOME/Documents/Codex/2026-10-18/memfw-stepG-worktree/results/stepG/judge_primary.jsonl"
+      },
+      {
+        "accuracy": {
+          "mem0_custom": {
+            "accuracy": 0.4444444444444444,
+            "judged": 54
+          },
+          "mem0_stock": {
+            "accuracy": 0.3888888888888889,
+            "judged": 54
+          },
+          "memfw": {
+            "accuracy": 0.3888888888888889,
+            "judged": 54
+          }
+        },
+        "judged_rows": 162,
+        "label": "same_model",
+        "model": "qwen3.5:9b",
+        "source": "$HOME/Documents/Codex/2026-10-18/memfw-stepG-worktree/results/stepG/judge_same_model.jsonl"
+      }
+    ],
+    "paired": {
+      "primary": {
+        "mem0_custom": {
+          "cohen_dz": 0.0,
+          "difference_ci95": [
+            -0.2222222222222222,
+            0.2222222222222222
+          ],
+          "exact_sign_flip": {
+            "mean_difference": 0.0,
+            "method": "exact_sign_flip",
+            "n": 18,
+            "p_value": 1.0,
+            "sign_flips": 262144
+          },
+          "exact_wilcoxon": {
+            "method": "exact_wilcoxon",
+            "n": 4,
+            "p_value": 1.0,
+            "signed_rank_combinations": 16,
+            "statistic": 5.0
+          },
+          "mean_difference": 0.0,
+          "mean_mem0": 0.4444444444444444,
+          "mean_memfw": 0.4444444444444444,
+          "median_difference": 0.0,
+          "minimum_detectable_difference": 0.3201306922660165,
+          "n_pairs": 18,
+          "per_question_differences": {
+            "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 0.0,
+            "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.0,
+            "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+            "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+            "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+            "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+            "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+            "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+            "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": -1.0,
+            "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+            "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 1.0,
+            "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 1.0,
+            "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+            "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.0,
+            "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+            "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": -1.0,
+            "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+            "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+          },
+          "rank_biserial": 0.0
+        },
+        "mem0_stock": {
+          "cohen_dz": -0.13349047343893788,
+          "difference_ci95": [
+            -0.2777777777777778,
+            0.1111111111111111
+          ],
+          "exact_sign_flip": {
+            "mean_difference": -0.05555555555555555,
+            "method": "exact_sign_flip",
+            "n": 18,
+            "p_value": 1.0,
+            "sign_flips": 262144
+          },
+          "exact_wilcoxon": {
+            "method": "exact_wilcoxon",
+            "n": 3,
+            "p_value": 1.0,
+            "signed_rank_combinations": 8,
+            "statistic": 2.0
+          },
+          "mean_difference": -0.05555555555555555,
+          "mean_mem0": 0.4444444444444444,
+          "mean_memfw": 0.3888888888888889,
+          "median_difference": 0.0,
+          "minimum_detectable_difference": 0.27466226702908614,
+          "n_pairs": 18,
+          "per_question_differences": {
+            "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 0.0,
+            "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.0,
+            "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+            "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+            "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+            "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+            "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+            "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+            "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": -1.0,
+            "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+            "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 1.0,
+            "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.0,
+            "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+            "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.0,
+            "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+            "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": -1.0,
+            "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+            "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+          },
+          "rank_biserial": -0.3333333333333333
+        }
+      },
+      "same_model": {
+        "mem0_custom": {
+          "cohen_dz": 0.10301327744925143,
+          "difference_ci95": [
+            -0.16666666666666666,
+            0.2777777777777778
+          ],
+          "exact_sign_flip": {
+            "mean_difference": 0.05555555555555555,
+            "method": "exact_sign_flip",
+            "n": 18,
+            "p_value": 1.0,
+            "sign_flips": 262144
+          },
+          "exact_wilcoxon": {
+            "method": "exact_wilcoxon",
+            "n": 5,
+            "p_value": 1.0,
+            "signed_rank_combinations": 32,
+            "statistic": 9.0
+          },
+          "mean_difference": 0.05555555555555555,
+          "mean_mem0": 0.3888888888888889,
+          "mean_memfw": 0.4444444444444444,
+          "median_difference": 0.0,
+          "minimum_detectable_difference": 0.3559230127357832,
+          "n_pairs": 18,
+          "per_question_differences": {
+            "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 1.0,
+            "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.0,
+            "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+            "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+            "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+            "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+            "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+            "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+            "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": -1.0,
+            "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+            "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 1.0,
+            "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 1.0,
+            "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+            "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.0,
+            "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+            "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": -1.0,
+            "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+            "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+          },
+          "rank_biserial": 0.2
+        },
+        "mem0_stock": {
+          "cohen_dz": 0.0,
+          "difference_ci95": [
+            -0.2222222222222222,
+            0.2222222222222222
+          ],
+          "exact_sign_flip": {
+            "mean_difference": 0.0,
+            "method": "exact_sign_flip",
+            "n": 18,
+            "p_value": 1.0,
+            "sign_flips": 262144
+          },
+          "exact_wilcoxon": {
+            "method": "exact_wilcoxon",
+            "n": 4,
+            "p_value": 1.0,
+            "signed_rank_combinations": 16,
+            "statistic": 5.0
+          },
+          "mean_difference": 0.0,
+          "mean_mem0": 0.3888888888888889,
+          "mean_memfw": 0.3888888888888889,
+          "median_difference": 0.0,
+          "minimum_detectable_difference": 0.3201306922660165,
+          "n_pairs": 18,
+          "per_question_differences": {
+            "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 1.0,
+            "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.0,
+            "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+            "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+            "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+            "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+            "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+            "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+            "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": -1.0,
+            "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+            "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 1.0,
+            "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.0,
+            "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+            "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.0,
+            "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+            "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": -1.0,
+            "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+            "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+          },
+          "rank_biserial": 0.0
+        }
+      }
+    }
+  },
+  "limitations": [
+    "Small fixed subset: one public LoCoMo conversation, first 100 turns, 18 questions; results do not represent full LoCoMo.",
+    "Single dataset (LoCoMo) and a single local answer model; absolute scores are model-dependent.",
+    "All retention is 100% for the primary comparison; forgetting is not exercised in this formal run.",
+    "memfw stores verbatim turns by design in this protocol; Mem0 arms run extraction pipelines, so write costs are not symmetric.",
+    "Mean token-F1 and paired token-F1 exclude category-5 adversarial questions (abstention rule instead).",
+    "Two evidence-recall definitions are reported: pre-fit top-k and post-fit (128-token context). The post-fit micro value matches the Day 11 metric definition; the macro value is the paired-analysis unit.",
+    "Primary judge is a different model (qwen3.5:4b); the same-model judge is a sensitivity diagnostic, not ground truth.",
+    "Provenance audit uses run rep1 only; mem0_custom's custom instructions request attributed_to='user', so its R3 rate is partly prompt-forced (mem0_stock is not prompt-forced).",
+    "Paired tests use 18 fixed-subset pairs; the minimum detectable difference is reported. Secondary arms/tests are exploratory and not family-corrected.",
+    "Memory-text form differs by protocol: memfw stores verbatim turns (speaker prefix, long sentences) while Mem0 stores extracted short statements; under the same 128-token budget the information density differs, so recall/answer gaps partly reflect this asymmetry rather than retrieval quality alone.",
+    "Model identity is evidenced by env.txt digests, not by a cryptographic receipt from the model server."
+  ],
+  "paired": {
+    "cohen_dz": 0.04579890402015031,
+    "difference_ci95": [
+      -0.1678027296777297,
+      0.2156292665667665
+    ],
+    "exact_sign_flip": {
+      "mean_difference": 0.019783457283457293,
+      "method": "exact_sign_flip",
+      "n": 18,
+      "p_value": 0.88671875,
+      "sign_flips": 262144
+    },
+    "exact_wilcoxon": {
+      "method": "exact_wilcoxon",
+      "n": 9,
+      "p_value": 0.94140625,
+      "signed_rank_combinations": 512,
+      "statistic": 21.5
+    },
+    "mean_difference": 0.019783457283457293,
+    "mean_mem0": 0.4392773892773893,
+    "mean_memfw": 0.45906084656084656,
+    "median_difference": 0.0,
+    "minimum_detectable_difference": 0.2850814000848746,
+    "n_pairs": 18,
+    "per_question_differences": {
+      "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": -1.0,
+      "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.09999999999999998,
+      "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+      "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+      "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+      "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": -0.3636363636363636,
+      "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+      "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+      "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.9,
+      "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+      "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": -0.33333333333333337,
+      "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": -0.056818181818181795,
+      "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+      "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": -0.17582417582417575,
+      "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+      "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+      "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+      "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.28571428571428575
+    },
+    "rank_biserial": -0.044444444444444446
+  },
+  "run_errors": 0,
+  "schema_version": "stepg-metrics-v2",
+  "sources": {
+    "questions_glob": "$HOME/Documents/Codex/2026-10-18/memfw-stepG-worktree/results/stepG/runs/*/*/questions.jsonl",
+    "runs_dir": "$HOME/Documents/Codex/2026-10-18/memfw-stepG-worktree/results/stepG/runs",
+    "summaries_glob": "$HOME/Documents/Codex/2026-10-18/memfw-stepG-worktree/results/stepG/runs/*/*/summary.json"
+  },
+  "systems": {
+    "mem0_custom": {
+      "answer_latency": {
+        "count": 54,
+        "mean_seconds": 1.2810317036869323,
+        "p50_seconds": 1.2312218959996244,
+        "p95_seconds": 1.4746241857545102,
+        "total_seconds": 69.17571199909435
+      },
+      "answer_token_usage": {
+        "completion_tokens": 366,
+        "prompt_tokens": 11898
+      },
+      "error_samples": [],
+      "ingest_seconds_mean": 999.7283415000032,
+      "llm_token_usage": {
+        "calls": 300,
+        "completion_tokens": 11628,
+        "prompt_tokens": 2733069
+      },
+      "mean_answer_score": 0.46515082956259424,
+      "mean_evidence_recall": 0.8148148148148148,
+      "mean_evidence_recall_postfit": 0.8148148148148148,
+      "mean_evidence_recall_prefit": 0.8148148148148148,
+      "mean_token_f1": 0.31233678086619265,
+      "memory_count_mean": 50.0,
+      "micro_evidence_recall_postfit": 0.8333333333333334,
+      "micro_evidence_recall_prefit": 0.8333333333333334,
+      "per_question_answer_score": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 1.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.9411764705882352,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.4000000000000001,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 1.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.0,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 1.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 1.0,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.32,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.4615384615384615,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 1.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 0.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.25
+      },
+      "per_question_evidence_recall_postfit": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 0.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 1.0,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 1.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 1.0,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 1.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 1.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 1.0,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 1.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 1.0,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.6666666666666666,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 1.0,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 1.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 1.0
+      },
+      "per_question_evidence_recall_prefit": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 0.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 1.0,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 1.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 1.0,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 1.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 1.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 1.0,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 1.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 1.0,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.6666666666666666,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 1.0,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 1.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 1.0
+      },
+      "per_question_token_f1": {
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.9411764705882352,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.4000000000000001,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 1.0,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.32,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.4615384615384615,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 0.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.25
+      },
+      "per_run_mean_answer_score": {
+        "rep1": 0.46515082956259424,
+        "rep2": 0.46515082956259424,
+        "rep3": 0.46515082956259424
+      },
+      "question_count": 18,
+      "repeats": 3,
+      "retrieval_latency": {
+        "count": 54,
+        "mean_seconds": 0.30282704240784775,
+        "p50_seconds": 0.3033157294994453,
+        "p95_seconds": 0.30725924144644523,
+        "total_seconds": 16.352660290023778
+      },
+      "run_errors": 0,
+      "run_ids": [
+        "rep1",
+        "rep2",
+        "rep3"
+      ],
+      "scored_question_count_non_adversarial": 14,
+      "storage_bytes_mean": 459350.0,
+      "total_token_usage": {
+        "completion_tokens": 11994,
+        "prompt_tokens": 2744967
+      },
+      "write_latency": {
+        "mean_seconds": 9.99696284151384,
+        "per_run_means": {
+          "rep1": 9.800345074551588,
+          "rep2": 10.15634398248978,
+          "rep3": 10.034199467500148
+        }
+      },
+      "write_latency_turns": {
+        "count": 300,
+        "mean_seconds": 9.996962841513838,
+        "p50_seconds": 9.528069103995222,
+        "p95_seconds": 12.515438918118889,
+        "total_seconds": 2999.0888524541515
+      }
+    },
+    "mem0_stock": {
+      "answer_latency": {
+        "count": 54,
+        "mean_seconds": 1.2811379837803543,
+        "p50_seconds": 1.2334475835086778,
+        "p95_seconds": 1.4597339477069906,
+        "total_seconds": 69.18145112413913
+      },
+      "answer_token_usage": {
+        "completion_tokens": 330,
+        "prompt_tokens": 11160
+      },
+      "error_samples": [],
+      "ingest_seconds_mean": 1004.449821458334,
+      "llm_token_usage": {
+        "calls": 300,
+        "completion_tokens": 17337,
+        "prompt_tokens": 2704968
+      },
+      "mean_answer_score": 0.4392773892773893,
+      "mean_evidence_recall": 0.6574074074074074,
+      "mean_evidence_recall_postfit": 0.6574074074074074,
+      "mean_evidence_recall_prefit": 0.6574074074074074,
+      "mean_token_f1": 0.27907092907092906,
+      "memory_count_mean": 79.0,
+      "micro_evidence_recall_postfit": 0.6666666666666666,
+      "micro_evidence_recall_prefit": 0.6666666666666666,
+      "per_question_answer_score": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 1.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.9,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.3636363636363636,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 1.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.0,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 1.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 1.0,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.1818181818181818,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.4615384615384615,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 1.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 0.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+      },
+      "per_question_evidence_recall_postfit": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 0.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.5,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 1.0,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 1.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 1.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.0,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 1.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 1.0,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.3333333333333333,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 1.0,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 1.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 1.0
+      },
+      "per_question_evidence_recall_prefit": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 0.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.5,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 1.0,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 1.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 1.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.0,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 1.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 1.0,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.3333333333333333,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 1.0,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 1.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 1.0
+      },
+      "per_question_token_f1": {
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.9,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.3636363636363636,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 1.0,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.1818181818181818,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.4615384615384615,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 0.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+      },
+      "per_run_mean_answer_score": {
+        "rep1": 0.4392773892773893,
+        "rep2": 0.4392773892773893,
+        "rep3": 0.4392773892773893
+      },
+      "question_count": 18,
+      "repeats": 3,
+      "retrieval_latency": {
+        "count": 54,
+        "mean_seconds": 0.308103472276276,
+        "p50_seconds": 0.3066253124998184,
+        "p95_seconds": 0.3259791084419703,
+        "total_seconds": 16.637587502918905
+      },
+      "run_errors": 0,
+      "run_ids": [
+        "rep1",
+        "rep2",
+        "rep3"
+      ],
+      "scored_question_count_non_adversarial": 14,
+      "storage_bytes_mean": 709206.0,
+      "total_token_usage": {
+        "completion_tokens": 17667,
+        "prompt_tokens": 2716128
+      },
+      "write_latency": {
+        "mean_seconds": 10.044171493740578,
+        "per_run_means": {
+          "rep1": 9.80829588337132,
+          "rep2": 10.083388748741708,
+          "rep3": 10.240829849108705
+        }
+      },
+      "write_latency_turns": {
+        "count": 300,
+        "mean_seconds": 10.044171493740578,
+        "p50_seconds": 10.071963520997087,
+        "p95_seconds": 12.657036247588985,
+        "total_seconds": 3013.2514481221733
+      }
+    },
+    "memfw": {
+      "answer_latency": {
+        "count": 54,
+        "mean_seconds": 1.269889644298625,
+        "p50_seconds": 1.2397593750065425,
+        "p95_seconds": 1.4090476626850432,
+        "total_seconds": 68.57404079212574
+      },
+      "answer_token_usage": {
+        "completion_tokens": 267,
+        "prompt_tokens": 11484
+      },
+      "error_samples": [],
+      "ingest_seconds_mean": 2.200655583331051,
+      "llm_token_usage": {
+        "calls": 0,
+        "completion_tokens": 0,
+        "prompt_tokens": 0
+      },
+      "mean_answer_score": 0.45906084656084656,
+      "mean_evidence_recall": 0.6944444444444444,
+      "mean_evidence_recall_postfit": 0.6944444444444444,
+      "mean_evidence_recall_prefit": 0.6944444444444444,
+      "mean_token_f1": 0.3759353741496599,
+      "memory_count_mean": 100.0,
+      "micro_evidence_recall_postfit": 0.6666666666666666,
+      "micro_evidence_recall_prefit": 0.6666666666666666,
+      "per_question_answer_score": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 0.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 1.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.9,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 1.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.6666666666666666,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.125,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.28571428571428575,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 1.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.28571428571428575
+      },
+      "per_question_evidence_recall_postfit": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 1.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.5,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 1.0,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 1.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 1.0,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 1.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.6666666666666666,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.3333333333333333,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 1.0,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 1.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 1.0
+      },
+      "per_question_evidence_recall_prefit": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 1.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.5,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 1.0,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 1.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 1.0,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 1.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.6666666666666666,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.3333333333333333,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 1.0,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 1.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 1.0
+      },
+      "per_question_token_f1": {
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.9,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.6666666666666666,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.125,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.28571428571428575,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.28571428571428575
+      },
+      "per_run_mean_answer_score": {
+        "rep1": 0.45906084656084656,
+        "rep2": 0.45906084656084656,
+        "rep3": 0.45906084656084656
+      },
+      "question_count": 18,
+      "repeats": 3,
+      "retrieval_latency": {
+        "count": 54,
+        "mean_seconds": 0.38147112192355387,
+        "p50_seconds": 0.4026938125025481,
+        "p95_seconds": 0.41417037258652273,
+        "total_seconds": 20.59944058387191
+      },
+      "run_errors": 0,
+      "run_ids": [
+        "rep1",
+        "rep2",
+        "rep3"
+      ],
+      "scored_question_count_non_adversarial": 14,
+      "storage_bytes_mean": 99633.0,
+      "total_token_usage": {
+        "completion_tokens": 267,
+        "prompt_tokens": 11484
+      },
+      "write_latency": {
+        "mean_seconds": 0.021863502516741087,
+        "per_run_means": {
+          "rep1": 0.023365854599978773,
+          "rep2": 0.021005063769989646,
+          "rep3": 0.021219589180254843
+        }
+      },
+      "write_latency_turns": {
+        "count": 300,
+        "mean_seconds": 0.021863502516741087,
+        "p50_seconds": 0.019286145514342934,
+        "p95_seconds": 0.022646260412875565,
+        "total_seconds": 6.5590507550223265
+      }
+    }
+  }
+}
