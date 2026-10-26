@@ -124,5 +124,9 @@ claim; read the report's limitations before citing numbers.
   An exploratory expanded question set (41 questions in the same window) is reported separately.
 - **Expanded check:** an exploratory 41-question set inside the same window (tighter MDE, still no
   significant differences) is included in the report.
+- **Cross-framework check:** the same fixed subset is replayed for additional open-source memory
+  frameworks (LangMem, MemTensor MemOS in its local `general_text` mode, plus the existing Mem0 arms)
+  with an identical answerer/embedder/judge. Framework arms are exploratory single-repeat runs; see
+  [`results/stepG/frameworks/FRAMEWORK_COMPARISON.md`](results/stepG/frameworks/FRAMEWORK_COMPARISON.md).
 - **Reproduce:** `python eval/stepG_pipeline.py --stage all` (local Ollama models required; see the
   report for the exact environment). Implementation: [`eval/stepG_runner.py`](eval/stepG_runner.py).

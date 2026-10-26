@@ -527,6 +527,77 @@ def _expanded_section(expanded: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _framework_section(frameworks: dict[str, Any]) -> str:
+    systems = frameworks.get("systems", {})
+    arms = frameworks.get("arms", sorted(systems))
+    judge = (frameworks.get("judge") or {}).get("accuracy") or {}
+    rows: list[list[str]] = []
+    for arm in arms:
+        aggregate = systems.get(arm) or {}
+        rows.append(
+            [
+                arm,
+                _fmt(aggregate.get("mean_answer_score")),
+                _fmt(aggregate.get("mean_token_f1")),
+                _pct(aggregate.get("mean_evidence_recall_postfit")),
+                _pct(aggregate.get("micro_evidence_recall_postfit")),
+                _pct((judge.get(arm) or {}).get("accuracy"))
+                if isinstance(judge.get(arm), dict)
+                else _pct(judge.get(arm)),
+                _fmt((aggregate.get("write_latency_turns") or {}).get("p50_seconds")),
+                _fmt(aggregate.get("memory_count_mean"), 1),
+                str(aggregate.get("repeats")),
+            ]
+        )
+    lines = [
+        "框架臂为探索性单次重复；参考臂（memfw / mem0_stock）仍为 3 次重复。"
+        "详细适配说明与公平性 caveat 见 `results/stepG/frameworks/FRAMEWORK_COMPARISON.md`。",
+        "",
+        _table(
+            [
+                "arm",
+                "answer_score",
+                "token_f1(cat1-4)",
+                "recall macro",
+                "recall micro",
+                "judge primary",
+                "写入 P50(s)",
+                "记忆数",
+                "重复数",
+            ],
+            rows,
+        ),
+    ]
+    for comparison in frameworks.get("comparisons") or []:
+        pair = comparison.get("answer_score") or {}
+        ci = pair.get("difference_ci95") or [None, None]
+        lines.append("")
+        lines.append(f"**{comparison.get('label')}**")
+        lines.append("")
+        lines.append(
+            _table(
+                ["指标", "memfw", "框架", "均值差", "95% CI", "精确置换 p", "MDE"],
+                [
+                    [
+                        "answer_score",
+                        _fmt(pair.get("mean_memfw")),
+                        _fmt(pair.get("mean_mem0")),
+                        _fmt(pair.get("mean_difference")),
+                        f"[{_fmt(ci[0])}, {_fmt(ci[1])}]",
+                        _fmt((pair.get("exact_sign_flip") or {}).get("p_value")),
+                        _fmt(pair.get("minimum_detectable_difference")),
+                    ]
+                ],
+            )
+        )
+    lines.append("")
+    lines.append(
+        "> 框架默认抽取/更新策略不同，且 MemOS 在本地只能使用 `general_text` 原话存储模式"
+        "（tree_text 需要外部图数据库）；因此该表用于框架间方向性对比，不是严格的实现排名。"
+    )
+    return "\n".join(lines)
+
+
 def write_report(config: dict[str, Any]) -> Path:
     results_dir = _resolve(config["paths"]["results_dir"])
     metrics_path = results_dir / "metrics.json"
@@ -713,6 +784,12 @@ def write_report(config: dict[str, Any]) -> Path:
             lines.append("## 6. 扩题集（exploratory）")
             lines.append("")
             lines.append(_expanded_section(expanded))
+            lines.append("")
+        frameworks_path = results_dir / "frameworks" / "metrics.json"
+        if frameworks_path.exists():
+            lines.append("## 6b. 开源记忆框架对比（exploratory）")
+            lines.append("")
+            lines.append(_framework_section(_read_json(frameworks_path)))
             lines.append("")
         lines.append("## 7. 与初步结果的对比")
         lines.append("")
@@ -957,6 +1034,10 @@ def write_report(config: dict[str, Any]) -> Path:
                     [
                         "results/stepG/provenance_rubric.md / audit.csv / summary.json",
                         "provenance 规则、逐条判定、汇总",
+                    ],
+                    [
+                        "results/stepG/frameworks/FRAMEWORK_COMPARISON.md",
+                        "开源框架对比（LangMem/MemOS 等）",
                     ],
                     ["results/stepG/validation.json", "产物完整性校验"],
                     ["results/stepG/REPORT.md", "本报告"],

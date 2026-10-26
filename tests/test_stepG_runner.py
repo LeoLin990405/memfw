@@ -728,3 +728,37 @@ def test_day11ctx_factory_uses_day11_num_ctx(
     runner._make_system("mem0_stock_day11ctx", config, "rep1", object())  # type: ignore[arg-type]
     assert captured["num_ctx"] == 8192
     assert captured["custom_instructions"] is False
+
+
+def test_framework_section_renders_consistent_tables() -> None:
+    from eval.stepG_report import _framework_section
+
+    aggregate = {
+        "mean_answer_score": 0.5,
+        "mean_token_f1": 0.4,
+        "mean_evidence_recall_postfit": 0.6,
+        "micro_evidence_recall_postfit": 0.7,
+        "write_latency_turns": {"p50_seconds": 0.01},
+        "memory_count_mean": 100.5,
+        "repeats": 1,
+    }
+    pair = {
+        "mean_memfw": 0.5,
+        "mean_mem0": 0.6,
+        "mean_difference": -0.1,
+        "difference_ci95": [-0.3, 0.1],
+        "exact_sign_flip": {"p_value": 0.5},
+        "minimum_detectable_difference": 0.3,
+    }
+    frameworks = {
+        "arms": ["langmem", "memfw"],
+        "systems": {"langmem": aggregate, "memfw": aggregate},
+        "judge": {"accuracy": {"langmem": {"accuracy": 0.5}, "memfw": {"accuracy": 0.4}}},
+        "comparisons": [{"label": "memfw vs langmem", "answer_score": pair}],
+    }
+    text = _framework_section(frameworks)
+    tables = [block for block in text.split("\n\n") if block.lstrip().startswith("|")]
+    assert tables
+    for block in tables:
+        widths = {len(line.split("|")) for line in block.splitlines() if line.startswith("|")}
+        assert len(widths) == 1, (block[:80], widths)

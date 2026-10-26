@@ -595,6 +595,44 @@
     },
     {
       "detail": "",
+      "name": "frameworks/metrics.json exists",
+      "ok": true
+    },
+    {
+      "detail": [
+        "langmem",
+        "memoryos"
+      ],
+      "name": "framework comparison covers >= 2 framework arms",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "framework comparison includes memfw reference",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "FRAMEWORK_COMPARISON.md exists",
+      "ok": true
+    },
+    {
+      "detail": 18,
+      "name": "framework/langmem: 18 question rows",
+      "ok": true
+    },
+    {
+      "detail": 18,
+      "name": "framework/memoryos: 18 question rows",
+      "ok": true
+    },
+    {
+      "detail": 36,
+      "name": "framework judge rows == 36",
+      "ok": true
+    },
+    {
+      "detail": "",
       "name": "judge_primary.jsonl exists",
       "ok": true
     },

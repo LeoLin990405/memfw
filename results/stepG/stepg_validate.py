@@ -124,6 +124,49 @@ def main() -> int:
             )
         check("expanded rows complete", expanded_rows_ok)
 
+    # Optional framework comparison (exploratory, LangMem/MemOS etc.)
+    frameworks_dir = results_dir / "frameworks"
+    frameworks_metrics_path = frameworks_dir / "metrics.json"
+    check("frameworks/metrics.json exists", frameworks_metrics_path.exists())
+    if frameworks_metrics_path.exists():
+        frameworks_metrics = json.loads(frameworks_metrics_path.read_text())
+        framework_arms = [
+            arm for arm in frameworks_metrics.get("arms") or [] if arm not in expected_systems
+        ]
+        check(
+            "framework comparison covers >= 2 framework arms",
+            len(framework_arms) >= 2,
+            framework_arms,
+        )
+        check(
+            "framework comparison includes memfw reference",
+            "memfw" in (frameworks_metrics.get("arms") or []),
+        )
+        check(
+            "FRAMEWORK_COMPARISON.md exists",
+            (frameworks_dir / "FRAMEWORK_COMPARISON.md").exists(),
+        )
+        for arm in framework_arms:
+            rows_path = frameworks_dir / "runs" / arm / "rep1" / "questions.jsonl"
+            if not rows_path.exists():
+                check(f"framework/{arm}: questions.jsonl exists", False)
+                continue
+            arm_rows = [
+                json.loads(line) for line in rows_path.read_text().splitlines() if line.strip()
+            ]
+            check(f"framework/{arm}: 18 question rows", len(arm_rows) == 18, len(arm_rows))
+        judge_path = frameworks_dir / "judge_primary.jsonl"
+        if judge_path.exists():
+            verdicts = [
+                json.loads(line) for line in judge_path.read_text().splitlines() if line.strip()
+            ]
+            expected = 18 * len(framework_arms)
+            check(
+                f"framework judge rows == {expected}",
+                len(verdicts) == expected,
+                len(verdicts),
+            )
+
     # Generated aggregates
     expected_judge_rows = 18 * repeats * len(expected_systems)
     for judge_name in ("judge_primary.jsonl", "judge_same_model.jsonl"):
@@ -187,7 +230,7 @@ def main() -> int:
         if not path.is_file() or path.suffix not in {".md", ".txt", ".json", ".jsonl", ".csv"}:
             continue
         relative = path.relative_to(results_dir)
-        if relative.parts[:1] and relative.parts[0] in {"runtime", "data"}:
+        if "runtime" in relative.parts or relative.parts[:1] == ("data",):
             continue
         try:
             text = path.read_text(encoding="utf-8")

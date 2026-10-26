@@ -273,6 +273,31 @@ memfw vs mem0_stock；每题跨重复均值后做配对检验。
 
 > 扩题集复用同一批已写入的记忆，只新增“回答+judge”，用于提高统计功效；属于探索性分析，不做族错误校正。
 
+## 6b. 开源记忆框架对比（exploratory）
+
+框架臂为探索性单次重复；参考臂（memfw / mem0_stock）仍为 3 次重复。详细适配说明与公平性 caveat 见 `results/stepG/frameworks/FRAMEWORK_COMPARISON.md`。
+
+| arm | answer_score | token_f1(cat1-4) | recall macro | recall micro | judge primary | 写入 P50(s) | 记忆数 | 重复数 |
+|---|---|---|---|---|---|---|---|---|
+| memfw | 0.4591 | 0.3759 | 69.4% | 66.7% | 44.4% | 0.0193 | 100.0 | 3 |
+| langmem | 0.2672 | 0.0578 | 0.0% | 0.0% | 22.2% | 21.5278 | 95.0 | 1 |
+| memoryos | 0.5575 | 0.4310 | 52.8% | 54.2% | 50.0% | 0.0151 | 100.0 | 1 |
+| mem0_stock | 0.4393 | 0.2791 | 65.7% | 66.7% | 38.9% | 10.0720 | 79.0 | 3 |
+
+**memfw vs langmem**
+
+| 指标 | memfw | 框架 | 均值差 | 95% CI | 精确置换 p | MDE |
+|---|---|---|---|---|---|---|
+| answer_score | 0.4591 | 0.2672 | 0.1919 | [-0.0327, 0.4155] | 0.1211 | 0.3337 |
+
+**memfw vs memoryos**
+
+| 指标 | memfw | 框架 | 均值差 | 95% CI | 精确置换 p | MDE |
+|---|---|---|---|---|---|---|
+| answer_score | 0.4591 | 0.5575 | -0.0984 | [-0.2651, 0.0286] | 0.3750 | 0.2212 |
+
+> 框架默认抽取/更新策略不同，且 MemOS 在本地只能使用 `general_text` 原话存储模式（tree_text 需要外部图数据库）；因此该表用于框架间方向性对比，不是严格的实现排名。
+
 ## 7. 与初步结果的对比
 
 | 项目 | Day 11 初步 | 本轮正式 | 来源 |
@@ -344,5 +369,6 @@ MEM0_DIR=$PWD/results/stepG/runtime/mem0_home \
 | results/stepG/metrics.json / metrics.md | 质量、效率、规模、配对检验 |
 | results/stepG/expanded_metrics.json / md | 扩题集指标（exploratory） |
 | results/stepG/provenance_rubric.md / audit.csv / summary.json | provenance 规则、逐条判定、汇总 |
+| results/stepG/frameworks/FRAMEWORK_COMPARISON.md | 开源框架对比（LangMem/MemOS 等） |
 | results/stepG/validation.json | 产物完整性校验 |
 | results/stepG/REPORT.md | 本报告 |
