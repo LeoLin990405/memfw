@@ -128,5 +128,9 @@ claim; read the report's limitations before citing numbers.
   frameworks (LangMem, MemTensor MemOS in its local `general_text` mode, plus the existing Mem0 arms)
   with an identical answerer/embedder/judge. Framework arms are exploratory single-repeat runs; see
   [`results/stepG/frameworks/FRAMEWORK_COMPARISON.md`](results/stepG/frameworks/FRAMEWORK_COMPARISON.md).
+- **Data analysis:** per-category and per-question breakdowns, retrieval-vs-answer bottlenecks,
+  judge disagreements and the adversarial-category failure mode are recomputed from the raw
+  artifacts in [`results/stepG/ANALYSIS.md`](results/stepG/ANALYSIS.md)
+  (`python eval/stepG_analysis.py`).
 - **Reproduce:** `python eval/stepG_pipeline.py --stage all` (local Ollama models required; see the
   report for the exact environment). Implementation: [`eval/stepG_runner.py`](eval/stepG_runner.py).

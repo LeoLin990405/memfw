@@ -628,6 +628,11 @@ def write_report(config: dict[str, Any]) -> Path:
     )
     lines.append("")
     lines.append(
+        "- 配套数据分析：`results/stepG/ANALYSIS.md`（分题型、逐题账本、检索瓶颈、judge 偏差、"
+        "cat5 专项，由 `eval/stepG_analysis.py` 从原始产物重算）。"
+    )
+    lines.append("")
+    lines.append(
         "- 迭代内容：新增 **mem0_stock** arm（stock Mem0）作为主比较；"
         "**mem0_custom**（schema 兼容 instructions）保留为敏感性 arm；"
         "**mem0_stock_day11ctx** 用 Day 11 的 `num_ctx=8192` 复刻 Mem0 抽取，"

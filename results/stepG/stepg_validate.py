@@ -244,6 +244,18 @@ def main() -> int:
 
     report_path = results_dir / "REPORT.md"
     check("REPORT.md exists", report_path.exists())
+    analysis_path = results_dir / "ANALYSIS.md"
+    check("ANALYSIS.md exists", analysis_path.exists())
+    if analysis_path.exists():
+        analysis_text = analysis_path.read_text(encoding="utf-8")
+        check(
+            "ANALYSIS.md contains conclusion section",
+            "## 12. 结论与 caveat" in analysis_text,
+        )
+        check(
+            "ANALYSIS.md is reproducible",
+            "python eval/stepG_analysis.py" in analysis_text,
+        )
     test_results = results_dir / "test-results.txt"
     check("test-results.txt exists", test_results.exists())
     if test_results.exists():

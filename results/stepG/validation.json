@@ -823,6 +823,21 @@
     },
     {
       "detail": "",
+      "name": "ANALYSIS.md exists",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "ANALYSIS.md contains conclusion section",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "ANALYSIS.md is reproducible",
+      "ok": true
+    },
+    {
+      "detail": "",
       "name": "test-results.txt exists",
       "ok": true
     },

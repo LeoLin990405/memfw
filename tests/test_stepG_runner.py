@@ -762,3 +762,21 @@ def test_framework_section_renders_consistent_tables() -> None:
     for block in tables:
         widths = {len(line.split("|")) for line in block.splitlines() if line.startswith("|")}
         assert len(widths) == 1, (block[:80], widths)
+
+
+def test_analysis_report_is_reproducible() -> None:
+    from eval.stepG_analysis import build_analysis
+    from eval.stepG_runner import load_config
+
+    config = load_config(Path("results/stepG/config.yaml"))
+    text = build_analysis(config)
+    for header in (
+        "## 1. 数据与口径",
+        "## 2. 分题型表现",
+        "## 5. cat5（对抗/归属）专项",
+        "## 10. 开源框架对比",
+        "## 12. 结论与 caveat",
+    ):
+        assert header in text
+    assert "memfw 赢 4 题 / 输 5 题 / 平 9 题" in text
+    assert "python eval/stepG_analysis.py" in text
