@@ -258,6 +258,8 @@ def build_markdown(metrics: dict[str, Any]) -> str:
             "- LangMem 抽取出的记忆常是跨轮摘要，框架未保留逐轮 provenance；"
             "因此本表的 evidence recall 对 LangMem 接近 0，这是记忆表示差异，"
             "不是检索实现 bug。",
+            "- Cognee 曾尝试纳入：本地 embedding 连接测试 30s 超时，最小 add/cognify "
+            "smoke 也超过合理时长，未完成适配，因此不纳入本表（尝试日志未提交）。",
         ]
     )
     return "\n".join(lines)

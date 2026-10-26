@@ -35,3 +35,4 @@
 - 写入延迟包含框架自身的抽取/索引成本；不同框架调用 LLM 的次数不同，该列不构成实现优劣结论。
 - LangMem 适配器把最近 5 条记忆作为 existing 上下文传入（框架默认 store manager 的 query_limit=5），并且只应用插入、不应用更新/删除，以保持与 Mem0 插入型协议的差异可解释。
 - LangMem 抽取出的记忆常是跨轮摘要，框架未保留逐轮 provenance；因此本表的 evidence recall 对 LangMem 接近 0，这是记忆表示差异，不是检索实现 bug。
+- Cognee 曾尝试纳入：本地 embedding 连接测试 30s 超时，最小 add/cognify smoke 也超过合理时长，未完成适配，因此不纳入本表（尝试日志未提交）。
