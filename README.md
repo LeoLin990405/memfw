@@ -132,5 +132,10 @@ claim; read the report's limitations before citing numbers.
   judge disagreements and the adversarial-category failure mode are recomputed from the raw
   artifacts in [`results/stepG/ANALYSIS.md`](results/stepG/ANALYSIS.md)
   (`python eval/stepG_analysis.py`).
+- **Architecture iteration:** [`results/stepG/arch/ARCH_SUMMARY.md`](results/stepG/arch/ARCH_SUMMARY.md)
+  reports ablations (speaker/date-tagged context, abstention/date/count rules, MMR and hybrid
+  retrieval) on the same protocol (`python eval/stepG_arch.py`). `memfw_v6`/`memfw_v6_hybrid`
+  have higher point estimates than the frozen v1 and the Mem0/LangMem/MemOS arms, but the
+  differences are mostly not statistically significant at n=18/41 — read the caveats.
 - **Reproduce:** `python eval/stepG_pipeline.py --stage all` (local Ollama models required; see the
   report for the exact environment). Implementation: [`eval/stepG_runner.py`](eval/stepG_runner.py).

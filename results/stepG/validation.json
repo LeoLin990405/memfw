@@ -595,6 +595,36 @@
     },
     {
       "detail": "",
+      "name": "arch/ARCH_SUMMARY.md exists",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "arch/metrics_fixed.json exists",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "arch metrics include memfw_v6",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "arch metrics include framework reference",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "arch/metrics_expanded.json exists",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "arch/ARCH_REPORT_expanded.md exists",
+      "ok": true
+    },
+    {
+      "detail": "",
       "name": "frameworks/metrics.json exists",
       "ok": true
     },

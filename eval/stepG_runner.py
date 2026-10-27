@@ -919,6 +919,8 @@ def run_system(
     dry_run: bool = False,
     limit_questions: int | None = None,
     log: Callable[[str], None] = lambda _message: None,
+    answer_prompt: str = ANSWER_PROMPT,
+    prompt_version: str = "base",
 ) -> dict[str, Any]:
     """Ingest, retrieve, answer, and persist one (run_id, system) result set."""
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -1020,7 +1022,7 @@ def run_system(
         retrieval_seconds = time.perf_counter() - begin
         context = fit_context(retrieved, context_budget)
         memories_text = "\n".join(f"- {item['memory']}" for item in context) or "- (none)"
-        prompt = ANSWER_PROMPT.format(memories=memories_text, question=question["question"])
+        prompt = answer_prompt.format(memories=memories_text, question=question["question"])
         begin = time.perf_counter()
         try:
             answer, usage = chat.chat(prompt, max_tokens=int(config["llm"].get("max_tokens", 64)))
@@ -1039,6 +1041,7 @@ def run_system(
             "system": system_name,
             "question_id": question["question_id"],
             "qa_index": question["qa_index"],
+            "answer_prompt_version": prompt_version,
             "category": question["category"],
             "question": question["question"],
             "gold_answer": question["answer"],

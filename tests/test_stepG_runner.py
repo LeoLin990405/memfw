@@ -780,3 +780,38 @@ def test_analysis_report_is_reproducible() -> None:
         assert header in text
     assert "memfw 赢 4 题 / 输 5 题 / 平 9 题" in text
     assert "python eval/stepG_analysis.py" in text
+
+
+def test_arch_prompts_have_no_benchmark_specific_hints() -> None:
+    from eval.stepG_arch import PROMPTS
+
+    text = " ".join(prompt for prompt, _version in PROMPTS.values()).lower()
+    for banned in (
+        "jasper",
+        "rockies",
+        "canada",
+        "painting",
+        "fitness tracker",
+        "doctor",
+        "may 21",
+        "july 21",
+        "sam or evan",
+    ):
+        assert banned not in text, banned
+    assert "alex" in text and "jamie" in text
+
+
+def test_arch_summary_is_reproducible_from_metrics() -> None:
+    from eval.stepG_arch import build_summary
+    from eval.stepG_runner import load_config
+
+    config = load_config(Path("results/stepG/config.yaml"))
+    text = build_summary(config)
+    for marker in (
+        "# memfw 架构迭代总结",
+        "memfw_v6",
+        "memfw_v6_hybrid",
+        "ARCH_REPORT_fixed.md",
+        "ARCH_REPORT_expanded.md",
+    ):
+        assert marker in text

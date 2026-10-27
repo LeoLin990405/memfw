@@ -4,6 +4,8 @@
 
 - 配套数据分析：`results/stepG/ANALYSIS.md`（分题型、逐题账本、检索瓶颈、judge 偏差、cat5 专项，由 `eval/stepG_analysis.py` 从原始产物重算）。
 
+- 架构迭代：`results/stepG/arch/ARCH_SUMMARY.md`（memfw_v6 / v6_hybrid 在同一协议下的消融与框架对比；点估计更高，但样本量下差异大多不显著，结论以报告 caveat 为准）。
+
 - 迭代内容：新增 **mem0_stock** arm（stock Mem0）作为主比较；**mem0_custom**（schema 兼容 instructions）保留为敏感性 arm；**mem0_stock_day11ctx** 用 Day 11 的 `num_ctx=8192` 复刻 Mem0 抽取，用于逐字节可复现性核对；主 judge 换成不同模型（qwen3.5:4b），同模型 judge 保留为诊断；新增**扩题集**（exploratory）提高统计功效。
 
 ## 1. 执行状态
@@ -370,6 +372,10 @@ MEM0_DIR=$PWD/results/stepG/runtime/mem0_home \
 | results/stepG/judge_*.jsonl | primary（qwen3.5:4b）与 sensitivity（qwen3.5:9b）judge 逐条判定 |
 | results/stepG/metrics.json / metrics.md | 质量、效率、规模、配对检验 |
 | results/stepG/expanded_metrics.json / md | 扩题集指标（exploratory） |
+| results/stepG/ANALYSIS.md | 数据分析（分题型/逐题/检索/judge/cat5） |
+| results/stepG/arch/ARCH_SUMMARY.md | 架构迭代总结（memfw v6/v6_hybrid） |
+| results/stepG/arch/ARCH_REPORT_fixed.md | 架构消融（固定 18 题） |
+| results/stepG/arch/ARCH_REPORT_expanded.md | 架构消融（扩题集 41 题） |
 | results/stepG/provenance_rubric.md / audit.csv / summary.json | provenance 规则、逐条判定、汇总 |
 | results/stepG/frameworks/FRAMEWORK_COMPARISON.md | 开源框架对比（LangMem/MemOS 等） |
 | results/stepG/validation.json | 产物完整性校验 |

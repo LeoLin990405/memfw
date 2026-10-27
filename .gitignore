@@ -88,3 +88,4 @@ results/stepG/runtime/
 results/stepG/frameworks/runtime/
 results/stepG/pipeline_status.json
 results/stepG/run_manifest.json
+results/stepG/arch/runtime/

@@ -633,6 +633,11 @@ def write_report(config: dict[str, Any]) -> Path:
     )
     lines.append("")
     lines.append(
+        "- 架构迭代：`results/stepG/arch/ARCH_SUMMARY.md`（memfw_v6 / v6_hybrid 在同一协议下的"
+        "消融与框架对比；点估计更高，但样本量下差异大多不显著，结论以报告 caveat 为准）。"
+    )
+    lines.append("")
+    lines.append(
         "- 迭代内容：新增 **mem0_stock** arm（stock Mem0）作为主比较；"
         "**mem0_custom**（schema 兼容 instructions）保留为敏感性 arm；"
         "**mem0_stock_day11ctx** 用 Day 11 的 `num_ctx=8192` 复刻 Mem0 抽取，"
@@ -1036,6 +1041,10 @@ def write_report(config: dict[str, Any]) -> Path:
                     ],
                     ["results/stepG/metrics.json / metrics.md", "质量、效率、规模、配对检验"],
                     ["results/stepG/expanded_metrics.json / md", "扩题集指标（exploratory）"],
+                    ["results/stepG/ANALYSIS.md", "数据分析（分题型/逐题/检索/judge/cat5）"],
+                    ["results/stepG/arch/ARCH_SUMMARY.md", "架构迭代总结（memfw v6/v6_hybrid）"],
+                    ["results/stepG/arch/ARCH_REPORT_fixed.md", "架构消融（固定 18 题）"],
+                    ["results/stepG/arch/ARCH_REPORT_expanded.md", "架构消融（扩题集 41 题）"],
                     [
                         "results/stepG/provenance_rubric.md / audit.csv / summary.json",
                         "provenance 规则、逐条判定、汇总",

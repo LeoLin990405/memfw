@@ -124,6 +124,27 @@ def main() -> int:
             )
         check("expanded rows complete", expanded_rows_ok)
 
+    # Architecture iteration artifacts (memfw v6 ablations)
+    arch_dir = results_dir / "arch"
+    check("arch/ARCH_SUMMARY.md exists", (arch_dir / "ARCH_SUMMARY.md").exists())
+    arch_metrics_path = arch_dir / "metrics_fixed.json"
+    check("arch/metrics_fixed.json exists", arch_metrics_path.exists())
+    if arch_metrics_path.exists():
+        arch_metrics = json.loads(arch_metrics_path.read_text())
+        check(
+            "arch metrics include memfw_v6",
+            "memfw_v6" in (arch_metrics.get("arms") or []),
+        )
+        check(
+            "arch metrics include framework reference",
+            "memoryos" in (arch_metrics.get("arms") or []),
+        )
+    check("arch/metrics_expanded.json exists", (arch_dir / "metrics_expanded.json").exists())
+    check(
+        "arch/ARCH_REPORT_expanded.md exists",
+        (arch_dir / "ARCH_REPORT_expanded.md").exists(),
+    )
+
     # Optional framework comparison (exploratory, LangMem/MemOS etc.)
     frameworks_dir = results_dir / "frameworks"
     frameworks_metrics_path = frameworks_dir / "metrics.json"
