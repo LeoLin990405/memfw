@@ -46,6 +46,8 @@
 | mem0_stock | 0.4962 | 0.3660 | 75.0% | 51.2% | n/a | 79.0 | 1 |
 | mem0_custom | 0.5535 | 0.4417 | 81.2% | 56.1% | n/a | 50.0 | 1 |
 | mem0_stock_day11ctx | 0.5168 | 0.3932 | 75.0% | 56.1% | n/a | 87.0 | 1 |
+| langmem | 0.3104 | 0.0879 | 0.0% | 22.2% | n/a | n/a | 1 |
+| memoryos | 0.5469 | 0.4331 | 58.3% | 50.0% | n/a | n/a | 1 |
 
 ### expanded 配对比较（v6 系 vs 参考/框架）
 
@@ -54,13 +56,17 @@
 | memfw_v6 vs memfw | 0.0637 | [-0.0004, 0.1398] | 0.0799 | 0.1001 |
 | memfw_v6 vs mem0_stock | 0.0895 | [-0.0322, 0.2197] | 0.1773 | 0.1848 |
 | memfw_v6 vs mem0_custom | 0.0322 | [-0.0647, 0.1338] | 0.5437 | 0.1455 |
+| memfw_v6 vs memoryos | 0.0388 | [-0.0662, 0.1423] | 0.4857 | 0.1524 |
+| memfw_v6 vs langmem | 0.2753 | [0.1157, 0.4353] | 0.0019 | 0.2322 |
 | memfw_v6_hybrid vs memfw | 0.0848 | [-0.0512, 0.2190] | 0.2303 | 0.1927 |
 | memfw_v6_hybrid vs mem0_stock | 0.1106 | [-0.0276, 0.2484] | 0.1324 | 0.2004 |
 | memfw_v6_hybrid vs mem0_custom | 0.0533 | [-0.0661, 0.1704] | 0.3912 | 0.1701 |
+| memfw_v6_hybrid vs memoryos | 0.0599 | [-0.0721, 0.1868] | 0.3835 | 0.1867 |
+| memfw_v6_hybrid vs langmem | 0.2964 | [0.1427, 0.4461] | 0.0006 | 0.2232 |
 
 ## 结论（必须带 caveat）
 
-- 在固定 18 题与扩题集 41 题上，`memfw_v6`/`memfw_v6_hybrid` 的 answer_score、token-F1 与 judge 点估计均高于 memfw v1 以及 Mem0 系；固定 18 题上也高于 MemOS(general_text) 与 LangMem 的点估计。
+- 在固定 18 题与扩题集 41 题上，`memfw_v6`/`memfw_v6_hybrid` 的 answer_score、token-F1 与 judge 点估计均高于 memfw v1、Mem0 系、MemOS(general_text) 与 LangMem 的点估计（固定 18 与扩题集 41 均如此）。
 - 受题量限制，差异大多未达到统计显著（固定 18 题 MDE≈0.2，扩题集≈0.15）；结论应表述为“点估计一致更优、方向一致”，而不是“已证明显著更强”。
 - 框架 arm 为单次重复，MemOS 仅 report general_text 模式；提示规则属于架构的一部分，其它框架未做同等 prompt 调优，比较是“默认用法 vs 我们的迭代版”。
 - 泄漏检查：早期示例包含基准实体（Jasper/Canada 等），已从提示中移除并全部重跑；当前提示只用虚构示例，见 `test_arch_prompts_have_no_benchmark_specific_hints`。

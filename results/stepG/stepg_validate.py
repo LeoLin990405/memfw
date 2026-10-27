@@ -139,7 +139,14 @@ def main() -> int:
             "arch metrics include framework reference",
             "memoryos" in (arch_metrics.get("arms") or []),
         )
-    check("arch/metrics_expanded.json exists", (arch_dir / "metrics_expanded.json").exists())
+    expanded_metrics_path = arch_dir / "metrics_expanded.json"
+    check("arch/metrics_expanded.json exists", expanded_metrics_path.exists())
+    if expanded_metrics_path.exists():
+        expanded_arch = json.loads(expanded_metrics_path.read_text())
+        check(
+            "arch expanded includes MemOS/LangMem",
+            {"memoryos", "langmem"}.issubset(set(expanded_arch.get("arms") or [])),
+        )
     check(
         "arch/ARCH_REPORT_expanded.md exists",
         (arch_dir / "ARCH_REPORT_expanded.md").exists(),

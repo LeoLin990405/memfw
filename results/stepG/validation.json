@@ -620,6 +620,11 @@
     },
     {
       "detail": "",
+      "name": "arch expanded includes MemOS/LangMem",
+      "ok": true
+    },
+    {
+      "detail": "",
       "name": "arch/ARCH_REPORT_expanded.md exists",
       "ok": true
     },

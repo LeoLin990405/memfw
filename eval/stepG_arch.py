@@ -743,10 +743,12 @@ def _reference_aggregate(
 def _framework_rows(
     config: dict[str, Any], arm: str, question_set: str
 ) -> dict[str, dict[str, list[dict[str, Any]]]]:
-    if question_set != "fixed":
-        return {}
     results_dir = _resolve(config["paths"]["results_dir"])
-    rows = _read_rows(results_dir / "frameworks" / "runs" / arm / "rep1" / "questions.jsonl")
+    if question_set == "fixed":
+        path = results_dir / "frameworks" / "runs" / arm / "rep1" / "questions.jsonl"
+    else:
+        path = results_dir / "frameworks" / "expanded" / "runs" / arm / "rep1" / "questions.jsonl"
+    rows = _read_rows(path)
     return {arm: {"rep1": rows}} if rows else {}
 
 
@@ -803,9 +805,14 @@ def _expanded_judge_means(config: dict[str, Any]) -> dict[str, dict[str, float]]
     return judge_per_question(rows_by_arm, verdicts)
 
 
-def _framework_judge_means(config: dict[str, Any]) -> dict[str, dict[str, float]]:
+def _framework_judge_means(
+    config: dict[str, Any], question_set: str
+) -> dict[str, dict[str, float]]:
     results_dir = _resolve(config["paths"]["results_dir"])
-    path = results_dir / "frameworks" / "judge_primary.jsonl"
+    if question_set == "fixed":
+        path = results_dir / "frameworks" / "judge_primary.jsonl"
+    else:
+        path = results_dir / "frameworks" / "expanded" / "judge_primary.jsonl"
     if not path.exists():
         return {}
     rows_by_arm: dict[str, dict[str, list[dict[str, Any]]]] = {}
@@ -879,9 +886,9 @@ def build_report(
     judge_accuracy: dict[str, Any] = {}
     if question_set == "fixed":
         judge_means: dict[str, dict[str, float]] = _main_judge_means(config)
-        judge_means.update(_framework_judge_means(config))
     else:
         judge_means = _expanded_judge_means(config)
+    judge_means.update(_framework_judge_means(config, question_set))
     if judge_cfg:
         variant_rows = {arm: rows_by_arm[arm] for arm in variants}
         out_path = root / f"judge_{question_set}.jsonl"
@@ -919,7 +926,14 @@ def build_report(
     other_arms = (
         ("memfw", "mem0_stock", "memoryos", "langmem", "mem0_custom")
         if question_set == "fixed"
-        else ("memfw", "mem0_stock", "mem0_custom", "mem0_stock_day11ctx")
+        else (
+            "memfw",
+            "mem0_stock",
+            "mem0_custom",
+            "mem0_stock_day11ctx",
+            "memoryos",
+            "langmem",
+        )
     )
     for arm in variants:
         for other in other_arms:
@@ -1146,8 +1160,8 @@ def build_summary(config: dict[str, Any]) -> str:
             "## 结论（必须带 caveat）",
             "",
             "- 在固定 18 题与扩题集 41 题上，`memfw_v6`/`memfw_v6_hybrid` 的 answer_score、"
-            "token-F1 与 judge 点估计均高于 memfw v1 以及 Mem0 系；固定 18 题上也高于 "
-            "MemOS(general_text) 与 LangMem 的点估计。",
+            "token-F1 与 judge 点估计均高于 memfw v1、Mem0 系、MemOS(general_text) 与 "
+            "LangMem 的点估计（固定 18 与扩题集 41 均如此）。",
             "- 受题量限制，差异大多未达到统计显著（固定 18 题 MDE≈0.2，扩题集≈0.15）；"
             "结论应表述为“点估计一致更优、方向一致”，而不是“已证明显著更强”。",
             "- 框架 arm 为单次重复，MemOS 仅 report general_text 模式；提示规则属于架构的一部分，"
