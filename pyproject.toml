@@ -38,6 +38,19 @@ strict = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["mem0", "mem0.*", "ollama", "ollama.*"]
+module = [
+    "mem0",
+    "mem0.*",
+    "ollama",
+    "ollama.*",
+    "langchain_ollama",
+    "langchain_ollama.*",
+    "langgraph",
+    "langgraph.*",
+    "langmem",
+    "langmem.*",
+    "memos",
+    "memos.*",
+]
 ignore_missing_imports = true
 

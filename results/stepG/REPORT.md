@@ -6,6 +6,8 @@
 
 - 架构迭代：`results/stepG/arch/ARCH_SUMMARY.md`（memfw_v6 / v6_hybrid 在同一协议下的消融与框架对比；点估计更高，但样本量下差异大多不显著，结论以报告 caveat 为准）。
 
+- 跨对话扩展验证：`results/stepG/multiconv/MULTICONV_REPORT.md`（public LoCoMo 全部 10 个 conversation、每段前 100 轮，共 311 题；含对话级 cluster bootstrap 与 per-conversation 一致性）。
+
 - 迭代内容：新增 **mem0_stock** arm（stock Mem0）作为主比较；**mem0_custom**（schema 兼容 instructions）保留为敏感性 arm；**mem0_stock_day11ctx** 用 Day 11 的 `num_ctx=8192` 复刻 Mem0 抽取，用于逐字节可复现性核对；主 judge 换成不同模型（qwen3.5:4b），同模型 judge 保留为诊断；新增**扩题集**（exploratory）提高统计功效。
 
 ## 1. 执行状态
@@ -376,6 +378,8 @@ MEM0_DIR=$PWD/results/stepG/runtime/mem0_home \
 | results/stepG/arch/ARCH_SUMMARY.md | 架构迭代总结（memfw v6/v6_hybrid） |
 | results/stepG/arch/ARCH_REPORT_fixed.md | 架构消融（固定 18 题） |
 | results/stepG/arch/ARCH_REPORT_expanded.md | 架构消融（扩题集 41 题） |
+| results/stepG/multiconv/MULTICONV_REPORT.md | 多对话扩展验证（311 题） |
+| results/stepG/multiconv/subset.json / metrics.json | 多对话子集与汇总指标 |
 | results/stepG/provenance_rubric.md / audit.csv / summary.json | provenance 规则、逐条判定、汇总 |
 | results/stepG/frameworks/FRAMEWORK_COMPARISON.md | 开源框架对比（LangMem/MemOS 等） |
 | results/stepG/validation.json | 产物完整性校验 |

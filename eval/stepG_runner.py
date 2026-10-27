@@ -1029,6 +1029,21 @@ def run_system(
         except Exception as error:  # noqa: BLE001 - recorded per question
             answer, usage = "", {"prompt_tokens": 0, "completion_tokens": 0}
             errors.append({"question_id": question["question_id"], "error": type(error).__name__})
+        if answer.strip().lower() in ("unknown", ""):
+            refine = getattr(system, "refine_answer", None)
+            if callable(refine):
+                try:
+                    refined = refine(
+                        chat=chat,
+                        question=question,
+                        context=context,
+                        answer=answer,
+                        config=config,
+                    )
+                except Exception:  # noqa: BLE001 - optional refinement must not fail a run
+                    refined = ""
+                if refined:
+                    answer = refined
         answer_seconds = time.perf_counter() - begin
         retrieval_latencies.append(retrieval_seconds)
         answer_latencies.append(answer_seconds)

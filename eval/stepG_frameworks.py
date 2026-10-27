@@ -57,7 +57,7 @@ class LangMemSystem:
         from langmem import create_memory_manager
         from pydantic import Field
 
-        class CountingChatOllama(ChatOllama):
+        class CountingChatOllama(ChatOllama):  # type: ignore[misc]
             usage: dict[str, int] = Field(
                 default_factory=lambda: {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0}
             )
@@ -182,11 +182,6 @@ class LangMemSystem:
 
     def token_usage(self) -> dict[str, int]:
         return dict(self._model.usage)
-
-
-FRAMEWORK_ADAPTERS = {
-    "langmem": LangMemSystem,
-}
 
 
 def make_framework_system(arm: str, root: Path, config: dict[str, Any]) -> Any:
@@ -394,7 +389,7 @@ class MemOSSystem:
         return dict(self._usage)
 
 
-FRAMEWORK_ADAPTERS = {
+FRAMEWORK_ADAPTERS: dict[str, Any] = {
     "langmem": LangMemSystem,
     "memoryos": MemOSSystem,
 }

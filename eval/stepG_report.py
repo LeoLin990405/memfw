@@ -638,6 +638,12 @@ def write_report(config: dict[str, Any]) -> Path:
     )
     lines.append("")
     lines.append(
+        "- 跨对话扩展验证：`results/stepG/multiconv/MULTICONV_REPORT.md`（public LoCoMo 全部 10 个 "
+        "conversation、每段前 100 轮，共 311 题；含对话级 cluster bootstrap 与 "
+        "per-conversation 一致性）。"
+    )
+    lines.append("")
+    lines.append(
         "- 迭代内容：新增 **mem0_stock** arm（stock Mem0）作为主比较；"
         "**mem0_custom**（schema 兼容 instructions）保留为敏感性 arm；"
         "**mem0_stock_day11ctx** 用 Day 11 的 `num_ctx=8192` 复刻 Mem0 抽取，"
@@ -1045,6 +1051,8 @@ def write_report(config: dict[str, Any]) -> Path:
                     ["results/stepG/arch/ARCH_SUMMARY.md", "架构迭代总结（memfw v6/v6_hybrid）"],
                     ["results/stepG/arch/ARCH_REPORT_fixed.md", "架构消融（固定 18 题）"],
                     ["results/stepG/arch/ARCH_REPORT_expanded.md", "架构消融（扩题集 41 题）"],
+                    ["results/stepG/multiconv/MULTICONV_REPORT.md", "多对话扩展验证（311 题）"],
+                    ["results/stepG/multiconv/subset.json / metrics.json", "多对话子集与汇总指标"],
                     [
                         "results/stepG/provenance_rubric.md / audit.csv / summary.json",
                         "provenance 规则、逐条判定、汇总",

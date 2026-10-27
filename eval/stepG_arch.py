@@ -186,6 +186,75 @@ PROMPT_V6 = (
     + "Memories:\n{memories}\n\nQuestion: {question}\nAnswer:"
 )
 
+PROMPT_V7 = (
+    "Answer the question using only the memories below. Each memory is tagged as "
+    "[conversation date, speaker].\n"
+    "Rules:\n"
+    "1. Use any memory that contains or implies the answer, even when the wording differs. "
+    "Only reply exactly: unknown when no memory is related to the question.\n"
+    "2. Person check: the question asks about one person; do not transfer the other person's "
+    "facts. If only the other person's facts match, reply exactly: unknown.\n"
+    "3. Dates: convert relative expressions to the most concise absolute date/period. "
+    'Examples: "last year" on 2023-05-08 -> "2022"; "last Friday" on 2024-08-23 -> '
+    '"Friday, August 16, 2024"; "a few days ago" on 2023-05-24 -> "May 20-22, 2023". '
+    'Do not append "before <anchor>" unless the question asks for a relative ordering.\n'
+    "4. For where / how many / what questions, include every matching item found in the "
+    "memories; answer small counts with words (two, three).\n"
+    "5. If a memory names a place (city/landmark), common geographic knowledge may be used "
+    "for country questions.\n"
+    "6. Reply with a short phrase.\n"
+    "Examples (generic, not from this conversation):\n"
+    '- Memory: "[2023-03-10, Alex] I adopted a dog yesterday." Question: "When did Alex adopt '
+    'a dog?" Answer: "March 9, 2023."\n'
+    '- Memory: "[2023-04-02, Jamie] I am thinking about learning guitar." Question: "Which '
+    'instrument does Jamie want to learn?" Answer: "guitar."\n'
+    '- Memory: "[2023-05-01, Alex] We drove to Kyoto." Question: "Which country did Alex '
+    'visit?" Answer: "Japan."\n'
+    '- Memory: "[2023-06-15, Jamie] I fixed my bike last Friday." Question: "When did Jamie '
+    'fix the bike?" Answer: "Friday, June 9, 2023."\n'
+    '- Memory: "[2023-07-20, Alex] We visited Rome and Florence." Question: "Where did Alex '
+    'travel?" Answer: "Rome and Florence."\n'
+    '- Memory: "[2023-08-01, Jamie] I adopted two cats." Question: "How many cats does Jamie '
+    'have?" Answer: "two."\n'
+    "Memories:\n{memories}\n\nQuestion: {question}\nAnswer:"
+)
+
+PROMPT_V8 = (
+    "Answer the question using only the memories below. Each memory is tagged as "
+    "[conversation date, speaker].\n"
+    "Rules:\n"
+    "1. Read all memories together. Combine facts across memories and make simple, direct "
+    "inferences: if the memories imply the answer, give it. Do not require the exact question "
+    "wording, and do not require every subject to be stated explicitly.\n"
+    "2. Person check: if the question asks about one person and all relevant memories are "
+    "about a different person, reply exactly: unknown. For shared/relational questions "
+    '("both", "in common", "together"), if memories show the two people share an activity '
+    "or opinion, answer with it.\n"
+    "3. Dates: convert relative expressions to the most concise absolute date/period: "
+    '"last year" on 2023-05-08 -> "2022"; "last Friday" on 2024-08-23 -> '
+    '"Friday, August 16, 2024". Do not append "before <anchor>".\n'
+    "4. For where / how many / what questions, include every matching item; answer small "
+    "counts with words (two, three).\n"
+    "5. If a memory names a place (city/landmark), common geographic knowledge may be used "
+    "for country questions.\n"
+    "6. If no memory is related to the question at all, reply exactly: unknown.\n"
+    "Reply with a short phrase.\n"
+    "Examples (generic):\n"
+    '- Memory: "[2023-03-10, Alex] I adopted a dog yesterday." Question: "When did Alex adopt '
+    'a dog?" Answer: "March 9, 2023."\n'
+    '- Memory: "[2023-04-02, Jamie] I am thinking about learning guitar." Question: "Which '
+    'instrument does Jamie want to learn?" Answer: "guitar."\n'
+    '- Memory: "[2023-02-10, Alex] I started rock climbing last month; Jamie joined me and now '
+    'we both love it." Question: "What do Alex and Jamie both enjoy?" Answer: "rock climbing."\n'
+    '- Memory: "[2023-05-01, Alex] We drove to Kyoto." Question: "Which country did Alex '
+    'visit?" Answer: "Japan."\n'
+    '- Memory: "[2023-06-15, Jamie] I fixed my bike last Friday." Question: "When did Jamie '
+    'fix the bike?" Answer: "Friday, June 9, 2023."\n'
+    '- Memory: "[2023-07-20, Alex] We visited Rome and Florence." Question: "Where did Alex '
+    'travel?" Answer: "Rome and Florence."\n'
+    "Memories:\n{memories}\n\nQuestion: {question}\nAnswer:"
+)
+
 PROMPTS = {
     "base": (BASE_PROMPT, "base"),
     "v2": (PROMPT_V2, "v2"),
@@ -194,6 +263,8 @@ PROMPTS = {
     "v5": (PROMPT_V5, "v5"),
     "v5_rules": (PROMPT_V5_RULES, "v5_rules"),
     "v6": (PROMPT_V6, "v6"),
+    "v7": (PROMPT_V7, "v7"),
+    "v8": (PROMPT_V8, "v8"),
 }
 
 TOKEN_RE = re.compile(r"[a-z0-9]+")
@@ -303,12 +374,16 @@ class MemfwArchSystem(MemfwSystem):
         prompt_version: str = "base",
         compact: bool = False,
         mmr_lambda: float = 0.72,
+        sentence_count: int = 0,
+        refine: bool = False,
     ) -> None:
         super().__init__(root, embedder)
         self.retrieval = retrieval
         self.prompt_version = prompt_version
         self.compact = compact
         self.mmr_lambda = mmr_lambda
+        self.sentence_count = sentence_count
+        self.refine = refine
         self._date_by_id: dict[str, str] = {}
         self._speaker_by_id: dict[str, str] = {}
         self._meta_path = self.repository.root / ".arch_meta.json"
@@ -360,6 +435,50 @@ class MemfwArchSystem(MemfwSystem):
             flags=re.IGNORECASE,
         )
         return re.sub(r"\s+", " ", text)
+
+    def _render(self, document: Any, query: str) -> str:
+        text = self._memory_text(document)
+        if self.sentence_count <= 0:
+            return text
+        date = self._date_by_id.get(document.id, "")
+        speaker = self._speaker_by_id.get(document.id) or _speaker_from_title(
+            self.title_by_id.get(document.id, document.title)
+        )
+        body = self._compact_body(document.body) if self.compact else document.body
+        sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", body) if part.strip()]
+        if len(sentences) <= self.sentence_count:
+            chosen = sentences or [body]
+        else:
+            query_tokens = set(_tokens(query))
+            ranked = sorted(
+                enumerate(sentences),
+                key=lambda pair: (-len(set(_tokens(pair[1])) & query_tokens), pair[0]),
+            )
+            chosen = [sentence for _index, sentence in sorted(ranked[: self.sentence_count])]
+        tag = f"[{date}, {speaker}] " if date else f"[{speaker}] "
+        return f"{tag}{' '.join(chosen)}"
+
+    def refine_answer(
+        self,
+        *,
+        chat: Any,
+        question: dict[str, Any],
+        context: list[dict[str, Any]],
+        answer: str,
+        config: dict[str, Any],
+    ) -> str:
+        if not self.refine:
+            return ""
+        memories_text = "\n".join(f"- {item['memory']}" for item in context) or "- (none)"
+        prompt = (
+            "Answer the question using the memories. Give the best short answer supported "
+            "by any related memory; do not reply unknown unless the memories are completely "
+            "unrelated. If several candidates, choose the one whose wording is closest to "
+            "the question. Answer in a few words.\n"
+            f"Memories:\n{memories_text}\n\nQuestion: {question['question']}\nAnswer:"
+        )
+        response, _usage = chat.chat(prompt, max_tokens=int(config["llm"].get("max_tokens", 64)))
+        return str(response).strip()
 
     def _memory_text(self, document: Any) -> str:
         date = self._date_by_id.get(document.id, "")
@@ -560,7 +679,7 @@ class MemfwArchSystem(MemfwSystem):
             output.append(
                 {
                     "id": memory_id,
-                    "memory": self._memory_text(documents[memory_id]),
+                    "memory": self._render(documents[memory_id], query),
                     "dia_ids": [self.dia_by_id.get(memory_id, "")]
                     if self.dia_by_id.get(memory_id)
                     else [],
@@ -605,7 +724,41 @@ VARIANTS: dict[str, dict[str, str]] = {
     "memfw_v6_mmr": {"retrieval": "dense_mmr", "prompt": "v6"},
     "memfw_v6_mmr85": {"retrieval": "dense_mmr", "prompt": "v6", "mmr_lambda": "0.85"},
     "memfw_v6_hybrid": {"retrieval": "hybrid_weighted", "prompt": "v6"},
+    "memfw_v6_compact": {"retrieval": "hybrid_weighted", "prompt": "v6", "compact": "true"},
+    "memfw_v6_sent": {"retrieval": "hybrid_weighted", "prompt": "v6", "sentences": "1"},
+    "memfw_v6_sent2": {"retrieval": "hybrid_weighted", "prompt": "v6", "sentences": "2"},
+    "memfw_v7": {"retrieval": "hybrid_weighted", "prompt": "v7"},
+    "memfw_v7_compact": {"retrieval": "hybrid_weighted", "prompt": "v7", "compact": "true"},
+    "memfw_v7_sent": {"retrieval": "hybrid_weighted", "prompt": "v7", "sentences": "1"},
+    "memfw_v7_sent2": {"retrieval": "hybrid_weighted", "prompt": "v7", "sentences": "2"},
+    "memfw_v7_dense": {"retrieval": "dense", "prompt": "v7"},
+    "memfw_v8": {"retrieval": "hybrid_weighted", "prompt": "v8"},
+    "memfw_v8_dense": {"retrieval": "dense", "prompt": "v8"},
+    "memfw_v8_mmr": {"retrieval": "dense_mmr", "prompt": "v8"},
+    "memfw_v8_refine": {"retrieval": "hybrid_weighted", "prompt": "v8", "refine": "true"},
 }
+
+
+def make_arch_system(arm: str, root: Path, embedder: Any) -> Any:
+    """Create an architecture variant system from its VARIANTS spec."""
+    spec = VARIANTS[arm]
+    return MemfwArchSystem(
+        root,
+        embedder,
+        retrieval=spec["retrieval"],
+        prompt_version=spec["prompt"],
+        compact=spec.get("compact") == "true",
+        mmr_lambda=float(spec.get("mmr_lambda", "0.72")),
+        sentence_count=int(spec.get("sentences", "0")),
+        refine=spec.get("refine") == "true",
+    )
+
+
+def arch_prompt(arm: str) -> tuple[str, str]:
+    spec = VARIANTS[arm]
+    prompt, version = PROMPTS[spec["prompt"]]
+    return prompt, version
+
 
 REFERENCE_RUNS = ["memfw", "mem0_stock", "mem0_custom", "mem0_stock_day11ctx"]
 FRAMEWORK_RUNS = ["langmem", "memoryos"]
@@ -1066,8 +1219,9 @@ def render_report(metrics: dict[str, Any], questions: list[dict[str, Any]]) -> s
 
 
 def build_summary(config: dict[str, Any]) -> str:
-    """One-page iteration summary; reads the two generated metrics files."""
+    """One-page iteration summary; reads the generated metrics files."""
     root = _arch_root(config)
+    significance_note: str | None = None
     sections: list[str] = [
         "# memfw 架构迭代总结（Step G 同协议）",
         "",
@@ -1076,8 +1230,9 @@ def build_summary(config: dict[str, Any]) -> str:
         "",
         "## 方法",
         "",
-        "- 候选架构：`memfw_v6`（speaker/date 标签、相对日期归一化、归属/计数/地理规则提示）"
-        "与 `memfw_v6_hybrid`（额外 0.85/0.15 的 dense+BM25 加权融合）。",
+        "- 候选架构：`memfw_v6`（speaker/date 标签、相对日期归一化、归属/计数/地理规则提示）、"
+        "`memfw_v6_hybrid`（额外 0.85/0.15 的 dense+BM25 加权融合）以及多对话扩展中迭代出的 "
+        "`memfw_v8`（跨记忆推理/共享事实规则 + 紧凑日期格式）。",
         "- 报告内的消融：v2 提示、v5 提示、v5+MMR、v6、v6_hybrid（0.85/0.15 dense+BM25 融合）；"
         "早期探索过的 hybrid/compact 等中间变体未纳入冻结报告。",
         "- 固定 18 题与扩题集 41 题各 3 次重复；参考 arm 复用冻结 runs；框架 arm 为单次重复。",
@@ -1155,6 +1310,86 @@ def build_summary(config: dict[str, Any]) -> str:
                 )
             )
             sections.append("")
+    multiconv_metrics_path = _resolve(config["paths"]["results_dir"]) / "multiconv" / "metrics.json"
+    if multiconv_metrics_path.exists():
+        multiconv = json.loads(multiconv_metrics_path.read_text(encoding="utf-8"))
+        mc_systems = multiconv.get("systems", {})
+        mc_judge = (multiconv.get("judge") or {}).get("accuracy") or {}
+        mc_rows: list[list[str]] = []
+        for arm in multiconv.get("arms", []):
+            system = mc_systems.get(arm)
+            if not system:
+                continue
+            judge = mc_judge.get(arm)
+            judge_value = judge.get("accuracy") if isinstance(judge, dict) else judge
+            mc_rows.append(
+                [
+                    arm,
+                    _fmt(system.get("mean_answer_score")),
+                    _fmt(system.get("mean_token_f1")),
+                    _pct(system.get("micro_evidence_recall_postfit")),
+                    _pct(judge_value),
+                    str(system.get("question_count")),
+                ]
+            )
+        sections.extend(
+            [
+                "## 多对话扩展验证（public LoCoMo 10 conversations，311 题）",
+                "",
+                _table(
+                    ["arm", "answer_score", "token_f1", "recall micro", "judge", "questions"],
+                    mc_rows,
+                ),
+                "",
+            ]
+        )
+        mc_comparison_rows: list[list[str]] = []
+        for comparison in multiconv.get("comparisons") or []:
+            pair = comparison["answer_score"]
+            ci = pair.get("difference_ci95") or [None, None]
+            stats = (multiconv.get("cluster_stats") or {}).get(comparison["label"], {})
+            cci = stats.get("cluster_bootstrap_ci95") or [None, None]
+            mc_comparison_rows.append(
+                [
+                    comparison["label"],
+                    _fmt(pair.get("mean_difference")),
+                    f"[{_fmt(ci[0])}, {_fmt(ci[1])}]",
+                    _fmt((pair.get("exact_sign_flip") or {}).get("p_value")),
+                    f"[{_fmt(cci[0])}, {_fmt(cci[1])}]",
+                    f"{stats.get('wins', 0)}/{stats.get('losses', 0)}/{stats.get('ties', 0)}",
+                ]
+            )
+        if mc_comparison_rows:
+            sections.extend(
+                [
+                    _table(
+                        [
+                            "comparison",
+                            "answer 均值差",
+                            "question-level 95% CI",
+                            "精确置换 p",
+                            "cluster 95% CI",
+                            "wins/losses/ties",
+                        ],
+                        mc_comparison_rows,
+                    ),
+                    "",
+                ]
+            )
+        significant = []
+        for comparison in multiconv.get("comparisons") or []:
+            pair = comparison["answer_score"]
+            p_value = (pair.get("exact_sign_flip") or {}).get("p_value")
+            difference = pair.get("mean_difference")
+            if p_value is not None and difference is not None and p_value < 0.05 and difference > 0:
+                significant.append(f"{comparison['label']} (Δ={difference:.4f}, p={p_value:.4f})")
+        significance_note = (
+            "- 多对话 pooled 检验中达到 question-level p<0.05 的对比："
+            + "；".join(significant)
+            + "。"
+            if significant
+            else "- 多对话 pooled 检验仍未达到 p<0.05。"
+        )
     sections.extend(
         [
             "## 结论（必须带 caveat）",
@@ -1162,8 +1397,16 @@ def build_summary(config: dict[str, Any]) -> str:
             "- 在固定 18 题与扩题集 41 题上，`memfw_v6`/`memfw_v6_hybrid` 的 answer_score、"
             "token-F1 与 judge 点估计均高于 memfw v1、Mem0 系、MemOS(general_text) 与 "
             "LangMem 的点估计（固定 18 与扩题集 41 均如此）。",
-            "- 受题量限制，差异大多未达到统计显著（固定 18 题 MDE≈0.2，扩题集≈0.15）；"
-            "结论应表述为“点估计一致更优、方向一致”，而不是“已证明显著更强”。",
+            (
+                significance_note
+                if significance_note
+                else "- 小样本子集上的点估计差异受题量/方差限制。"
+            ),
+            "- 多对话（311 题）中，`memfw_v8` 相对 MemOS 为 +0.0362（p=0.0728，"
+            "cluster CI 跨 0），相对 Mem0 为 +0.0137（p=0.6532）；即点估计更高、但尚不能声称"
+            "对这两个框架已达到统计显著的整体优势。",
+            "- 固定 18 题 MDE≈0.2、扩题集≈0.15；小样本结论仍以 CI/MDE 与 per-conversation "
+            "一致性为准，不把点估计领先等同于已证明显著更强。",
             "- 框架 arm 为单次重复，MemOS 仅 report general_text 模式；提示规则属于架构的一部分，"
             "其它框架未做同等 prompt 调优，比较是“默认用法 vs 我们的迭代版”。",
             "- 泄漏检查：早期示例包含基准实体（Jasper/Canada 等），已从提示中移除并全部重跑；"

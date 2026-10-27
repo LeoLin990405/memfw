@@ -595,6 +595,39 @@
     },
     {
       "detail": "",
+      "name": "multiconv/subset.json exists",
+      "ok": true
+    },
+    {
+      "detail": [
+        10,
+        311
+      ],
+      "name": "multiconv covers 10 conversations / 311 questions",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "multiconv/metrics.json exists",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "multiconv metrics include memfw_v6_hybrid",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "multiconv metrics include Mem0/MemOS",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "multiconv/MULTICONV_REPORT.md exists",
+      "ok": true
+    },
+    {
+      "detail": "",
       "name": "arch/ARCH_SUMMARY.md exists",
       "ok": true
     },

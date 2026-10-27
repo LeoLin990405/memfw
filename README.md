@@ -137,5 +137,9 @@ claim; read the report's limitations before citing numbers.
   retrieval) on the same protocol (`python eval/stepG_arch.py`). `memfw_v6`/`memfw_v6_hybrid`
   have higher point estimates than the frozen v1 and the Mem0/LangMem/MemOS arms, but the
   differences are mostly not statistically significant at n=18/41 — read the caveats.
+- **Multi-conversation validation:** [`results/stepG/multiconv/MULTICONV_REPORT.md`](results/stepG/multiconv/MULTICONV_REPORT.md)
+  extends the same protocol to all ten public LoCoMo conversations (first 100 turns each, 313
+  questions) with conversation-cluster bootstrap, testing whether the architecture gains
+  generalise beyond the single frozen conversation (`python eval/stepG_multiconv.py`).
 - **Reproduce:** `python eval/stepG_pipeline.py --stage all` (local Ollama models required; see the
   report for the exact environment). Implementation: [`eval/stepG_runner.py`](eval/stepG_runner.py).

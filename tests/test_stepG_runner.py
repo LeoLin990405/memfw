@@ -815,3 +815,26 @@ def test_arch_summary_is_reproducible_from_metrics() -> None:
         "ARCH_REPORT_expanded.md",
     ):
         assert marker in text
+
+
+def test_multiconv_cluster_bootstrap_is_deterministic() -> None:
+    from eval.stepG_multiconv import _cluster_bootstrap
+
+    per_conversation = {
+        "conv-a": [0.2, -0.1, 0.4],
+        "conv-b": [0.0, 0.3],
+        "conv-c": [-0.2, 0.1, 0.5, 0.2],
+    }
+    first = _cluster_bootstrap(per_conversation, seed=20261021, samples=500)
+    second = _cluster_bootstrap(per_conversation, seed=20261021, samples=500)
+    assert first == second
+    point, low, high = first
+    assert low <= point <= high
+
+
+def test_multiconv_arm_registry_covers_required_arms() -> None:
+    from eval.stepG_multiconv import ARMS, CONVERSATIONS
+
+    assert len(CONVERSATIONS) == 10
+    for arm in ("memfw", "memfw_v6_hybrid", "mem0_stock", "memoryos"):
+        assert arm in ARMS

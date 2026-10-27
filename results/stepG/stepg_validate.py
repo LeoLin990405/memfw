@@ -124,6 +124,35 @@ def main() -> int:
             )
         check("expanded rows complete", expanded_rows_ok)
 
+    # Multi-conversation validation artifacts
+    multiconv_dir = results_dir / "multiconv"
+    multiconv_subset_path = multiconv_dir / "subset.json"
+    check("multiconv/subset.json exists", multiconv_subset_path.exists())
+    if multiconv_subset_path.exists():
+        multiconv_subset = json.loads(multiconv_subset_path.read_text())
+        check(
+            "multiconv covers 10 conversations / 311 questions",
+            multiconv_subset.get("conversation_count") == 10
+            and multiconv_subset.get("question_count") == 311,
+            [multiconv_subset.get("conversation_count"), multiconv_subset.get("question_count")],
+        )
+    multiconv_metrics_path = multiconv_dir / "metrics.json"
+    check("multiconv/metrics.json exists", multiconv_metrics_path.exists())
+    if multiconv_metrics_path.exists():
+        multiconv_metrics = json.loads(multiconv_metrics_path.read_text())
+        check(
+            "multiconv metrics include memfw_v6_hybrid",
+            "memfw_v6_hybrid" in (multiconv_metrics.get("arms") or []),
+        )
+        check(
+            "multiconv metrics include Mem0/MemOS",
+            {"mem0_stock", "memoryos"}.issubset(set(multiconv_metrics.get("arms") or [])),
+        )
+    check(
+        "multiconv/MULTICONV_REPORT.md exists",
+        (multiconv_dir / "MULTICONV_REPORT.md").exists(),
+    )
+
     # Architecture iteration artifacts (memfw v6 ablations)
     arch_dir = results_dir / "arch"
     check("arch/ARCH_SUMMARY.md exists", (arch_dir / "ARCH_SUMMARY.md").exists())
