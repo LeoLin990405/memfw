@@ -27,6 +27,12 @@ from memfw.retrieval import VaultRetriever
 
 SERVER_INFO = {"name": "memfw", "version": "0.1.0"}
 PROTOCOL = "2024-11-05"
+INSTRUCTIONS = (
+    "memfw exposes a local Markdown memory vault. Use memory_search before answering "
+    "questions that depend on stored memories, and memory_get to read one memory by id. "
+    "Writes are human-gated: memory_remember only stages a candidate and does not modify "
+    "the vault."
+)
 
 TOOLS: list[dict[str, Any]] = [
     {
@@ -186,6 +192,7 @@ class Gateway:
                         "protocolVersion": PROTOCOL,
                         "capabilities": {"tools": {"listChanged": False}},
                         "serverInfo": SERVER_INFO,
+                        "instructions": INSTRUCTIONS,
                     },
                 }
             )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from memfw.core.repository import Repository
@@ -46,3 +47,13 @@ def test_mcp_status(tmp_path: Path) -> None:
     status = Gateway(root).status()
     assert status["memories"] == 2
     assert status["log"]["event_count"] >= 2
+
+
+def test_mcp_initialize_includes_instructions(capsys):
+    Gateway("/tmp/does-not-need-to-exist").handle(
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+    )
+    payload = json.loads(capsys.readouterr().out)
+    instructions = payload["result"]["instructions"]
+    assert "memory_search" in instructions
+    assert "human" in instructions
