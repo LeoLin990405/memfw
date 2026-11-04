@@ -1,0 +1,88 @@
+{
+  "invariants": {
+    "bm25_search_stable_across_index_rebuild": true,
+    "event_replay_stable_across_index_rebuild": true,
+    "index_rebuild_count_stable": true,
+    "production_candidate_count": 100
+  },
+  "schema_version": 1,
+  "scope": {
+    "clock": "fixed from source turn timestamps by the Day 7 adapter",
+    "question_limit": 20,
+    "questions_evaluated": 20,
+    "questions_with_all_evidence_in_window": 57,
+    "retention_budget_ratio": 0.25,
+    "retrieval_context_tokens": 128,
+    "sample_index": 0,
+    "sample_questions": 199,
+    "sample_questions_with_valid_evidence": 197,
+    "sample_turns": 419,
+    "turn_limit": 100,
+    "turns_in_evaluation_window": 100
+  },
+  "status": "completed",
+  "systems": [
+    {
+      "evidence_recall": 0.11538461538461539,
+      "evidence_retrieved": 3,
+      "evidence_total": 26,
+      "fifo_fallback": false,
+      "policy": "fifo",
+      "retained_body_bytes": 3268,
+      "retained_memories": 27,
+      "retention_budget_bytes": 3583
+    },
+    {
+      "evidence_recall": 0.11538461538461539,
+      "evidence_retrieved": 3,
+      "evidence_total": 26,
+      "fifo_fallback": false,
+      "policy": "lru",
+      "retained_body_bytes": 3268,
+      "retained_memories": 27,
+      "retention_budget_bytes": 3583
+    },
+    {
+      "evidence_recall": 0.11538461538461539,
+      "evidence_retrieved": 3,
+      "evidence_total": 26,
+      "fifo_fallback": false,
+      "policy": "decay",
+      "retained_body_bytes": 3540,
+      "retained_memories": 23,
+      "retention_budget_bytes": 3583
+    },
+    {
+      "evidence_recall": 0.15384615384615385,
+      "evidence_retrieved": 4,
+      "evidence_total": 26,
+      "fifo_fallback": false,
+      "policy": "salience",
+      "retained_body_bytes": 3241,
+      "retained_memories": 13,
+      "retention_budget_bytes": 3583
+    },
+    {
+      "evidence_recall": 0.11538461538461539,
+      "evidence_retrieved": 3,
+      "evidence_total": 26,
+      "fifo_fallback": true,
+      "mock_proposals": 0,
+      "policy": "consolidate_then_forget",
+      "projected_merges": 0,
+      "retained_body_bytes": 3268,
+      "retained_memories": 27,
+      "retention_budget_bytes": 3583
+    },
+    {
+      "evidence_recall": 0.3076923076923077,
+      "evidence_retrieved": 8,
+      "evidence_total": 26,
+      "fifo_fallback": false,
+      "policy": "no_forgetting_reference",
+      "retained_body_bytes": 14334,
+      "retained_memories": 100,
+      "retention_budget_bytes": null
+    }
+  ]
+}

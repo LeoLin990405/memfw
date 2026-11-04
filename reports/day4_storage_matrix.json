@@ -1,0 +1,221 @@
+{
+  "baseline_archive": "day4_baseline_snapshot.zip",
+  "baseline_inventory": "BASELINE_SHA256.txt inside baseline archive",
+  "baseline_source": "frozen baseline from archive; module path checked by probe",
+  "body_fixture_method": "The storage fixture repeats one readable follow-up sentence to exceed each requested body budget. It is storage-only and excluded from semantic scoring.",
+  "budget_semantics": "The 1MB and 10MB values cap logical UTF-8 memory-body bytes only. They are not physical vault quotas; physical allocated bytes are reported separately.",
+  "comparison": "Frozen old source after FIFO forget versus current source after the same FIFO forget and log compaction.",
+  "configuration": "Same FIFO hard-forget body budget, no anchors, one metadata summary update, log_keep_recent=100.",
+  "dataset": "day4_storage_fixture.jsonl",
+  "dataset_seed": 20261018,
+  "dataset_sha256": "535660e5de3eedd2c49adf8c467781c59f2f4a8c5790cc38df9bd08b7a1a4fa4",
+  "labels_used": false,
+  "memory_count": 200,
+  "physical_units": "allocated bytes (st_blocks * 512 where supported)",
+  "profiles": {
+    "10MB": {
+      "baseline_snapshot": {
+        "anchors_before": 0,
+        "anchors_retained": 0,
+        "body_bytes_after_forget": 9975000,
+        "body_bytes_before_forget": 15000000,
+        "budget_bytes": 10000000,
+        "budget_profile": "10MB",
+        "budget_satisfied": true,
+        "compact_result": null,
+        "memory_count_before_forget": 200,
+        "physical_after_compaction": {
+          "anchors": 0,
+          "archives": 0,
+          "events": 163840,
+          "history": 10428416,
+          "index": 0,
+          "memories": 10350592,
+          "other": 4096
+        },
+        "physical_after_forget_precompact": {
+          "anchors": 0,
+          "archives": 0,
+          "events": 163840,
+          "history": 10428416,
+          "index": 0,
+          "memories": 10350592,
+          "other": 4096
+        },
+        "physical_before_forget": {
+          "anchors": 0,
+          "archives": 0,
+          "events": 102400,
+          "history": 15642624,
+          "index": 0,
+          "memories": 15564800,
+          "other": 4096
+        },
+        "physical_total_after_compaction": 20946944,
+        "physical_total_after_forget_precompact": 20946944,
+        "physical_total_before_forget": 31313920,
+        "retained_count": 133,
+        "runtime_role": "baseline_snapshot",
+        "unsatisfied_reason": null
+      },
+      "new_runtime_compacted": {
+        "anchors_before": 0,
+        "anchors_retained": 0,
+        "body_bytes_after_forget": 9975000,
+        "body_bytes_before_forget": 15000000,
+        "budget_bytes": 10000000,
+        "budget_profile": "10MB",
+        "budget_satisfied": true,
+        "compact_result": {
+          "archived_event_count": 169,
+          "compressed_bytes": 14190,
+          "newly_archived_event_count": 169,
+          "raw_bytes": 81514,
+          "retained_event_count": 100,
+          "segment": "segment-000000000169-351c4a3e4aa179cb2aca6d85df9cc99adda8b5e61fa74276b49c654a89606273.tar.zst",
+          "segment_count": 1
+        },
+        "memory_count_before_forget": 200,
+        "physical_after_compaction": {
+          "anchors": 0,
+          "archives": 0,
+          "events": 77824,
+          "history": 10354688,
+          "index": 0,
+          "memories": 10350592,
+          "other": 4096
+        },
+        "physical_after_forget_precompact": {
+          "anchors": 0,
+          "archives": 0,
+          "events": 139264,
+          "history": 10354688,
+          "index": 0,
+          "memories": 10350592,
+          "other": 4096
+        },
+        "physical_before_forget": {
+          "anchors": 0,
+          "archives": 0,
+          "events": 102400,
+          "history": 15568896,
+          "index": 0,
+          "memories": 15564800,
+          "other": 4096
+        },
+        "physical_total_after_compaction": 20787200,
+        "physical_total_after_forget_precompact": 20848640,
+        "physical_total_before_forget": 31240192,
+        "retained_count": 133,
+        "runtime_role": "new_runtime",
+        "unsatisfied_reason": null
+      },
+      "physical_delta_bytes": -159744,
+      "physical_savings_fraction": 0.007626124364489636,
+      "same_survivor_count": true
+    },
+    "1MB": {
+      "baseline_snapshot": {
+        "anchors_before": 0,
+        "anchors_retained": 0,
+        "body_bytes_after_forget": 997500,
+        "body_bytes_before_forget": 1500000,
+        "budget_bytes": 1000000,
+        "budget_profile": "1MB",
+        "budget_satisfied": true,
+        "compact_result": null,
+        "memory_count_before_forget": 200,
+        "physical_after_compaction": {
+          "anchors": 0,
+          "archives": 0,
+          "events": 163840,
+          "history": 1097728,
+          "index": 0,
+          "memories": 1089536,
+          "other": 4096
+        },
+        "physical_after_forget_precompact": {
+          "anchors": 0,
+          "archives": 0,
+          "events": 163840,
+          "history": 1097728,
+          "index": 0,
+          "memories": 1089536,
+          "other": 4096
+        },
+        "physical_before_forget": {
+          "anchors": 0,
+          "archives": 0,
+          "events": 102400,
+          "history": 1646592,
+          "index": 0,
+          "memories": 1638400,
+          "other": 4096
+        },
+        "physical_total_after_compaction": 2355200,
+        "physical_total_after_forget_precompact": 2355200,
+        "physical_total_before_forget": 3391488,
+        "retained_count": 133,
+        "runtime_role": "baseline_snapshot",
+        "unsatisfied_reason": null
+      },
+      "new_runtime_compacted": {
+        "anchors_before": 0,
+        "anchors_retained": 0,
+        "body_bytes_after_forget": 997500,
+        "body_bytes_before_forget": 1500000,
+        "budget_bytes": 1000000,
+        "budget_profile": "1MB",
+        "budget_satisfied": true,
+        "compact_result": {
+          "archived_event_count": 169,
+          "compressed_bytes": 14224,
+          "newly_archived_event_count": 169,
+          "raw_bytes": 81514,
+          "retained_event_count": 100,
+          "segment": "segment-000000000169-51fb3f8fb84305089e6aaaa338d196e64f83aba71ca57773e2aa0eace0324438.tar.zst",
+          "segment_count": 1
+        },
+        "memory_count_before_forget": 200,
+        "physical_after_compaction": {
+          "anchors": 0,
+          "archives": 0,
+          "events": 77824,
+          "history": 1093632,
+          "index": 0,
+          "memories": 1089536,
+          "other": 4096
+        },
+        "physical_after_forget_precompact": {
+          "anchors": 0,
+          "archives": 0,
+          "events": 139264,
+          "history": 1093632,
+          "index": 0,
+          "memories": 1089536,
+          "other": 4096
+        },
+        "physical_before_forget": {
+          "anchors": 0,
+          "archives": 0,
+          "events": 102400,
+          "history": 1642496,
+          "index": 0,
+          "memories": 1638400,
+          "other": 4096
+        },
+        "physical_total_after_compaction": 2265088,
+        "physical_total_after_forget_precompact": 2326528,
+        "physical_total_before_forget": 3387392,
+        "retained_count": 133,
+        "runtime_role": "new_runtime",
+        "unsatisfied_reason": null
+      },
+      "physical_delta_bytes": -90112,
+      "physical_savings_fraction": 0.03826086956521739,
+      "same_survivor_count": true
+    }
+  },
+  "quick_count": true,
+  "source_session_timestamps_and_content_match_between_runs": true
+}

@@ -1,0 +1,959 @@
+[
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D3:5"
+    ],
+    "memory": "Evan recommends replacing candy with dark chocolate having high cocoa content as a healthier option for Sam.",
+    "memory_id": "02944b19-0cde-4832-9fd1-22e518098443",
+    "metadata": {
+      "dia_id": "D3:5"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D2:10"
+    ],
+    "memory": "Sam is looking for a new hobby to stay motivated and has been considering trying painting as a way to de-stress.",
+    "memory_id": "02dc39f5-7e25-4eea-a9fa-ce0383322592",
+    "metadata": {
+      "dia_id": "D2:10"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:6"
+    ],
+    "memory": "Sam asked Evan how long he has been prioritizing his health after seeing photos of his kids having a great time.",
+    "memory_id": "040bc0d5-33b3-46ef-aa99-5fd5278fe9cb",
+    "metadata": {
+      "dia_id": "D5:6"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D3:15"
+    ],
+    "memory": "Evan agreed to help Sam get started with a fitness routine by showing him some basic exercises together.",
+    "memory_id": "08b245a0-a449-44c4-9c86-6347994077a2",
+    "metadata": {
+      "dia_id": "D3:15"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D2:4"
+    ],
+    "memory": "Sam is currently going through a tough week and values taking time for peace and self-care.",
+    "memory_id": "0ab92f67-f04f-4ddd-96c2-fa0610865bad",
+    "metadata": {
+      "dia_id": "D2:4"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D5:1"
+    ],
+    "memory": "Evan went on a trip to Canada last week (around October 2026) and met an incredible Canadian woman whom he describes as making him feel alive.",
+    "memory_id": "0bfdda65-9293-4efc-ace8-99fe1e5aaefe",
+    "metadata": {
+      "dia_id": "D5:1"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D5:13"
+    ],
+    "memory": "Evan is motivated by a thirst for adventure and enjoys interesting hikes.",
+    "memory_id": "0c5cc1a7-45a9-4e09-b230-0a3579e9fc36",
+    "metadata": {
+      "dia_id": "D5:13"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D5:5"
+    ],
+    "memory": "Evan admits that ginger snaps are his weakness and acknowledges that dealing with health issues has made him appreciate joyful moments more.",
+    "memory_id": "0d56e657-2267-4098-a3db-0114fbbfd59b",
+    "metadata": {
+      "dia_id": "D5:5"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D3:3"
+    ],
+    "memory": "Evan admits to loving ginger snaps but is currently making an effort to reduce consumption of them as part of his health-conscious changes.",
+    "memory_id": "13726913-900a-4b46-ba49-004801712f0a",
+    "metadata": {
+      "dia_id": "D3:3"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:20"
+    ],
+    "memory": "Sam believes that small, everyday actions and 'little stuff' are crucial for building resilience over time.",
+    "memory_id": "1b62e027-bac0-4f01-b529-6982deb73599",
+    "metadata": {
+      "dia_id": "D5:20"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D2:7"
+    ],
+    "memory": "Evan offered continued support to Sam on his journey toward a healthier lifestyle following the recent doctor's visit.",
+    "memory_id": "1d67eaca-3f9a-4410-9586-ff8a4f1a39d0",
+    "metadata": {
+      "dia_id": "D2:7"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:14"
+    ],
+    "memory": "Evan started hiking as a stress-busting hobby a few years ago.",
+    "memory_id": "1dba06af-5570-45ee-ad67-cba27adf90e5",
+    "metadata": {
+      "dia_id": "D1:14"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D1:11"
+    ],
+    "memory": "Evan asked Sam about other hobbies he has found for himself.",
+    "memory_id": "21993c5c-2350-4907-911e-b4a3b83a6d7a",
+    "metadata": {
+      "dia_id": "D1:11"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D5:2"
+    ],
+    "memory": "Evan met an incredible Canadian woman during a trip to Canada in August 2023, describing the experience as unreal and movie-like.",
+    "memory_id": "2541cb4e-615a-4fe2-800f-0d73d7148266",
+    "metadata": {
+      "dia_id": "D5:2"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D3:14"
+    ],
+    "memory": "Evan encourages Sam to continue supporting each other on their health journeys, emphasizing that every step matters and progress takes time.",
+    "memory_id": "2ad3ffe0-3dcd-4386-8303-93fb6804edbe",
+    "metadata": {
+      "dia_id": "D3:14"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D1:4"
+    ],
+    "memory": "Evan and his family went on a trip to the Rockies in his new Prius.",
+    "memory_id": "2c46136b-a307-413d-8171-e46e437b1383",
+    "metadata": {
+      "dia_id": "D1:4"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D1:11"
+    ],
+    "memory": "Sam is considering trying painting as a new hobby.",
+    "memory_id": "2dd23c17-fa19-40fd-9b5d-0cb4536759ca",
+    "metadata": {
+      "dia_id": "D1:11"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D4:3"
+    ],
+    "memory": "Sam thanked Evan for his support and confirmed that he is actively working on improving his health and getting active.",
+    "memory_id": "31262aac-a0b1-40a7-b8ca-e555a1a106d8",
+    "metadata": {
+      "dia_id": "D4:3"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D1:16"
+    ],
+    "memory": "Evan was introduced to watercolor painting by a friend who gave him advice, after which he became immediately interested in the hobby.",
+    "memory_id": "31f5080e-a1a5-4c8b-b67f-409649e45ac1",
+    "metadata": {
+      "dia_id": "D1:16"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D4:1"
+    ],
+    "memory": "Sam told Evan that his friends mocked his weight last Friday, which hurt him and motivated him to realize he needs to make changes.",
+    "memory_id": "352da0d6-f0b3-4ef0-b33f-7a22a42f6d81",
+    "metadata": {
+      "dia_id": "D4:1"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D3:1"
+    ],
+    "memory": "Evan experienced a sudden heart palpitation incident last week (around early June 2023), which served as a serious wake-up call regarding his lifestyle.",
+    "memory_id": "364e1613-6409-4d10-b92c-0e864337b2af",
+    "metadata": {
+      "dia_id": "D3:1"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D4:4"
+    ],
+    "memory": "Evan provided Sam with a reminder of his own commitment to fitness by showing his gym membership card.",
+    "memory_id": "366e12ba-e72c-49de-a8f3-717f73f5b0d2",
+    "metadata": {
+      "dia_id": "D4:4"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D4:2"
+    ],
+    "memory": "Evan offered to work on Sam's health goals together with him following the emotional incident at the supermarket and the recent mockery by friends.",
+    "memory_id": "3e86070d-22a3-4ef0-b7b5-fce19a7930f2",
+    "metadata": {
+      "dia_id": "D4:2"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D4:5"
+    ],
+    "memory": "Sam asked Evan what he believed made the biggest impact on his personal health journey.",
+    "memory_id": "4174ff86-40b8-491c-b22c-ed8f99055c6b",
+    "metadata": {
+      "dia_id": "D4:5"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D4:9"
+    ],
+    "memory": "Sam has tried flavored seltzer water before and found it nice, and is now asking Evan for ideas on low-calorie snacks to pair with it.",
+    "memory_id": "4402886f-a752-4db6-a4b6-fb6495275567",
+    "metadata": {
+      "dia_id": "D4:9"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D2:2"
+    ],
+    "memory": "Sam mentioned he has never been to Jasper but found it breathtaking from the photo.",
+    "memory_id": "459b3e75-cf7c-4532-ac82-baa5d1f54805",
+    "metadata": {
+      "dia_id": "D2:2"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D4:4"
+    ],
+    "memory": "Evan emphasized that achieving a healthier lifestyle involves not just exercise, but also diet and broader lifestyle changes.",
+    "memory_id": "4fee621e-b687-4239-977c-94f3b4b7df6b",
+    "metadata": {
+      "dia_id": "D4:4"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D3:16"
+    ],
+    "memory": "Sam is coming from the shop and experienced a frustrating issue at the supermarket where all self-checkout machines were broken, leaving him in a terrible mood.",
+    "memory_id": "52beb2ce-cc79-47e5-8fda-43ff7a19bbc2",
+    "metadata": {
+      "dia_id": "D3:16"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D5:4"
+    ],
+    "memory": "Sam commented that the food looked good to eat and reflected on how dealing with health problems can be challenging and diminish enjoyable experiences.",
+    "memory_id": "53b1d7eb-f519-48e1-809b-bd9f308da9dd",
+    "metadata": {
+      "dia_id": "D5:4"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D4:4"
+    ],
+    "memory": "Evan shared his personal experience of struggling with health issues a few years ago but successfully stuck with it.",
+    "memory_id": "5420b9c6-5e95-495c-988b-596a9be71afa",
+    "metadata": {
+      "dia_id": "D4:4"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D3:14"
+    ],
+    "memory": "Sam is seeking assistance from Evan to get started on making small changes to his diet, specifically swapping soda for flavored seltzer water and candy for dark chocolate.",
+    "memory_id": "564da560-9058-4a21-bbd2-07e3235ef3a5",
+    "metadata": {
+      "dia_id": "D3:14"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D5:3"
+    ],
+    "memory": "Evan confirmed that the Canadian woman he met is great and stated that every moment with her is fun and energizing.",
+    "memory_id": "56716660-3474-4f49-afea-07d9e8ab1f12",
+    "metadata": {
+      "dia_id": "D5:3"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D2:11"
+    ],
+    "memory": "Evan has been practicing watercolor painting for a few years and finds that it helps him find peace.",
+    "memory_id": "571ecd19-8c7a-4813-bbbf-fa5c0919a063",
+    "metadata": {
+      "dia_id": "D2:11"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D4:15"
+    ],
+    "memory": "Sam plans to start going to the gym and exercising regularly starting tomorrow, believing that earlier action leads to sooner rewards.",
+    "memory_id": "5c1755f6-8a49-4062-b44d-f2e7eaf90612",
+    "metadata": {
+      "dia_id": "D4:15"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D5:18"
+    ],
+    "memory": "Sam expressed admiration for the health tracking tool Evan uses, describing it as powerful yet simple.",
+    "memory_id": "626572b7-1f5d-4c13-a192-8d82c1150fa7",
+    "metadata": {
+      "dia_id": "D5:18"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D3:2"
+    ],
+    "memory": "Sam is trying to eat healthier in response to Evan's message about his health scare.",
+    "memory_id": "646f284b-b104-41bd-bab9-dcdeec44dc6f",
+    "metadata": {
+      "dia_id": "D3:2"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D1:7"
+    ],
+    "memory": "Sam loves hiking but hasn't done it in a long time, recalling a special hike with his dad when he was ten years old.",
+    "memory_id": "648cd712-9d63-4f42-ab0e-d6d91632d7f1",
+    "metadata": {
+      "dia_id": "D1:7"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D5:7"
+    ],
+    "memory": "Evan has been working on his health journey for two years, acknowledging that the road has been long with ups and downs.",
+    "memory_id": "658a185f-5b49-4a3b-933d-16a339beb29c",
+    "metadata": {
+      "dia_id": "D5:7"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:9"
+    ],
+    "memory": "Sam hiked a significant distance during his childhood trip with his dad, considering it a great memory and a feat for him at the time.",
+    "memory_id": "6b469e93-1282-40ca-be6c-4187017cad28",
+    "metadata": {
+      "dia_id": "D1:9"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D4:10"
+    ],
+    "memory": "Evan suggests pairing flavored seltzer water with air-popped popcorn or fruit as healthy, low-calorie snack options for Sam.",
+    "memory_id": "6dc998b7-d395-46e4-8ea2-f4d9bc414b83",
+    "metadata": {
+      "dia_id": "D4:10"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D1:13"
+    ],
+    "memory": "Sam has not tried painting yet but is keen to give it a go as a way to relax and be creative.",
+    "memory_id": "7834c0f3-160a-4eb0-940d-73176fb672a1",
+    "metadata": {
+      "dia_id": "D1:13"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D5:3"
+    ],
+    "memory": "Evan remarked on the unpredictability of life and joked about what life has thrown for him right now.",
+    "memory_id": "7f41a45a-9e14-45f5-9fa4-7b873e9bc4e9",
+    "metadata": {
+      "dia_id": "D5:3"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D2:11"
+    ],
+    "memory": "Evan clarifies that while painting is good for stress, he does not believe it will help with Sam's weight issues and instead recommends exercising as well.",
+    "memory_id": "7f81656c-682f-4aaa-a3f5-59e951c83aa1",
+    "metadata": {
+      "dia_id": "D2:11"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D3:14"
+    ],
+    "memory": "Sam acknowledges that progress takes time and expresses determination to keep trying and making tiny changes towards a healthier lifestyle.",
+    "memory_id": "82074c16-64d6-4704-908d-da93c2866674",
+    "metadata": {
+      "dia_id": "D3:14"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D5:9"
+    ],
+    "memory": "Evan stated that his family motivates him to stay healthy, helping track his progress and serving as a constant reminder to keep going.",
+    "memory_id": "8b8f733b-b599-43d5-a2dc-882161f4f5ce",
+    "metadata": {
+      "dia_id": "D5:9"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D3:9"
+    ],
+    "memory": "Evan and Sam agreed to continue supporting each other on their respective health journeys, acknowledging that progress takes time.",
+    "memory_id": "8e41bb29-d827-4189-ac62-6c7c7eccd5a6",
+    "metadata": {
+      "dia_id": "D3:9"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D3:4"
+    ],
+    "memory": "Sam admits to having made no changes to his diet recently and continues to enjoy soda and candy, acknowledging that these are not the best habits.",
+    "memory_id": "92f902e1-073a-4a7e-a761-61e92892a1aa",
+    "metadata": {
+      "dia_id": "D3:4"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:15"
+    ],
+    "memory": "Evan advises finding something that motivates you and makes you happy, whether it is large or tiny, to help conquer life's struggles.",
+    "memory_id": "948b0697-0583-4120-8054-80fdfd5e6cd4",
+    "metadata": {
+      "dia_id": "D5:15"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D2:9"
+    ],
+    "memory": "Evan advises making diet changes by finding small, manageable ways to make smarter choices rather than overhauling everything at once.",
+    "memory_id": "95d4e24d-aff3-460a-9498-fa3e17c9e2ba",
+    "metadata": {
+      "dia_id": "D2:9"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D1:2"
+    ],
+    "memory": "Evan recently returned from a family trip taken in his new Prius.",
+    "memory_id": "99c35aea-8f49-48f6-9ccb-0f647634d863",
+    "metadata": {
+      "dia_id": "D1:2"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D1:17"
+    ],
+    "memory": "Sam expresses admiration for Evan's passion for watercolor painting and hopes to find a hobby he is equally passionate about.",
+    "memory_id": "9bcd7a74-e337-4a35-abf1-acee9f80450f",
+    "metadata": {
+      "dia_id": "D1:17"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D5:2"
+    ],
+    "memory": "Sam expressed sympathy for Evan regarding his recent health issues, acknowledging that it can be tough to fully enjoy things sometimes.",
+    "memory_id": "9efce730-9ed9-4c59-827a-9f5df4040090",
+    "metadata": {
+      "dia_id": "D5:2"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D1:4"
+    ],
+    "memory": "Evan's old Prius broke down, leading him to repair and sell it before purchasing a new one.",
+    "memory_id": "a0757e0c-7718-4d7e-9058-cf4b8c5f7091",
+    "metadata": {
+      "dia_id": "D1:4"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:6"
+    ],
+    "memory": "Evan went on a trip to Canada around August 2023 and met an incredible Canadian woman who makes him feel alive.",
+    "memory_id": "a40edb87-6285-41e8-9c32-216312292533",
+    "metadata": {
+      "dia_id": "D5:6"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D5:3"
+    ],
+    "memory": "Evan noted that his current relationship is a nice change, especially after dealing with recent health issues.",
+    "memory_id": "ab62f888-3392-41b9-844a-1528f05864cb",
+    "metadata": {
+      "dia_id": "D5:3"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D5:14"
+    ],
+    "memory": "Sam commented on an amazing view and emphasized that the key to maintaining a healthy lifestyle is finding something that keeps you motivated.",
+    "memory_id": "ae32e520-8054-4855-99fb-2c798de7dd36",
+    "metadata": {
+      "dia_id": "D5:14"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D2:2"
+    ],
+    "memory": "Sam expressed admiration for Evan's road trip photo of Jasper and asked if the trip was relaxing.",
+    "memory_id": "af498cbe-d737-4028-ad16-7108a76ff6cc",
+    "metadata": {
+      "dia_id": "D2:2"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D4:10"
+    ],
+    "memory": "Evan reveals he is currently reading the mystery novel 'The Great Gatsby' and finds it very gripping.",
+    "memory_id": "b13a1169-c16e-42ab-934b-1306d07cc6b7",
+    "metadata": {
+      "dia_id": "D4:10"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D1:6"
+    ],
+    "memory": "Evan and his family hiked the trails in the Rockies last week, enjoying amazing views.",
+    "memory_id": "b844fddd-5040-497a-88c7-b8cf000d9fd7",
+    "metadata": {
+      "dia_id": "D1:6"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D3:5"
+    ],
+    "memory": "Evan suggests Sam swap his soda for flavored seltzer water as a healthier alternative that retains the bubbly taste without the sugar.",
+    "memory_id": "baf55ddb-0835-4235-a67f-81c1e466178f",
+    "metadata": {
+      "dia_id": "D3:5"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D4:6"
+    ],
+    "memory": "Evan made dietary changes including cutting down on sugary snacks and eating more vegetables and fruit, which he states had a big impact on his health.",
+    "memory_id": "bddae4bb-6a5c-4f42-a298-d165d3b70242",
+    "metadata": {
+      "dia_id": "D4:6"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D2:11"
+    ],
+    "memory": "Evan recommends painting as a way to relieve stress and be creative, noting it provides freedom to explore colors, textures, and express feelings.",
+    "memory_id": "c0b0324e-d7fd-4ab1-849a-0fc832aa5600",
+    "metadata": {
+      "dia_id": "D2:11"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:15"
+    ],
+    "memory": "Sam is impressed by Evan's hobby of watercolor painting and asks how he got into it.",
+    "memory_id": "c1b801a0-4f74-4759-a4ce-79d18832b688",
+    "metadata": {
+      "dia_id": "D1:15"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:6"
+    ],
+    "memory": "Evan has been dealing with health issues lately but finds joy in the good moments, such as eating ginger snaps.",
+    "memory_id": "c2b601bd-47c0-4476-bbe9-fb5815e0a184",
+    "metadata": {
+      "dia_id": "D5:6"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D5:17"
+    ],
+    "memory": "Evan explained that he acquired a specific item (likely the gym membership card or similar symbol mentioned in prior context) because it represents strength and resilience, serving as a motivation to persevere through tough times.",
+    "memory_id": "ccf4efdb-6db7-490f-924e-b855ec9267e0",
+    "metadata": {
+      "dia_id": "D5:17"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D4:8"
+    ],
+    "memory": "Evan encourages Sam to try flavored seltzer water as a healthier alternative to soda, acknowledging that the transition is tough but achievable.",
+    "memory_id": "ceba4316-77ea-41b2-a577-a0b5a7e5f4ae",
+    "metadata": {
+      "dia_id": "D4:8"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:18"
+    ],
+    "memory": "Evan advises Sam to keep trying new things until he finds a hobby that sparks his excitement.",
+    "memory_id": "d0456295-444a-4844-a1f8-ab0e49f3cb77",
+    "metadata": {
+      "dia_id": "D1:18"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D5:2"
+    ],
+    "memory": "Sam congratulated Evan on meeting his new partner and expressed that being with someone who makes you feel alive is amazing.",
+    "memory_id": "d07da0c4-5b1d-4e06-8189-1657e14bf5b0",
+    "metadata": {
+      "dia_id": "D5:2"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D3:3"
+    ],
+    "memory": "Evan is eating a salad and being extra careful with his health, specifically trying to eat less processed food and sugary snacks.",
+    "memory_id": "d3f49b5e-bb9d-4f42-bf72-bf7c7ccdf9cf",
+    "metadata": {
+      "dia_id": "D3:3"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D2:6"
+    ],
+    "memory": "Sam had a doctor's check-up a few days before May 24, 2023, and received feedback that his weight was not great.",
+    "memory_id": "dd8818df-b8dd-4f85-a716-a8dfa89804bf",
+    "metadata": {
+      "dia_id": "D2:6"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D2:3"
+    ],
+    "memory": "Evan described his family road trip to Jasper as relaxing and peaceful, featuring fresh air, a cozy cabin surrounded by mountains and forests, which felt like a real retreat.",
+    "memory_id": "de1a74d1-831a-4729-961c-d5fb2787a5ee",
+    "metadata": {
+      "dia_id": "D2:3"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D3:15"
+    ],
+    "memory": "Evan and Sam plan to meet up to practice exercises as part of their shared goal to reach their health goals.",
+    "memory_id": "dfaa677d-2767-4680-a0d2-8ec347d4facb",
+    "metadata": {
+      "dia_id": "D3:15"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D4:9"
+    ],
+    "memory": "Evan mentions he has started reading a new mystery novel that he finds very gripping.",
+    "memory_id": "dfac566d-2622-48ae-b872-2f4a8cef9571",
+    "metadata": {
+      "dia_id": "D4:9"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D3:1"
+    ],
+    "memory": "Evan describes life as having been quite the rollercoaster lately following his health scare.",
+    "memory_id": "e32ea534-eaff-472a-89cf-a9a15ce19dbd",
+    "metadata": {
+      "dia_id": "D3:1"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D2:1"
+    ],
+    "memory": "Evan shared a photo of a glacier he captured during his family road trip to Jasper.",
+    "memory_id": "e6803031-a7ad-4390-be38-28299f64ab0a",
+    "metadata": {
+      "dia_id": "D2:1"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:8"
+    ],
+    "memory": "Sam is considering ordering similar items to the ones Evan mentioned and asks for Evan's opinion on whether they are worth it.",
+    "memory_id": "e82a1cb5-895e-4207-af3a-69b19432563c",
+    "metadata": {
+      "dia_id": "D5:8"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D5:10"
+    ],
+    "memory": "Sam finds the health tracking tool Evan mentioned to be a good idea and asks how it has been working out for him.",
+    "memory_id": "e8a02995-bd31-4bd1-b22e-29896eaf3294",
+    "metadata": {
+      "dia_id": "D5:10"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D2:1"
+    ],
+    "memory": "Evan took his family on a road trip to Jasper last weekend (around October 2026), driving through the Icefields Parkway and enjoying the glaciers and lakes.",
+    "memory_id": "e912b2da-22cb-4547-939d-271d9a82feb4",
+    "metadata": {
+      "dia_id": "D2:1"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D4:8"
+    ],
+    "memory": "Evan mentions he has started reading a new mystery novel and finds it very gripping.",
+    "memory_id": "e9ad608e-1a77-4700-a43d-249a9c3423df",
+    "metadata": {
+      "dia_id": "D4:8"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D4:2"
+    ],
+    "memory": "Evan apologized to Sam for the recent incident where friends mocked his weight and reassured him that progress takes time.",
+    "memory_id": "ec271c71-aae1-401f-a65f-98e28d7e1558",
+    "metadata": {
+      "dia_id": "D4:2"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D2:7"
+    ],
+    "memory": "Evan expressed empathy for Sam's challenging health experience regarding weight and encouraged him to make positive lifestyle changes at any time.",
+    "memory_id": "eea0827b-f26c-443d-afaf-470fe9d9c2f8",
+    "metadata": {
+      "dia_id": "D2:7"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D4:7"
+    ],
+    "memory": "Sam confirms he is actively reducing his intake of soda and candy, acknowledging the difficulty but expressing determination to make the change.",
+    "memory_id": "f261cab0-c58d-49c8-b6a7-23468ce312be",
+    "metadata": {
+      "dia_id": "D4:7"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D3:10"
+    ],
+    "memory": "Sam agrees that progress takes time and commits to continuing his effort to make small, incremental changes to his lifestyle.",
+    "memory_id": "f40f9ad6-8131-4cdd-a2cb-43da358cb06d",
+    "metadata": {
+      "dia_id": "D3:10"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D5:3"
+    ],
+    "memory": "Evan described the view from his trip to Canada as nice and thanked Sam for sharing it.",
+    "memory_id": "f96e8a9e-df07-4ad5-944b-60cfd45b7606",
+    "metadata": {
+      "dia_id": "D5:3"
+    }
+  },
+  {
+    "attributed_to": "assistant",
+    "dia_ids": [
+      "D2:9"
+    ],
+    "memory": "Evan recommends finding a fitness routine that one genuinely enjoys as the foundation for a healthier lifestyle, emphasizing the positive feeling of being healthy and strong.",
+    "memory_id": "fab63fab-2ac1-4ca4-b067-8a4a9dc18d44",
+    "metadata": {
+      "dia_id": "D2:9"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D2:8"
+    ],
+    "memory": "Sam acknowledges that breaking old habits is difficult and asks Evan for tips on how to start the process of changing them.",
+    "memory_id": "fbd7f10f-0f3c-4605-b798-e84d8c18d443",
+    "metadata": {
+      "dia_id": "D2:8"
+    }
+  },
+  {
+    "attributed_to": "user",
+    "dia_ids": [
+      "D2:5"
+    ],
+    "memory": "Evan offered to help Sam with their tough week after learning about the difficulties they were facing.",
+    "memory_id": "fbff0d9b-fb4d-4b2c-9e52-eacc93c92d59",
+    "metadata": {
+      "dia_id": "D2:5"
+    }
+  }
+]

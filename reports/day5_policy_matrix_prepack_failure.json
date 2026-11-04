@@ -1,0 +1,67 @@
+{
+  "body_bytes_each_range": [
+    1107,
+    1239
+  ],
+  "completed_nonconsolidation_profiles": [
+    {
+      "budget_bytes": 1000000,
+      "event_kinds": {
+        "budget_unsatisfiable": 1,
+        "delete": 39
+      },
+      "events_live": 40,
+      "physical_bytes": 1069056,
+      "policy": "fifo",
+      "retained_count": 0
+    },
+    {
+      "budget_bytes": 1000000,
+      "event_kinds": {
+        "budget_unsatisfiable": 1,
+        "delete": 39
+      },
+      "events_live": 40,
+      "physical_bytes": 1093632,
+      "policy": "lru",
+      "retained_count": 0
+    },
+    {
+      "budget_bytes": 1000000,
+      "event_kinds": {
+        "budget_unsatisfiable": 1,
+        "delete": 39
+      },
+      "events_live": 40,
+      "physical_bytes": 1093632,
+      "policy": "decay",
+      "retained_count": 0
+    },
+    {
+      "budget_bytes": 1000000,
+      "event_kinds": {
+        "budget_unsatisfiable": 1,
+        "delete": 39
+      },
+      "events_live": 40,
+      "physical_bytes": 1093632,
+      "policy": "salience",
+      "retained_count": 0
+    }
+  ],
+  "consolidation_profile_observed": {
+    "agent_proposal_events": 1378,
+    "live_event_lines": 1418,
+    "logical_file_bytes_observed_live": 4570999,
+    "measurement_note": "Sum of st_size values during an in-progress profile; racy and not allocated physical bytes. Do not compare to physical-byte profiles.",
+    "status": "contaminated; excluded"
+  },
+  "dataset_seed": 20261018,
+  "explicit_duplicate_pairs": 10,
+  "preserved_bases_dir": "/private/tmp/memfw-day5-reusable-bases",
+  "preserved_profiles_dir": "/private/tmp/memfw-day5-prepack-profiles",
+  "reason": "Repeated common padding across unrelated records created thousands of unintended near-duplicate consolidation proposals; do not use consolidation results for policy comparison.",
+  "record_count": 1000,
+  "recorded_at_utc": "2026-10-18T02:52:02.998227+00:00",
+  "status": "interrupted_exploratory_confounded"
+}

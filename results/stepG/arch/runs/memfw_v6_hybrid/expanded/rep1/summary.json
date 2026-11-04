@@ -1,0 +1,52 @@
+{
+  "answer_latency": {
+    "count": 41,
+    "mean_seconds": 3.4477025477070837,
+    "p50_seconds": 3.4766167500056326,
+    "p95_seconds": 3.82242595902062,
+    "total_seconds": 141.35580445599044
+  },
+  "answer_token_usage": {
+    "completion_tokens": 252,
+    "prompt_tokens": 31585
+  },
+  "arm": "memfw_v6_hybrid",
+  "custom_instructions_used": false,
+  "dry_run": false,
+  "errors": [],
+  "ingest_seconds": 3.4901015000068583,
+  "llm_token_usage": {
+    "calls": 0,
+    "completion_tokens": 0,
+    "prompt_tokens": 0
+  },
+  "mean_answer_score": 0.6068220668220667,
+  "mean_token_f1": 0.38730987170011555,
+  "memory_count": 100,
+  "models": {
+    "embedding": "nomic-embed-text",
+    "llm": "qwen3.5:9b",
+    "llm_transport": "ollama"
+  },
+  "question_rows": 41,
+  "retrieval_latency": {
+    "count": 41,
+    "mean_seconds": 0.628512916563323,
+    "p50_seconds": 0.7068472079990897,
+    "p95_seconds": 0.7515083749894984,
+    "total_seconds": 25.76902957909624
+  },
+  "run_id": "rep1",
+  "schema_version": "stepg-run-summary-v1",
+  "seed": 20261021,
+  "storage_bytes": 110100,
+  "system": "memfw_v6_hybrid",
+  "turn_count": 100,
+  "write_latency": {
+    "count": 100,
+    "mean_seconds": 0.03475438498950098,
+    "p50_seconds": 0.028488520998507738,
+    "p95_seconds": 0.034293902096396774,
+    "total_seconds": 3.4754384989500977
+  }
+}

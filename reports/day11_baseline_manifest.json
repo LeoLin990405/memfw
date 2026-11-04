@@ -1,0 +1,290 @@
+{
+  "schema_version": "day11-locomo-manifest-v1",
+  "seed": 20261021,
+  "selection": {
+    "sample_policy": "uniform seeded choice from top-level samples",
+    "turn_policy": "first 100 turns in source order",
+    "question_policy": "gold evidence fully present in input window; up to 4 per category, seeded selection",
+    "selection_bias": "Eligibility requires all gold evidence within the first 100 turns; results do not represent full LoCoMo."
+  },
+  "source": {
+    "path": "<MEMFW_DATA_DIR>/locomo10.json",
+    "sha256": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+    "sample_index": 8,
+    "sample_id": "conv-49"
+  },
+  "scope": {
+    "source_turn_count": 509,
+    "input_turn_count": 100,
+    "input_turn_ids": [
+      "D1:1",
+      "D1:2",
+      "D1:3",
+      "D1:4",
+      "D1:5",
+      "D1:6",
+      "D1:7",
+      "D1:8",
+      "D1:9",
+      "D1:10",
+      "D1:11",
+      "D1:12",
+      "D1:13",
+      "D1:14",
+      "D1:15",
+      "D1:16",
+      "D1:17",
+      "D1:18",
+      "D1:19",
+      "D1:20",
+      "D1:21",
+      "D1:22",
+      "D2:1",
+      "D2:2",
+      "D2:3",
+      "D2:4",
+      "D2:5",
+      "D2:6",
+      "D2:7",
+      "D2:8",
+      "D2:9",
+      "D2:10",
+      "D2:11",
+      "D2:12",
+      "D2:13",
+      "D2:14",
+      "D2:15",
+      "D2:16",
+      "D2:17",
+      "D3:1",
+      "D3:2",
+      "D3:3",
+      "D3:4",
+      "D3:5",
+      "D3:6",
+      "D3:7",
+      "D3:8",
+      "D3:9",
+      "D3:10",
+      "D3:11",
+      "D3:12",
+      "D3:13",
+      "D3:14",
+      "D3:15",
+      "D3:16",
+      "D3:17",
+      "D3:18",
+      "D4:1",
+      "D4:2",
+      "D4:3",
+      "D4:4",
+      "D4:5",
+      "D4:6",
+      "D4:7",
+      "D4:8",
+      "D4:9",
+      "D4:10",
+      "D4:11",
+      "D4:12",
+      "D4:13",
+      "D4:14",
+      "D4:15",
+      "D4:16",
+      "D4:17",
+      "D4:18",
+      "D4:19",
+      "D4:20",
+      "D5:1",
+      "D5:2",
+      "D5:3",
+      "D5:4",
+      "D5:5",
+      "D5:6",
+      "D5:7",
+      "D5:8",
+      "D5:9",
+      "D5:10",
+      "D5:11",
+      "D5:12",
+      "D5:13",
+      "D5:14",
+      "D5:15",
+      "D5:16",
+      "D5:17",
+      "D5:18",
+      "D5:19",
+      "D5:20",
+      "D5:21",
+      "D5:22",
+      "D5:23"
+    ],
+    "question_count": 196,
+    "eligible_question_counts_by_category": {
+      "1": 5,
+      "2": 9,
+      "3": 2,
+      "4": 15,
+      "5": 10
+    },
+    "selected_question_count": 18,
+    "selected_question_counts_by_category": {
+      "1": 4,
+      "2": 4,
+      "3": 2,
+      "4": 4,
+      "5": 4
+    }
+  },
+  "questions": [
+    {
+      "qa_index": 2,
+      "category": 1,
+      "question_sha256": "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f",
+      "evidence_turn_ids": [
+        "D1:2",
+        "D1:4",
+        "D2:1"
+      ]
+    },
+    {
+      "qa_index": 3,
+      "category": 1,
+      "question_sha256": "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5",
+      "evidence_turn_ids": [
+        "D1:2",
+        "D1:4"
+      ]
+    },
+    {
+      "qa_index": 6,
+      "category": 1,
+      "question_sha256": "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423",
+      "evidence_turn_ids": [
+        "D1:4",
+        "D2:1"
+      ]
+    },
+    {
+      "qa_index": 26,
+      "category": 1,
+      "question_sha256": "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6",
+      "evidence_turn_ids": [
+        "D5:9",
+        "D5:11",
+        "D5:13"
+      ]
+    },
+    {
+      "qa_index": 4,
+      "category": 2,
+      "question_sha256": "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f",
+      "evidence_turn_ids": [
+        "D1:11"
+      ]
+    },
+    {
+      "qa_index": 9,
+      "category": 2,
+      "question_sha256": "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24",
+      "evidence_turn_ids": [
+        "D2:1"
+      ]
+    },
+    {
+      "qa_index": 12,
+      "category": 2,
+      "question_sha256": "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032",
+      "evidence_turn_ids": [
+        "D2:6"
+      ]
+    },
+    {
+      "qa_index": 17,
+      "category": 2,
+      "question_sha256": "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55",
+      "evidence_turn_ids": [
+        "D4:1"
+      ]
+    },
+    {
+      "qa_index": 5,
+      "category": 3,
+      "question_sha256": "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7",
+      "evidence_turn_ids": [
+        "D2:1"
+      ]
+    },
+    {
+      "qa_index": 27,
+      "category": 3,
+      "question_sha256": "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd",
+      "evidence_turn_ids": [
+        "D5:7"
+      ]
+    },
+    {
+      "qa_index": 86,
+      "category": 4,
+      "question_sha256": "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f",
+      "evidence_turn_ids": [
+        "D1:18"
+      ]
+    },
+    {
+      "qa_index": 87,
+      "category": 4,
+      "question_sha256": "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293",
+      "evidence_turn_ids": [
+        "D2:1"
+      ]
+    },
+    {
+      "qa_index": 88,
+      "category": 4,
+      "question_sha256": "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971",
+      "evidence_turn_ids": [
+        "D2:3"
+      ]
+    },
+    {
+      "qa_index": 95,
+      "category": 4,
+      "question_sha256": "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da",
+      "evidence_turn_ids": [
+        "D5:9"
+      ]
+    },
+    {
+      "qa_index": 159,
+      "category": 5,
+      "question_sha256": "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2",
+      "evidence_turn_ids": [
+        "D2:1"
+      ]
+    },
+    {
+      "qa_index": 160,
+      "category": 5,
+      "question_sha256": "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d",
+      "evidence_turn_ids": [
+        "D2:3"
+      ]
+    },
+    {
+      "qa_index": 164,
+      "category": 5,
+      "question_sha256": "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee",
+      "evidence_turn_ids": [
+        "D5:9"
+      ]
+    },
+    {
+      "qa_index": 165,
+      "category": 5,
+      "question_sha256": "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895",
+      "evidence_turn_ids": [
+        "D5:17"
+      ]
+    }
+  ]
+}

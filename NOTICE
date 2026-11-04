@@ -1,0 +1,9 @@
+memfw
+Copyright 2026 Leo Lin (LeoLin990405)
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This distribution contains no absorbed third-party source code. Third-party
+Python dependencies remain under their own licenses. If future distributions
+include material from another project, that project's attribution and license
+text must be added here and in the documentation.

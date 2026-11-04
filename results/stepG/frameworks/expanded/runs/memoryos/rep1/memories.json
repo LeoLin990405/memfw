@@ -1,0 +1,1202 @@
+[
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:1"
+    ],
+    "memory": "[2023-05-18] Sam: Hey Evan, good to see you! What's new since we last met? Anything cool happening?",
+    "memory_id": "01a6c00a-9020-49e0-b1e2-061ff4ec726c",
+    "metadata": {
+      "session_id": "D1:1",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:11"
+    ],
+    "memory": "[2023-07-27] Sam: Yum, that sounds good! Thanks! And I'll definitely read that novel sometime.",
+    "memory_id": "0235bc79-4e5f-4df5-b235-5ef55369576b",
+    "metadata": {
+      "session_id": "D4:11",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:14"
+    ],
+    "memory": "[2023-07-27] Evan: By the way, have you thought about exercising? Trust me, it's just as important as eating right.",
+    "memory_id": "05e1758b-af5d-4499-bf88-72f87c7f506b",
+    "metadata": {
+      "session_id": "D4:14",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:17"
+    ],
+    "memory": "[2023-08-07] Evan: I got this because it symbolizes strength and resilience. Taking care of it motivates me to keep going through tough times.",
+    "memory_id": "07be43a5-d1cb-4ea0-846f-7db65a654bba",
+    "metadata": {
+      "session_id": "D5:17",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:4"
+    ],
+    "memory": "[2023-08-07] Sam: Looks good to eat! Dealing with health problems can be challenging and take away from enjoyable experiences.",
+    "memory_id": "0c8a0e03-4536-49d5-a69a-02a02887bb40",
+    "metadata": {
+      "session_id": "D5:4",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:14"
+    ],
+    "memory": "[2023-08-07] Sam: What an amazing view! The key is to find something that keeps you motivated.",
+    "memory_id": "0fa0c75b-0bf5-4f98-854a-b201601d1913",
+    "metadata": {
+      "session_id": "D5:14",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:11"
+    ],
+    "memory": "[2023-08-07] Evan: It's been awesome, Sam! That visual reminder has been really motivating.",
+    "memory_id": "124893ce-7c90-4f2c-bbc4-0e8f37c2da35",
+    "metadata": {
+      "session_id": "D5:11",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:16"
+    ],
+    "memory": "[2023-08-07] Sam: Nice! What made you decide to get that?",
+    "memory_id": "13244755-24c0-47aa-8cd8-48ee36621eb0",
+    "metadata": {
+      "session_id": "D5:16",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:5"
+    ],
+    "memory": "[2023-06-06] Evan: Yeah, breaking habits can be tough. Making small changes can have a big impact later on. Have you considered swapping soda for flavored seltzer water? It's still bubbly and tasty, but without the sugar. And instead of candy, you could try dark chocolate with high cocoa content - it's a healthier option. What do you think?",
+    "memory_id": "177ad01b-641b-4fac-a04a-4dfa87b2df3d",
+    "metadata": {
+      "session_id": "D3:5",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:6"
+    ],
+    "memory": "[2023-05-18] Evan: We all hiked the trails last week - the views were amazing!",
+    "memory_id": "17ee4274-8cd0-4d6e-b99c-77975e09599e",
+    "metadata": {
+      "session_id": "D1:6",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:17"
+    ],
+    "memory": "[2023-06-06] Evan: Sorry you were in that situation, hopefully it won't happen again!",
+    "memory_id": "1eeed4b3-cf89-48de-9268-65ad0ad57d9d",
+    "metadata": {
+      "session_id": "D3:17",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:13"
+    ],
+    "memory": "[2023-07-27] Sam: That reminder is inspiring. Thanks for reminding me to focus on progress, not perfection.",
+    "memory_id": "22b4e338-3dee-478c-a567-7eb2fcf26d42",
+    "metadata": {
+      "session_id": "D4:13",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:5"
+    ],
+    "memory": "[2023-08-07] Evan: Ginger snaps are my weakness for sure! Dealing with health issues has been tough, but it's made me appreciate the good moments more. These are the ones who bring lots of joy even through the hard times.",
+    "memory_id": "233851e3-95f4-46c4-994d-d360f1d9cb62",
+    "metadata": {
+      "session_id": "D5:5",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:18"
+    ],
+    "memory": "[2023-06-06] Sam: Yeah, I hope so, take care of yourself.",
+    "memory_id": "2708be66-8353-483e-a5c0-ac6355aebc10",
+    "metadata": {
+      "session_id": "D3:18",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:3"
+    ],
+    "memory": "[2023-08-07] Evan: Woah. such a nice view! Thanks, Sam! She's definitely great. Every moment with her is really fun and energizing. It's a nice change, especially after dealing with health issues. But you never know what life's gonna throw at you. Btw look what life has thrown for me right now haha.",
+    "memory_id": "2b7685be-ddc5-4221-b397-c46ec60c0900",
+    "metadata": {
+      "session_id": "D5:3",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:1"
+    ],
+    "memory": "[2023-07-27] Sam: Hey Evan, I need to talk to you. My friends were mocking my weight last Friday and it hurt. That made me realize I need to make changes.",
+    "memory_id": "2cbfe182-ee95-4a8f-89b4-03323413a8a1",
+    "metadata": {
+      "session_id": "D4:1",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:10"
+    ],
+    "memory": "[2023-05-24] Sam: Thanks, Evan. Like you said, I've been looking for a hobby to stay motivated. I've been thinking about trying painting. Do you think it will help me de-stress?",
+    "memory_id": "2eb11a15-38a3-44bd-a19b-b25715df7a47",
+    "metadata": {
+      "session_id": "D2:10",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:21"
+    ],
+    "memory": "[2023-08-07] Evan: Yeah, every little thing we do for ourselves helps us in the long run.",
+    "memory_id": "2f7a3766-dcc6-4eb3-a297-0f949335a0aa",
+    "metadata": {
+      "session_id": "D5:21",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:12"
+    ],
+    "memory": "[2023-07-27] Evan: No worries, Sam! Focus on healthy swaps and taking small steps. Stay upbeat!",
+    "memory_id": "2fe72681-47ac-4562-8e02-d71843d50bb3",
+    "metadata": {
+      "session_id": "D4:12",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:19"
+    ],
+    "memory": "[2023-05-18] Sam: Thanks, Evan! I'm excited to try new things, should be fun!",
+    "memory_id": "3532c60b-652c-42bc-b097-7d21e88c17ca",
+    "metadata": {
+      "session_id": "D1:19",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:15"
+    ],
+    "memory": "[2023-05-18] Sam: Wow, that's impressive! How did you get into watercolor painting?",
+    "memory_id": "37d3b6da-94d1-4579-b11b-0165ed0f9f54",
+    "metadata": {
+      "session_id": "D1:15",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:2"
+    ],
+    "memory": "[2023-07-27] Evan: Hey Sam, sorry about that. Don't worry, progress takes time. Let's work on it together.",
+    "memory_id": "39bf6dd5-bbcd-48ff-82e3-b2a5ed3ff142",
+    "metadata": {
+      "session_id": "D4:2",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:6"
+    ],
+    "memory": "[2023-05-24] Sam: Thanks, Evan. Appreciate the offer, but had a check-up with my doctor a few days ago and, yikes, the weight wasn't great. It was pretty eye-opening.",
+    "memory_id": "3a1b92fe-5c3a-4688-8c50-837e2a503331",
+    "metadata": {
+      "session_id": "D2:6",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:4"
+    ],
+    "memory": "[2023-07-27] Evan: That's great, Sam! I struggled with my health a few years ago, but stuck with it. Here's a reminder of my commitment - my gym membership card. It's not just about exercise, diet and lifestyle changes also play a big role.",
+    "memory_id": "3af373a5-7fa7-4a8c-8452-6a0973db2b13",
+    "metadata": {
+      "session_id": "D4:4",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:17"
+    ],
+    "memory": "[2023-05-24] Evan: Take care, Sam! I'll catch up with you later.",
+    "memory_id": "3bd2bdb7-f708-438a-a7d3-86271aaafc74",
+    "metadata": {
+      "session_id": "D2:17",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:10"
+    ],
+    "memory": "[2023-08-07] Sam: Cool! It sounds like a really good tool to stay on track. How has it been working out for you?",
+    "memory_id": "3c749adc-4411-4e6d-8c93-e92d48023019",
+    "metadata": {
+      "session_id": "D5:10",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:3"
+    ],
+    "memory": "[2023-05-18] Sam: Wow, not bad, what happened to the old one? Where'd you go, by the way?",
+    "memory_id": "3ce34b90-cde8-434d-b93c-4188eb99fcfb",
+    "metadata": {
+      "session_id": "D1:3",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:1"
+    ],
+    "memory": "[2023-06-06] Evan: Hey Sam! Long time no talk! How're you doing? Life's been quite the rollercoaster lately. I had a health scare last week – a sudden heart palpitation incident that really shook me up. It's been a serious wake-up call about my lifestyle.",
+    "memory_id": "3f98e775-12c0-49d8-b400-de39d6458e8b",
+    "metadata": {
+      "session_id": "D3:1",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:2"
+    ],
+    "memory": "[2023-06-06] Sam: Hey Evan, great hearing from you! Sorry about that, glad you're feeling better now. Trying to eat healthier these days.",
+    "memory_id": "423989cf-58e1-4420-9cb4-5be8c404da8d",
+    "metadata": {
+      "session_id": "D3:2",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:18"
+    ],
+    "memory": "[2023-08-07] Sam: Wow, it's amazing! So powerful yet so simple.",
+    "memory_id": "47acd2d8-fa55-48e1-b640-d4dbd4bf5e1a",
+    "metadata": {
+      "session_id": "D5:18",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:5"
+    ],
+    "memory": "[2023-05-24] Evan: Sorry to hear that, Sam. Is there anything I can do to help?",
+    "memory_id": "47bc1739-dd3a-4484-9a3c-10a7f9b49bbf",
+    "metadata": {
+      "session_id": "D2:5",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:7"
+    ],
+    "memory": "[2023-05-24] Evan: That must have been a challenging experience, Sam. It's tough when we have to confront our own health challenges. Remember, it's never too late to make positive changes for a healthier lifestyle. Is there anything I can do to support you in this journey?",
+    "memory_id": "498b0a1e-362e-46c1-a443-20e8163b0dc1",
+    "metadata": {
+      "session_id": "D2:7",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:9"
+    ],
+    "memory": "[2023-05-18] Sam: We hiked a good distance - quite a feat for me back then. It's definitely a great memory.",
+    "memory_id": "4b7dcd8c-5315-47ba-adbd-8ecc5fde4f60",
+    "metadata": {
+      "session_id": "D1:9",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:2"
+    ],
+    "memory": "[2023-05-18] Evan: Hey Sam! Good to see you! Yeah, I just got back from a trip with my family in my new Prius.",
+    "memory_id": "4cd7547c-9c3c-40f3-85f7-1f92232995ea",
+    "metadata": {
+      "session_id": "D1:2",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:7"
+    ],
+    "memory": "[2023-08-07] Evan: Yes, they bring me such joy. My healthy road has been a long one. I've been working on it for two years now, so there have been ups and downs, but I'm doing my best.",
+    "memory_id": "4cff83da-e3e7-498b-a319-d8c17b70ba4e",
+    "metadata": {
+      "session_id": "D5:7",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:13"
+    ],
+    "memory": "[2023-08-07] Evan: I'm motivated by a thirst for adventure on interesting hikes, that's pretty cool!",
+    "memory_id": "4f5c0cf2-f3fe-4b20-9e39-0f927b0bd7b5",
+    "metadata": {
+      "session_id": "D5:13",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:8"
+    ],
+    "memory": "[2023-05-24] Sam: Thanks, Evan. Breaking old habits isn't easy. Do you have any tips for starting the process?",
+    "memory_id": "4fc231cd-4ad6-4437-a70f-d628525ea2e9",
+    "metadata": {
+      "session_id": "D2:8",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:12"
+    ],
+    "memory": "[2023-06-06] Sam: Thanks, Evan! I appreciate your support, it means a lot to me to have you in my corner.",
+    "memory_id": "513b76b2-3870-4e88-a544-37cc09bde971",
+    "metadata": {
+      "session_id": "D3:12",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:12"
+    ],
+    "memory": "[2023-08-07] Sam: Thanks for the recommendation, what else motivates you?",
+    "memory_id": "55dc3403-af64-4bd1-9f1b-22ceae073841",
+    "metadata": {
+      "session_id": "D5:12",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:9"
+    ],
+    "memory": "[2023-08-07] Evan: Thanks Sam! My family motivates me to stay healthy. Well, it helps a lot with my health goals. It tracks my progress really well and serves as a constant reminder to keep going.",
+    "memory_id": "5a99ad1f-6c5d-4416-b64e-8c25e062124e",
+    "metadata": {
+      "session_id": "D5:9",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:3"
+    ],
+    "memory": "[2023-07-27] Sam: Thanks for the support, Evan. I'm working on my health and getting active!",
+    "memory_id": "5bfa7bde-9a2e-49bb-84c6-0f6a33bcffc2",
+    "metadata": {
+      "session_id": "D4:3",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:7"
+    ],
+    "memory": "[2023-05-18] Sam: Wow, that's cool. I love hiking, but it's been ages since I've done it. I did this hike with my dad way back when I was ten. Going hiking together was great fun, and really special for us.",
+    "memory_id": "61f7cd50-4b42-4033-be41-642edf5fdf70",
+    "metadata": {
+      "session_id": "D1:7",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:1"
+    ],
+    "memory": "[2023-05-24] Evan: Hey Sam, good to hear from you! Since we last talked, lots has been happening! Last weekend, I took my family on a road trip to Jasper. It was amazing! We drove through the Icefields Parkway and the glaciers and lakes were gorgeous. I got a shot of a glacier, check it out!",
+    "memory_id": "62e1556a-2389-4663-a6f8-fcbf7404cc19",
+    "metadata": {
+      "session_id": "D2:1",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:13"
+    ],
+    "memory": "[2023-05-24] Evan: Awesome, Sam! Have fun with it and don't put too much pressure on yourself. Can't wait to hear how it's going!",
+    "memory_id": "677c3a98-7cd7-4c51-a6a9-e4daecf559c0",
+    "metadata": {
+      "session_id": "D2:13",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:6"
+    ],
+    "memory": "[2023-08-07] Sam: It looks like your kids are having a great time! And how long have you been prioritizing your health?",
+    "memory_id": "693cad5e-6867-4fd3-85b5-2d51394abb4e",
+    "metadata": {
+      "session_id": "D5:6",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:5"
+    ],
+    "memory": "[2023-05-18] Sam: Wow! Looks amazing. When did you get to go there?",
+    "memory_id": "6a27b01a-24e8-42e5-a4c9-9bea85ad168c",
+    "metadata": {
+      "session_id": "D1:5",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:11"
+    ],
+    "memory": "[2023-05-18] Sam: Nothing so far, but I was thinking about trying painting. Do you have any hobbies you love?",
+    "memory_id": "6bbf7a87-7fc2-46b7-803a-9aaf799e343f",
+    "metadata": {
+      "session_id": "D1:11",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:15"
+    ],
+    "memory": "[2023-06-06] Evan: Sure Sam, I'd be glad to help. Let's get together and I'll show you some basic exercises. We'll reach our goals!",
+    "memory_id": "713af80e-cdda-46d5-88da-4fda0e9e22b2",
+    "metadata": {
+      "session_id": "D3:15",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:8"
+    ],
+    "memory": "[2023-05-18] Evan: Aww, that's cute. How far did you two hike?",
+    "memory_id": "727a35ad-ab62-4988-adc9-887c46e15c5d",
+    "metadata": {
+      "session_id": "D1:8",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:19"
+    ],
+    "memory": "[2023-08-07] Evan: Thanks, Sam. It's a reminder that even in little things, we can be tough.",
+    "memory_id": "75fe6ad5-2580-4e21-b764-a496af9f44a4",
+    "metadata": {
+      "session_id": "D5:19",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:8"
+    ],
+    "memory": "[2023-08-07] Sam: I wish your motivation never goes anywhere! I'm thinking of ordering myself some similar ones too, what do you think, are they worth it?",
+    "memory_id": "7d53baf5-37ae-45d3-a4ba-7ba2b65f3037",
+    "metadata": {
+      "session_id": "D5:8",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:16"
+    ],
+    "memory": "[2023-05-24] Sam: Thanks, Evan! Will do. Bye for now.",
+    "memory_id": "7e77e8cf-8934-4372-9ec1-784ff0a859c4",
+    "metadata": {
+      "session_id": "D2:16",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:10"
+    ],
+    "memory": "[2023-06-06] Sam: Yeah, you're right. It takes time, but I'm up for keep trying and making those tiny changes.",
+    "memory_id": "7f02186f-cee4-45cb-858e-59ecd8c3de21",
+    "metadata": {
+      "session_id": "D3:10",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:11"
+    ],
+    "memory": "[2023-06-06] Evan: C'mon, keep it up! Every little bit counts, you'll get there!",
+    "memory_id": "82f7c934-9d61-4f09-99f0-7b35461e621f",
+    "metadata": {
+      "session_id": "D3:11",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:11"
+    ],
+    "memory": "[2023-05-24] Evan: Of course, Sam! Painting is a great way to relieve stress and be creative. It gives you the freedom to explore colors and textures and express feelings. I've been doing it for a few years now and it helps me find peace. But unfortunately it won't help you with your weight problem, besides painting I recommend exercising!",
+    "memory_id": "83a6ca0f-9cb4-4dc2-9bcd-9c5b981e5e4b",
+    "metadata": {
+      "session_id": "D2:11",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:15"
+    ],
+    "memory": "[2023-05-24] Evan: Alright Sam, have fun with it! Keep me updated!",
+    "memory_id": "85645a43-b7c9-41ce-beec-f646a5358d30",
+    "metadata": {
+      "session_id": "D2:15",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:8"
+    ],
+    "memory": "[2023-07-27] Evan: Go for it, Sam! It's tough at first, but you got this. Try flavored seltzer water instead. It can be a great alternative to soda. Btw I can't stop thinking about that new mystery novel I started. It's so gripping!",
+    "memory_id": "85a75acf-4c08-4c55-80b6-688c2bf2438e",
+    "metadata": {
+      "session_id": "D4:8",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:16"
+    ],
+    "memory": "[2023-05-18] Evan: My friend got me into it and gave me some advice, and I was hooked right away!",
+    "memory_id": "865be6e4-70e2-4814-a0f9-d2024a348e06",
+    "metadata": {
+      "session_id": "D1:16",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:17"
+    ],
+    "memory": "[2023-05-18] Sam: Wow! I hope I can find something I'm as passionate about as you are with watercolor painting.",
+    "memory_id": "8773c468-68e7-4d67-ab35-b34ad12df1c4",
+    "metadata": {
+      "session_id": "D1:17",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:18"
+    ],
+    "memory": "[2023-05-18] Evan: You'll find it, just keep trying new things until something sparks your excitement.",
+    "memory_id": "8824e492-e80f-4c64-9cf9-753f94894532",
+    "metadata": {
+      "session_id": "D1:18",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:13"
+    ],
+    "memory": "[2023-05-18] Sam: Not yet, but I'm keen to give it a go. It looks like a nice way to chill and get creative.",
+    "memory_id": "89451a7e-a818-44a4-b882-15f613cc353a",
+    "metadata": {
+      "session_id": "D1:13",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:12"
+    ],
+    "memory": "[2023-05-24] Sam: Thanks, Evan! Appreciate the encouragement. I'll give it a go and let you know how it turns out.",
+    "memory_id": "89d87fdf-e037-4ba4-b723-4213204b134b",
+    "metadata": {
+      "session_id": "D2:12",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:17"
+    ],
+    "memory": "[2023-07-27] Sam: Thanks, Evan! Your support means a lot. I really appreciate it.",
+    "memory_id": "8b8e82a8-4d8b-49e6-9a3a-81e4a810fc57",
+    "metadata": {
+      "session_id": "D4:17",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:9"
+    ],
+    "memory": "[2023-05-24] Evan: Yeah, what worked for me was finding a fitness routine I really enjoy. It's my go-to, I love the feeling of being healthy and strong. Making it fun and finding little ways to make smarter choices in my diet really added up. Don't forget, you got this!",
+    "memory_id": "8c10aae9-4c79-4c11-b144-03078fad2bda",
+    "metadata": {
+      "session_id": "D2:9",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:14"
+    ],
+    "memory": "[2023-05-24] Sam: Cheers, Evan! I won't stress - just gonna enjoy it.",
+    "memory_id": "8dcf9c03-4d9a-4858-bb77-a37154ba33a6",
+    "metadata": {
+      "session_id": "D2:14",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:9"
+    ],
+    "memory": "[2023-07-27] Sam: Sounds good, Evan. I've tried it before and it was nice. Do you have any ideas for low-calorie snacks to pair with it? And what's the novel?",
+    "memory_id": "959e6793-efcc-4b88-8af3-6d943f0614ac",
+    "metadata": {
+      "session_id": "D4:9",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:6"
+    ],
+    "memory": "[2023-06-06] Sam: Yeah, good idea! I'll give it a try.",
+    "memory_id": "9dcddfc1-2df4-4f75-8192-514e917bd6a5",
+    "metadata": {
+      "session_id": "D3:6",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:10"
+    ],
+    "memory": "[2023-07-27] Evan: Definitely, how about some flavored seltzer with some air-popped popcorn or fruit? It's yum and healthy! The novel I'm reading is \"The Great Gatsby\".",
+    "memory_id": "ae45fb4a-3c52-4832-afef-63585d35d33d",
+    "metadata": {
+      "session_id": "D4:10",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:14"
+    ],
+    "memory": "[2023-06-06] Sam: Wow, that's awesome! Could you give me a hand with getting started?",
+    "memory_id": "b143d5a6-f088-4561-88c2-3e8d46afa2e0",
+    "metadata": {
+      "session_id": "D3:14",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:16"
+    ],
+    "memory": "[2023-07-27] Evan: That's awesome, Sam! It's such a rewarding and tough activity - keep going and have fun!",
+    "memory_id": "b1edaab8-bac2-430a-95ea-108f254d5560",
+    "metadata": {
+      "session_id": "D4:16",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:7"
+    ],
+    "memory": "[2023-07-27] Sam: Yep, I'm reducing my soda and candy intake. It's tough, but I'm determined to make a change.",
+    "memory_id": "b5ff7b41-9005-4b19-a7e7-93760f6728d1",
+    "metadata": {
+      "session_id": "D4:7",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:1"
+    ],
+    "memory": "[2023-08-07] Evan: Hey Sam, how's it going? Last week I went on a trip to Canada and something unreal happened - I met this awesome Canadian woman and it was like something out of a movie. She's incredible and being with her makes me feel alive.",
+    "memory_id": "b851169c-701c-4b9e-9f71-dda2805ab4bc",
+    "metadata": {
+      "session_id": "D5:1",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:22"
+    ],
+    "memory": "[2023-05-18] Evan: Take it easy, Evan! Can't wait to see you. Have a good one!",
+    "memory_id": "bafb4946-e079-4fa9-a478-ec7d2998c456",
+    "metadata": {
+      "session_id": "D1:22",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:2"
+    ],
+    "memory": "[2023-05-24] Sam: Hey Evan, looks amazing! I've never been to Jasper, but it looks breathtaking. Tell me more about your road trip. Was it relaxing?",
+    "memory_id": "bd061b72-3b52-4bc4-92fc-243ab27423d4",
+    "metadata": {
+      "session_id": "D2:2",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:20"
+    ],
+    "memory": "[2023-07-27] Evan: No worries, Sam. I'm here if you need me. Keep going!",
+    "memory_id": "be2c8681-8083-4b7d-b5e8-7da41ce6395f",
+    "metadata": {
+      "session_id": "D4:20",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:4"
+    ],
+    "memory": "[2023-06-06] Sam: Nah, no changes for me. Still enjoying my soda and candy, although I know it's not the best habit to have.",
+    "memory_id": "bf0ee57b-f528-4c51-82df-fb87a602f375",
+    "metadata": {
+      "session_id": "D3:4",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:14"
+    ],
+    "memory": "[2023-05-18] Evan: Yep, it's a great stress-buster. I started doing this a few years back.",
+    "memory_id": "c010ed15-5e1b-412b-893d-3de785709ea8",
+    "metadata": {
+      "session_id": "D1:14",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:8"
+    ],
+    "memory": "[2023-06-06] Sam: Hey Evan, thanks! Appreciate it. I'll definitely keep you posted.",
+    "memory_id": "c17e194c-fcf4-481b-a9a2-10bdfdcfb8c7",
+    "metadata": {
+      "session_id": "D3:8",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:5"
+    ],
+    "memory": "[2023-07-27] Sam: That's awesome, Evan! What do you think made the biggest impact on your health journey?",
+    "memory_id": "c2556883-ff79-443e-9c9d-38bca7deb2da",
+    "metadata": {
+      "session_id": "D4:5",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:22"
+    ],
+    "memory": "[2023-08-07] Sam: Yep, small steps add up. Stay consistent and don't give up!",
+    "memory_id": "c258ab82-633e-4833-9633-5617bdfc157d",
+    "metadata": {
+      "session_id": "D5:22",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:10"
+    ],
+    "memory": "[2023-05-18] Evan: What other hobbies have you found for yourself?",
+    "memory_id": "c264ee02-9d4d-4e7e-a859-568588bdcc9d",
+    "metadata": {
+      "session_id": "D1:10",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:13"
+    ],
+    "memory": "[2023-06-06] Evan: Yes, Sam! I'm here for you. Let's rock our workouts and reach our goals! Exercise clears the mind - it's amazing!",
+    "memory_id": "c82d2511-0857-40e7-8eba-dc58a5c34c2e",
+    "metadata": {
+      "session_id": "D3:13",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:4"
+    ],
+    "memory": "[2023-05-18] Evan: My old prius broke down, decided to get it repaired and sell it. Glad you asked, we went to Rockies, check it out.",
+    "memory_id": "cf911c73-1e7e-4cd0-91b4-19c827396ca7",
+    "metadata": {
+      "session_id": "D1:4",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:15"
+    ],
+    "memory": "[2023-07-27] Sam: Starting tomorrow, I will go to the gym and exercise regularly. The sooner I start, the sooner I will see the rewards of this activity.",
+    "memory_id": "d3442d3c-5e2e-4e50-a380-951c9ca14056",
+    "metadata": {
+      "session_id": "D4:15",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:18"
+    ],
+    "memory": "[2023-07-27] Evan: No worries, you've got this!",
+    "memory_id": "d42cc602-a633-400e-8091-290c46f1afb8",
+    "metadata": {
+      "session_id": "D4:18",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:20"
+    ],
+    "memory": "[2023-08-07] Sam: Little stuff matters - it builds our resilience over time.",
+    "memory_id": "d811cec5-42d6-45bb-9da1-7de0449f2e0c",
+    "metadata": {
+      "session_id": "D5:20",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:3"
+    ],
+    "memory": "[2023-06-06] Evan: That salad looks yummy! I'm being extra careful with my health lately. I'm trying to eat less processed food and sugary snacks, even though I love ginger snaps. Have you made any changes to your diet recently?",
+    "memory_id": "db209221-2c4c-40f2-8999-f855b8426290",
+    "metadata": {
+      "session_id": "D3:3",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:19"
+    ],
+    "memory": "[2023-07-27] Sam: Thanks, Evan. I really appreciate it.",
+    "memory_id": "db8c65da-6a41-4e7c-9b23-5e1c078d10a8",
+    "metadata": {
+      "session_id": "D4:19",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:12"
+    ],
+    "memory": "[2023-05-18] Evan: Cool idea, Sam! I love it. Have you tried it before?",
+    "memory_id": "df597cb4-39d1-44e6-b717-8838a0f75a7c",
+    "metadata": {
+      "session_id": "D1:12",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:16"
+    ],
+    "memory": "[2023-06-06] Sam: Cool, can't wait! Thank you. By the way, I'm coming from the shop and I had a frustrating issue at the supermarket. The self-checkout machines were all broken, my mood is terrible now!",
+    "memory_id": "e90b7e2b-49cc-494d-a40c-f0d5b26fce6c",
+    "metadata": {
+      "session_id": "D3:16",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:15"
+    ],
+    "memory": "[2023-08-07] Evan: Yep, that's it. Find something that motivates you and makes you happy, whether it's large or tiny. It'll help us conquer the struggles we encounter.",
+    "memory_id": "edbb16a9-0eff-4a50-b5c7-502b4b198f01",
+    "metadata": {
+      "session_id": "D5:15",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:9"
+    ],
+    "memory": "[2023-06-06] Evan: I'm here for you, Sam. Let's continue supporting each other on our health journeys. It's important to remember that progress takes time.",
+    "memory_id": "ef60be46-b980-4160-afbd-cb7e7cbb91a1",
+    "metadata": {
+      "session_id": "D3:9",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:2"
+    ],
+    "memory": "[2023-08-07] Sam: Congrats Evan! She must be something special! Being with someone who makes you feel alive is amazing. I'm sorry to hear that you're dealing with health issues lately, it can be really tough. It's hard to fully enjoy things sometimes.",
+    "memory_id": "efde95e3-498f-475c-a118-20c0276784f7",
+    "metadata": {
+      "session_id": "D5:2",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:20"
+    ],
+    "memory": "[2023-05-18] Evan: No worries, Sam! Super pumped for you! Let's catch up soon and see how you're enjoying your new hobbies!",
+    "memory_id": "f1347647-0555-49ee-8a1f-acc14e87b157",
+    "metadata": {
+      "session_id": "D1:20",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:23"
+    ],
+    "memory": "[2023-08-07] Evan: Yep, Sam! Consistency and perseverance will get us far. Great chat!",
+    "memory_id": "f3594875-e7b8-42f1-bdd7-c42a953f01ed",
+    "metadata": {
+      "session_id": "D5:23",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:4"
+    ],
+    "memory": "[2023-05-24] Sam: That sounds great, Evan! It's so important to take time for ourselves and find peace, especially after a hard week. Mine's been tough.",
+    "memory_id": "f5112d0e-c453-48bb-a8f1-de46ba099bc8",
+    "metadata": {
+      "session_id": "D2:4",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:6"
+    ],
+    "memory": "[2023-07-27] Evan: I made some dietary changes, like cutting down on sugary snacks and eating more veggies and fruit, and it made a big impact on my health. Have you considered any changes?",
+    "memory_id": "f923be07-0dfd-458a-9e80-8b5baf3c6717",
+    "metadata": {
+      "session_id": "D4:6",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:21"
+    ],
+    "memory": "[2023-05-18] Sam: Yeah, I'll keep you posted. See you soon!",
+    "memory_id": "fc0a770f-7476-48ba-927d-ceea3dcc7dae",
+    "metadata": {
+      "session_id": "D1:21",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:3"
+    ],
+    "memory": "[2023-05-24] Evan: Hey Sam, thanks for asking! It was great - fresh air, peacefulness and a cozy cabin surrounded by mountains and forests made it feel like a real retreat.",
+    "memory_id": "fc91c5b1-9ac0-4156-a38d-fe9fe4c23fe6",
+    "metadata": {
+      "session_id": "D2:3",
+      "source": "memoryos"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:7"
+    ],
+    "memory": "[2023-06-06] Evan: Awesome, Sam! Let me know how it goes. Making small changes can really help you live a healthier life. Don't forget - every step matters!",
+    "memory_id": "fd54d9f4-d0d8-4d16-bab4-f4fc1b113744",
+    "metadata": {
+      "session_id": "D3:7",
+      "source": "memoryos"
+    }
+  }
+]

@@ -1,0 +1,1004 @@
+{
+  "arms": [
+    "memfw",
+    "langmem",
+    "memoryos",
+    "mem0_stock"
+  ],
+  "comparisons": [
+    {
+      "a": "memfw",
+      "answer_score": {
+        "cohen_dz": 0.3794387039111342,
+        "difference_ci95": [
+          -0.03273809523809523,
+          0.4154811507936507
+        ],
+        "exact_sign_flip": {
+          "mean_difference": 0.19186507936507938,
+          "method": "exact_sign_flip",
+          "n": 18,
+          "p_value": 0.12109375,
+          "sign_flips": 262144
+        },
+        "exact_wilcoxon": {
+          "method": "exact_wilcoxon",
+          "n": 9,
+          "p_value": 0.13671875,
+          "signed_rank_combinations": 512,
+          "statistic": 35.5
+        },
+        "mean_difference": 0.19186507936507938,
+        "mean_mem0": 0.2671957671957672,
+        "mean_memfw": 0.45906084656084656,
+        "median_difference": 0.0,
+        "minimum_detectable_difference": 0.33371527682145935,
+        "n_pairs": 18,
+        "per_question_differences": {
+          "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": -1.0,
+          "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+          "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+          "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+          "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+          "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": -0.14285714285714288,
+          "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+          "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+          "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.9,
+          "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+          "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.0,
+          "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.125,
+          "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+          "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.28571428571428575,
+          "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+          "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+          "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+          "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.28571428571428575
+        },
+        "rank_biserial": 0.5777777777777777
+      },
+      "b": "langmem",
+      "evidence_recall": {
+        "cohen_dz": 1.61970885967925,
+        "difference_ci95": [
+          0.49074074074074076,
+          0.8796296296296297
+        ],
+        "exact_sign_flip": {
+          "mean_difference": 0.6944444444444444,
+          "method": "exact_sign_flip",
+          "n": 18,
+          "p_value": 0.0001220703125,
+          "sign_flips": 262144
+        },
+        "exact_wilcoxon": {
+          "method": "exact_wilcoxon",
+          "n": 14,
+          "p_value": 0.0001220703125,
+          "signed_rank_combinations": 16384,
+          "statistic": 105.0
+        },
+        "mean_difference": 0.6944444444444444,
+        "mean_mem0": 0.0,
+        "mean_memfw": 0.6944444444444444,
+        "median_difference": 1.0,
+        "minimum_detectable_difference": 0.2829582292090551,
+        "n_pairs": 18,
+        "per_question_differences": {
+          "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 1.0,
+          "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+          "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.5,
+          "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+          "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+          "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 1.0,
+          "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+          "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 1.0,
+          "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 1.0,
+          "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 1.0,
+          "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.6666666666666666,
+          "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.3333333333333333,
+          "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+          "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 1.0,
+          "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 1.0,
+          "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+          "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+          "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 1.0
+        },
+        "rank_biserial": 1.0
+      },
+      "judge_primary": {
+        "cohen_dz": 0.5194624816493197,
+        "difference_ci95": [
+          0.05555555555555555,
+          0.4444444444444444
+        ],
+        "exact_sign_flip": {
+          "mean_difference": 0.2222222222222222,
+          "method": "exact_sign_flip",
+          "n": 18,
+          "p_value": 0.125,
+          "sign_flips": 262144
+        },
+        "exact_wilcoxon": {
+          "method": "exact_wilcoxon",
+          "n": 4,
+          "p_value": 0.125,
+          "signed_rank_combinations": 16,
+          "statistic": 10.0
+        },
+        "mean_difference": 0.2222222222222222,
+        "mean_mem0": 0.2222222222222222,
+        "mean_memfw": 0.4444444444444444,
+        "median_difference": 0.0,
+        "minimum_detectable_difference": 0.2823287329249427,
+        "n_pairs": 18,
+        "per_question_differences": {
+          "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 0.0,
+          "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+          "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+          "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+          "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+          "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+          "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+          "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+          "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 1.0,
+          "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+          "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.0,
+          "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.0,
+          "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+          "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.0,
+          "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+          "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+          "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+          "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+        },
+        "rank_biserial": 1.0
+      },
+      "label": "memfw vs langmem",
+      "token_f1": {
+        "cohen_dz": 0.7123401356191439,
+        "difference_ci95": [
+          0.10382653061224491,
+          0.5528124999999999
+        ],
+        "exact_sign_flip": {
+          "mean_difference": 0.31811224489795914,
+          "method": "exact_sign_flip",
+          "n": 14,
+          "p_value": 0.0234375,
+          "sign_flips": 16384
+        },
+        "exact_wilcoxon": {
+          "method": "exact_wilcoxon",
+          "n": 8,
+          "p_value": 0.0234375,
+          "signed_rank_combinations": 256,
+          "statistic": 34.0
+        },
+        "mean_difference": 0.31811224489795914,
+        "mean_mem0": 0.05782312925170068,
+        "mean_memfw": 0.3759353741496599,
+        "median_difference": 0.0625,
+        "minimum_detectable_difference": 0.33418502522285837,
+        "n_pairs": 14,
+        "per_question_differences": {
+          "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+          "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+          "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+          "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+          "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": -0.14285714285714288,
+          "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+          "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.9,
+          "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.0,
+          "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.125,
+          "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+          "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.28571428571428575,
+          "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+          "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+          "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.28571428571428575
+        },
+        "rank_biserial": 0.8888888888888888
+      }
+    },
+    {
+      "a": "memfw",
+      "answer_score": {
+        "cohen_dz": -0.29350250545926415,
+        "difference_ci95": [
+          -0.26506132756132755,
+          0.028589466089466095
+        ],
+        "exact_sign_flip": {
+          "mean_difference": -0.0983946608946609,
+          "method": "exact_sign_flip",
+          "n": 18,
+          "p_value": 0.375,
+          "sign_flips": 262144
+        },
+        "exact_wilcoxon": {
+          "method": "exact_wilcoxon",
+          "n": 4,
+          "p_value": 0.375,
+          "signed_rank_combinations": 16,
+          "statistic": 2.0
+        },
+        "mean_difference": -0.0983946608946609,
+        "mean_mem0": 0.5574555074555074,
+        "mean_memfw": 0.45906084656084656,
+        "median_difference": 0.0,
+        "minimum_detectable_difference": 0.2212490930965287,
+        "n_pairs": 18,
+        "per_question_differences": {
+          "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": -1.0,
+          "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.0,
+          "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": -1.0,
+          "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+          "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+          "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+          "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+          "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+          "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.0,
+          "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+          "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.0,
+          "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": -0.056818181818181795,
+          "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+          "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.0,
+          "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+          "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 0.0,
+          "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+          "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.28571428571428575
+        },
+        "rank_biserial": -0.6
+      },
+      "b": "memoryos",
+      "evidence_recall": {
+        "cohen_dz": 0.4346134936801766,
+        "difference_ci95": [
+          0.0,
+          0.3333333333333333
+        ],
+        "exact_sign_flip": {
+          "mean_difference": 0.16666666666666666,
+          "method": "exact_sign_flip",
+          "n": 18,
+          "p_value": 0.25,
+          "sign_flips": 262144
+        },
+        "exact_wilcoxon": {
+          "method": "exact_wilcoxon",
+          "n": 3,
+          "p_value": 0.25,
+          "signed_rank_combinations": 8,
+          "statistic": 6.0
+        },
+        "mean_difference": 0.16666666666666666,
+        "mean_mem0": 0.5277777777777778,
+        "mean_memfw": 0.6944444444444444,
+        "median_difference": 0.0,
+        "minimum_detectable_difference": 0.25308553412176554,
+        "n_pairs": 18,
+        "per_question_differences": {
+          "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 1.0,
+          "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.0,
+          "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+          "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+          "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+          "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+          "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+          "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+          "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.0,
+          "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 1.0,
+          "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.0,
+          "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.0,
+          "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+          "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.0,
+          "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 1.0,
+          "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 0.0,
+          "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+          "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+        },
+        "rank_biserial": 1.0
+      },
+      "judge_primary": {
+        "cohen_dz": -0.23570226039551584,
+        "difference_ci95": [
+          -0.16666666666666666,
+          0.0
+        ],
+        "exact_sign_flip": {
+          "mean_difference": -0.05555555555555555,
+          "method": "exact_sign_flip",
+          "n": 18,
+          "p_value": 1.0,
+          "sign_flips": 262144
+        },
+        "exact_wilcoxon": {
+          "method": "exact_wilcoxon",
+          "n": 1,
+          "p_value": 1.0,
+          "signed_rank_combinations": 2,
+          "statistic": 0
+        },
+        "mean_difference": -0.05555555555555555,
+        "mean_mem0": 0.5,
+        "mean_memfw": 0.4444444444444444,
+        "median_difference": 0.0,
+        "minimum_detectable_difference": 0.15555555555555556,
+        "n_pairs": 18,
+        "per_question_differences": {
+          "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 0.0,
+          "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.0,
+          "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": -1.0,
+          "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+          "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+          "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+          "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+          "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+          "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.0,
+          "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+          "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.0,
+          "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.0,
+          "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+          "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.0,
+          "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+          "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 0.0,
+          "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+          "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+        },
+        "rank_biserial": -1.0
+      },
+      "label": "memfw vs memoryos",
+      "token_f1": {
+        "cohen_dz": -0.19450982168787806,
+        "difference_ci95": [
+          -0.21834415584415584,
+          0.05716604823747682
+        ],
+        "exact_sign_flip": {
+          "mean_difference": -0.05507884972170686,
+          "method": "exact_sign_flip",
+          "n": 14,
+          "p_value": 0.75,
+          "sign_flips": 16384
+        },
+        "exact_wilcoxon": {
+          "method": "exact_wilcoxon",
+          "n": 3,
+          "p_value": 0.75,
+          "signed_rank_combinations": 8,
+          "statistic": 2.0
+        },
+        "mean_difference": -0.05507884972170686,
+        "mean_mem0": 0.43101422387136673,
+        "mean_memfw": 0.3759353741496599,
+        "median_difference": 0.0,
+        "minimum_detectable_difference": 0.21190311432903822,
+        "n_pairs": 14,
+        "per_question_differences": {
+          "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.0,
+          "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": -1.0,
+          "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+          "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+          "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+          "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+          "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.0,
+          "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.0,
+          "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": -0.056818181818181795,
+          "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+          "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.0,
+          "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 0.0,
+          "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+          "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.28571428571428575
+        },
+        "rank_biserial": -0.3333333333333333
+      }
+    }
+  ],
+  "judge": {
+    "accuracy": {
+      "langmem": {
+        "accuracy": 0.2222222222222222,
+        "judged": 18
+      },
+      "mem0_stock": {
+        "accuracy": 0.3888888888888889,
+        "judged": 18
+      },
+      "memfw": {
+        "accuracy": 0.4444444444444444,
+        "judged": 18
+      },
+      "memoryos": {
+        "accuracy": 0.5,
+        "judged": 18
+      }
+    },
+    "model": "qwen3.5:4b",
+    "source": "$PROJECT_ROOT/results/stepG/frameworks/judge_primary.jsonl"
+  },
+  "notes": [
+    "Framework arms are exploratory single-repeat runs; reference arms keep three repeats.",
+    "Framework extraction prompts/update policies are their defaults; only the LLM/embedder were swapped.",
+    "Adapter details and fairness caveats are listed in the report."
+  ],
+  "protocol": {
+    "context_token_budget": 128,
+    "framework_repeats": 1,
+    "questions": 18,
+    "reference_repeats": 3,
+    "sample_id": "conv-49",
+    "seed": 20261021,
+    "top_k": 5,
+    "turns": 100
+  },
+  "schema_version": "stepg-frameworks-v1",
+  "systems": {
+    "langmem": {
+      "answer_latency": {
+        "count": 18,
+        "mean_seconds": 1.270321914500932,
+        "p50_seconds": 1.2378340204959386,
+        "p95_seconds": 1.5230456812947522,
+        "total_seconds": 22.865794461016776
+      },
+      "answer_token_usage": {
+        "completion_tokens": 66,
+        "prompt_tokens": 3508
+      },
+      "error_samples": [],
+      "ingest_seconds_mean": 2062.121979916992,
+      "llm_token_usage": {
+        "calls": 100,
+        "completion_tokens": 149876,
+        "prompt_tokens": 501698
+      },
+      "mean_answer_score": 0.2671957671957672,
+      "mean_evidence_recall": 0.0,
+      "mean_evidence_recall_postfit": 0.0,
+      "mean_evidence_recall_prefit": 0.0,
+      "mean_token_f1": 0.05782312925170068,
+      "memory_count_mean": 95.0,
+      "micro_evidence_recall_postfit": 0.0,
+      "micro_evidence_recall_prefit": 0.0,
+      "per_question_answer_score": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 1.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.14285714285714288,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 1.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.0,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 1.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.6666666666666666,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.0,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.0,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 1.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 0.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+      },
+      "per_question_evidence_recall_postfit": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 0.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.0,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.0,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.0,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.0,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 0.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+      },
+      "per_question_evidence_recall_prefit": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 0.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.0,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.0,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.0,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.0,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 0.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+      },
+      "per_question_token_f1": {
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.14285714285714288,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.6666666666666666,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.0,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 0.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 0.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+      },
+      "per_run_mean_answer_score": {
+        "rep1": 0.2671957671957672
+      },
+      "question_count": 18,
+      "repeats": 1,
+      "retrieval_latency": {
+        "count": 18,
+        "mean_seconds": 0.3053575832778329,
+        "p50_seconds": 0.30516972899931716,
+        "p95_seconds": 0.3431643662028364,
+        "total_seconds": 5.496436499000993
+      },
+      "run_errors": 0,
+      "run_ids": [
+        "rep1"
+      ],
+      "scored_question_count_non_adversarial": 14,
+      "storage_bytes_mean": 127372.0,
+      "total_token_usage": {
+        "completion_tokens": 149942,
+        "prompt_tokens": 505206
+      },
+      "write_latency": {
+        "mean_seconds": 20.62090197665988,
+        "per_run_means": {
+          "rep1": 20.62090197665988
+        }
+      },
+      "write_latency_turns": {
+        "count": 100,
+        "mean_seconds": 20.62090197665988,
+        "p50_seconds": 21.527824957996927,
+        "p95_seconds": 23.565590617303677,
+        "total_seconds": 2062.090197665988
+      }
+    },
+    "mem0_stock": {
+      "answer_latency": {
+        "count": 54,
+        "mean_seconds": 1.2811379837803543,
+        "p50_seconds": 1.2334475835086778,
+        "p95_seconds": 1.4597339477069906,
+        "total_seconds": 69.18145112413913
+      },
+      "answer_token_usage": {
+        "completion_tokens": 330,
+        "prompt_tokens": 11160
+      },
+      "error_samples": [],
+      "ingest_seconds_mean": 1004.449821458334,
+      "llm_token_usage": {
+        "calls": 100,
+        "completion_tokens": 23116,
+        "prompt_tokens": 3606624
+      },
+      "mean_answer_score": 0.4392773892773893,
+      "mean_evidence_recall": 0.6574074074074074,
+      "mean_evidence_recall_postfit": 0.6574074074074074,
+      "mean_evidence_recall_prefit": 0.6574074074074074,
+      "mean_token_f1": 0.27907092907092906,
+      "memory_count_mean": 79.0,
+      "micro_evidence_recall_postfit": 0.6666666666666666,
+      "micro_evidence_recall_prefit": 0.6666666666666666,
+      "per_question_answer_score": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 1.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.9,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.3636363636363636,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 1.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.0,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 1.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 1.0,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.1818181818181818,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.4615384615384615,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 1.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 0.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+      },
+      "per_question_evidence_recall_postfit": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 0.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.5,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 1.0,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 1.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 1.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.0,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 1.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 1.0,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.3333333333333333,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 1.0,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 1.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 1.0
+      },
+      "per_question_evidence_recall_prefit": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 0.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.5,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 1.0,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 1.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 1.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.0,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 1.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 1.0,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.3333333333333333,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 1.0,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 1.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 1.0
+      },
+      "per_question_token_f1": {
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 0.9,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.3636363636363636,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 1.0,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.1818181818181818,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.4615384615384615,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 0.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+      },
+      "per_run_mean_answer_score": {
+        "rep1": 0.4392773892773893,
+        "rep2": 0.4392773892773893,
+        "rep3": 0.4392773892773893
+      },
+      "question_count": 18,
+      "repeats": 3,
+      "retrieval_latency": {
+        "count": 54,
+        "mean_seconds": 0.308103472276276,
+        "p50_seconds": 0.3066253124998184,
+        "p95_seconds": 0.3259791084419703,
+        "total_seconds": 16.637587502918905
+      },
+      "run_errors": 0,
+      "run_ids": [
+        "rep1",
+        "rep2",
+        "rep3"
+      ],
+      "scored_question_count_non_adversarial": 14,
+      "storage_bytes_mean": 709206.0,
+      "total_token_usage": {
+        "completion_tokens": 23446,
+        "prompt_tokens": 3617784
+      },
+      "write_latency": {
+        "mean_seconds": 10.044171493740578,
+        "per_run_means": {
+          "rep1": 9.80829588337132,
+          "rep2": 10.083388748741708,
+          "rep3": 10.240829849108705
+        }
+      },
+      "write_latency_turns": {
+        "count": 300,
+        "mean_seconds": 10.044171493740578,
+        "p50_seconds": 10.071963520997087,
+        "p95_seconds": 12.657036247588985,
+        "total_seconds": 3013.2514481221733
+      }
+    },
+    "memfw": {
+      "answer_latency": {
+        "count": 54,
+        "mean_seconds": 1.269889644298625,
+        "p50_seconds": 1.2397593750065425,
+        "p95_seconds": 1.4090476626850432,
+        "total_seconds": 68.57404079212574
+      },
+      "answer_token_usage": {
+        "completion_tokens": 267,
+        "prompt_tokens": 11484
+      },
+      "error_samples": [],
+      "ingest_seconds_mean": 2.200655583331051,
+      "llm_token_usage": {
+        "calls": 0,
+        "completion_tokens": 0,
+        "prompt_tokens": 0
+      },
+      "mean_answer_score": 0.45906084656084656,
+      "mean_evidence_recall": 0.6944444444444444,
+      "mean_evidence_recall_postfit": 0.6944444444444444,
+      "mean_evidence_recall_prefit": 0.6944444444444444,
+      "mean_token_f1": 0.3759353741496599,
+      "memory_count_mean": 100.0,
+      "micro_evidence_recall_postfit": 0.6666666666666666,
+      "micro_evidence_recall_prefit": 0.6666666666666666,
+      "per_question_answer_score": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 0.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 1.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.9,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 1.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.6666666666666666,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.125,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.28571428571428575,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 1.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.28571428571428575
+      },
+      "per_question_evidence_recall_postfit": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 1.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.5,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 1.0,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 1.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 1.0,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 1.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.6666666666666666,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.3333333333333333,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 1.0,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 1.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 1.0
+      },
+      "per_question_evidence_recall_prefit": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 1.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.5,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 1.0,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 1.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 1.0,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 1.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.6666666666666666,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.3333333333333333,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 1.0,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 1.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 1.0
+      },
+      "per_question_token_f1": {
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.0,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.9,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.6666666666666666,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.125,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.28571428571428575,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.28571428571428575
+      },
+      "per_run_mean_answer_score": {
+        "rep1": 0.45906084656084656,
+        "rep2": 0.45906084656084656,
+        "rep3": 0.45906084656084656
+      },
+      "question_count": 18,
+      "repeats": 3,
+      "retrieval_latency": {
+        "count": 54,
+        "mean_seconds": 0.38147112192355387,
+        "p50_seconds": 0.4026938125025481,
+        "p95_seconds": 0.41417037258652273,
+        "total_seconds": 20.59944058387191
+      },
+      "run_errors": 0,
+      "run_ids": [
+        "rep1",
+        "rep2",
+        "rep3"
+      ],
+      "scored_question_count_non_adversarial": 14,
+      "storage_bytes_mean": 99633.0,
+      "total_token_usage": {
+        "completion_tokens": 267,
+        "prompt_tokens": 11484
+      },
+      "write_latency": {
+        "mean_seconds": 0.021863502516741087,
+        "per_run_means": {
+          "rep1": 0.023365854599978773,
+          "rep2": 0.021005063769989646,
+          "rep3": 0.021219589180254843
+        }
+      },
+      "write_latency_turns": {
+        "count": 300,
+        "mean_seconds": 0.021863502516741087,
+        "p50_seconds": 0.019286145514342934,
+        "p95_seconds": 0.022646260412875565,
+        "total_seconds": 6.5590507550223265
+      }
+    },
+    "memoryos": {
+      "answer_latency": {
+        "count": 18,
+        "mean_seconds": 1.2768136202216231,
+        "p50_seconds": 1.2631717915028275,
+        "p95_seconds": 1.4069932286492985,
+        "total_seconds": 22.98264516398922
+      },
+      "answer_token_usage": {
+        "completion_tokens": 68,
+        "prompt_tokens": 4730
+      },
+      "error_samples": [],
+      "ingest_seconds_mean": 1.8650541659953888,
+      "llm_token_usage": {
+        "calls": 0,
+        "completion_tokens": 0,
+        "prompt_tokens": 0
+      },
+      "mean_answer_score": 0.5574555074555074,
+      "mean_evidence_recall": 0.5277777777777778,
+      "mean_evidence_recall_postfit": 0.5277777777777778,
+      "mean_evidence_recall_prefit": 0.5277777777777778,
+      "mean_token_f1": 0.43101422387136673,
+      "memory_count_mean": 100.0,
+      "micro_evidence_recall_postfit": 0.5416666666666666,
+      "micro_evidence_recall_prefit": 0.5416666666666666,
+      "per_question_answer_score": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 1.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 1.0,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 1.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.9,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 1.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.6666666666666666,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.1818181818181818,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.28571428571428575,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 1.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+      },
+      "per_question_evidence_recall_postfit": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 0.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.5,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 1.0,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 1.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 1.0,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.6666666666666666,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.3333333333333333,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 1.0,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 1.0
+      },
+      "per_question_evidence_recall_prefit": {
+        "00914ba78e0da03b8d691ed48ea3629909fb76c0633bda5b331abbbb2bce6eee": 0.0,
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 0.5,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 1.0,
+        "3a04a0a8403b40697fdc31c011d6d0dbfc5362bfc5387f92978f7bf9192b8895": 0.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 1.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 1.0,
+        "813b6d09972c43b1013317f71289071aedc96f5fcdcdeaa250b6f3de2564e9a2": 0.0,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.6666666666666666,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.3333333333333333,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 1.0,
+        "b990e2b86d4ce772362930d682ab4de0b9acdb105196396dc3774fa446ac229d": 0.0,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 1.0
+      },
+      "per_question_token_f1": {
+        "28af2ce39c61975ab0a2ab5991eca13d56f346c3debadd7a1c84e21b1d934971": 1.0,
+        "348b41d848781f4c877b7b888c05e6681f4c58fcc893764ea5d99b696ccb0423": 1.0,
+        "35d7c70c1fb46c60443433ca68534ed81702698a87a87dbbbc82298969c1e7bd": 0.0,
+        "3789773c9ad3f8d9d728ea9cd3a87e07fc05e54e5540de8ebee71b84f3d6b9a7": 0.0,
+        "39e1f548f78102b8ba330c9afcb013fa5e33f2259269ec609c83840398af0032": 0.0,
+        "51d20584b0632373ea39c3d39db43c7ed5318320aeadb08f4cd5758158accf3f": 0.0,
+        "71cde4755ba2ef24b96f274aa1570d7d3217d90bec7fd0268502ac403128b6da": 0.9,
+        "88186cf381681f472aad973f6be9ecda755f1f6b6a19ece0386b278fb270cf9f": 0.6666666666666666,
+        "9004b156ef7851b78e942e97e0638dc9bf6e55c5804e9a3a22913de21e0437a6": 0.1818181818181818,
+        "9afce461f3f348ef88d722558b38d1a74ad9c18ca08e5ff8f973b36841fcfa4f": 0.0,
+        "a164235bf70ad7b31b76d0b08986a1d7bb8930f2895b54203d92e40b6ca72a55": 0.28571428571428575,
+        "c31fff108ec41b6ac39d09e2dca2d296712f5a41c8f142712998287b8429b293": 1.0,
+        "d315857fbc47268f8a9faa8cbc6c0e693378fa2b78409db6787818b1281739d5": 1.0,
+        "f9a77baf529aff8292bdbf262856449ec96eec16a972faff7c69fdda0d7f2f24": 0.0
+      },
+      "per_run_mean_answer_score": {
+        "rep1": 0.5574555074555074
+      },
+      "question_count": 18,
+      "repeats": 1,
+      "retrieval_latency": {
+        "count": 18,
+        "mean_seconds": 0.29872428011084495,
+        "p50_seconds": 0.30605331199694774,
+        "p95_seconds": 0.3420845874985389,
+        "total_seconds": 5.377037041995209
+      },
+      "run_errors": 0,
+      "run_ids": [
+        "rep1"
+      ],
+      "scored_question_count_non_adversarial": 14,
+      "storage_bytes_mean": 840277.0,
+      "total_token_usage": {
+        "completion_tokens": 68,
+        "prompt_tokens": 4730
+      },
+      "write_latency": {
+        "mean_seconds": 0.01837619869002083,
+        "per_run_means": {
+          "rep1": 0.01837619869002083
+        }
+      },
+      "write_latency_turns": {
+        "count": 100,
+        "mean_seconds": 0.01837619869002083,
+        "p50_seconds": 0.015101729000889463,
+        "p95_seconds": 0.01812306010360771,
+        "total_seconds": 1.8376198690020829
+      }
+    }
+  }
+}

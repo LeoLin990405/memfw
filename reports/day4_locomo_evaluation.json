@@ -1,0 +1,164 @@
+[
+  {
+    "after_budget": {
+      "memfw": {
+        "evidence_recall": 1.0,
+        "evidence_retrieved": 2,
+        "evidence_total": 2,
+        "question_hit_fraction": 1.0,
+        "questions_with_evidence_hit": 2,
+        "questions_with_evidence_total": 2
+      },
+      "offline_mem0_style_crud": {
+        "evidence_recall": 1.0,
+        "evidence_retrieved": 2,
+        "evidence_total": 2,
+        "question_hit_fraction": 1.0,
+        "questions_with_evidence_hit": 2,
+        "questions_with_evidence_total": 2
+      }
+    },
+    "answer_generation": "none; evidence retrieval only",
+    "baseline_retained_count": 2,
+    "before_budget": {
+      "memfw": {
+        "evidence_recall": 1.0,
+        "evidence_retrieved": 2,
+        "evidence_total": 2,
+        "question_hit_fraction": 1.0,
+        "questions_with_evidence_hit": 2,
+        "questions_with_evidence_total": 2
+      },
+      "offline_mem0_style_crud": {
+        "evidence_recall": 1.0,
+        "evidence_retrieved": 2,
+        "evidence_total": 2,
+        "question_hit_fraction": 1.0,
+        "questions_with_evidence_hit": 2,
+        "questions_with_evidence_total": 2
+      }
+    },
+    "budget_satisfied": true,
+    "budget_tokens_per_query": 128,
+    "input": "<REPO_ROOT>/tests/fixtures/day4_locomo/fixture_1.json",
+    "memfw_forget_policy": "FIFO hard forget",
+    "memfw_retained_count": 2,
+    "offline_mem0_style_crud_description": "local add/update/delete store with lexical overlap retrieval; not official Mem0",
+    "query_tokenizer": "memfw.stats.keyness.tokenize; identical normalized terms supplied to both systems",
+    "question_count": 2,
+    "retention_budget": {
+      "initial_count": 5,
+      "type": "max_count",
+      "value": 2
+    },
+    "turn_count": 5
+  },
+  {
+    "after_budget": {
+      "memfw": {
+        "evidence_recall": 0.5,
+        "evidence_retrieved": 1,
+        "evidence_total": 2,
+        "question_hit_fraction": 0.5,
+        "questions_with_evidence_hit": 1,
+        "questions_with_evidence_total": 2
+      },
+      "offline_mem0_style_crud": {
+        "evidence_recall": 0.5,
+        "evidence_retrieved": 1,
+        "evidence_total": 2,
+        "question_hit_fraction": 0.5,
+        "questions_with_evidence_hit": 1,
+        "questions_with_evidence_total": 2
+      }
+    },
+    "answer_generation": "none; evidence retrieval only",
+    "baseline_retained_count": 2,
+    "before_budget": {
+      "memfw": {
+        "evidence_recall": 1.0,
+        "evidence_retrieved": 2,
+        "evidence_total": 2,
+        "question_hit_fraction": 1.0,
+        "questions_with_evidence_hit": 2,
+        "questions_with_evidence_total": 2
+      },
+      "offline_mem0_style_crud": {
+        "evidence_recall": 1.0,
+        "evidence_retrieved": 2,
+        "evidence_total": 2,
+        "question_hit_fraction": 1.0,
+        "questions_with_evidence_hit": 2,
+        "questions_with_evidence_total": 2
+      }
+    },
+    "budget_satisfied": true,
+    "budget_tokens_per_query": 128,
+    "input": "<REPO_ROOT>/tests/fixtures/day4_locomo/fixture_2.json",
+    "memfw_forget_policy": "FIFO hard forget",
+    "memfw_retained_count": 2,
+    "offline_mem0_style_crud_description": "local add/update/delete store with lexical overlap retrieval; not official Mem0",
+    "query_tokenizer": "memfw.stats.keyness.tokenize; identical normalized terms supplied to both systems",
+    "question_count": 2,
+    "retention_budget": {
+      "initial_count": 4,
+      "type": "max_count",
+      "value": 2
+    },
+    "turn_count": 4
+  },
+  {
+    "after_budget": {
+      "memfw": {
+        "evidence_recall": 0.5,
+        "evidence_retrieved": 1,
+        "evidence_total": 2,
+        "question_hit_fraction": 0.5,
+        "questions_with_evidence_hit": 1,
+        "questions_with_evidence_total": 2
+      },
+      "offline_mem0_style_crud": {
+        "evidence_recall": 0.5,
+        "evidence_retrieved": 1,
+        "evidence_total": 2,
+        "question_hit_fraction": 0.5,
+        "questions_with_evidence_hit": 1,
+        "questions_with_evidence_total": 2
+      }
+    },
+    "answer_generation": "none; evidence retrieval only",
+    "baseline_retained_count": 2,
+    "before_budget": {
+      "memfw": {
+        "evidence_recall": 1.0,
+        "evidence_retrieved": 2,
+        "evidence_total": 2,
+        "question_hit_fraction": 1.0,
+        "questions_with_evidence_hit": 2,
+        "questions_with_evidence_total": 2
+      },
+      "offline_mem0_style_crud": {
+        "evidence_recall": 1.0,
+        "evidence_retrieved": 2,
+        "evidence_total": 2,
+        "question_hit_fraction": 1.0,
+        "questions_with_evidence_hit": 2,
+        "questions_with_evidence_total": 2
+      }
+    },
+    "budget_satisfied": true,
+    "budget_tokens_per_query": 128,
+    "input": "<REPO_ROOT>/tests/fixtures/day4_locomo/fixture_3.json",
+    "memfw_forget_policy": "FIFO hard forget",
+    "memfw_retained_count": 2,
+    "offline_mem0_style_crud_description": "local add/update/delete store with lexical overlap retrieval; not official Mem0",
+    "query_tokenizer": "memfw.stats.keyness.tokenize; identical normalized terms supplied to both systems",
+    "question_count": 2,
+    "retention_budget": {
+      "initial_count": 4,
+      "type": "max_count",
+      "value": 2
+    },
+    "turn_count": 4
+  }
+]

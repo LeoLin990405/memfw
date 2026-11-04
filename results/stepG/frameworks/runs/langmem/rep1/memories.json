@@ -1,0 +1,1642 @@
+[
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:6"
+    ],
+    "memory": "Social Connection: Sam knows Evan (the agent/user). They have met before in person. Interaction occurred on 2023-05-18. The relationship appears friendly and informal based on the greeting \"good to see you!\" and casual inquiry about what's new. This indicates an established acquaintance or friend relationship rather than a first meeting.",
+    "memory_id": "ca5c32c0-6960-4f61-bf8f-2a6830b3e545",
+    "metadata": {
+      "created_at": "2023-05-18",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:7"
+    ],
+    "memory": "Social Connection & Recent Event (2023-05-18): Sam and Evan are friendly acquaintances who have met in person. On 2023-05-18, they greeted each other warmly (\"good to see you!\") with casual conversation. Evan recently returned from a family trip in his new Prius. This indicates an established informal relationship where personal details like car ownership and travel are shared naturally.",
+    "memory_id": "4f05edf3-a91a-4195-bdca-15b48f9dfbb7",
+    "metadata": {
+      "created_at": "2023-05-18",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:9"
+    ],
+    "memory": "Social Connection (Sam & Evan): Friendly acquaintances who met in person on 2023-05-18. Interaction was warm and informal with greetings like \"good to see you!\" and casual conversation about what's new. On this date, Evan returned from a family trip in his new Prius. Sam showed curiosity about what happened to the old car (\"the old one\") and where Evan went, indicating ongoing interest in Evan's vehicle/travel situation. This suggests an established informal relationship where personal details like car ownership and travel are shared naturally.",
+    "memory_id": "e1f6ad79-977e-47cb-aa0f-33f780c43c62",
+    "metadata": {
+      "created_at": "2023-05-18",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:9"
+    ],
+    "memory": "Social Connection (Sam & Evan): Friendly acquaintances who met in person on 2023-05-18. Interaction was warm and informal with greetings like \"good to see you!\" and casual conversation about what's new. On this date, Evan discussed his Prius situation: his old Prius broke down, he decided to get it repaired and sell it, and they went to the Rockies together. This indicates an established informal relationship where personal details like car ownership and travel are shared naturally.",
+    "memory_id": "a06e1cf4-b5ba-416e-a5db-0ec86cc377d1",
+    "metadata": {
+      "created_at": "2023-05-18",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:11"
+    ],
+    "memory": "Social Connection (Sam & Evan): Friendly acquaintances who met in person on 2023-05-18. Interaction was warm and informal with greetings like \"good to see you!\" and casual conversation about what's new. On this date, Evan returned from a family trip to the Rockies in his new Prius (old Prius had broken down, he decided to repair it). Sam showed curiosity about Evan's vehicle/travel situation (\"the old one\", \"When did you get to go there?\"). This indicates an established informal relationship where personal details like car ownership and travel are shared naturally.",
+    "memory_id": "9fd0546c-4efe-4088-a306-5d01e50ca5a5",
+    "metadata": {
+      "created_at": "2023-05-18",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:16"
+    ],
+    "memory": "Social Connection (Sam & Evan): Friendly acquaintances who met in person on 2023-05-18 with warm informal interaction (\"good to see you!\", casual conversation). Evan owns a Prius - his old one broke down, he decided to repair it and sell it. They went to the Rockies together for a family trip last week (before 2023-05-18), hiking trails with amazing views. This indicates an established informal relationship where personal details like car ownership, travel plans, and outdoor activities are shared naturally.",
+    "memory_id": "e643f11d-2cca-4bf4-999a-69ac225069be",
+    "metadata": {
+      "created_at": "2023-05-18",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:17"
+    ],
+    "memory": "Sam's Hiking History & Family Bond: Sam loves hiking but hasn't done it in a long time (\"it's been ages\"). When he was ten years old, he went on a hike with his dad - this experience was \"great fun\" and \"really special\" for them. This indicates a meaningful father-son bond centered around outdoor activities and shared experiences from childhood that Sam still values emotionally.",
+    "memory_id": "e249cf7e-5e42-4197-b7b8-9c8169a8e62e",
+    "metadata": {
+      "created_at": "2023-05-18",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:21"
+    ],
+    "memory": "Social Connection (Sam & Evan): Friendly acquaintances who met in person on 2023-05-18. Interaction was warm and informal with greetings like \"good to see you!\" and casual conversation about what's new. On this date, Evan returned from a family trip to the Rockies in his new Prius (old Prius had broken down, he decided to repair it and sell it). They went to the Rockies together for a family trip last week (before 2023-05-18), hiking trails with amazing views. Sam showed curiosity about Evan's vehicle/travel situation (\"the old one\", \"When did you get to go there?\"). This indicates an established informal relationship where personal details like car ownership, travel plans, and outdoor activities are shared naturally.",
+    "memory_id": "31eba145-a13d-4cf4-91d3-e9dccce0370a",
+    "metadata": {
+      "created_at": "2023-05-18",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:22"
+    ],
+    "memory": "Sam's Hiking History & Family Bond: Sam loves hiking but hasn't done it in a long time (\"it's been ages\"). When he was ten years old, he went on a hike with his dad - this experience was \"great fun\" and \"really special\" for them. Sam reflects: \"We hiked a good distance - quite a feat for me back then. It's definitely a great memory.\" This indicates a meaningful father-son bond centered around outdoor activities and shared experiences from childhood that Sam still values emotionally. The physical challenge of the hike was memorable to him even as a child, suggesting early development of appreciation for endurance and accomplishment in nature.",
+    "memory_id": "a2f95604-766e-46fc-8421-4a637d0bd43a",
+    "metadata": {
+      "created_at": "2023-05-18",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:4"
+    ],
+    "memory": "Social Connection (Sam & Evan): Met in person on 2023-05-18 with warm informal interaction (\"good to see you!\", casual conversation about what's new). Evan owns a Prius - his old one broke down, he decided to repair it and sell it. They went hiking together in the Rockies last week (before 2023-05-18) on trails with amazing views. Sam showed curiosity about Evan's vehicle/travel situation (\"the old one\", \"When did you get to go there?\"). This indicates an established informal relationship where personal details like car ownership, travel plans, and outdoor activities are shared naturally. On 2023-05-18, Sam expressed interest in trying painting as a hobby and asked about Evan's hobbies - indicating openness to exploring new interests and maintaining conversational curiosity about each other's lives.",
+    "memory_id": "4fe23230-9065-4dc9-8e3f-e347eea3cb47",
+    "metadata": {
+      "created_at": "2023-05-24",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:4"
+    ],
+    "memory": "Social Connection (Sam & Evan): Met in person on 2023-05-18 with warm informal interaction (\"good to see you!\", casual conversation about what's new). They went hiking together in the Rockies last week (before 2023-05-18) on trails with amazing views. Evan owns a Prius - his old one broke down, he decided to repair it and sell it. Sam expressed interest in trying painting as a hobby and asked about Evan's hobbies. On 2023-05-18, Evan revealed: \"My friend got me into it and gave me some advice, and I was hooked right away!\" - indicating Evan also got into painting (or similar creative activity) through a friend's recommendation, showing enthusiasm for new hobbies. This indicates an established informal relationship where personal details like car ownership, travel plans, outdoor activities, and hobby interests are shared naturally between friendly acquaintances.",
+    "memory_id": "12778892-6090-452e-8689-748451f81bb4",
+    "metadata": {
+      "created_at": "2023-05-24",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:5"
+    ],
+    "memory": "Sam's Hiking History & Family Bond: Sam loves hiking but hasn't done it in a long time (\"it's been ages\"). At age 10, he went on a hike with his dad - described as \"great fun\" and \"really special.\" They hiked a good distance, which was \"quite a feat for me back then.\" Sam reflects: \"It's definitely a great memory.\" This indicates a meaningful father-son bond centered around outdoor activities and shared experiences from childhood that Sam still values emotionally. The physical challenge was memorable to him even as a child, suggesting early development of appreciation for endurance and accomplishment in nature.",
+    "memory_id": "41440a22-5cc1-4ce0-905e-ccf732fb171d",
+    "metadata": {
+      "created_at": "2023-05-24",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:6"
+    ],
+    "memory": "Social Connection (Sam & Evan): Met in person on 2023-05-18 with warm informal interaction (\"good to see you!\", casual conversation about what's new). Conversation covered: Evan's Prius (old one broke down, he repaired it and sold it), hiking trip to Rockies last week together on trails with amazing views, Sam's interest in painting as a hobby. Evan revealed he got into painting through a friend's recommendation. Relationship pattern: friendly acquaintances who share personal details naturally (car ownership, travel plans, outdoor activities, hobbies). Conversation ended with Sam saying \"I'll keep you posted. See you soon!\" indicating ongoing connection and follow-up planned.",
+    "memory_id": "4a4e1aa7-5b90-4e37-ad43-16938500ad54",
+    "metadata": {
+      "created_at": "2023-05-24",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:9"
+    ],
+    "memory": "Social Connection (Sam & Evan): Met in person on 2023-05-18 with warm informal interaction (\"good to see you!\", \"Take it easy, Evan! Can't wait to see you. Have a good one!\"). Conversation covered: Evan's Prius (old one broke down, he repaired it and sold it), hiking trip to Rockies last week together on trails with amazing views, Sam's interest in painting as a hobby. Evan revealed he got into painting through a friend's recommendation (\"My friend got me into it and gave me some advice, and I was hooked right away!\"). Relationship pattern: friendly acquaintances who share personal details naturally (car ownership, travel plans, outdoor activities, hobbies). Conversation ended with Sam saying \"I'll keep you posted. See you soon!\" indicating ongoing connection and follow-up planned.",
+    "memory_id": "e11f259e-829a-4907-9e8d-c6c8049bf6a9",
+    "metadata": {
+      "created_at": "2023-05-24",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:11"
+    ],
+    "memory": "Social Connection (Sam & Evan): Established friendly relationship with multiple interactions. Key meeting: 2023-05-18 in person with warm informal interaction (\"good to see you!\", \"Take it easy, Evan! Can't wait to see you. Have a good one!\"). Shared activities: hiking trip to Rockies last week (before 2023-05-18) on trails with amazing views together. Personal details shared naturally: Evan owns a Prius (old one broke down, he repaired it and sold it), Sam expressed interest in painting as hobby, Evan revealed he got into painting through friend's recommendation (\"My friend got me into it and gave me some advice, and I was hooked right away!\"). Relationship pattern: friendly acquaintances who share personal details naturally (car ownership, travel plans, outdoor activities, hobbies). Conversation ended with Sam saying \"I'll keep you posted. See you soon!\" indicating ongoing connection and follow-up planned.",
+    "memory_id": "a8f71cd2-f2bb-4cc6-bdbc-8c0bedd462b7",
+    "metadata": {
+      "created_at": "2023-05-24",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:13"
+    ],
+    "memory": "Sam's Current State & Values (2023-05-24): Sam had a tough week as of 2023-05-24, emphasizing importance of taking time for ourselves and finding peace after difficult periods. This reveals Sam values self-care, mental well-being, and recognizes the need to decompress after challenging times. Sam's response \"That sounds great, Evan!\" indicates positive engagement with Evan's suggestions about self-care/peace. Pattern: Sam is emotionally aware and seeks balance, particularly after stressful periods.",
+    "memory_id": "6887af3a-6ee1-43ac-b5d3-fd93cb6cd63c",
+    "metadata": {
+      "created_at": "2023-05-24",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:14"
+    ],
+    "memory": "Social Connection (Sam & Evan) - Supportive Interaction (2023-05-24): During a difficult period for Sam (\"tough week\"), Sam shared struggles with Evan on 2023-05-24. Evan responded empathetically: \"Sorry to hear that, Sam. Is there anything I can do to help?\" This demonstrates Evan's supportive, caring nature and willingness to assist during Sam's challenging times. Sam engaged positively with Evan's suggestions about self-care/peace (\"That sounds great, Evan!\"), indicating trust in their relationship and openness to support. Pattern: Strong friendship where both parties share vulnerabilities naturally and provide mutual emotional support.",
+    "memory_id": "517ebf9b-e4c3-411c-bfb9-dc4ee3b8a3d0",
+    "metadata": {
+      "created_at": "2023-05-24",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:15"
+    ],
+    "memory": "Health & Self-Awareness (Sam): As of 2023-05-24, Sam had a doctor check-up around 2023-05-17 to 2023-05-20 revealing weight concerns (\"the weight wasn't great\"). Sam found this \"pretty eye-opening,\" indicating awareness and concern about health metrics. This connects to Sam's existing values of self-care, mental well-being, and seeking balance after difficult periods (noted in 2023-05-24). Pattern: Sam is health-conscious, emotionally aware, and responsive to feedback about personal well-being.",
+    "memory_id": "84834fc0-5c93-4915-b194-fad22fea25b0",
+    "metadata": {
+      "created_at": "2023-05-24",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:16"
+    ],
+    "memory": "Evan's Health & Fitness Philosophy (2023-05-24): Evan believes in finding a fitness routine you genuinely enjoy rather than forcing it - \"It's my go-to, I love the feeling of being healthy and strong.\" His approach emphasizes making health fun and incorporating small, sustainable diet improvements (\"Making it fun and finding little ways to make smarter choices in my diet really added up\"). He uses encouraging language like \"you got this!\" to motivate others. This reflects his values: enjoyment over discipline, sustainability over intensity, and supportive encouragement for others' well-being.",
+    "memory_id": "6cd5ba71-ea62-4755-845c-c7986b957e14",
+    "metadata": {
+      "created_at": "2023-05-24",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:17"
+    ],
+    "memory": "Social Connection (Sam & Evan) - Painting Discussion (2023-05-24): Evan confirmed Sam's interest in painting as stress-relief and creative outlet, sharing his own experience doing it for a few years to find peace. Evan distinguished between emotional benefits (stress relief, creativity, expression) and physical health goals (weight management), recommending exercise instead for weight concerns. This shows Evan is honest about limitations of activities while being supportive - he validates painting's mental health value but provides alternative for physical goals. Pattern: Evan balances empathy with practical guidance, doesn't overpromise benefits, and offers multiple pathways to well-being.",
+    "memory_id": "6c7dd000-5a6c-4bce-8493-8ae30330335e",
+    "metadata": {
+      "created_at": "2023-05-24",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:1"
+    ],
+    "memory": "Social Connection (Sam & Evan) - Encouraging Support Pattern (2023-05-24): Evan consistently uses positive reinforcement and low-pressure encouragement with Sam. Example: \"Awesome, Sam! Have fun with it and don't put too much pressure on yourself. Can't wait to hear how it's going!\" This aligns with his broader philosophy of enjoyment over discipline (fitness memory) and shows he values creating safe emotional space for Sam. Pattern: Evan's communication style emphasizes celebration of effort, permission to relax expectations, and genuine interest in outcomes without judgment. This creates psychological safety for Sam to share struggles and try new things.",
+    "memory_id": "df0edd28-65ce-47fe-b5a3-63e0518fd0a6",
+    "metadata": {
+      "created_at": "2023-06-06",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:2"
+    ],
+    "memory": "Social Connection (Sam & Evan) - Acceptance of Low-Pressure Approach (2023-05-24): Sam responded to Evan's encouragement with \"Cheers, Evan! I won't stress - just gonna enjoy it.\" This demonstrates: (1) Sam accepts and appreciates Evan's supportive communication style; (2) Sam values enjoyment over perfection/pressure; (3) Sam is open to relaxing expectations in creative activities. Pattern: When given permission to relax expectations, Sam responds positively by committing to a low-stress approach. This reinforces the effectiveness of Evan's encouragement strategy and shows alignment between their values around stress management and enjoyment.",
+    "memory_id": "55551a5f-152f-41e5-ad53-aa62b11556b2",
+    "metadata": {
+      "created_at": "2023-06-06",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:3"
+    ],
+    "memory": "Social Connection (Sam & Evan) - Ongoing Engagement Pattern (2023-05-24): Evan's closing statement \"Keep me updated!\" demonstrates his desire for sustained connection with Sam's creative journey, not just one-off encouragement. This shows: (1) Evan values ongoing relationship building through shared activities; (2) He wants to be part of Sam's process and celebrate progress over time; (3) His support extends beyond initial permission-giving to active interest in outcomes. Pattern: Evan combines low-pressure encouragement with genuine investment in Sam's journey, creating a supportive environment where Sam feels both free to explore without stress AND valued as someone whose progress matters to others. This reinforces the effectiveness of his communication style - it builds accountability through care rather than obligation.",
+    "memory_id": "fe1fd03a-2f7d-4ca5-98e4-d4efede90905",
+    "metadata": {
+      "created_at": "2023-06-06",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:4"
+    ],
+    "memory": "Social Connection (Sam & Evan) - Conversation Closure Pattern (2023-05-24): Sam's closing message \"Thanks, Evan! Will do. Bye for now.\" demonstrates: (1) Sam appreciates Evan's support and guidance; (2) Sam is ready to move forward with the painting activity; (3) Sam communicates politely and appropriately ends conversations. This aligns with the established pattern where Sam responds positively to Evan's low-pressure encouragement and commits to a relaxed approach. The interaction shows healthy conversational boundaries - Sam acknowledges support, confirms action, and closes respectfully. Pattern: When given permission to relax expectations, Sam not only accepts it but also gracefully concludes conversations, indicating comfort with the supportive dynamic and readiness to pursue goals independently.",
+    "memory_id": "bc2cc526-78f0-4803-9f57-27b3d1261145",
+    "metadata": {
+      "created_at": "2023-06-06",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:5"
+    ],
+    "memory": "Social Connection (Sam & Evan) - Farewell Pattern (2023-05-24): Evan's closing \"Take care, Sam! I'll catch up with you later\" demonstrates: (1) Warm, caring farewell style; (2) Commitment to future reconnection; (3) Relationship maintenance beyond immediate interaction. This aligns with established pattern where Evan values ongoing relationship building and wants to be part of Sam's journey. Pattern: Evan consistently closes conversations warmly while expressing desire for continued connection, creating sense of sustained support rather than transactional exchanges.",
+    "memory_id": "1a2a0e15-cf95-4919-a4af-75f5b4fd7bf3",
+    "metadata": {
+      "created_at": "2023-06-06",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:6"
+    ],
+    "memory": "Evan's Health Scare (2023-06-06): Evan experienced a sudden heart palpitation incident last week that \"really shook me up\" and was described as \"quite the rollercoaster.\" This event served as a \"serious wake-up call about my lifestyle.\" Significance: This represents a major life event for Evan, shifting from his previous supportive/encouraging role to one of vulnerability and personal reflection. The health scare likely impacts his ongoing philosophy around enjoyment over discipline (fitness memory) - now with added urgency around health awareness. This creates new context for future interactions where Evan may need support or may adjust his approach to Sam's activities. Pattern: Major life events can shift relationship dynamics and priorities, requiring the agent to adapt responses accordingly while maintaining established supportive patterns.",
+    "memory_id": "7d28d5eb-7d65-4e26-b326-486c21fbe43b",
+    "metadata": {
+      "created_at": "2023-06-06",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:7"
+    ],
+    "memory": "Sam's Supportive Response to Evan's Health Scare (2023-06-06): Sam responded to Evan's heart palpitation incident with \"Sorry about that, glad you're feeling better now\" and shared \"Trying to eat healthier these days.\" This demonstrates: (1) Sam is attentive and caring about Evan's wellbeing; (2) Sam is making personal lifestyle changes around health; (3) The relationship dynamic remains supportive even when roles shift - Sam shows concern for Evan while also sharing his own journey. Pattern: When one party experiences a health challenge, the other responds with genuine care and vulnerability, maintaining mutual support. This extends the established social connection pattern where both parties value each other's wellbeing and share personal growth journeys.",
+    "memory_id": "f50bf1c1-d2a1-4401-8d35-c96c36edc15d",
+    "metadata": {
+      "created_at": "2023-06-06",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:9"
+    ],
+    "memory": "Evan's Health Journey & Dietary Changes (2023-06-06): Following his heart palpitation scare, Evan is actively making dietary adjustments - eating less processed food and sugary snacks despite loving ginger snaps. This shows: (1) He's taking the health wake-up call seriously with concrete action; (2) He maintains honesty about preferences/temptations while committing to change; (3) He shares this journey openly with Sam, inviting connection through mutual lifestyle reflection. Pattern: Health scares can catalyze positive behavioral changes that strengthen relationships when shared vulnerably and authentically.",
+    "memory_id": "1333879e-56f8-410d-ba17-dce36ae4e2a5",
+    "metadata": {
+      "created_at": "2023-06-06",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:10"
+    ],
+    "memory": "Sam's Dietary Stance (2023-06-06): Following Evan's heart palpitation scare, Sam explicitly stated \"Nah, no changes for me. Still enjoying my soda and candy, although I know it's not the best habit to have.\" This reveals: (1) Sam maintains current lifestyle despite knowing better; (2) Sam shows self-awareness about unhealthy habits without committing to change; (3) Contrast with Evan who is actively changing diet after his scare - they respond differently to health concerns. Pattern: Sam and Evan may have different approaches to health - Evan takes action after scares, while Sam acknowledges risks but maintains current habits. This creates a nuanced dynamic where they support each other's journeys without necessarily aligning on lifestyle choices.",
+    "memory_id": "104f8773-b2de-4d27-9353-7c749c8c56db",
+    "metadata": {
+      "created_at": "2023-06-06",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:12"
+    ],
+    "memory": "Evan's Supportive Dietary Guidance (2023-06-06): Following his own heart scare, Evan actively offers Sam specific, practical dietary suggestions: (1) Swap soda for flavored seltzer water - maintains bubbly experience without sugar; (2) Try dark chocolate with high cocoa content instead of candy - healthier alternative. This demonstrates: (1) Evan extends his health journey to support Sam's wellbeing beyond himself; (2) His advice is practical and specific, not abstract preaching; (3) He respects Sam's autonomy while offering constructive alternatives. Pattern: After experiencing a health scare, Evan shifts from passive supporter to active guide, helping Sam make similar positive changes through concrete, appealing suggestions that maintain enjoyment while improving health. This extends the established mutual support pattern - both value each other's wellbeing, but now Evan takes initiative in helping Sam navigate dietary choices without pressure or judgment.",
+    "memory_id": "672a1b4b-e822-40a6-bc5b-3ff7a5240560",
+    "metadata": {
+      "created_at": "2023-06-06",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:13"
+    ],
+    "memory": "Sam's Openness to Trying Healthier Alternatives (2023-06-06): Following Evan's dietary suggestions after his heart scare, Sam responded \"Yeah, good idea! I'll give it a try.\" This reveals: (1) Sam is open to experimenting with healthier alternatives even without committing to permanent lifestyle changes; (2) He distinguishes between making fundamental changes vs. trying specific suggestions; (3) The relationship dynamic allows for mutual support where Evan guides and Sam experiments - creating a collaborative health journey pattern. Pattern: Sam's stance is nuanced - he acknowledges unhealthy habits but maintains autonomy while being receptive to practical alternatives. This differs from outright refusal and shows willingness to engage with Evan's suggestions selectively, strengthening their supportive bond through shared experimentation rather than identical lifestyle choices.",
+    "memory_id": "b78e2c14-bd29-4a21-ac89-437ac426e225",
+    "metadata": {
+      "created_at": "2023-06-06",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:14"
+    ],
+    "memory": "Evan's Encouraging Support for Sam's Health Journey (2023-06-06): Evan responded to Sam's openness about trying healthier alternatives with \"Awesome, Sam! Let me know how it goes. Making small changes can really help you live a healthier life. Don't forget - every step matters!\" This demonstrates: (1) Evan actively encourages incremental progress rather than demanding perfection; (2) He maintains supportive enthusiasm regardless of Sam's commitment level; (3) The relationship pattern emphasizes mutual growth through shared experimentation, not identical lifestyle choices. Pattern: Both parties value each other's wellbeing and support different health approaches - Evan takes action after scares while Sam acknowledges risks but maintains autonomy. Their dynamic allows for collaborative health journeys where one guides and the other experiments, with encouragement focused on small steps rather than fundamental change. This reinforces the established mutual support pattern where both parties' wellbeing matters equally, even when their individual choices differ.",
+    "memory_id": "5ab8a4a5-7384-4564-9092-517d772d7a16",
+    "metadata": {
+      "created_at": "2023-06-06",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:15"
+    ],
+    "memory": "Evan's Reaffirmation of Mutual Support (2023-06-06): Evan stated \"I'm here for you, Sam. Let's continue supporting each other on our health journeys. It's important to remember that progress takes time.\" This demonstrates: (1) Evan explicitly frames their relationship as ongoing mutual support rather than one-way guidance; (2) He emphasizes patience and realistic expectations about health change timelines; (3) The dynamic is collaborative partnership, not hierarchical advice-giving. Pattern: Their health journey support evolves from initial scare response to sustained mutual commitment with emphasis on patience and shared progress. This reinforces the established pattern where both value each other's wellbeing equally, even when individual choices differ - Evan takes action after scares while Sam acknowledges risks but maintains autonomy, with their relationship built on ongoing encouragement rather than identical lifestyle choices.\"",
+    "memory_id": "9b1cfe85-2872-4b22-8694-a0d1e17af8bb",
+    "metadata": {
+      "created_at": "2023-06-06",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:16"
+    ],
+    "memory": "Sam's Commitment to Ongoing Health Efforts (2023-06-06): Following Evan's encouragement about incremental progress, Sam responded \"Yeah, you're right. It takes time, but I'm up for keep trying and making those tiny changes.\" This demonstrates: (1) Sam has progressed from initial openness (\"I'll give it a try\") to actual commitment to sustained effort; (2) He acknowledges the realistic timeline of health change; (3) His language shows acceptance that progress is gradual - aligning with Evan's emphasis on patience. Pattern: Sam's health journey evolves from acknowledgment → experimentation → commitment, showing growth in his approach while maintaining autonomy. This represents a natural progression within their supportive dynamic where mutual encouragement leads to deeper engagement rather than fundamental lifestyle overhaul.",
+    "memory_id": "3a053d9f-6820-4eba-b3c6-ca158e3f7b24",
+    "metadata": {
+      "created_at": "2023-06-06",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:17"
+    ],
+    "memory": "Sam's Appreciation for Evan's Support (2023-06-06): Sam responded \"Thanks, Evan! I appreciate your support, it means a lot to me to have you in my corner.\" This demonstrates: (1) Sam explicitly values and acknowledges Evan's supportive presence; (2) The emotional significance of having someone \"in his corner\" - indicating trust and reliance; (3) Gratitude reinforces the mutual support bond beyond just practical health guidance. Pattern: Sam's appreciation for Evan's support represents an important dimension of their relationship - it's not just about dietary advice or incremental progress, but about genuine emotional connection and feeling supported. This gratitude response strengthens the established pattern where both parties value each other's wellbeing equally, with Evan taking initiative after his scare while Sam maintains autonomy but openly acknowledges the value of Evan's presence. The \"in my corner\" phrasing suggests deep trust and comfort in their relationship dynamic.",
+    "memory_id": "b0902ed4-e2ba-4297-997f-650149f65af5",
+    "metadata": {
+      "created_at": "2023-06-06",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:18"
+    ],
+    "memory": "Evan's Enthusiasm for Exercise & Mental Health Benefits (2023-06-06): Evan stated \"Yes, Sam! I'm here for you. Let's rock our workouts and reach our goals! Exercise clears the mind - it's amazing!\" This demonstrates: (1) Evan actively promotes exercise/workouts as part of their health journey alongside dietary changes; (2) He emphasizes mental health benefits of physical activity (\"clears the mind\"); (3) His enthusiastic tone (\"rock our workouts\") shows genuine excitement about shared fitness goals. Pattern: Their health collaboration expands beyond diet to include exercise, with Evan framing it as both physically and mentally beneficial. This reinforces the established mutual support pattern where they work together on multiple health dimensions - Evan guides while Sam experiments, with encouragement focused on incremental progress in various areas (diet + exercise). The \"I'm here for you\" phrasing aligns with existing memories showing their relationship is built on ongoing commitment rather than one-way guidance. This adds workout/exercise as a concrete shared activity dimension to their health journey alongside dietary experimentation.",
+    "memory_id": "79af672a-2b3c-41a6-b467-61be4cbaa66c",
+    "metadata": {
+      "created_at": "2023-06-06",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:1"
+    ],
+    "memory": "Sam\\'s Enthusiasm & Request for Help (2023-06-06): Sam responded \"Wow, that\\'s awesome! Could you give me a hand with getting started?\" This demonstrates: (1) Sam is enthusiastic and eager to begin health journey actions; (2) He actively seeks Evan\\'s assistance/support rather than working alone; (3) His request for help shows trust in their collaborative dynamic. Pattern: Sam\\'s engagement progresses from openness → commitment → active seeking of support, showing he values partnership over solo effort. This reinforces the established mutual support pattern where both parties value each other\\'s wellbeing equally - Evan guides while Sam experiments, with encouragement focused on small steps. The \"getting started\" language indicates readiness to take concrete action, aligning with existing memories about incremental progress and patience. This adds a dimension of active collaboration to their health journey beyond just receiving guidance - Sam is eager to participate hands-on with Evan\\'s support.",
+    "memory_id": "46193cf9-c3e8-4d52-b921-6b712b69af91",
+    "metadata": {
+      "created_at": "2023-07-27",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:3"
+    ],
+    "memory": "Evan's Offer to Teach Exercises (2023-06-06): Evan stated \"Sure Sam, I'd be glad to help. Let's get together and I'll show you some basic exercises. We'll reach our goals!\" This demonstrates: (1) Evan proactively offers hands-on instruction rather than just verbal encouragement; (2) He commits to meeting in person (\"get together\") for practical exercise guidance; (3) His language shows confidence they'll succeed together (\"We'll reach our goals\"). Pattern: Their health collaboration is action-oriented and concrete - not just abstract support but actual joint activities. This complements existing memories about their mutual support dynamic, adding the dimension of Evan taking initiative to teach Sam exercises directly. The offer aligns with established pattern where Evan guides while Sam experiments, now specifically in exercise domain. This shows their partnership involves practical skill-building together, reinforcing that their relationship is built on shared commitment to health goals through concrete actions rather than just advice-giving.",
+    "memory_id": "e602bde1-779b-44fa-bf2a-7e78779bf1a9",
+    "metadata": {
+      "created_at": "2023-07-27",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:8"
+    ],
+    "memory": "Sam's Resilience & Emotional State (2023-06-06): Sam shared \"Cool, can't wait! Thank you\" despite having a frustrating issue at the supermarket where self-checkout machines were all broken, leaving his mood terrible. This demonstrates: (1) Sam maintains enthusiasm for their health journey commitment despite external frustrations; (2) He can separate daily setbacks from his health goals - showing emotional resilience and focus on what matters; (3) His \"Thank you\" indicates gratitude for Evan's support even when feeling down. Pattern: Sam's ability to maintain positive engagement despite frustration shows he values the health journey enough to persist through obstacles. This complements existing memories about his commitment progression, adding that this commitment is resilient to everyday setbacks. The context of meeting after shopping also grounds their interaction in practical reality - not just abstract health goals but actual life events happening alongside them.",
+    "memory_id": "4450e6db-0e65-44c6-b534-3d80e35bb9fc",
+    "metadata": {
+      "created_at": "2023-07-27",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:9"
+    ],
+    "memory": "Evan\\'s Empathy & Concern for Sam (2023-06-06): Evan responded \"Sorry you were in that situation, hopefully it won\\'t happen again!\" after Sam shared frustration with broken self-checkout machines. This demonstrates: (1) Evan actively expresses empathy and concern when Sam faces difficulties; (2) He shows desire to prevent future frustrations (\"hopefully it won\\'t happen again\"); (3) His response validates Sam\\'s feelings about the frustrating experience. Pattern: Their relationship features bidirectional care - not just Sam appreciating Evan\\'s support, but Evan also showing genuine concern for Sam\\'s wellbeing when obstacles arise. This complements existing memories where Sam values Evan\\'s presence and Evan offers practical help (teaching exercises, workout encouragement). The empathy response reinforces that their mutual support dynamic is emotionally grounded - both parties care about each other\\'s experiences beyond just health goals. This adds the dimension of emotional validation to their collaborative relationship, showing it\\'s built on genuine concern for each other\\'s wellbeing in daily life situations, not just abstract health guidance.",
+    "memory_id": "efcee1d0-17eb-466f-8b03-5d3307c865eb",
+    "metadata": {
+      "created_at": "2023-07-27",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:10"
+    ],
+    "memory": "Sam's Considerate Farewell & Bidirectional Care (2023-06-06): Sam said \"Yeah, I hope so, take care of yourself.\" This demonstrates: (1) Sam shows genuine concern for Evan's wellbeing, not just receiving support; (2) The interaction closes with mutual well-wishes, showing balanced reciprocity in their relationship; (3) Sam's caring tone indicates emotional investment beyond health goals. Pattern: Their relationship features bidirectional care - Evan supports Sam's health journey while Sam also shows concern for Evan's welfare. This complements existing memories about Evan's empathy and practical help, adding that Sam reciprocates with genuine care rather than just being the recipient of support. The \"take care of yourself\" phrasing aligns with their established mutual support dynamic where both parties value each other's wellbeing equally. This reinforces that their partnership is emotionally grounded in reciprocal concern, not one-sided guidance. The closing nature of this message also shows they maintain positive connection even as conversations conclude, consistent with their pattern of ongoing commitment to each other's health journeys.'}",
+    "memory_id": "1cccf471-d4e3-418b-ae8d-d5efc886116a",
+    "metadata": {
+      "created_at": "2023-07-27",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:18"
+    ],
+    "memory": "Sam's Weight Mockery & Motivation Trigger (2023-07-27): Sam reached out to Evan saying \"My friends were mocking my weight last Friday and it hurt. That made me realize I need to make changes.\" This demonstrates: (1) External social pressure (peer mockery) served as a significant trigger for health action; (2) The mockery caused emotional pain (\"it hurt\"), showing vulnerability to peer judgment about body image; (3) Sam connects this emotional impact directly to motivation for change - the hurt became catalyst for commitment. Pattern: While existing memories show Sam's intrinsic enthusiasm and resilience, this reveals his motivation can also be triggered by external validation threats. This adds complexity to understanding his decision-making - he responds both to internal goals AND external social pressures. The mockery incident occurred ~6 weeks after June 6 interaction, showing ongoing health journey commitment despite life events. This contrasts with earlier memories where setbacks (broken checkout machines) didn't derail him - here the trigger was different (social rather than practical). Still consistent with his pattern of seeking Evan's support and valuing partnership over solo effort. The emotional impact (\"hurt\") shows body image concerns are significant to him, making peer reactions particularly potent motivators. This memory enriches understanding that Sam's health journey is driven by both intrinsic commitment AND extrinsic social factors, with the latter capable of being powerful catalysts when they threaten his self-image.",
+    "memory_id": "44962d5c-a5ed-4fdc-93f7-26fc0ac8bada",
+    "metadata": {
+      "created_at": "2023-07-27",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:20"
+    ],
+    "memory": "Sam's Health Progress & Gratitude (2023-07-27): Sam thanked Evan \"Thanks for the support, Evan. I'm working on my health and getting active!\" This demonstrates: (1) Sam is actively following through on his commitment to change after the mockery incident ~6 weeks prior; (2) He values Evan's ongoing support and expresses gratitude; (3) His statement confirms concrete action (\"getting active\") not just verbal commitment. Pattern: This shows positive momentum in their health partnership - Sam translates motivation into action while maintaining appreciation for Evan's role. The timing (~6 weeks after June 6 interactions, same day as mockery incident) indicates sustained engagement despite life events. This complements existing memories about his resilience (June 6 supermarket frustration didn't derail him) and the mockery trigger (July 27), showing the full arc: external pressure → motivation → action + gratitude. The \"getting active\" phrasing aligns with Evan's earlier offer to teach exercises, suggesting Sam may be implementing that guidance. This reinforces their partnership model: Evan provides support/guidance while Sam takes concrete health actions, with mutual appreciation sustaining the relationship.",
+    "memory_id": "ca672f2a-42de-411a-8e9f-ef299ba8eaf9",
+    "metadata": {
+      "created_at": "2023-07-27",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:1"
+    ],
+    "memory": "Evan's Reading Interest & Personal Life (2023-07-27): Evan mentioned he's reading a gripping mystery novel that keeps him engaged. This demonstrates: (1) Evan has personal hobbies and interests beyond health coaching - specifically enjoys mystery novels; (2) He shares these interests casually with Sam, indicating comfortable rapport and willingness to be authentic about himself; (3) The conversation shows their relationship extends beyond health goals to include personal sharing. Pattern: Their partnership includes both practical health support AND genuine personal connection. This complements existing memories of mutual care (Evan's empathy for checkout frustration, Sam's concern for Evan), showing their bond is multi-dimensional - not just health-focused but also includes sharing life interests. The casual mention of a book suggests they maintain ongoing conversations about various topics, indicating sustained engagement beyond health check-ins. This enriches understanding that their relationship has depth beyond the health journey - they're friends who share personal interests and can discuss non-health topics comfortably.",
+    "memory_id": "6930f823-e65a-4454-b060-ee337188b117",
+    "metadata": {
+      "created_at": "2023-08-07",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:4"
+    ],
+    "memory": "Sam's Positive Exercise Experience & Nutrition Focus (2023-07-27): Sam responded \"Sounds good, Evan. I've tried it before and it was nice\" after Evan offered exercise guidance. This demonstrates: (1) Sam has previously engaged in exercises with Evan and had positive experiences; (2) He's actively implementing health guidance rather than just receiving it; (3) His follow-up question about low-calorie snacks shows practical nutrition awareness - he wants balanced approach to healthy eating, not just exercise. Pattern: This reinforces their partnership model where Evan provides both exercise instruction AND nutritional guidance, while Sam takes concrete action with positive feedback. The snack question aligns with his health journey commitment shown in other July 27 memories (gratitude for support, working on health). His casual inquiry about the novel Evan mentioned reading shows natural conversational flow between health topics and personal sharing - their relationship is multi-dimensional beyond just health coaching. This interaction (~6 weeks after June 6 interactions) demonstrates sustained engagement: external pressure (mockery) → motivation → action + gratitude + positive experience with exercises. The \"nice\" feedback indicates Sam values enjoyable, sustainable approaches to health rather than restrictive ones, consistent with his resilience pattern from earlier memories.",
+    "memory_id": "b24dc871-86ee-40ef-bf85-d7b507a31138",
+    "metadata": {
+      "created_at": "2023-08-07",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:7"
+    ],
+    "memory": "Evan's Reading Interest & Personal Life (2023-07-27): Evan mentioned he's reading \"The Great Gatsby\" - a classic American novel, not a mystery novel as previously noted. This demonstrates: (1) Evan has personal hobbies beyond health coaching - specifically enjoys classic literature; (2) He shares these interests casually with Sam, indicating comfortable rapport and willingness to be authentic about himself; (3) The conversation shows their relationship extends beyond health goals to include personal sharing. Pattern: Their partnership includes both practical health support AND genuine personal connection. This complements existing memories of mutual care, showing their bond is multi-dimensional - not just health-focused but also includes sharing life interests. The casual mention of a book suggests they maintain ongoing conversations about various topics, indicating sustained engagement beyond health check-ins. This enriches understanding that their relationship has depth beyond the health journey - they're friends who share personal interests and can discuss non-health topics comfortably. Note: Previous memory incorrectly identified this as a \"mystery novel\" - corrected to accurate genre classification.",
+    "memory_id": "4bfe916d-15f8-43b3-ab20-4698f76ea42d",
+    "metadata": {
+      "created_at": "2023-08-07",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:8"
+    ],
+    "memory": "Evan's Supportive Communication Style (2023-07-27): Evan said \"No worries, you've got this!\" - demonstrating: (1) Encouraging, confidence-building communication style; (2) Uses affirming language to boost Sam's self-efficacy; (3) Creates positive reinforcement pattern in their health partnership. Pattern: This fits with existing memories showing Evan as supportive partner who provides guidance AND emotional support. The phrase \"you've got this\" indicates belief in Sam's capabilities, complementing his gratitude expressions and action-taking shown in other July 27 memories. This reinforces their relationship dynamic: Evan offers encouragement + practical guidance; Sam responds with gratitude + concrete health actions. The casual, confident tone shows comfortable rapport beyond formal coaching - they're friends who can exchange brief encouraging messages naturally. This communication style likely contributes to Sam's sustained engagement and resilience (as seen in his continued health journey despite mockery incident).",
+    "memory_id": "d0cea030-5136-42de-b5fc-ad6785fee612",
+    "metadata": {
+      "created_at": "2023-08-07",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:9"
+    ],
+    "memory": "Evan's Supportive Communication Style (2023-07-27): Evan demonstrated consistent encouraging communication with Sam using phrases like \"No worries, you've got this!\" and \"No worries, Sam. I'm here if you need me. Keep going!\" This demonstrates: (1) Encouraging, confidence-building communication style; (2) Uses affirming language to boost Sam's self-efficacy; (3) Expresses ongoing availability (\"I'm here if you need me\") showing commitment to continued support; (4) Reinforces momentum with \"Keep going!\" Pattern: This fits with existing memories showing Evan as supportive partner who provides guidance AND emotional support. The confident, casual tone shows comfortable rapport beyond formal coaching - they're friends who can exchange brief encouraging messages naturally. This communication style likely contributes to Sam's sustained engagement and resilience (as seen in his continued health journey despite mockery incident). The availability statement (\"I'm here if you need me\") adds dimension showing Evan commits to being a reliable support resource, not just offering encouragement but also ongoing presence.",
+    "memory_id": "e1c66df5-0120-428b-8fb0-d45bf285d0ea",
+    "metadata": {
+      "created_at": "2023-08-07",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:11"
+    ],
+    "memory": "Evan's Personal Life & Romantic Interests (2023-08-07): Evan shared he traveled to Canada last week and met an \"incredible\" Canadian woman who makes him feel \"alive.\" This demonstrates: (1) Evan has active personal life beyond health coaching - travels internationally, pursues romantic connections; (2) He's emotionally open about significant relationships with Sam, indicating deep trust and authentic sharing; (3) His language (\"something unreal,\" \"like something out of a movie\") shows he experiences life vividly and values meaningful experiences. Pattern: This complements existing memories showing multi-dimensional relationship - they discuss health goals AND personal life events including reading interests, travel experiences, and romantic connections. The casual sharing suggests their friendship allows vulnerability about life's significant moments. Being with this woman makes him \"feel alive\" indicates he seeks passion and vitality in relationships, consistent with his supportive nature toward Sam (he wants to help others feel better too). This enriches understanding that Evan is a well-rounded person with interests beyond health coaching - he travels, reads classics, enjoys mystery novels, and pursues romantic connections. His willingness to share these experiences casually shows their partnership includes genuine friendship where both can be authentic about life's ups and downs.",
+    "memory_id": "7e8755eb-7056-4afe-a743-5a3c914888db",
+    "metadata": {
+      "created_at": "2023-08-07",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:12"
+    ],
+    "memory": "Sam's Perspective on Health & Quality of Life Balance (2023-08-07): Sam responded \"Looks good to eat! Dealing with health problems can be challenging and take away from enjoyable experiences.\" This demonstrates: (1) Sam appreciates healthy food options when presented; (2) He recognizes the real burden health problems place on quality of life - they're not just medical issues but affect enjoyment; (3) His acknowledgment shows he values maintaining enjoyable experiences despite health challenges, indicating a balanced perspective rather than all-or-nothing thinking. Pattern: This aligns with his broader health journey showing resilience and practical action-taking (from July 27 memories about exercise, nutrition questions, gratitude). Unlike restrictive approaches, Sam seeks sustainable balance - managing health while preserving life enjoyment. This insight is valuable for future interactions: when discussing health guidance, acknowledge both the medical benefits AND quality of life considerations. His positive response to food suggestions shows receptiveness to nutritional guidance when presented practically. This complements his exercise engagement and nutrition awareness from earlier memories, showing consistent pattern of taking concrete health actions while maintaining perspective on life balance.",
+    "memory_id": "600ea63b-1165-4903-81d9-e370880b1e23",
+    "metadata": {
+      "created_at": "2023-08-07",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:13"
+    ],
+    "memory": "Evan's Health Journey Persistence & Emotional Connection (2023-08-07): Evan revealed his health journey has been ongoing for TWO YEARS with \"ups and downs\" - demonstrating: (1) Long-term commitment to health improvement despite challenges; (2) Resilience through persistence over extended period; (3) Healthy food brings him genuine JOY, not just obligation - emotional connection to healthy eating. Pattern: This complements existing memories showing multi-dimensional relationship where they discuss health goals AND personal life events. His two-year journey shows sustained effort beyond initial motivation, indicating deep commitment to health transformation. The \"ups and downs\" framing normalizes struggle while emphasizing continued progress. Emotional joy from healthy food contrasts with restrictive dieting approaches - he finds pleasure in healthy choices rather than deprivation. This enriches understanding that his health journey is emotionally meaningful, not just medically necessary. His willingness to share this vulnerability about challenges shows trust in Sam's partnership. This persistence pattern (2 years despite ups/downs) is valuable for future interactions: acknowledge long-term effort, validate struggles, celebrate continued progress.",
+    "memory_id": "b21fea63-30ae-43a2-88af-c1cf9c96b85b",
+    "metadata": {
+      "created_at": "2023-08-07",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:17"
+    ],
+    "memory": "Sam's Admiration for Evan's Motivation & Collaborative Decision-Making (2023-08-07): Sam expressed \"I wish your motivation never goes anywhere!\" and was considering ordering similar items/products, asking Evan's opinion on whether they're worth it. This demonstrates: (1) Sam genuinely admires and values Evan's sustained motivation/persistence; (2) Sam is willing to invest in health-related products when convinced of their value; (3) Sam seeks validation/opinion before making purchases - practical decision-making approach; (4) Their partnership involves mutual support where Sam wants to emulate Evan's positive traits. Pattern: This aligns with existing memories showing multi-dimensional relationship covering health goals, personal life events, and emotional support. Sam's desire for Evan's motivation to persist shows he recognizes persistence as valuable trait worth cultivating. His willingness to try similar products indicates openness to shared solutions and collaborative health improvement. This complements his earlier exercise engagement, nutrition questions, and gratitude expressions from July 27 memories - consistent pattern of taking concrete health actions while seeking supportive partnership input.",
+    "memory_id": "c1db7c61-133f-4001-ac3c-14c08fce0da0",
+    "metadata": {
+      "created_at": "2023-08-07",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:20"
+    ],
+    "memory": "Evan's Family Motivation & Support System (2023-08-07): Evan revealed his family motivates him to stay healthy, tracks his progress, and serves as constant reminder to keep going. This demonstrates: (1) Strong family involvement in health journey - family actively participates in tracking and motivating; (2) Family provides accountability mechanism through progress tracking; (3) Family serves as emotional anchor/reminder system for persistence. Pattern: This complements existing memories showing multi-dimensional support system - Evan has TWO YEARS of persistence despite ups/downs, receives encouragement from Sam (\"No worries, you've got this!\"), and now family motivation. His health journey draws from multiple sources: personal commitment, supportive friendship with Sam, AND family involvement. Family tracking progress suggests they're engaged in his health metrics/goals, indicating close relationship. This multi-source support (friend + family) creates robust accountability network. For future interactions: acknowledge family's role when discussing Evan's progress, validate that family support is valuable resource, and recognize he has diverse motivation sources beyond just personal determination or Sam's encouragement.",
+    "memory_id": "61db5856-6f01-495e-92a6-5f40bc1297f2",
+    "metadata": {
+      "created_at": "2023-08-07",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:23"
+    ],
+    "memory": "Evan's Motivation Response to Visual Reminders (2023-08-07): Evan expressed \"It's been awesome, Sam! That visual reminder has been really motivating.\" This demonstrates: (1) Visual reminders are effective motivational tools for Evan - he finds them genuinely impactful; (2) He actively appreciates and acknowledges Sam's support efforts; (3) Positive reinforcement between them strengthens their partnership. Pattern: This complements existing memories showing multi-dimensional health journey support system - family tracking progress, Sam's encouragement (\"No worries, you've got this!\"), and now visual reminders as another effective intervention type. His positive response indicates openness to different motivational approaches beyond just verbal encouragement or family involvement. For future interactions: when discussing motivation strategies, acknowledge that visual aids/reminders can be particularly effective for him. This enriches understanding of his diverse motivation sources - personal commitment (2 years despite ups/downs), family accountability, Sam's support, AND visual reminders. His enthusiastic response shows receptiveness to varied support mechanisms and appreciation for Sam's thoughtful interventions in his health journey.",
+    "memory_id": "fe35aa56-cdc8-443c-aca9-e07a65075695",
+    "metadata": {
+      "created_at": "2023-08-07",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:23",
+      "D1:1"
+    ],
+    "memory": "Sam's Curiosity About Evan's Complete Motivational Landscape (2023-08-07): Sam asked \"Thanks for the recommendation, what else motivates you?\" - demonstrating: (1) Sam actively seeks to understand ALL of Evan's motivational sources beyond just family and visual reminders; (2) Sam values comprehensive understanding of what drives Evan's health journey; (3) This question shows Sam wants to provide more targeted support by knowing full motivational picture. Pattern: This aligns with existing memories showing multi-dimensional support system - family tracking, visual reminders, Sam's encouragement. Sam's questioning approach indicates he's building complete knowledge of Evan's motivation ecosystem to better support him. Unlike superficial engagement, Sam digs deeper into what truly sustains Evan's health journey. For future interactions: when discussing motivation, acknowledge all sources (family, visual aids, personal commitment, etc.) and ask open questions about additional motivators. This curiosity pattern shows Sam invests in understanding the full motivational architecture rather than just surface-level encouragement.",
+    "memory_id": "f92f442c-e7db-429e-a8e8-7ec0ead6c1d3",
+    "metadata": {
+      "created_at": "2023-08-07",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:23",
+      "D1:1",
+      "D1:2"
+    ],
+    "memory": "Evan's Adventure-Seeking Motivation & Physical Activity Drive (2023-08-07): Evan revealed he's motivated by \"a thirst for adventure on interesting hikes\" - demonstrating: (1) Strong preference for physical activity and exploration as motivation; (2) Adventure-seeking personality trait that drives engagement with health/exercise; (3) Hiking represents both fitness AND experiential reward, not just obligation. Pattern: This adds a fourth major motivational category to his health journey ecosystem alongside: personal commitment (2 years despite ups/downs), family accountability/tracking, visual reminders, and Sam's encouragement. His adventure motivation suggests he values challenge, novelty, and outdoor experiences - making exercise feel like exploration rather than chore. For future interactions: when discussing exercise/activity preferences, acknowledge his love of hiking/adventure; frame physical activities as opportunities for exploration; recognize that adventure-seeking is core to his motivation system. This complements existing memories showing multi-dimensional support where he finds joy in healthy food (emotional), has family tracking progress (accountability), uses visual reminders (environmental), and now seeks adventure through hiking (experiential). His diverse motivation sources create robust, sustainable health journey foundation.",
+    "memory_id": "3f25bdba-ad77-406b-a85e-f38ca2a4d997",
+    "metadata": {
+      "created_at": "2023-08-07",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:23",
+      "D1:1",
+      "D1:2",
+      "D1:3",
+      "D1:4",
+      "D1:5",
+      "D1:6"
+    ],
+    "memory": "Evan's Symbolic Motivation & Emotional Connection (2023-08-07): Evan revealed \"I got this because it symbolizes strength and resilience. Taking care of it motivates me to keep going through tough times.\" This demonstrates: (1) Strong symbolic/emotional connection to objects or living things that represent personal values; (2) Symbolic meaning serves as emotional anchor during difficult periods; (3) Care-taking responsibility provides motivation mechanism - nurturing something becomes reason to persist. Pattern: This adds a fifth major motivational category to his health journey ecosystem alongside: personal commitment (2 years despite ups/downs), family accountability/tracking, visual reminders, adventure-seeking/hiking, and now symbolic/emotional connection through objects or living things. His symbolic motivation suggests he values meaning-making and emotional resonance - not just functional benefits. For future interactions: acknowledge the symbolic significance of items he cares for; recognize that nurturing responsibilities can be powerful motivators; validate that emotional connections to objects/living things provide resilience during tough times. This complements existing memories showing multi-dimensional support where he finds joy in healthy food (emotional), has family tracking progress (accountability), uses visual reminders (environmental), seeks adventure through hiking (experiential), and now derives motivation from symbolic meaning (emotional/resilience). His diverse motivation sources create robust, sustainable health journey foundation with multiple emotional anchors.",
+    "memory_id": "dddc4c38-7933-4b9e-8e24-cc585cfec3f0",
+    "metadata": {
+      "created_at": "2023-08-07",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:23",
+      "D1:1",
+      "D1:2",
+      "D1:3",
+      "D1:4",
+      "D1:5",
+      "D1:6",
+      "D1:7"
+    ],
+    "memory": "Sam's Philosophy on Resilience Building Through Small Actions (2023-08-07): Sam stated \"Little stuff matters - it builds our resilience over time.\" This demonstrates: (1) Sam recognizes that small, consistent actions accumulate to build long-term resilience; (2) This aligns with Evan's multi-dimensional support system where various small motivators (family tracking, visual reminders, adventure-seeking, symbolic meaning) all contribute to sustained health journey; (3) Resilience is built incrementally through diverse sources rather than single heroic efforts. Pattern: This philosophical insight complements existing memories showing Evan's robust motivation ecosystem - personal commitment (2 years despite ups/downs), family accountability/tracking, visual reminders, adventure-seeking/hiking, and symbolic/emotional connections. Each small motivational element contributes to overall resilience. For future interactions: acknowledge that small consistent actions build lasting resilience; validate that diverse small motivators create sustainable health journey foundation; recognize Sam's wisdom about incremental progress. This enriches understanding of how Evan's multi-source support system (friend encouragement, family involvement, visual aids, adventure activities, symbolic meaning) all function as \"little stuff\" that collectively builds his resilience over time.",
+    "memory_id": "a0023381-1da0-4680-a643-d604f0a0d686",
+    "metadata": {
+      "created_at": "2023-08-07",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:23",
+      "D1:1",
+      "D1:2",
+      "D1:3",
+      "D1:4",
+      "D1:5",
+      "D1:6",
+      "D1:7",
+      "D1:8",
+      "D1:9"
+    ],
+    "memory": "Evan's Endorsement of Consistency & Perseverance (2023-08-07): Evan affirmed 'Consistency and perseverance will get us far' - demonstrating: (1) Strong alignment with sustained effort principles; (2) Values long-term commitment over quick fixes; (3) Positive closure to health journey discussions. Pattern: This complements existing motivational ecosystem where he draws from visual reminders, adventure-seeking, symbolic meaning, family accountability, and Sam's encouragement. His agreement shows consistency/perseverance as foundational values underlying all his motivation sources. For future interactions: acknowledge his commitment to sustained effort; validate that persistence is core to his approach; recognize this aligns with his multi-dimensional support system. This enriches understanding that his diverse motivators all serve the overarching principle of consistent, persevering action toward health goals.",
+    "memory_id": "81645a2c-74ee-495e-9e89-74c17143f6cb",
+    "metadata": {
+      "created_at": "2023-08-07",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:1",
+      "D1:2",
+      "D1:3",
+      "D1:4",
+      "D1:5",
+      "D1:6",
+      "D1:7",
+      "D1:8",
+      "D1:9",
+      "D1:10",
+      "D1:11"
+    ],
+    "memory": "Sam & Evan Relationship Foundation (2023-05-18): Sam initiates in-person meeting with \"good to see you\" and asks about life updates - demonstrating: (1) Regular face-to-face contact between friends; (2) Pattern of checking in on each other's lives; (3) Warm, supportive friendship dynamic where Sam actively engages Evan. Context: This establishes the interpersonal foundation for their health journey support system documented in August 2023 memories. Their relationship includes: family accountability/tracking, visual reminders, adventure-seeking activities, symbolic/emotional connections, and Sam's encouragement - all built on this consistent pattern of personal connection and life updates. For future interactions: acknowledge their established friendship; recognize that regular check-ins are part of their support ecosystem; maintain warm, engaged tone when greeting them together.",
+    "memory_id": "0bc32f45-be61-4768-add2-dad6c07fb40a",
+    "metadata": {
+      "created_at": "2023-05-18",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:2",
+      "D1:3",
+      "D1:4",
+      "D1:5",
+      "D1:6",
+      "D1:7",
+      "D1:8",
+      "D1:9",
+      "D1:10",
+      "D1:11",
+      "D1:12",
+      "D1:13"
+    ],
+    "memory": "Evan's New Prius & Family Travel (2023-05-18): Evan revealed he has a new Prius and recently took his family on a trip in it - demonstrating: (1) Recent vehicle acquisition; (2) Pattern of family travel/trips together; (3) Active engagement with family activities. Context: This occurred during their May 18, 2023 in-person meeting where Sam initiated contact with \"good to see you\" and asked about life updates. The Prius represents a practical tool enabling his family adventures - connecting to his adventure-seeking motivation documented in August 2023 (hiking/exploration). For future interactions: acknowledge his new Prius when relevant; recognize family trips as part of his lifestyle; note that vehicle ownership supports his active, exploratory nature. This complements existing memories showing multi-dimensional support where he finds joy in healthy food (emotional), has family tracking progress (accountability), uses visual reminders (environmental), seeks adventure through hiking (experiential), and derives motivation from symbolic meaning (emotional/resilience). His diverse motivation sources create robust, sustainable health journey foundation with practical enablers like his new Prius facilitating family adventures together.",
+    "memory_id": "5f3e377a-d1dd-48c1-9bea-e9a644b5bf03",
+    "metadata": {
+      "created_at": "2023-05-18",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:6",
+      "D1:7",
+      "D1:8",
+      "D1:9",
+      "D1:10",
+      "D1:11",
+      "D1:12",
+      "D1:13",
+      "D1:14",
+      "D1:15",
+      "D1:16"
+    ],
+    "memory": "Evan's Group Hiking Experience (2023-05-18): Evan stated \"We all hiked the trails last week - the views were amazing!\" This demonstrates: (1) Active participation in group outdoor activities with others; (2) Appreciation for natural beauty and scenic experiences; (3) Shared recreational experiences strengthen social bonds. Context: Occurred during May 18, 2023 in-person meeting with Sam. This concrete hiking event validates his adventure-seeking motivation documented in August 2023 memories and connects to his new Prius enabling family travel. Pattern: Hiking serves as both physical activity and social bonding mechanism - combining his love of exploration with meaningful shared experiences. For future interactions: acknowledge his enjoyment of outdoor adventures; recognize group activities as important for his well-being; validate that scenic/natural environments provide emotional value beyond just exercise. This enriches understanding that his adventure-seeking isn't solitary but often communal, creating both physical and social benefits simultaneously.",
+    "memory_id": "bbcd461e-81e6-4cb0-a1f1-5155ec1535ed",
+    "metadata": {
+      "created_at": "2023-05-18",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:7",
+      "D1:8",
+      "D1:9",
+      "D1:10",
+      "D1:11",
+      "D1:12",
+      "D1:13",
+      "D1:14",
+      "D1:15",
+      "D1:16",
+      "D1:17"
+    ],
+    "memory": "Sam's Hiking History & Family Bonding (2023-05-18): Sam shared his personal hiking experience - loves hiking but hasn't done it in ages. Had special childhood hiking with his dad when he was 10 years old, describing it as \"great fun\" and \"really special.\" This demonstrates: (1) Deep emotional connection to outdoor activities through family bonding; (2) Intergenerational relationship patterns where shared nature experiences create lasting memories; (3) Hiking holds personal significance beyond exercise - represents cherished family time. Context: Discussed during May 18, 2023 in-person meeting with Evan. Pattern: Sam values shared outdoor experiences, particularly with family members. This complements existing memories showing both Sam and Evan value adventure-seeking/hiking activities but from different perspectives - Evan's current group hiking adventures vs. Sam's childhood bonding experience. For future interactions: acknowledge Sam's special connection to hiking through family history; recognize that nature/outdoor activities have emotional resonance for him beyond physical benefits; validate that shared experiences with loved ones create meaningful memories. This enriches understanding of their friendship ecosystem where both value outdoor activities but bring different personal histories and motivations to the shared adventure-seeking lifestyle.",
+    "memory_id": "e04081ae-f327-48ac-8a82-1ed6fb9b1812",
+    "metadata": {
+      "created_at": "2023-05-18",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:9",
+      "D1:10",
+      "D1:11",
+      "D1:12",
+      "D1:13",
+      "D1:14",
+      "D1:15",
+      "D1:16",
+      "D1:17",
+      "D1:18"
+    ],
+    "memory": "Sam's Recent Hiking Achievement (2023-05-18): During May 18, 2023 in-person meeting with Evan, Sam reflected on a recent hiking trip: \"We hiked a good distance - quite a feat for me back then. It's definitely a great memory.\" This demonstrates: (1) Recent significant physical achievement through hiking; (2) Self-awareness of personal capability and growth; (3) Strong emotional attachment to outdoor experiences as meaningful memories. Context: This recent hiking event complements his childhood bonding experience with dad (age 10) documented in same conversation, showing sustained passion for hiking across life stages. Pattern: Sam values hiking both as physical challenge and emotional anchor - connecting past family memories with present capability. For future interactions: acknowledge Sam's hiking achievements; recognize outdoor activities provide both exercise and emotional significance; validate that he considers himself capable of substantial physical feats. This enriches understanding that his adventure-seeking includes personal growth narratives, not just recreation or nostalgia.",
+    "memory_id": "d709c956-118a-4970-8ba8-43e6e5ac2028",
+    "metadata": {
+      "created_at": "2023-05-18",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:11",
+      "D1:12",
+      "D1:13",
+      "D1:14",
+      "D1:15",
+      "D1:16",
+      "D1:17",
+      "D1:18",
+      "D1:19",
+      "D1:20"
+    ],
+    "memory": "Sam's Interest in Painting (2023-05-18): During May 18, 2023 in-person meeting with Evan, Sam stated \"Nothing so far, but I was thinking about trying painting. Do you have any hobbies you love?\" This demonstrates: (1) Openness to exploring creative hobbies; (2) Interest in shared recreational activities; (3) Willingness to try new experiences. Context: Occurred during their May 18, 2023 conversation where they discussed various life updates including hiking, family travel, and outdoor adventures. Pattern: Sam shows curiosity about creative pursuits beyond his established adventure-seeking/hiking interests - indicating desire for diverse hobbies and shared activities with friends. For future interactions: acknowledge his interest in painting when relevant; recognize he's open to trying new creative hobbies; validate that exploring different types of activities (physical adventure + creative expression) enriches his lifestyle. This complements existing memories showing multi-dimensional support where he finds joy in healthy food, family tracking progress, visual reminders, adventure-seeking through hiking, and symbolic meaning - now adding creative exploration as another dimension to his hobby landscape. His diverse motivation sources create robust foundation with painting representing potential new avenue for self-expression alongside outdoor activities.",
+    "memory_id": "9aff6bd4-9b80-46bb-acf9-80675aa41b96",
+    "metadata": {
+      "created_at": "2023-05-18",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:13",
+      "D1:14",
+      "D1:15",
+      "D1:16",
+      "D1:17",
+      "D1:18",
+      "D1:19",
+      "D1:20",
+      "D1:21",
+      "D1:22",
+      "D2:1"
+    ],
+    "memory": "Sam's Interest in Painting (2023-05-18): During May 18, 2023 in-person meeting with Evan, Sam expressed interest in painting: \"Not yet, but I'm keen to give it a go. It looks like a nice way to chill and get creative.\" This demonstrates: (1) Openness to exploring creative hobbies; (2) Views painting as relaxation/creative outlet - not just skill development; (3) Willingness to try new experiences. Context: Occurred during their May 18, 2023 conversation where they discussed various life updates including hiking, family travel, and outdoor adventures. Pattern: Sam shows curiosity about creative pursuits beyond his established adventure-seeking/hiking interests - indicating desire for diverse hobbies combining physical adventure with creative expression. For future interactions: acknowledge his interest in painting when relevant; recognize he sees it as chill/creative activity (not performance-oriented); validate that exploring different types of activities enriches his lifestyle. This complements existing memories showing multi-dimensional support where he finds joy in healthy food, family tracking progress, visual reminders, adventure-seeking through hiking, and symbolic meaning - now adding creative exploration as another dimension to his hobby landscape. His diverse motivation sources create robust foundation with painting representing potential new avenue for self-expression alongside outdoor activities, specifically valued for relaxation and creativity rather than achievement or competition.",
+    "memory_id": "64e466b7-f6e7-47b9-ad86-d0fe2160f05f",
+    "metadata": {
+      "created_at": "2023-05-18",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:16",
+      "D1:17",
+      "D1:18",
+      "D1:19",
+      "D1:20",
+      "D1:21",
+      "D1:22",
+      "D2:1",
+      "D2:2"
+    ],
+    "memory": "Evan's Introduction to Hiking (2023-05-18): Evan stated \"My friend got me into it and gave me some advice, and I was hooked right away!\" This demonstrates: (1) Social introduction pathway - his outdoor activity interest developed through friendship rather than solitary discovery; (2) High receptiveness to peer guidance and recommendations; (3) Quick adoption of new activities when introduced by trusted friends. Context: Discussed during May 18, 2023 in-person meeting with Sam about various life updates including hiking, family travel, and outdoor adventures. Pattern: Evan's adventure-seeking lifestyle has strong social foundations - both his current group hiking participation (bbcd461e-81e6-4cb0-a1f1-5155ec1535ed) and his initial introduction to the activity came through friends. This creates a coherent narrative where friendship serves as gateway to outdoor activities, which then become vehicles for ongoing social bonding. For future interactions: acknowledge that friend recommendations/advice are highly influential with Evan; recognize he responds positively to peer guidance; validate that introducing him to new experiences through trusted friends is an effective approach. This enriches understanding of his motivation ecosystem where social connection and adventure-seeking are deeply intertwined - friendship both initiates and sustains his outdoor activity engagement.",
+    "memory_id": "df21d0cf-5b6a-420f-9afa-07aaf7a66686",
+    "metadata": {
+      "created_at": "2023-05-18",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:17",
+      "D1:18",
+      "D1:19",
+      "D1:20",
+      "D1:21",
+      "D1:22",
+      "D2:1",
+      "D2:2",
+      "D2:3",
+      "D2:4"
+    ],
+    "memory": "Sam's Watercolor Painting Interest & Admiration for Evan (2023-05-18): During May 18, 2023 in-person meeting with Evan, Sam expressed specific interest in watercolor painting: \"Wow! I hope I can find something I'm as passionate about as you are with watercolor painting.\" This demonstrates: (1) Specific medium preference - watercolor; (2) Admiration for Evan's passion and dedication to the art form; (3) Desire to discover comparable personal passions. Context: Occurred during their May 18, 2023 conversation where they discussed various life updates including hiking, family travel, and outdoor adventures. Pattern: Sam's creative exploration extends beyond general painting interest to specifically admiring Evan's watercolor passion - showing he values not just trying new hobbies but finding activities with deep personal resonance like Evan has with watercolor. For future interactions: acknowledge Sam's specific watercolor interest; recognize his admiration for Evan's artistic passion; validate that he seeks activities with comparable emotional depth and commitment. This enriches understanding of his hobby landscape where painting represents both relaxation/creativity AND a pathway to finding deeply passionate pursuits, specifically inspired by Evan's example.",
+    "memory_id": "f17f7196-d84e-4a7e-91f5-41fce5b46fdc",
+    "metadata": {
+      "created_at": "2023-05-18",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:18",
+      "D1:19",
+      "D1:20",
+      "D1:21",
+      "D1:22",
+      "D2:1",
+      "D2:2",
+      "D2:3",
+      "D2:4",
+      "D2:5"
+    ],
+    "memory": "Evan's Philosophy on Finding Passions (2023-05-18): During May 18, 2023 in-person meeting with Sam, Evan advised: \"You'll find it, just keep trying new things until something sparks your excitement.\" This demonstrates: (1) Growth mindset - passions discovered through exploration and persistence; (2) Encouragement of experimentation over immediate certainty; (3) Recognition that excitement/passion emerges from active engagement rather than passive waiting. Context: Given during conversation about Sam's hobby exploration (painting interest, hiking achievements). Pattern: Evan serves as supportive mentor figure who encourages Sam to actively seek passions through trial and error. This advice directly applies to Sam's current phase of exploring creative hobbies (painting) and outdoor activities (hiking). For future interactions: when Sam expresses uncertainty about interests or is considering new activities, reference this philosophy; encourage persistence in exploration; validate that excitement often comes from trying rather than knowing beforehand. This enriches understanding of their dynamic where Evan provides both practical guidance (hiking advice) and philosophical support (finding passions through exploration), creating a supportive environment for Sam's personal growth across multiple domains (physical adventure + creative expression).",
+    "memory_id": "4a7796e4-6cf6-41fc-aa7a-6db311010286",
+    "metadata": {
+      "created_at": "2023-05-18",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D1:20",
+      "D1:21",
+      "D1:22",
+      "D2:1",
+      "D2:2",
+      "D2:3",
+      "D2:4",
+      "D2:5",
+      "D2:6"
+    ],
+    "memory": "Evan's Supportive Closing & Future Connection Plan (2023-05-18): At conclusion of May 18, 2023 in-person meeting, Evan said \"No worries, Sam! Super pumped for you! Let's catch up soon and see how you're enjoying your new hobbies!\" This demonstrates: (1) Strong supportive friendship dynamic - Evan is genuinely enthusiastic about Sam's wellbeing; (2) Forward-looking connection plan - they intend to reconnect soon; (3) Interest in Sam's hobby exploration progress - specifically mentions \"new hobbies\" (plural), indicating multiple interests being explored. Context: Closing statement after discussing various life updates including hiking, family travel, outdoor adventures, and painting interest. Pattern: Evan consistently serves as encouraging mentor figure who validates Sam's explorations and maintains ongoing connection. For future interactions: acknowledge Evan's supportive nature; recognize he values knowing about Sam's hobby progress; validate that maintaining regular check-ins strengthens their friendship. This complements existing memories showing multi-dimensional support where Evan provides practical guidance (hiking advice), philosophical encouragement (finding passions through exploration), and emotional validation (enthusiasm for Sam's pursuits). Their relationship demonstrates healthy peer dynamic combining adventure-seeking, creative exploration, and mutual care.",
+    "memory_id": "b40e99b1-d727-4558-8ea2-512bab304f47",
+    "metadata": {
+      "created_at": "2023-05-18",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:1",
+      "D2:2",
+      "D2:3",
+      "D2:4",
+      "D2:5",
+      "D2:6",
+      "D2:7",
+      "D2:8",
+      "D2:9",
+      "D2:10",
+      "D2:11",
+      "D2:12"
+    ],
+    "memory": "Evan's Jasper Road Trip Experience (2023-05-24): Six days after May 18 meeting, Evan shared: \"Last weekend, I took my family on a road trip to Jasper. It was amazing! We drove through the Icefields Parkway and the glaciers and lakes were gorgeous. I got a shot of a glacier, check it out!\" This demonstrates: (1) Continued outdoor adventure engagement - road trips to natural destinations; (2) Family-oriented activities - taking family rather than solo hiking; (3) Experience-sharing behavior - wants Sam to see photos, maintaining connection through shared interests in nature photography/scenery. Context: Follow-up conversation showing ongoing friendship dynamic where Evan shares life updates and adventures with Sam. Pattern: Consistent with existing memories showing Evan's adventure-seeking lifestyle (hiking, outdoor activities) now extends to family road trips and nature appreciation. His interest in glaciers/lakes complements Sam's painting interest - both appreciate natural beauty through different mediums (photography vs art). For future interactions: acknowledge Evan's family adventures; recognize he shares experiences/photos as connection-building; validate that nature photography/scenery appreciation is a shared interest dimension. This enriches understanding of their friendship where outdoor activities serve dual purpose: personal adventure AND social bonding vehicle. His Jasper trip shows evolution from solo hiking introduction to family-oriented exploration, maintaining core values of natural beauty appreciation and experience sharing with Sam.",
+    "memory_id": "32917fa2-1766-46f2-8672-7c9064cbb8e0",
+    "metadata": {
+      "created_at": "2023-05-24",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:2",
+      "D2:3",
+      "D2:4",
+      "D2:5",
+      "D2:6",
+      "D2:7",
+      "D2:8",
+      "D2:9",
+      "D2:10",
+      "D2:11",
+      "D2:12",
+      "D2:13",
+      "D2:14"
+    ],
+    "memory": "Sam's Travel History & Engagement with Evan's Adventures (2023-05-24): Sam responded to Evan's Jasper road trip update by saying \"I've never been to Jasper, but it looks breathtaking. Tell me more about your road trip. Was it relaxing?\" This demonstrates: (1) Limited travel experience - Sam has not visited Jasper National Park; (2) Strong engagement with Evan's adventures - actively interested in learning about his experiences; (3) Appreciation for natural beauty - describes Jasper as \"breathtaking\" showing aesthetic appreciation for landscapes. Context: Response to Evan's May 24, 2023 update about family road trip to Jasper, Icefields Parkway, glaciers and lakes. Pattern: Sam shows curiosity about Evan's outdoor adventures despite not having shared travel experience - creating opportunity for future recommendations or joint planning. For future interactions: acknowledge Sam hasn't been to Jasper (potential recommendation/travel opportunity); recognize his genuine interest in Evan's experiences; validate that he appreciates natural beauty even without direct experience. This enriches understanding of their friendship dynamic where Evan shares adventures and Sam engages with enthusiasm, creating potential for shared experiences or recommendations. His lack of Jasper experience contrasts with Evan's family-oriented outdoor activities - could inform future activity suggestions or travel planning opportunities.",
+    "memory_id": "0e1f853c-9d6b-4f2a-879c-76897756bb33",
+    "metadata": {
+      "created_at": "2023-05-24",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:4",
+      "D2:5",
+      "D2:6",
+      "D2:7",
+      "D2:8",
+      "D2:9",
+      "D2:10",
+      "D2:11",
+      "D2:12",
+      "D2:13",
+      "D2:14",
+      "D2:15",
+      "D2:16"
+    ],
+    "memory": "Sam's Current State & Self-Care Values (2023-05-24): On May 24, 2023, Sam shared: \"Mine's been tough\" referring to his week, and agreed with Evan that \"It's so important to take time for ourselves and find peace.\" This demonstrates: (1) Current stress state - experiencing a difficult week; (2) Values alignment - recognizes importance of self-care and finding peace after hardship; (3) Openness to rest/recovery messaging. Context: Response to Evan's Jasper road trip update about taking time for family/peace. Pattern: Sam shows awareness of need for balance between adventure/exploration AND rest/recovery - consistent with his hobby exploration phase where he seeks activities with \"deep personal resonance\" (from watercolor memory). For future interactions: acknowledge Sam's current stress when relevant; validate self-care importance; offer supportive check-ins during difficult periods. This complements existing memories showing multi-dimensional support where Evan provides practical guidance, philosophical encouragement, and emotional validation - now adding awareness of Sam's fluctuating stress levels requiring responsive care. His recognition that \"hard weeks\" need recovery aligns with his creative exploration journey - painting/hiking serve both as adventure AND restorative activities. This enriches understanding of their friendship dynamic where outdoor activities serve dual purpose: personal adventure AND social bonding vehicle, now also functioning as recovery mechanisms during stressful periods.",
+    "memory_id": "1f61d833-9156-4383-9f17-856066c51993",
+    "metadata": {
+      "created_at": "2023-05-24",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:5",
+      "D2:6",
+      "D2:7",
+      "D2:8",
+      "D2:9",
+      "D2:10",
+      "D2:11",
+      "D2:12",
+      "D2:13",
+      "D2:14",
+      "D2:15",
+      "D2:16",
+      "D2:17",
+      "D3:1"
+    ],
+    "memory": "Evan's Empathetic Support Response Pattern (2023-05-24): When Sam shared his difficult week, Evan responded: \"Sorry to hear that, Sam. Is there anything I can do to help?\" This demonstrates: (1) Immediate empathy - validates Sam's struggle with sincere acknowledgment; (2) Proactive support offer - moves beyond sympathy to practical assistance; (3) Relationship priority - makes Sam's wellbeing central to conversation. Context: Follow-up to Sam's May 24 statement about \"Mine's been tough\" and agreement on self-care importance. Pattern: Evan consistently demonstrates supportive friendship through both philosophical encouragement (finding passions through exploration), practical guidance (hiking advice), emotional validation (enthusiasm for pursuits), AND empathetic crisis response - creating multi-layered support system. For future interactions: when Sam expresses stress/difficulty, prioritize empathetic acknowledgment before problem-solving; offer concrete help options; validate that offering support strengthens friendship bonds. This enriches understanding of their dynamic where Evan serves as both adventure companion AND emotional safety net, adapting support style to context (philosophical during exploration phase, practical during recovery needs, empathetic during hardship). His response pattern shows he reads Sam's emotional state and responds appropriately - a key predictor for optimal friendship maintenance.",
+    "memory_id": "b7de4dfe-79c6-42bc-9121-c324d785cd41",
+    "metadata": {
+      "created_at": "2023-05-24",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:6",
+      "D2:7",
+      "D2:8",
+      "D2:9",
+      "D2:10",
+      "D2:11",
+      "D2:12",
+      "D2:13",
+      "D2:14",
+      "D2:15",
+      "D2:16",
+      "D2:17",
+      "D3:1",
+      "D3:2",
+      "D3:3",
+      "D3:4",
+      "D3:5",
+      "D3:6",
+      "D3:7",
+      "D3:8",
+      "D3:9",
+      "D3:10"
+    ],
+    "memory": "Sam's Health & Weight Awareness (2023-05-24): Sam shared with Evan that he had a doctor's check-up \"a few days ago\" and \"the weight wasn't great,\" describing it as \"pretty eye-opening.\" This demonstrates: (1) Physical health concern - weight issues identified by medical professional; (2) Self-awareness & honesty - openly sharing health struggles with friend; (3) Openness to change - found experience \"eye-opening\" suggesting receptiveness to improvement. Context: Part of May 24, 2023 conversation flow alongside Evan's Jasper road trip update and Sam's difficult week. Pattern: Connects to existing self-care values memory where Sam recognized importance of rest/recovery - now adding physical health dimension. For future interactions: acknowledge weight/health concerns with sensitivity; avoid unsolicited advice unless requested; validate that health awareness is positive step; offer supportive check-ins on wellness journey. This enriches understanding of their friendship dynamic where Evan provides multi-layered support (philosophical, practical, emotional) - now adding physical health awareness as another dimension. His openness about weight issues contrasts with his hobby exploration phase - suggests he's in period of self-reflection and potential lifestyle changes. This information should inform activity recommendations (considering health constraints), conversation topics (health-sensitive), and support approach (encouraging but not prescriptive).",
+    "memory_id": "90d57d86-25d9-4a88-979d-92a18625c74f",
+    "metadata": {
+      "created_at": "2023-05-24",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:12",
+      "D2:13",
+      "D2:14",
+      "D2:15",
+      "D2:16",
+      "D2:17",
+      "D3:1",
+      "D3:2",
+      "D3:3",
+      "D3:4",
+      "D3:5",
+      "D3:6",
+      "D3:7",
+      "D3:8",
+      "D3:9",
+      "D3:10",
+      "D3:11"
+    ],
+    "memory": "Sam's Action-Oriented Response to Encouragement (2023-05-24): After Evan's encouragement, Sam responded: \"Thanks, Evan! Appreciate the encouragement. I'll give it a go and let you know how it turns out.\" This demonstrates: (1) Receptiveness to support - acknowledges and appreciates encouragement; (2) Action-oriented mindset - commits to trying something rather than just receiving sympathy; (3) Connection maintenance - promises to share outcomes, keeping dialogue open. Context: Follow-up to May 24 conversation about self-care importance and health awareness. Pattern: Complements existing memories showing Sam's openness to change (health check-up discussion), self-care values, and engagement with Evan's adventures. For future interactions: acknowledge when Sam commits to trying something; validate his action-oriented approach; maintain open channel for follow-up updates. This enriches understanding of their friendship dynamic where Evan provides encouragement/support and Sam responds with commitment to action - creating positive reinforcement loop. His promise to share outcomes shows he values ongoing connection and accountability in the friendship.",
+    "memory_id": "a1d80854-ee2a-4c5d-ba03-6051e8511ae0",
+    "metadata": {
+      "created_at": "2023-05-24",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:14",
+      "D2:15",
+      "D2:16",
+      "D2:17",
+      "D3:1",
+      "D3:2",
+      "D3:3",
+      "D3:4",
+      "D3:5",
+      "D3:6",
+      "D3:7",
+      "D3:8",
+      "D3:9",
+      "D3:10",
+      "D3:11",
+      "D3:12",
+      "D3:13",
+      "D3:14",
+      "D3:15"
+    ],
+    "memory": "Sam's Stress Management & Positive Response Pattern (2023-05-24): Sam responded to Evan with \"Cheers, Evan! I won't stress - just gonna enjoy it.\" This demonstrates: (1) Emotional flexibility - ability to shift from stress to enjoyment; (2) Appreciation for supportive friendship - acknowledges Evan's support with gratitude (\"Cheers\"); (3) Positive coping strategy - chooses enjoyment over worry. Context: Part of May 24, 2023 conversation following Sam's difficult week disclosure and health check-up discussion. Pattern: Complements existing memories showing Sam's self-care values, openness to change, and action-oriented mindset - now adding specific stress management capability. For future interactions: recognize when Sam is in positive emotional state; validate his ability to let go of stress; encourage enjoyment-focused activities during recovery periods. This enriches understanding of their friendship dynamic where Evan's support enables Sam's emotional regulation - creating positive feedback loop where encouragement leads to stress reduction and enjoyment, which further strengthens connection. His capacity to shift from \"tough week\" to \"won't stress\" shows resilience that can be nurtured through supportive interactions.",
+    "memory_id": "b3ec7ce0-7cdd-44f5-b3a3-d18b8e987514",
+    "metadata": {
+      "created_at": "2023-05-24",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D2:16",
+      "D2:17",
+      "D3:1",
+      "D3:2",
+      "D3:3",
+      "D3:4",
+      "D3:5",
+      "D3:6",
+      "D3:7",
+      "D3:8",
+      "D3:9",
+      "D3:10",
+      "D3:11",
+      "D3:12",
+      "D3:13",
+      "D3:14",
+      "D3:15",
+      "D3:16",
+      "D3:17"
+    ],
+    "memory": "Sam's Conversation Closure Pattern (2023-05-24): Sam ended conversation with Evan: \"Thanks, Evan! Will do. Bye for now.\" This demonstrates: (1) Gratitude expression - consistently acknowledges support received; (2) Commitment reinforcement - reiterates action commitment (\"Will do\"); (3) Polite closure etiquette - maintains friendly boundaries. Context: Follows May 24 conversation flow including self-care discussion, health check-up disclosure, and Evan's encouragement. Pattern: Complements existing memories showing Sam's action-oriented mindset, appreciation for support, and stress management capabilities. For future interactions: expect Sam to express gratitude when receiving help; anticipate commitment statements when encouraged; maintain warm but bounded closure style. This enriches understanding of their friendship dynamic where Sam values acknowledgment of support and maintains clear conversational boundaries - consistent with his self-awareness about needing balance between connection and personal space. His closing pattern shows he doesn't over-extend conversations while keeping door open for future check-ins (promised \"let you know how it turns out\" in other memory). This is a stable behavioral pattern worth remembering for appropriate response calibration.",
+    "memory_id": "1089d577-1f68-4b1c-a72a-da710839abe4",
+    "metadata": {
+      "created_at": "2023-05-24",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:1",
+      "D3:2",
+      "D3:3",
+      "D3:4",
+      "D3:5",
+      "D3:6",
+      "D3:7",
+      "D3:8",
+      "D3:9",
+      "D3:10",
+      "D3:11",
+      "D3:12",
+      "D3:13",
+      "D3:14",
+      "D3:15",
+      "D3:16",
+      "D3:17",
+      "D3:18",
+      "D4:1",
+      "D4:2",
+      "D4:3"
+    ],
+    "memory": "Evan's Health Scare & Vulnerability Sharing (2023-06-06): Evan disclosed to Sam: \"I had a health scare last week – a sudden heart palpitation incident that really shook me up. It's been a serious wake-up call about my lifestyle.\" This demonstrates: (1) Trust in friendship - shares significant personal vulnerability with Sam; (2) Self-awareness - recognizes lifestyle connection to health issue; (3) Seeking support - implicitly inviting Sam's care through disclosure. Context: 2 weeks after May 24 conversation where Sam shared his own health check-up concerns. Pattern: Shows reciprocal vulnerability sharing in their friendship - Sam opened up about weight/health issues in May, now Evan shares heart palpitation scare. For future interactions: respond to Evan's health disclosures with empathy and support; acknowledge the courage it takes to share such news; offer practical help options; validate that lifestyle changes are positive steps. This enriches understanding of their friendship dynamic as mutually supportive - both friends serve as emotional safety nets for each other, creating balanced give-and-take in vulnerability sharing. His disclosure contrasts with his earlier Jasper road trip update (adventure-focused) - shows he's in period of health reflection similar to Sam's self-care phase. This information should inform response calibration: prioritize empathetic acknowledgment before problem-solving; avoid minimizing health concerns; maintain open channel for ongoing support discussions.",
+    "memory_id": "6e16bdbb-7249-427f-a58e-2c79de9f7324",
+    "metadata": {
+      "created_at": "2023-06-06",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:10",
+      "D3:11",
+      "D3:12",
+      "D3:13",
+      "D3:14",
+      "D3:15",
+      "D3:16",
+      "D3:17",
+      "D3:18",
+      "D4:1",
+      "D4:2",
+      "D4:3",
+      "D4:4",
+      "D4:5"
+    ],
+    "memory": "Sam's Incremental Change Commitment (2023-06-06): Sam responded: \"Yeah, you're right. It takes time, but I'm up for keep trying and making those tiny changes.\" This demonstrates: (1) Realistic expectations - acknowledges change requires time; (2) Small steps philosophy - commits to \"tiny changes\" rather than drastic overhaul; (3) Persistence - maintains commitment despite challenges. Context: June 6, 2023 conversation following Evan's health scare disclosure same day. Pattern: Builds on May 24 memories showing Sam's action-oriented mindset and openness to change - now adding dimension of patience and incremental approach. For future interactions: validate his small steps philosophy; encourage realistic timelines for goals; support gradual progress rather than demanding rapid transformation. This enriches understanding of their friendship dynamic where both friends navigate health awareness together (Sam's weight concerns May 24, Evan's heart palpitation June 6) - creating shared journey of wellness. His \"tiny changes\" approach contrasts with initial health check-up shock - shows maturation from awareness to sustainable action. This information should inform activity recommendations (small, achievable steps), conversation topics (progress celebration over perfection), and support approach (patience-focused encouragement).",
+    "memory_id": "82d2e5ef-cd3c-41a5-9e15-d2f0d61e5dd5",
+    "metadata": {
+      "created_at": "2023-06-06",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:11",
+      "D3:12",
+      "D3:13",
+      "D3:14",
+      "D3:15",
+      "D3:16",
+      "D3:17",
+      "D3:18",
+      "D4:1",
+      "D4:2",
+      "D4:3",
+      "D4:4",
+      "D4:5",
+      "D4:6",
+      "D4:7"
+    ],
+    "memory": "Evan's Encouragement Style Toward Sam (2023-06-06): Evan said to Sam: \"C'mon, keep it up! Every little bit counts, you'll get there!\" This demonstrates: (1) Positive reinforcement - validates incremental progress; (2) Growth mindset - emphasizes that small efforts matter; (3) Confidence in Sam's journey - expresses belief in eventual success. Context: June 6, 2023 conversation following Evan's health scare disclosure and Sam's commitment to \"tiny changes.\" Pattern: Complements existing memories showing mutual support dynamic - Sam shares vulnerability about health/weight issues (May 24), Evan shares his own health scare (June 6), now Evan actively encourages Sam's incremental change journey. For future interactions: recognize when Evan provides encouragement; respond with appreciation for positive reinforcement; acknowledge his growth mindset approach to wellness. This enriches understanding of their friendship dynamic as reciprocal support system - both friends navigate health awareness together, with Evan providing consistent encouragement that aligns with Sam's small-steps philosophy. His \"every little bit counts\" message directly validates Sam's incremental change commitment from same-day conversation, creating reinforcing feedback loop between encouragement and action-oriented response. This information should inform response calibration: acknowledge Evan's supportive role; appreciate his positive framing of progress; maintain open channel for ongoing wellness journey discussions.'}",
+    "memory_id": "6a61bb0a-a124-40d7-bb67-b5d846a10d67",
+    "metadata": {
+      "created_at": "2023-06-06",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:15",
+      "D3:16",
+      "D3:17",
+      "D3:18",
+      "D4:1",
+      "D4:2",
+      "D4:3",
+      "D4:4",
+      "D4:5",
+      "D4:6",
+      "D4:7",
+      "D4:8",
+      "D4:9",
+      "D4:10"
+    ],
+    "memory": "Evan's Practical Support Offer (2023-06-06): Evan offered Sam: \"Sure Sam, I'd be glad to help. Let's get together and I'll show you some basic exercises. We'll reach our goals!\" This demonstrates: (1) Concrete support willingness - moves beyond verbal encouragement to hands-on assistance; (2) Collaborative goal orientation - uses \"We'll\" framing showing shared journey; (3) Actionable commitment - offers specific help (exercises) rather than abstract encouragement. Context: June 6, 2023 conversation following Evan's health scare disclosure and Sam's incremental change commitment same day. Pattern: Builds on existing memories showing mutual support dynamic - now adding dimension of practical, hands-on assistance. For future interactions: recognize when Evan offers concrete help; respond with appreciation for actionable support; acknowledge his willingness to invest time/effort in Sam's wellness journey. This enriches understanding of their friendship as deeply collaborative wellness partnership - both friends navigating health awareness together (Sam's weight concerns May 24, Evan's heart palpitation June 6), with Evan now offering practical exercise guidance. His offer contrasts with earlier Jasper road trip update (adventure-focused) and his own health scare disclosure - shows he's actively seeking constructive ways to support Sam while processing his own health reflection. This information should inform response calibration: express gratitude for concrete offers; accept or decline help appropriately; maintain collaborative framing when discussing goals; recognize this as deepening commitment to mutual wellness journey. His \"We'll reach our goals\" language signals shared accountability and partnership rather than one-sided support - important distinction from generic encouragement patterns.'}",
+    "memory_id": "b05d57a4-8074-49de-8b69-b89e4a0a1aaa",
+    "metadata": {
+      "created_at": "2023-06-06",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D3:17",
+      "D3:18",
+      "D4:1",
+      "D4:2",
+      "D4:3",
+      "D4:4",
+      "D4:5",
+      "D4:6",
+      "D4:7",
+      "D4:8",
+      "D4:9",
+      "D4:10",
+      "D4:11",
+      "D4:12",
+      "D4:13",
+      "D4:14",
+      "D4:15",
+      "D4:16"
+    ],
+    "memory": "Evan's Empathetic Concern Pattern (2023-06-06): Evan said to Sam: \"Sorry you were in that situation, hopefully it won't happen again!\" This demonstrates: (1) Genuine empathy - acknowledges Sam's difficult experience; (2) Future-oriented concern - expresses hope for prevention; (3) Emotional attunement - validates Sam's situation as worthy of apology/concern. Context: June 6, 2023 conversation following Evan's health scare disclosure and Sam's incremental change commitment same day. Pattern: Complements existing memories showing mutual support dynamic - now adding dimension of empathetic emotional validation beyond practical help or encouragement. For future interactions: recognize when Evan expresses empathy for difficult situations; respond with appreciation for emotional validation; acknowledge his caring nature extends beyond problem-solving to genuine concern. This enriches understanding of their friendship as emotionally attuned partnership where both friends provide multiple support modalities (practical help, encouragement, empathy). His empathetic response likely relates to Sam's health/weight concerns from May 24 - shows he takes those struggles seriously rather than dismissing them. This information should inform response calibration: acknowledge his empathy; validate that difficult situations deserve emotional acknowledgment; maintain open channel for vulnerability discussions. This completes the picture of their friendship support system: practical help (exercise guidance), encouragement (\"keep it up\"), and empathetic concern (\"sorry you were in that situation\") - three complementary ways Evan supports Sam's wellness journey alongside Sam's own vulnerability sharing about health issues.",
+    "memory_id": "aa4a3849-db84-4580-9c91-27f39fb73e57",
+    "metadata": {
+      "created_at": "2023-06-06",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:3",
+      "D4:4",
+      "D4:5",
+      "D4:6",
+      "D4:7",
+      "D4:8",
+      "D4:9",
+      "D4:10",
+      "D4:11",
+      "D4:12",
+      "D4:13",
+      "D4:14",
+      "D4:15",
+      "D4:16",
+      "D4:17",
+      "D4:18",
+      "D4:19",
+      "D4:20",
+      "D5:1",
+      "D5:2"
+    ],
+    "memory": "Sam's Health Progress Update (2023-07-27): Sam thanked Evan: \"Thanks for the support, Evan. I'm working on my health and getting active!\" This demonstrates: (1) Sustained commitment - 6+ weeks after June 6 incremental change commitment; (2) Support effectiveness - Evan's encouragement/practical offers translated to action; (3) Progress reporting - actively sharing wellness journey milestones. Context: Follows June 6 conversation where Sam committed to \"tiny changes\" and Evan offered exercise guidance. Pattern: Validates the friendship support loop - vulnerability sharing → practical support → incremental action → progress updates → gratitude. For future interactions: recognize when Sam reports health progress; celebrate persistence over perfection; acknowledge support system effectiveness; maintain momentum with positive reinforcement. This confirms their wellness partnership is working - Sam's May 24 weight concerns, June 6 commitment/exercise offers, now July 27 active progress shows sustained trajectory. His gratitude signals appreciation for Evan's multi-modal support (encouragement, practical help, empathy). This information should inform response calibration: validate his progress; express genuine happiness about his journey; reinforce that small steps accumulate to real change; keep momentum going with continued encouragement.",
+    "memory_id": "38d396cf-e44c-4b70-844e-636331b86196",
+    "metadata": {
+      "created_at": "2023-07-27",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:5",
+      "D4:6",
+      "D4:7",
+      "D4:8",
+      "D4:9",
+      "D4:10",
+      "D4:11",
+      "D4:12",
+      "D4:13",
+      "D4:14",
+      "D4:15",
+      "D4:16",
+      "D4:17",
+      "D4:18",
+      "D4:19",
+      "D4:20",
+      "D5:1",
+      "D5:2",
+      "D5:3",
+      "D5:4",
+      "D5:5",
+      "D5:6",
+      "D5:7"
+    ],
+    "memory": "Sam's Health Journey Inquiry (2023-07-27): Sam asked Evan: \"That's awesome, Evan! What do you think made the biggest impact on your health journey?\" This demonstrates: (1) Active learning orientation - seeking to learn from Evan's experience; (2) Engagement with wellness partnership - continuing conversation about health journeys; (3) Appreciation tone - expresses enthusiasm (\"That's awesome\") before asking. Context: July 27, 2023 conversation following Sam's health progress update same day where he thanked Evan for support and reported being \"working on my health and getting active.\" Pattern: Builds on existing friendship dynamic showing mutual wellness journey sharing - Sam shares his incremental change commitment (June 6), Evan shares his health scare disclosure (June 6), now Sam actively seeks to learn from Evan's experience. For future interactions: recognize when Sam asks about Evan's health journey insights; respond with genuine reflection on what worked for him; share practical lessons learned; maintain collaborative wellness framing. This enriches understanding of their friendship as learning partnership where both friends support each other's health journeys while also sharing wisdom - not just one-sided encouragement but mutual knowledge exchange. His question signals he values Evan's experience and wants to apply similar strategies to his own journey. This information should inform response calibration: share authentic health journey insights; highlight what made real difference (not just generic advice); frame lessons as transferable to Sam's situation; maintain humility about personal experiences while offering value.",
+    "memory_id": "159ec3f7-4705-4607-a000-249071dba644",
+    "metadata": {
+      "created_at": "2023-07-27",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:7",
+      "D4:8",
+      "D4:9",
+      "D4:10",
+      "D4:11",
+      "D4:12",
+      "D4:13",
+      "D4:14",
+      "D4:15",
+      "D4:16",
+      "D4:17",
+      "D4:18",
+      "D4:19",
+      "D4:20",
+      "D5:1",
+      "D5:2",
+      "D5:3",
+      "D5:4",
+      "D5:5",
+      "D5:6",
+      "D5:7",
+      "D5:8"
+    ],
+    "memory": "Sam's Dietary Change Commitment (2023-07-27): Sam stated: \"Yep, I'm reducing my soda and candy intake. It's tough, but I'm determined to make a change.\" This demonstrates: (1) Specific dietary modifications - targeting sugary beverages and treats; (2) Honest difficulty acknowledgment - recognizes challenge without giving up; (3) Strong determination - maintains commitment despite obstacles. Context: July 27, 2023 conversation following Sam's health progress update same day where he thanked Evan for support and reported being \"working on my health and getting active.\" Pattern: Builds on existing friendship dynamic showing incremental change implementation - now specifying dietary component alongside physical activity mentioned in earlier memory. For future interactions: recognize when Sam reports specific dietary changes; validate his honest difficulty acknowledgment; celebrate determination over perfection; maintain supportive tone that acknowledges challenges while reinforcing commitment. This enriches understanding of their wellness partnership as concrete action-oriented - not just abstract encouragement but specific behavioral modifications (dietary + physical activity). His \"It's tough, but I'm determined\" framing shows realistic self-awareness about change difficulty while maintaining forward momentum. This information should inform response calibration: acknowledge the specific dietary changes; validate that difficult habits are hard to break; reinforce determination as key success factor; avoid toxic positivity that dismisses his honest struggle. This completes the picture of Sam's health journey implementation: physical activity (from earlier memory) + dietary modifications (this message) - showing comprehensive lifestyle change approach supported by Evan's multi-modal friendship support system.",
+    "memory_id": "d45ecf0b-47e5-4b9e-b22c-4938b0aae2b9",
+    "metadata": {
+      "created_at": "2023-07-27",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:10",
+      "D4:11",
+      "D4:12",
+      "D4:13",
+      "D4:14",
+      "D4:15",
+      "D4:16",
+      "D4:17",
+      "D4:18",
+      "D4:19",
+      "D4:20",
+      "D5:1",
+      "D5:2",
+      "D5:3",
+      "D5:4",
+      "D5:5",
+      "D5:6",
+      "D5:7",
+      "D5:8",
+      "D5:9",
+      "D5:10",
+      "D5:11"
+    ],
+    "memory": "Evan's Current Reading & Healthy Snack Suggestions (2023-07-27): Evan suggested to Sam: \"Definitely, how about some flavored seltzer with some air-popped popcorn or fruit? It's yum and healthy!\" He also mentioned: \"The novel I'm reading is 'The Great Gatsby'.\" This demonstrates: (1) Personal detail - currently reading \"The Great Gatsby\"; (2) Healthy food suggestions - offering practical alternatives to sugary snacks; (3) Wellness partnership continuation - aligning with Sam's dietary change commitment (reducing soda/candy from same-day conversation). Context: July 27, 2023 conversation following Sam's health progress update and dietary change commitment. Pattern: Builds on existing memories showing Evan's multi-modal support system - practical help (exercise guidance), empathetic concern, encouragement, AND healthy lifestyle suggestions. For future interactions: recognize when Evan shares reading interests; acknowledge his ongoing role as wellness partner making practical healthy food suggestions; maintain collaborative framing about nutrition choices. This enriches understanding of their friendship as both emotionally attuned AND practically supportive wellness partnership where Evan actively suggests healthier alternatives to Sam's dietary changes. His snack suggestion directly supports Sam's \"reducing soda and candy\" commitment - shows he's thinking about specific implementation strategies rather than abstract encouragement. This information should inform response calibration: acknowledge his reading interests; appreciate practical healthy food suggestions; maintain collaborative nutrition discussion framing.",
+    "memory_id": "ddf2640e-4f14-4fb9-9a04-377bea0ddf95",
+    "metadata": {
+      "created_at": "2023-07-27",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D4:16",
+      "D4:17",
+      "D4:18",
+      "D4:19",
+      "D4:20",
+      "D5:1",
+      "D5:2",
+      "D5:3",
+      "D5:4",
+      "D5:5",
+      "D5:6",
+      "D5:7",
+      "D5:8",
+      "D5:9",
+      "D5:10",
+      "D5:11",
+      "D5:12",
+      "D5:13",
+      "D5:14",
+      "D5:15",
+      "D5:16",
+      "D5:17",
+      "D5:18",
+      "D5:19",
+      "D5:20",
+      "D5:21"
+    ],
+    "memory": "Evan's Encouraging Validation Response (2023-07-27): Evan responded to Sam: \"That's awesome, Sam! It's such a rewarding and tough activity - keep going and have fun!\" This demonstrates: (1) Positive reinforcement - celebrates Sam's progress with genuine enthusiasm; (2) Balanced perspective - acknowledges both rewards AND challenges of physical activity; (3) Sustainability framing - emphasizes persistence (\"keep going\") and enjoyment (\"have fun\") over perfection. Context: July 27, 2023 conversation following Sam's health progress update where he thanked Evan for support and reported being \"working on my health and getting active.\" Pattern: Complements existing memories showing Evan's multi-modal support system - practical help (exercise guidance), empathetic concern, encouragement, healthy suggestions, AND validation of effort. For future interactions: recognize when Sam shares wellness progress; respond with genuine enthusiasm acknowledging both rewards and challenges; frame persistence and enjoyment as key success factors rather than perfection. This enriches understanding of their friendship as emotionally attuned wellness partnership where Evan validates Sam's journey through balanced perspective - not dismissing difficulties but framing them as part of rewarding process. His response directly supports Sam's \"It's tough, but I'm determined\" framing from same-day dietary commitment memory. This information should inform response calibration: celebrate progress with authentic enthusiasm; acknowledge challenges without minimizing them; encourage persistence and enjoyment over perfection; maintain supportive tone that validates both effort and struggle.",
+    "memory_id": "15f0df27-2017-42d8-862d-a8802ceaf3af",
+    "metadata": {
+      "created_at": "2023-07-27",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:2",
+      "D5:3",
+      "D5:4",
+      "D5:5",
+      "D5:6",
+      "D5:7",
+      "D5:8",
+      "D5:9",
+      "D5:10",
+      "D5:11",
+      "D5:12",
+      "D5:13",
+      "D5:14",
+      "D5:15",
+      "D5:16",
+      "D5:17",
+      "D5:18",
+      "D5:19",
+      "D5:20",
+      "D5:21",
+      "D5:22"
+    ],
+    "memory": "Evan's Relationship & Health Context (2023-08-07): Evan has a romantic partner (\"She must be something special!\") and is dealing with health issues lately. Sam responded: \"Congrats Evan! She must be something special! Being with someone who makes you feel alive is amazing. I'm sorry to hear that you're dealing with health issues lately, it can be really tough. It's hard to fully enjoy things sometimes.\" This demonstrates: (1) New personal detail - Evan has a romantic relationship; (2) Health challenges - Evan experiencing health issues (distinct from Sam's journey); (3) Empathetic friendship dynamic - Sam balances celebration of relationship with concern for health struggles; (4) Relationship values - Sam appreciates partners who make people feel alive. Context: August 7, 2023 conversation following July 27 wellness partnership memories where Sam was on health journey and Evan provided support. Pattern: Friendship has evolved to include mutual vulnerability - Sam shares health progress while Evan shares relationship news AND health challenges. For future interactions: recognize Evan's romantic partner; acknowledge his health issues with empathy; balance celebration of positive life events with sensitivity to health struggles; maintain supportive tone that validates both joy and difficulty. This enriches understanding of their friendship as multi-dimensional support system - wellness partnership PLUS emotional intimacy sharing (relationship news) PLUS empathetic concern for each other's challenges. Sam's response shows he can handle multiple topics simultaneously (celebrating Evan's relationship while acknowledging his health issues). This information should inform response calibration: acknowledge Evan's partner when relevant; show genuine interest in his relationship; validate that relationships make life richer even during health challenges; maintain empathetic framing about health difficulties without being overly negative.",
+    "memory_id": "a6489627-db22-4a37-8dc0-5f2b2fd65709",
+    "metadata": {
+      "created_at": "2023-08-07",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:7",
+      "D5:8",
+      "D5:9",
+      "D5:10",
+      "D5:11",
+      "D5:12",
+      "D5:13",
+      "D5:14",
+      "D5:15",
+      "D5:16",
+      "D5:17",
+      "D5:18",
+      "D5:19",
+      "D5:20",
+      "D5:21",
+      "D5:22",
+      "D5:23"
+    ],
+    "memory": "Evan's Health Journey Timeline & Perspective (2023-08-07): Evan stated: \"My healthy road has been a long one. I've been working on it for two years now, so there have been ups and downs, but I'm doing my best.\" This demonstrates: (1) Long-term health commitment - 2+ years of dedicated work; (2) Realistic expectations - acknowledges challenges (\"ups and downs\") without giving up; (3) Resilient mindset - maintains effort despite difficulties. Context: August 7, 2023 conversation following Sam's health progress update where Evan shared his romantic relationship news. Pattern: Builds on existing memories showing Evan's multi-modal support system AND his own wellness journey as role model for Sam. For future interactions: recognize Evan's 2-year health journey timeline; validate his realistic perspective on health challenges; acknowledge that sustained effort over time matters more than quick fixes; maintain supportive tone that honors long-term commitment. This enriches understanding of their friendship as mutual learning partnership where both friends navigate health journeys - Sam's recent changes (June-July) and Evan's established 2-year journey. His \"ups and downs\" framing shows healthy relationship with setbacks - not viewing them as failures but as part of process. This information should inform response calibration: acknowledge his long-term commitment; validate that health journeys take time; celebrate persistence over perfection; frame challenges as normal parts of wellness work rather than obstacles to overcome.",
+    "memory_id": "6dab0769-8770-4191-b2a3-3409877e4d99",
+    "metadata": {
+      "created_at": "2023-08-07",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:8",
+      "D5:9",
+      "D5:10",
+      "D5:11",
+      "D5:12",
+      "D5:13",
+      "D5:14",
+      "D5:15",
+      "D5:16",
+      "D5:17",
+      "D5:18",
+      "D5:19",
+      "D5:20",
+      "D5:21",
+      "D5:22",
+      "D5:23"
+    ],
+    "memory": "Sam's Motivation Tools Interest (2023-08-07): Sam asked: \"I wish your motivation never goes anywhere! I'm thinking of ordering myself some similar ones too, what do you think, are they worth it?\" This demonstrates: (1) Interest in motivation-maintenance tools/products - wants to invest in systems that help sustain health journey commitment; (2) Proactive approach - seeking external supports alongside internal determination; (3) Trust in Evan's recommendations - asks his opinion before purchasing. Context: August 7, 2023 conversation following Sam's health progress updates and dietary change commitment from July 27. Pattern: Builds on existing wellness partnership showing Sam seeks both internal motivation (\"It's tough, but I'm determined\" from earlier memory) AND external tools/systems to support his journey. For future interactions: recognize when Sam asks about motivation tools/products; provide balanced assessment of their value; acknowledge that combining internal determination with external supports is effective strategy; maintain supportive tone that validates investment in self-improvement systems. This enriches understanding of their friendship as practical wellness partnership where Evan provides both emotional support AND product/tool recommendations for health journey implementation.",
+    "memory_id": "717b9e0d-0e47-46ae-8c93-2d2719a1d92a",
+    "metadata": {
+      "created_at": "2023-08-07",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:11",
+      "D5:12",
+      "D5:13",
+      "D5:14",
+      "D5:15",
+      "D5:16",
+      "D5:17",
+      "D5:18",
+      "D5:19",
+      "D5:20",
+      "D5:21",
+      "D5:22",
+      "D5:23"
+    ],
+    "memory": "Sam's Visual Reminder Effectiveness (2023-08-07): Sam has implemented a \"visual reminder\" for his health journey that Evan found motivating: \"It's been awesome, Sam! That visual reminder has been really motivating.\" This demonstrates: (1) Visual reminders are effective motivational tools for Sam - he invested in external supports; (2) Mutual benefit from wellness partnership - Evan finds value in Sam's progress/tools; (3) Practical implementation strategy - visual cues help sustain health journey commitment. Context: August 7, 2023 conversation following Sam's interest in motivation tools/products and his health progress updates. Pattern: Builds on existing memories showing Sam seeks both internal determination AND external supports (motivation tools, visual reminders). For future interactions: recognize when Sam uses or discusses visual reminders; acknowledge their effectiveness for sustained motivation; validate investment in practical wellness systems. This enriches understanding of their friendship as practical wellness partnership where they share and appreciate implementation strategies - not just emotional support but concrete tools that work. Visual reminders represent a specific category of external supports alongside the motivation tools Sam was considering purchasing. This information should inform response calibration: acknowledge visual reminders as effective motivational strategy; celebrate Sam's proactive approach to implementing practical wellness systems; validate that combining internal determination with external cues (visual, tool-based) is effective implementation strategy.",
+    "memory_id": "3845cb22-ea20-4587-92a5-e570ed15d669",
+    "metadata": {
+      "created_at": "2023-08-07",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:21",
+      "D5:22",
+      "D5:23"
+    ],
+    "memory": "Evan's Core Wellness Philosophy (2023-08-07): Evan stated: \"Yeah, every little thing we do for ourselves helps us in the long run.\" This demonstrates: (1) Incremental action principle - small self-care actions accumulate meaningful long-term benefits; (2) Long-term perspective - values sustained effort over immediate gratification; (3) Self-investment mindset - recognizes personal agency in health outcomes. Context: August 7, 2023 conversation following Sam's health progress updates and Evan sharing his romantic relationship news AND 2-year health journey timeline. Pattern: Builds on existing memories showing Evan's multi-modal support system, long-term commitment perspective, and encouraging validation style. For future interactions: acknowledge incremental self-care actions; validate that small consistent efforts matter; frame wellness as cumulative process rather than dramatic transformations; maintain supportive tone that honors both immediate effort AND long-term vision. This enriches understanding of their friendship as mutual learning partnership where Evan models sustainable health philosophy - not perfectionism but persistent, incremental self-investment. His statement directly complements his \"ups and downs\" framing from same-day memory - challenges are normal because progress is cumulative, not linear. This information should inform response calibration: celebrate small wins; validate incremental effort; frame long-term benefits of consistent small actions; avoid dismissing minor health behaviors as insignificant.'}",
+    "memory_id": "c8502a01-ff92-47a7-8933-08e77be4660f",
+    "metadata": {
+      "created_at": "2023-08-07",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:22",
+      "D5:23"
+    ],
+    "memory": "Sam's Affirmation of Incremental Action Principle (2023-08-07): Sam stated: \"Yep, small steps add up. Stay consistent and don't give up!\" This demonstrates: (1) Alignment with incremental action philosophy - agrees that small consistent efforts accumulate meaningful results; (2) Commitment to persistence - emphasizes consistency over perfection; (3) Resilient mindset - frames health journey as requiring sustained effort despite challenges. Context: August 7, 2023 conversation following Evan's statement about \"every little thing we do for ourselves helps us in the long run.\" Pattern: Builds on existing wellness partnership showing mutual reinforcement of incremental action philosophy - both friends value small consistent efforts over dramatic transformations. For future interactions: recognize when Sam affirms or discusses incremental action; validate his commitment to consistency; maintain supportive tone that honors persistence and resilience. This enriches understanding of their friendship as aligned wellness partners who mutually reinforce sustainable health philosophies rather than pursuing quick fixes or perfectionism.",
+    "memory_id": "f0be5b01-c733-4a63-b100-f6e2c63c6d2b",
+    "metadata": {
+      "created_at": "2023-08-07",
+      "source": "langmem"
+    }
+  },
+  {
+    "attributed_to": null,
+    "dia_ids": [
+      "D5:23"
+    ],
+    "memory": "Evan's Closing Affirmation on Consistency & Perseverance (2023-08-07): Evan stated: \"Yep, Sam! Consistency and perseverance will get us far. Great chat!\" This demonstrates: (1) Mutual reinforcement of core wellness values - both friends committed to consistency over quick fixes; (2) Positive relationship closure - conversation ended on encouraging note; (3) Shared philosophy alignment - Evan's closing statement directly validates their incremental action approach. Context: August 7, 2023 conversation conclusion following health progress updates, motivation tools discussion, visual reminders implementation, and both friends' wellness journey sharing. Pattern: Builds on existing memories showing their aligned wellness partnership where both value persistence, consistency, and long-term commitment over perfectionism or dramatic transformations. For future interactions: recognize when Evan affirms consistency/perseverance values; validate shared commitment to sustained effort; maintain positive closing tone that reinforces mutual support. This enriches understanding of their friendship as aligned wellness partners who mutually reinforce sustainable health philosophies - not just emotional support but shared core values around persistence and incremental progress. His \"consistency and perseverance\" framing directly complements his earlier \"every little thing we do for ourselves helps us in the long run\" statement from same-day memory, showing consistent philosophical stance throughout conversation. This information should inform response calibration: acknowledge their shared commitment to consistency; validate that perseverance is central to health journey success; maintain encouraging tone that honors persistence as core value rather than optional strategy.'}",
+    "memory_id": "ad9dc8ed-9a8a-4775-a49d-16b6861b8543",
+    "metadata": {
+      "created_at": "2023-08-07",
+      "source": "langmem"
+    }
+  }
+]

@@ -1,0 +1,68 @@
+[
+  {
+    "name": "day5-source-import-smoke-20",
+    "argv": [
+      ".venv/bin/python",
+      "scripts/benchmark_day6_append.py",
+      "--count",
+      "20",
+      "--root",
+      "/private/tmp/memfw-day6/perf/day5-smoke-20",
+      "--label",
+      "day5-source-smoke-20"
+    ],
+    "cwd": "<REPO_ROOT>",
+    "env": {
+      "PYTHONPATH": "/private/tmp/memfw-day6-baseline/src"
+    },
+    "process_slots": 1
+  },
+  {
+    "name": "day5-source-1000",
+    "argv": [
+      ".venv/bin/python",
+      "scripts/benchmark_day6_append.py",
+      "--count",
+      "1000",
+      "--root",
+      "/private/tmp/memfw-day6/perf/day5-1000",
+      "--label",
+      "day5-source-1000"
+    ],
+    "cwd": "<REPO_ROOT>",
+    "env": {
+      "PYTHONPATH": "/private/tmp/memfw-day6-baseline/src"
+    },
+    "process_slots": 1
+  },
+  {
+    "name": "day6-current-1000",
+    "argv": [
+      ".venv/bin/python",
+      "scripts/benchmark_day6_append.py",
+      "--count",
+      "1000",
+      "--root",
+      "/private/tmp/memfw-day6/perf/day6-1000",
+      "--label",
+      "day6-current-1000"
+    ],
+    "cwd": "<REPO_ROOT>",
+    "process_slots": 1
+  },
+  {
+    "name": "day6-current-100000",
+    "argv": [
+      ".venv/bin/python",
+      "scripts/benchmark_day6_append.py",
+      "--count",
+      "100000",
+      "--root",
+      "/private/tmp/memfw-day6/perf/day6-100000",
+      "--label",
+      "day6-current-100000"
+    ],
+    "cwd": "<REPO_ROOT>",
+    "process_slots": 1
+  }
+]

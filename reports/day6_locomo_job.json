@@ -1,0 +1,8 @@
+[
+  {
+    "name": "official-locomo10",
+    "argv": [".venv/bin/python", "scripts/eval_locomo.py", "--data", "<MEMFW_DATA_DIR>/locomo10.json", "--budget-tokens", "128", "--policies", "fifo", "lru", "decay", "salience", "consolidate_then_forget", "--output", "reports/day6_locomo_official.json", "--checkpoint", "reports/day6_runs/locomo/checkpoint.json"],
+    "cwd": "<REPO_ROOT>",
+    "process_slots": 1
+  }
+]
