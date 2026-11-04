@@ -112,11 +112,31 @@ def test_experiment_root_lock_rejects_concurrent_run_before_writes(tmp_path: Pat
     assert not (work_root / "base").exists()
 
 
+VOLATILE_EXPERIMENT_KEYS = {
+    "storage_bytes",
+    "physical_disk_bytes",
+    "physical_disk_delta_bytes",
+}
+
+
+def _stable_payload(value: Any) -> Any:
+    """Strip filesystem-allocation metrics, which depend on the host filesystem."""
+    if isinstance(value, dict):
+        return {
+            key: _stable_payload(item)
+            for key, item in value.items()
+            if key not in VOLATILE_EXPERIMENT_KEYS
+        }
+    if isinstance(value, list):
+        return [_stable_payload(item) for item in value]
+    return value
+
+
 def test_small_policy_and_capture_experiment_is_reproducible(tmp_path: Path) -> None:
     records = generate_dataset(count=20)
     work_root = tmp_path / "repeatability"
-    first = run_experiment(records=records, work_root=work_root)
-    second = run_experiment(records=records, work_root=work_root)
+    first = _stable_payload(run_experiment(records=records, work_root=work_root))
+    second = _stable_payload(run_experiment(records=records, work_root=work_root))
 
     canonical_first = json.dumps(first, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     canonical_second = json.dumps(second, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
