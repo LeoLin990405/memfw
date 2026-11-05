@@ -164,8 +164,8 @@ mypy src
 ruff check src/memfw tests
 ```
 
-在参考机器上测试结果为 **485 passed、2 skipped、4 failed**；4 个失败是既有的
-`tests/test_mlx_transport.py` 用例，需要满足负载守卫的 MLX 机器才能通过，属于环境依赖而非回归。
+在参考机器上测试结果为 **493 passed、2 skipped**。MLX transport 测试受环境守卫控制
+（不满足 MLX 负载条件的机器会跳过），不同机器结果可能不同。
 
 ## 🧭 设计原则与边界
 

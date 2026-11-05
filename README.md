@@ -171,9 +171,9 @@ mypy src
 ruff check src/memfw tests
 ```
 
-On the reference host the suite reports **485 passed, 2 skipped, and 4 failed**; the four failures
-are the pre-existing `tests/test_mlx_transport.py` cases that require an MLX-capable host whose load
-average passes the test guard. They are environment-dependent, not regressions.
+On the reference host the suite reports **493 passed and 2 skipped**. The MLX transport tests are
+environment-gated (they skip when the host cannot satisfy their MLX load guard), so results can vary
+by host.
 
 ## 🧭 Design principles and limits
 
