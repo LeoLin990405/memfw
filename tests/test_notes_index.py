@@ -52,3 +52,32 @@ def test_index_search_incremental_and_fallback(tmp_path: Path) -> None:
     hits = fts_only.search("gradient", limit=3)
     assert hits and hits[0].path.endswith("CS/b.md")
     assert hits[0].source == "fts"
+
+
+def test_index_commits_checkpoints_before_a_late_failure(tmp_path: Path) -> None:
+    root = tmp_path / "vault"
+    _note(root / "a.md", "A", "first")
+    _note(root / "b.md", "B", "second")
+    _note(root / "c.md", "C", "third")
+
+    class FailingEmbedder(HashEmbeddingProvider):
+        def __init__(self) -> None:
+            super().__init__(8)
+            self.calls = 0
+
+        def embed(self, texts):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            if self.calls >= 3:
+                raise RuntimeError("simulated embedding failure")
+            return super().embed(texts)
+
+    db = tmp_path / "partial.sqlite"
+    index = NotesIndex(db, embedder=FailingEmbedder())
+    try:
+        index.index(root, commit_every=1)
+    except RuntimeError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("expected failure")
+    reopened = NotesIndex(db)
+    assert reopened.status()["notes"] >= 1

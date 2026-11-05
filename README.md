@@ -225,6 +225,9 @@ memfw notes serve --root ~/notes --db /tmp/notes.sqlite \
   --model qwen3-embedding --dimension 1024
 ```
 
+See [Notes index](docs/notes-index.md) for the index layout, MCP server, and
+checkpoint/resume behavior.
+
 Install the optional vector extension with `pip install 'memfw[notes]'`.
 Without it, the same API still works with full-text search and stores vectors
 as a fallback BLOB table.
