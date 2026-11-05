@@ -188,3 +188,26 @@ ruff check src/memfw tests
 ## 📄 许可证
 
 使用 [Apache License 2.0](LICENSE)。本发行版不包含吸收的第三方源码；见 [`NOTICE`](NOTICE)。
+
+
+## 笔记索引
+
+`memfw.notes` 是一个可重建的 Markdown 笔记 section 级索引，不写入笔记源文件：
+
+- SQLite FTS5 全文检索（trigram，必要时 jieba + unicode61 回退）；
+- 可选 sqlite-vec 向量检索；
+- 支持 OpenAI-compatible embedding endpoint；
+- frontmatter / heading 分块、wikilink、hash 增量；
+- RRF 混合排序；embedding 不可用时自动降级为全文检索。
+
+```bash
+memfw notes index --root ~/notes --db /tmp/notes.sqlite \
+  --endpoint http://127.0.0.1:8001/v1/embeddings \
+  --model qwen3-embedding --dimension 1024
+memfw notes search "corpus collocations" --db /tmp/notes.sqlite \
+  --endpoint http://127.0.0.1:8001/v1/embeddings \
+  --model qwen3-embedding --dimension 1024
+memfw notes status --db /tmp/notes.sqlite
+```
+
+安装可选扩展：`pip install 'memfw[notes]'`。

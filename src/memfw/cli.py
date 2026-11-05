@@ -21,6 +21,7 @@ from .core.repository import Repository
 from .curation.engine import enforce_budget, run_forget
 from .curation.review_cli import review_command as run_review
 from .index import MemoryIndex
+from .notes import HttpEmbeddingProvider, NotesIndex
 from .okf import export_okf, validate_okf_bundle
 from .policies import PolicyName
 from .retrieval import VaultRetriever
@@ -36,8 +37,10 @@ tier_app = typer.Typer(help="Inspect and move hot/cold memory tiers")
 tier_alias_app = typer.Typer(help="Tier placement commands")
 layer_alias_app = typer.Typer(help="Layer classification commands")
 okf_app = typer.Typer(help="Export and validate an OKF v0.2 knowledge bundle")
+notes_app = typer.Typer(help="Index and search a Markdown notes tree (derived, rebuildable)")
 app.add_typer(index_app, name="index")
 app.add_typer(okf_app, name="okf")
+app.add_typer(notes_app, name="notes")
 app.add_typer(log_app, name="log")
 app.add_typer(budget_app, name="budget")
 app.add_typer(forget_app, name="forget")
@@ -46,6 +49,84 @@ app.add_typer(tier_alias_app, name="tier")
 app.add_typer(layer_alias_app, name="layer")
 app.add_typer(capture_app, name="capture")
 capture_app.command(name="confirm")(confirm_command)
+
+
+def _notes_embedder(
+    endpoint: str | None,
+    model: str,
+    dimension: int,
+    batch_size: int,
+) -> HttpEmbeddingProvider | None:
+    if not endpoint:
+        return None
+    return HttpEmbeddingProvider(
+        endpoint,
+        model=model,
+        dimension=dimension,
+        batch_size=batch_size,
+    )
+
+
+@notes_app.command("index")
+def notes_index(
+    root: Annotated[Path, typer.Option("--root", "-r", help="Markdown notes root")] = Path("."),
+    db: Annotated[Path, typer.Option("--db", help="Derived SQLite index path")] = Path(
+        ".memfw-notes.sqlite"
+    ),
+    endpoint: Annotated[
+        str | None, typer.Option("--endpoint", help="OpenAI-compatible embeddings URL")
+    ] = None,
+    model: Annotated[str, typer.Option("--model")] = "embedding-model",
+    dimension: Annotated[int, typer.Option("--dimension")] = 1024,
+    batch_size: Annotated[int, typer.Option("--batch-size")] = 16,
+    max_files: Annotated[int | None, typer.Option("--max-files")] = None,
+) -> None:
+    """Build or incrementally update a section-level notes index."""
+
+    index = NotesIndex(db, embedder=_notes_embedder(endpoint, model, dimension, batch_size))
+    counts = index.index(root, max_files=max_files)
+    typer.echo(
+        json.dumps({"counts": counts, "status": index.status()}, ensure_ascii=False, indent=2)
+    )
+
+
+@notes_app.command("search")
+def notes_search(
+    query: Annotated[str, typer.Argument()],
+    db: Annotated[Path, typer.Option("--db", help="Derived SQLite index path")] = Path(
+        ".memfw-notes.sqlite"
+    ),
+    endpoint: Annotated[
+        str | None, typer.Option("--endpoint", help="OpenAI-compatible embeddings URL")
+    ] = None,
+    model: Annotated[str, typer.Option("--model")] = "embedding-model",
+    dimension: Annotated[int, typer.Option("--dimension")] = 1024,
+    limit: Annotated[int, typer.Option("--limit", "-n")] = 10,
+    path_prefix: Annotated[str | None, typer.Option("--path-prefix")] = None,
+    tag: Annotated[list[str] | None, typer.Option("--tag")] = None,
+    course: Annotated[str | None, typer.Option("--course")] = None,
+) -> None:
+    """Search the notes index; automatically degrades to FTS without an embedder."""
+
+    index = NotesIndex(db, embedder=_notes_embedder(endpoint, model, dimension, 16))
+    hits = index.search(
+        query,
+        limit=limit,
+        path_prefix=path_prefix,
+        tags=tag or (),
+        course=course,
+    )
+    typer.echo(json.dumps([hit.as_dict() for hit in hits], ensure_ascii=False, indent=2))
+
+
+@notes_app.command("status")
+def notes_status(
+    db: Annotated[Path, typer.Option("--db", help="Derived SQLite index path")] = Path(
+        ".memfw-notes.sqlite"
+    ),
+) -> None:
+    """Show notes index counts, tokenizer and vector state."""
+    typer.echo(json.dumps(NotesIndex(db).status(), ensure_ascii=False, indent=2))
 
 
 @app.command("review")

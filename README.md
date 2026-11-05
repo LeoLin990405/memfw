@@ -199,3 +199,29 @@ Issues and pull requests are welcome. Before opening a PR:
 
 Licensed under the [Apache License 2.0](LICENSE). This distribution contains no absorbed third-party
 source code; see [`NOTICE`](NOTICE).
+
+
+## Notes index
+
+`memfw.notes` is a derived, section-level index for a Markdown notes tree. It is
+independent of the memory vault and never writes the notes:
+
+- SQLite FTS5 lexical recall (trigram, or jieba + unicode61 fallback);
+- optional sqlite-vec vector recall;
+- OpenAI-compatible embedding provider (`HttpEmbeddingProvider`);
+- heading/frontmatter chunks, wikilinks, incremental hash-based updates;
+- RRF hybrid search with FTS-only degradation.
+
+```bash
+memfw notes index --root ~/notes --db /tmp/notes.sqlite \
+  --endpoint http://127.0.0.1:8001/v1/embeddings \
+  --model qwen3-embedding --dimension 1024
+memfw notes search "corpus collocations" --db /tmp/notes.sqlite \
+  --endpoint http://127.0.0.1:8001/v1/embeddings \
+  --model qwen3-embedding --dimension 1024
+memfw notes status --db /tmp/notes.sqlite
+```
+
+Install the optional vector extension with `pip install 'memfw[notes]'`.
+Without it, the same API still works with full-text search and stores vectors
+as a fallback BLOB table.
