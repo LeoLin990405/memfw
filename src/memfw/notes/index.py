@@ -466,6 +466,7 @@ class NotesIndex:
         *,
         max_files: int | None = None,
         progress: Any | None = None,
+        commit_every: int = 100,
     ) -> dict[str, int]:
         """Incrementally index ``root`` and return counts of work performed."""
 
@@ -570,6 +571,8 @@ class NotesIndex:
                             )
                     counts["embedded"] += len(section_rows)
                 counts["updated"] += 1
+                if commit_every > 0 and counts["updated"] % commit_every == 0:
+                    connection.commit()
                 if progress is not None:
                     progress(counts)
             if max_files is None:
