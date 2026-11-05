@@ -91,3 +91,6 @@ results/stepG/run_manifest.json
 results/stepG/arch/runtime/
 results/stepG/multiconv/runtime/
 results/stepG/multiconv/runtime_reuse/
+
+# CodeGraph local index
+.codegraph/
