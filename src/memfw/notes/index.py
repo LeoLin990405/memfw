@@ -320,8 +320,9 @@ class NotesIndex:
 
     def _load_vec(self, connection: sqlite3.Connection) -> bool:
         try:
-            import sqlite_vec  # type: ignore[import-untyped]
+            import importlib
 
+            sqlite_vec = importlib.import_module("sqlite_vec")
             connection.enable_load_extension(True)
             sqlite_vec.load(connection)
             connection.enable_load_extension(False)
@@ -514,7 +515,7 @@ class NotesIndex:
                         note.course,
                     ),
                 )
-                note_id = int(cursor.lastrowid)
+                note_id = int(cursor.lastrowid or 0)
                 for target in note.links:
                     connection.execute(
                         "INSERT INTO links(note_id,target) VALUES (?,?)", (note_id, target)
@@ -536,7 +537,7 @@ class NotesIndex:
                             section.end_line,
                         ),
                     )
-                    section_id = int(section_cursor.lastrowid)
+                    section_id = int(section_cursor.lastrowid or 0)
                     connection.execute(
                         "INSERT INTO sections_fts(rowid,heading,content,title) VALUES (?,?,?,?)",
                         (
