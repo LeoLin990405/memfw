@@ -21,6 +21,7 @@ from .core.repository import Repository
 from .curation.engine import enforce_budget, run_forget
 from .curation.review_cli import review_command as run_review
 from .index import MemoryIndex
+from .okf import export_okf, validate_okf_bundle
 from .policies import PolicyName
 from .retrieval import VaultRetriever
 from .stats import measure_runtime
@@ -34,7 +35,9 @@ forget_app = typer.Typer(help="Plan and apply policy-driven forgetting")
 tier_app = typer.Typer(help="Inspect and move hot/cold memory tiers")
 tier_alias_app = typer.Typer(help="Tier placement commands")
 layer_alias_app = typer.Typer(help="Layer classification commands")
+okf_app = typer.Typer(help="Export and validate an OKF v0.2 knowledge bundle")
 app.add_typer(index_app, name="index")
+app.add_typer(okf_app, name="okf")
 app.add_typer(log_app, name="log")
 app.add_typer(budget_app, name="budget")
 app.add_typer(forget_app, name="forget")
@@ -763,3 +766,48 @@ def stats(root: Annotated[Path, typer.Option("--root", "-r")] = Path(".")) -> No
             measure_runtime(repository, now=repository._now()).as_dict(), sort_keys=True, indent=2
         )
     )
+
+
+@okf_app.command("export")
+def okf_export(
+    out: Annotated[Path, typer.Argument(help="Output directory for the OKF bundle")],
+    root: Annotated[Path, typer.Option("--root", "-r")] = Path("."),
+    force: Annotated[bool, typer.Option("--force")] = False,
+    bundle_title: Annotated[str | None, typer.Option("--title")] = None,
+) -> None:
+    """Export the local vault as an OKF v0.2 bundle (derived, rebuildable)."""
+    result = export_okf(root, out, force=force, bundle_title=bundle_title)
+    typer.echo(
+        json.dumps(
+            {
+                "bundle": str(result.bundle),
+                "concepts": result.concepts,
+                "valid": result.valid,
+                "manifest": str(result.manifest),
+                "warnings": result.warnings,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+
+
+@okf_app.command("validate")
+def okf_validate(path: Annotated[Path, typer.Argument(help="OKF bundle directory")]) -> None:
+    """Validate an OKF bundle: frontmatter, required type, index/log, manifest count."""
+    result = validate_okf_bundle(path)
+    typer.echo(
+        json.dumps(
+            {
+                "valid": result.valid,
+                "concept_count": result.concept_count,
+                "errors": result.errors,
+                "warnings": result.warnings,
+                "type_counts": result.type_counts,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+    if not result.valid:
+        raise typer.Exit(code=1)

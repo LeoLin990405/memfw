@@ -34,6 +34,7 @@ Markdown 即真相 · 哈希链 JSONL 事件 · 可重建 FTS5 索引 · 确定�
 - **本地 MCP 服务。** `memfw-mcp` 把 search/get/remember/status 以 stdio MCP 暴露给任意客户端，
   只绑定一个本地 vault 目录。
 - **不依赖模型。** 核心是确定性逻辑，可完全离线运行。
+- **OKF 投影。** 可导出为标准、可重建的 OKF v0.2 bundle。
 
 ## 🧠 架构
 
@@ -107,6 +108,19 @@ memfw-mcp --root localdata/demo-vault
 | `memory_status` | vault 规模、layer/tier 统计与日志摘要 |
 
 服务刻意保持本地化：无 SSH、无远程主机、无外部检索后端。需要这些能力时，请在应用或适配器中实现。
+
+## 📚 OKF 投影
+
+可把 vault 导出为 [Open Knowledge Format v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format)
+bundle，便于 Agent 和工具以 frontmatter 消费知识：
+
+```sh
+memfw okf export ./okf-bundle --root ./localdata/demo-vault --force
+memfw okf validate ./okf-bundle
+```
+
+OKF bundle 是可重建的派生投影；Markdown 仍是权威。字段映射与校验规则见
+[`docs/okf.md`](docs/okf.md)。
 
 ## 📊 评估结果摘要
 

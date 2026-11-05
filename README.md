@@ -39,6 +39,7 @@ Markdown is the source of truth · hash-linked JSONL events · rebuildable FTS5 
 - **Local MCP server.** `memfw-mcp` exposes search/get/remember/status over stdio to any MCP client,
   bound to one local vault directory.
 - **No required model.** The core is deterministic and runs offline.
+- **OKF projection.** Export a vault as a standards-based, rebuildable OKF v0.2 bundle.
 
 ## 🧠 Architecture
 
@@ -113,6 +114,19 @@ Example client configuration (stdio):
 
 The server is deliberately local-only: no SSH, no remote host, no external search backend. If you
 need those, build them in your application or adapter.
+
+## 📚 OKF projection
+
+Export the vault as an [Open Knowledge Format v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format)
+bundle for interoperable, frontmatter-driven knowledge consumption:
+
+```sh
+memfw okf export ./okf-bundle --root ./localdata/demo-vault --force
+memfw okf validate ./okf-bundle
+```
+
+The bundle is derived and rebuildable; Markdown remains the authority. See
+[`docs/okf.md`](docs/okf.md) for the field mapping and validation rules.
 
 ## 📊 Evaluation summary
 
