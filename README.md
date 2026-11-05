@@ -220,6 +220,9 @@ memfw notes search "corpus collocations" --db /tmp/notes.sqlite \
   --endpoint http://127.0.0.1:8001/v1/embeddings \
   --model qwen3-embedding --dimension 1024
 memfw notes status --db /tmp/notes.sqlite
+memfw notes serve --root ~/notes --db /tmp/notes.sqlite \
+  --endpoint http://127.0.0.1:8001/v1/embeddings \
+  --model qwen3-embedding --dimension 1024
 ```
 
 Install the optional vector extension with `pip install 'memfw[notes]'`.

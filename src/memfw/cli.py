@@ -22,6 +22,8 @@ from .curation.engine import enforce_budget, run_forget
 from .curation.review_cli import review_command as run_review
 from .index import MemoryIndex
 from .notes import HttpEmbeddingProvider, NotesIndex
+from .notes.mcp import NotesGateway
+from .notes.mcp import serve as serve_notes_mcp
 from .okf import export_okf, validate_okf_bundle
 from .policies import PolicyName
 from .retrieval import VaultRetriever
@@ -80,11 +82,12 @@ def notes_index(
     dimension: Annotated[int, typer.Option("--dimension")] = 1024,
     batch_size: Annotated[int, typer.Option("--batch-size")] = 16,
     max_files: Annotated[int | None, typer.Option("--max-files")] = None,
+    commit_every: Annotated[int, typer.Option("--commit-every")] = 100,
 ) -> None:
     """Build or incrementally update a section-level notes index."""
 
     index = NotesIndex(db, embedder=_notes_embedder(endpoint, model, dimension, batch_size))
-    counts = index.index(root, max_files=max_files)
+    counts = index.index(root, max_files=max_files, commit_every=commit_every)
     typer.echo(
         json.dumps({"counts": counts, "status": index.status()}, ensure_ascii=False, indent=2)
     )
@@ -117,6 +120,24 @@ def notes_search(
         course=course,
     )
     typer.echo(json.dumps([hit.as_dict() for hit in hits], ensure_ascii=False, indent=2))
+
+
+@notes_app.command("serve")
+def notes_serve(
+    root: Annotated[Path, typer.Option("--root", "-r", help="Markdown notes root")] = Path("."),
+    db: Annotated[Path, typer.Option("--db", help="Derived SQLite index path")] = Path(
+        ".memfw-notes.sqlite"
+    ),
+    endpoint: Annotated[
+        str | None, typer.Option("--endpoint", help="OpenAI-compatible embeddings URL")
+    ] = None,
+    model: Annotated[str, typer.Option("--model")] = "embedding-model",
+    dimension: Annotated[int, typer.Option("--dimension")] = 1024,
+) -> None:
+    """Serve read-only notes tools over stdio MCP."""
+
+    embedder = _notes_embedder(endpoint, model, dimension, 16)
+    serve_notes_mcp(NotesGateway(root, db, embedder=embedder))
 
 
 @notes_app.command("status")
