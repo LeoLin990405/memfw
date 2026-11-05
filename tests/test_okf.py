@@ -34,7 +34,7 @@ def test_export_creates_conformant_bundle(tmp_path: Path) -> None:
     manifest = json.loads((bundle / "manifest.json").read_text())
     assert manifest["okf_version"] == "0.2"
     assert manifest["valid"] is True
-    concept = next(bundle.glob("*.md"))
+    concept = next(path for path in bundle.glob("*.md") if path.name not in {"index.md", "log.md"})
     text = concept.read_text()
     assert text.startswith("---\n")
     assert "type: note" in text
