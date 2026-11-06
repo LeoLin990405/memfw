@@ -25,6 +25,57 @@ ANNOTATION_KINDS = {
     "unspecified",
 }
 
+_FINISH_WORDS = {"结束", "完成", "退出", "quit", "exit", "done"}
+_KIND_ALIASES = {
+    "无答案": "no_answer",
+    "无法回答": "no_answer",
+    "没有答案": "no_answer",
+    "no answer": "no_answer",
+    "answerable": "answerable",
+    "有答案": "answerable",
+    "中文": "chinese",
+    "混排": "mixed",
+    "中英混排": "mixed",
+    "标题": "title",
+    "概念": "concept",
+}
+
+
+def is_finish(text: str) -> bool:
+    return text.strip().lower() in _FINISH_WORDS
+
+
+def normalize_kind(text: str) -> str:
+    value = text.strip().lower()
+    if not value:
+        return "answerable"
+    normalized = _KIND_ALIASES.get(value, value)
+    if normalized not in ANNOTATION_KINDS:
+        raise ValueError(f"unknown kind: {text}")
+    return normalized
+
+
+def path_search_term(text: str) -> str | None:
+    value = text.strip()
+    if value.startswith("?"):
+        return value[1:].strip()
+    for prefix in ("搜索", "查找", "search "):
+        if value.lower().startswith(prefix.lower()):
+            return value[len(prefix) :].strip()
+    return None
+
+
+def path_selection(text: str) -> int | None:
+    value = text.strip()
+    for prefix in ("选择", "第", "select ", "choose "):
+        if value.lower().startswith(prefix.lower()):
+            rest = value[len(prefix) :].strip().removesuffix("个")
+            if rest.isdigit():
+                return int(rest)
+    if value.isdigit():
+        return int(value)
+    return None
+
 
 @dataclass(frozen=True)
 class AnnotationEntry:

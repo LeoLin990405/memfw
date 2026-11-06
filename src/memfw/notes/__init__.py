@@ -1,6 +1,13 @@
 """Markdown notes retrieval: section index, hybrid search, optional embeddings."""
 
-from .annotation import AnnotationEntry, GoldenAnnotator
+from .annotation import (
+    AnnotationEntry,
+    GoldenAnnotator,
+    is_finish,
+    normalize_kind,
+    path_search_term,
+    path_selection,
+)
 from .distillation import ExportReport, TrainingPair, check_pairs, export_pairs, write_pairs
 from .evaluation import (
     EvalCase,
@@ -74,6 +81,10 @@ __all__ = [
     "query_digest",
     "AnnotationEntry",
     "GoldenAnnotator",
+    "is_finish",
+    "normalize_kind",
+    "path_search_term",
+    "path_selection",
     "ExportReport",
     "TrainingPair",
     "check_pairs",

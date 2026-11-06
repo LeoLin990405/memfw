@@ -34,7 +34,11 @@ from .notes import (
     compare_indexes,
     evaluate_retriever,
     export_pairs,
+    is_finish,
     load_cases,
+    normalize_kind,
+    path_search_term,
+    path_selection,
     read_manifest,
     verify_manifest,
     write_manifest,
@@ -250,36 +254,43 @@ def notes_annotate(
     typer.echo("Voice: use OS dictation; each prompt remains editable before save.")
     typer.echo("Type ?keyword at a path prompt to search note paths.")
     while True:
-        query = typer.prompt("Query (empty to finish)", default="", show_default=False)
-        if not query.strip():
+        query = typer.prompt("Query (empty or 结束 to finish)", default="", show_default=False)
+        if not query.strip() or is_finish(query):
             break
-        kind = typer.prompt("Kind", default="answerable")
+        raw_kind = typer.prompt("Kind", default="answerable")
+        try:
+            kind = normalize_kind(raw_kind)
+        except ValueError as exc:
+            typer.echo(f"not saved: {exc}")
+            continue
         paths: list[str] = []
+        hints: list[str] = []
         if kind != "no_answer":
             while True:
                 raw = typer.prompt(
-                    "Expected path (empty=done, ?text=search)",
+                    "Expected path (empty=done, 搜索 关键词=find, 选择 N=pick)",
                     default="",
                     show_default=False,
                 ).strip()
-                if not raw:
+                if not raw or is_finish(raw):
                     break
-                if raw.startswith("?"):
-                    hints = session.suggest_paths(raw[1:])
+                term = path_search_term(raw)
+                if term is not None:
+                    hints = session.suggest_paths(term)
                     if not hints:
                         typer.echo("no matching note paths")
                         continue
                     for index, hint in enumerate(hints, start=1):
                         typer.echo(f"  {index}. {hint}")
-                    chosen = typer.prompt(
-                        "Select number or paste path (empty=cancel)",
-                        default="",
-                        show_default=False,
-                    ).strip()
-                    if chosen.isdigit() and 1 <= int(chosen) <= len(hints):
-                        paths.append(hints[int(chosen) - 1])
-                    elif chosen:
-                        paths.append(chosen)
+                    typer.echo("say 选择 1 or 选择 2 ...")
+                    continue
+                selected = path_selection(raw)
+                if selected is not None:
+                    if 1 <= selected <= len(hints):
+                        paths.append(hints[selected - 1])
+                        typer.echo(f"added {hints[selected - 1]}")
+                    else:
+                        typer.echo("no such suggestion; use 搜索 关键词 first")
                     continue
                 paths.append(raw)
         evidence = typer.prompt("Evidence/notes (optional)", default="", show_default=False)
