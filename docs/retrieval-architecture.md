@@ -401,3 +401,17 @@ MCP additions:
 
 Tests cover trace recording, content minimization, MCP feedback round-trip,
 unknown trace rejection and task correlation.
+
+
+## CLI and shadow operations
+
+Added CLI entry points:
+
+- `memfw notes eval` for JSON/JSONL/YAML golden files;
+- `memfw notes feedback-export` for explicit feedback pairs with quality checks;
+- `memfw notes manifest-write` / `manifest-verify` for generation identity;
+- `memfw notes shadow` for read-only baseline/candidate comparison.
+
+The shadow command evaluates both indexes on identical cases and reports
+metric deltas and per-query rank changes. It does not switch or delete either
+index.

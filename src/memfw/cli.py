@@ -28,9 +28,20 @@ from .notes import (
     NotesIndex,
     NotesRetriever,
     RetrievalConfig,
+    build_manifest,
+    check_pairs,
+    compare_indexes,
+    evaluate_retriever,
+    export_pairs,
+    load_cases,
+    read_manifest,
+    verify_manifest,
+    write_manifest,
+    write_pairs,
 )
 from .notes.mcp import NotesGateway
 from .notes.mcp import serve as serve_notes_mcp
+from .notes.retrieval import Mode
 from .okf import export_okf, validate_okf_bundle
 from .policies import PolicyName
 from .retrieval import VaultRetriever
@@ -214,6 +225,106 @@ def notes_serve(
 
     embedder = _notes_embedder(endpoint, model, dimension, 16)
     serve_notes_mcp(NotesGateway(root, db, embedder=embedder))
+
+
+@notes_app.command("eval")
+def notes_eval(
+    queries: Annotated[Path, typer.Option("--queries", help="golden JSONL/JSON/YAML")],
+    db: Annotated[Path, typer.Option("--db")] = Path(".memfw-notes.sqlite"),
+    endpoint: Annotated[str | None, typer.Option("--endpoint")] = None,
+    model: Annotated[str, typer.Option("--model")] = "embedding-model",
+    dimension: Annotated[int, typer.Option("--dimension")] = 1024,
+    mode: Annotated[str, typer.Option("--mode")] = "hybrid",
+    candidates: Annotated[int, typer.Option("--candidates")] = 50,
+    limit: Annotated[int, typer.Option("--limit", "-n")] = 10,
+) -> None:
+    """Evaluate a golden query file against one notes index."""
+    cases = load_cases(queries)
+    index = NotesIndex(db, embedder=_notes_embedder(endpoint, model, dimension, 16))
+    retriever = NotesRetriever(
+        index,
+        config=RetrievalConfig(
+            mode=mode,  # type: ignore[arg-type]
+            candidates=candidates,
+            final_k=limit,
+        ),
+    )
+    report = evaluate_retriever(retriever, cases, name=mode, limit=limit)
+    typer.echo(json.dumps(report.as_dict(limit), ensure_ascii=False, indent=2))
+
+
+@notes_app.command("shadow")
+def notes_shadow(
+    queries: Annotated[Path, typer.Option("--queries", help="golden JSONL/JSON/YAML")],
+    baseline_db: Annotated[Path, typer.Option("--baseline-db")],
+    candidate_db: Annotated[Path, typer.Option("--candidate-db")],
+    endpoint: Annotated[str | None, typer.Option("--endpoint")] = None,
+    model: Annotated[str, typer.Option("--model")] = "embedding-model",
+    dimension: Annotated[int, typer.Option("--dimension")] = 1024,
+    mode: Annotated[str, typer.Option("--mode")] = "hybrid",
+    candidates: Annotated[int, typer.Option("--candidates")] = 50,
+    limit: Annotated[int, typer.Option("--limit", "-n")] = 10,
+) -> None:
+    """Compare two index generations read-only; never switches production."""
+    cases = load_cases(queries)
+    baseline = NotesIndex(baseline_db, embedder=_notes_embedder(endpoint, model, dimension, 16))
+    candidate = NotesIndex(candidate_db, embedder=_notes_embedder(endpoint, model, dimension, 16))
+    from typing import cast
+
+    report = compare_indexes(
+        baseline,
+        candidate,
+        cases,
+        mode=cast(Mode, mode),
+        candidates=candidates,
+        limit=limit,
+    )
+    typer.echo(json.dumps(report.as_dict(limit), ensure_ascii=False, indent=2))
+
+
+@notes_app.command("feedback-export")
+def notes_feedback_export(
+    feedback_db: Annotated[Path, typer.Option("--db")],
+    out: Annotated[Path, typer.Option("--out")],
+    min_confidence: Annotated[float, typer.Option("--min-confidence")] = 0.0,
+) -> None:
+    """Export explicit feedback pairs; never invents labels or trains."""
+    report = export_pairs(FeedbackStore(feedback_db), min_confidence=min_confidence)
+    write_pairs(report, out)
+    typer.echo(
+        json.dumps(
+            {
+                "out": str(out),
+                "pairs": len(report.pairs),
+                "skipped_unknown": report.skipped_unknown,
+                "skipped_missing": report.skipped_missing,
+                "skipped_duplicate": report.skipped_duplicate,
+                "quality": check_pairs(report.pairs),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+@notes_app.command("manifest-write")
+def notes_manifest_write(
+    db: Annotated[Path, typer.Option("--db")],
+    out: Annotated[Path, typer.Option("--out")],
+) -> None:
+    """Write an index manifest with model/chunker/count identity."""
+    write_manifest(out, build_manifest(NotesIndex(db)))
+    typer.echo(json.dumps({"manifest": str(out)}, ensure_ascii=False))
+
+
+@notes_app.command("manifest-verify")
+def notes_manifest_verify(
+    db: Annotated[Path, typer.Option("--db")],
+    manifest: Annotated[Path, typer.Option("--manifest")],
+) -> None:
+    """Verify model/chunker/manifest compatibility without switching anything."""
+    verify_manifest(NotesIndex(db), read_manifest(manifest))
+    typer.echo(json.dumps({"ok": True}, ensure_ascii=False))
 
 
 @notes_app.command("status")

@@ -7,6 +7,7 @@ from .evaluation import (
     cases_from_rows,
     evaluate_ablation,
     evaluate_retriever,
+    load_cases,
 )
 from .feedback import (
     CandidateTrace,
@@ -42,6 +43,7 @@ from .retrieval import (
     RetrievalResult,
     SparseRetriever,
 )
+from .shadow import ShadowReport, ShadowRow, compare_indexes
 from .versioning import (
     CHUNKER_VERSION,
     IndexCompatibilityError,
@@ -81,6 +83,9 @@ __all__ = [
     "read_manifest",
     "verify_manifest",
     "write_manifest",
+    "ShadowReport",
+    "ShadowRow",
+    "compare_indexes",
     "LanguageModelProvider",
     "NoOpReranker",
     "NoteHit",
@@ -93,6 +98,7 @@ __all__ = [
     "RetrievalResult",
     "SparseRetriever",
     "cases_from_rows",
+    "load_cases",
     "evaluate_ablation",
     "evaluate_retriever",
     "parse_markdown",

@@ -60,3 +60,20 @@ The server is read-only and local-only.
 
 See [retrieval architecture](retrieval-architecture.md) for the staged plan
 and Stage A evaluation.
+
+
+## Evaluation and feedback commands
+
+```bash
+memfw notes eval --db notes.sqlite --queries golden.yml --mode hybrid
+memfw notes feedback-export --db feedback.sqlite --out pairs.jsonl
+memfw notes manifest-write --db notes.sqlite --out index-manifest.json
+memfw notes manifest-verify --db notes.sqlite --manifest index-manifest.json
+memfw notes shadow --baseline-db old.sqlite --candidate-db new.sqlite \
+  --queries golden.yml --mode hybrid
+```
+
+- `eval` reports Recall/MRR/nDCG, answerable/unanswerable counts and latency.
+- `feedback-export` only uses explicit feedback; uncited results remain unknown.
+- manifest write/verify prevents mixing model/chunker generations.
+- shadow compares two indexes read-only; it never switches production.

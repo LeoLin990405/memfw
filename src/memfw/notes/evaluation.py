@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import math
 import time
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+
+import yaml
 
 from .index import NoteHit, NotesIndex
 from .retrieval import NotesRetriever, RetrievalConfig
@@ -157,6 +161,52 @@ def evaluate_ablation(
         )
         reports[mode] = evaluate_retriever(retriever, cases, name=mode, limit=limit)
     return reports
+
+
+def load_cases(path: Path | str) -> list[EvalCase]:
+    """Load golden cases from JSONL, JSON, or YAML without inventing labels."""
+    source = Path(path)
+    if source.suffix in {".yaml", ".yml"}:
+        payload = yaml.safe_load(source.read_text(encoding="utf-8"))
+        rows = payload.get("queries", payload) if isinstance(payload, dict) else payload
+    elif source.suffix == ".jsonl":
+        rows = [
+            json.loads(line)
+            for line in source.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    elif source.suffix == ".json":
+        payload = json.loads(source.read_text(encoding="utf-8"))
+        rows = payload.get("queries", payload) if isinstance(payload, dict) else payload
+    else:
+        raise ValueError("golden file must be .jsonl, .json, or .yaml")
+    if not isinstance(rows, list):
+        raise ValueError("golden file must contain a list of queries")
+    cases: list[EvalCase] = []
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        query_id = raw.get("id") or raw.get("query_id")
+        query = raw.get("query")
+        if not query_id or not isinstance(query, str) or not query.strip():
+            continue
+        raw_expected = raw.get("expected_paths", raw.get("expected_path", []))
+        expected: tuple[str, ...]
+        if isinstance(raw_expected, str):
+            expected = (raw_expected,)
+        elif isinstance(raw_expected, list):
+            expected = tuple(str(item) for item in raw_expected if str(item))
+        else:
+            expected = ()
+        cases.append(
+            EvalCase(
+                query_id=str(query_id),
+                query=query,
+                expected_paths=expected,
+                kind=str(raw.get("kind") or "unspecified"),
+            )
+        )
+    return cases
 
 
 def cases_from_rows(rows: Iterable[dict[str, Any]]) -> list[EvalCase]:
