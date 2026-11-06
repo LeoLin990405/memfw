@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import json
 import urllib.request
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
+from .feedback import CandidateTrace, FeedbackStore, RetrievalTrace
 from .index import NoteHit, NotesIndex
 
 Mode = Literal["fts", "vector", "hybrid"]
@@ -191,6 +193,8 @@ class RetrievalResult:
     reranked: bool = False
     errors: list[str] = field(default_factory=list)
     candidates: int = 0
+    trace_id: str | None = None
+    task_id: str | None = None
 
 
 def _dedupe(hits: Sequence[NoteHit]) -> list[NoteHit]:
@@ -220,12 +224,67 @@ class NotesRetriever:
         reranker: RerankerProvider | None = None,
         language_model: LanguageModelProvider | None = None,
         sparse: SparseRetriever | None = None,
+        trace_store: FeedbackStore | None = None,
     ) -> None:
         self.index = index
         self.config = config or RetrievalConfig()
         self.reranker = reranker
         self.language_model = language_model
         self.sparse = sparse
+        self.trace_store = trace_store
+
+    def _record_trace(
+        self,
+        result: RetrievalResult,
+        *,
+        task_id: str | None,
+        tenant: str,
+        source: str,
+    ) -> RetrievalResult:
+        if self.trace_store is None or not task_id:
+            return result
+        trace_id = str(uuid.uuid4())
+        model_versions: dict[str, str] = {}
+        embedder = self.index.embedder
+        if embedder is not None:
+            model_versions["embedding"] = str(
+                getattr(embedder, "fingerprint", "") or getattr(embedder, "model", "")
+            )
+        if self.reranker is not None:
+            model_versions["reranker"] = str(getattr(self.reranker, "name", ""))
+        if self.language_model is not None:
+            model_versions["language_model"] = str(getattr(self.language_model, "name", ""))
+        candidates = tuple(
+            CandidateTrace(
+                path=hit.path,
+                rank=hit.rank,
+                score=float(hit.score),
+                section_id=hit.section_id,
+                source=hit.source,
+            )
+            for hit in result.hits
+        )
+        try:
+            self.trace_store.record_trace(
+                RetrievalTrace(
+                    trace_id=trace_id,
+                    task_id=task_id,
+                    query=result.query,
+                    mode=result.mode_used,
+                    rewrites=tuple(result.rewrites),
+                    candidates=candidates,
+                    model_versions=model_versions,
+                    tenant=tenant,
+                    source=source,
+                    include_content=False,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - telemetry must not break search
+            result.errors.append(f"trace: {exc}")
+            return result
+        result.trace_id = trace_id
+        result.task_id = task_id
+        return result
 
     def _rewrite(self, query: str, errors: list[str]) -> list[str]:
         if not self.config.rewrite or self.language_model is None:
@@ -255,6 +314,9 @@ class NotesRetriever:
         metadata: dict[str, str] | None = None,
         since: float | None = None,
         until: float | None = None,
+        task_id: str | None = None,
+        tenant: str = "",
+        source: str = "",
     ) -> RetrievalResult:
         final_k = limit or self.config.final_k
         errors: list[str] = []
@@ -320,14 +382,19 @@ class NotesRetriever:
                     until=until,
                 )
                 fallback.errors = [*errors, *fallback.errors, "vector recall unavailable; used FTS"]
-                return fallback
-            return RetrievalResult(
-                query=query,
-                hits=[],
-                mode_used=self.config.mode,
-                degraded=self.config.mode != "fts",
-                rewrites=rewrites,
-                errors=errors,
+                return self._record_trace(fallback, task_id=task_id, tenant=tenant, source=source)
+            return self._record_trace(
+                RetrievalResult(
+                    query=query,
+                    hits=[],
+                    mode_used=self.config.mode,
+                    degraded=self.config.mode != "fts",
+                    rewrites=rewrites,
+                    errors=errors,
+                ),
+                task_id=task_id,
+                tenant=tenant,
+                source=source,
             )
         reranked = False
         if self.reranker is not None and self.config.rerank_candidates > 0:
@@ -357,14 +424,19 @@ class NotesRetriever:
                 tags=hit.tags,
                 section_id=hit.section_id,
             )
-        return RetrievalResult(
-            query=query,
-            hits=candidates[:final_k],
-            mode_used=self.config.mode,
-            degraded=self.config.mode != "fts"
-            and not any(hit.source in {"vector", "hybrid"} for hit in candidates),
-            rewrites=rewrites,
-            reranked=reranked,
-            errors=errors,
-            candidates=len(candidates),
+        return self._record_trace(
+            RetrievalResult(
+                query=query,
+                hits=candidates[:final_k],
+                mode_used=self.config.mode,
+                degraded=self.config.mode != "fts"
+                and not any(hit.source in {"vector", "hybrid"} for hit in candidates),
+                rewrites=rewrites,
+                reranked=reranked,
+                errors=errors,
+                candidates=len(candidates),
+            ),
+            task_id=task_id,
+            tenant=tenant,
+            source=source,
         )

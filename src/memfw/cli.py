@@ -22,6 +22,7 @@ from .curation.engine import enforce_budget, run_forget
 from .curation.review_cli import review_command as run_review
 from .index import MemoryIndex
 from .notes import (
+    FeedbackStore,
     HttpEmbeddingProvider,
     HttpRerankerProvider,
     NotesIndex,
@@ -132,6 +133,10 @@ def notes_search(
     until: Annotated[
         float | None, typer.Option("--until", help="mtime upper bound, epoch seconds")
     ] = None,
+    feedback_db: Annotated[Path | None, typer.Option("--feedback-db")] = None,
+    task_id: Annotated[str | None, typer.Option("--task-id")] = None,
+    tenant: Annotated[str, typer.Option("--tenant")] = "",
+    source: Annotated[str, typer.Option("--source-name")] = "",
 ) -> None:
     """Search the notes index; automatically degrades to FTS without an embedder."""
 
@@ -153,6 +158,7 @@ def notes_search(
             rerank_candidates=rerank_candidates,
         ),
         reranker=reranker,
+        trace_store=FeedbackStore(feedback_db) if feedback_db else None,
     )
     metadata: dict[str, str] = {}
     for item in meta or []:
@@ -171,6 +177,9 @@ def notes_search(
         metadata=metadata or None,
         since=since,
         until=until,
+        task_id=task_id,
+        tenant=tenant,
+        source=source,
     )
     typer.echo(
         json.dumps(
@@ -179,6 +188,8 @@ def notes_search(
                 "degraded": result.degraded,
                 "rewrites": result.rewrites,
                 "errors": result.errors,
+                "trace_id": result.trace_id,
+                "task_id": result.task_id,
                 "results": [hit.as_dict() for hit in result.hits],
             },
             ensure_ascii=False,

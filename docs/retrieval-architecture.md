@@ -376,3 +376,28 @@ Rewrite is therefore disabled by default; the optional provider remains for
 better-labelled query distributions. Structured extraction was smoke-tested
 but no candidate was applied to the vault. No user feedback or training data
 exists yet.
+
+
+## Phase 1 trace integration (implemented)
+
+`NotesRetriever.search(..., task_id=..., tenant=..., source=...)` now records a
+minimal retrieval trace into the optional `FeedbackStore`:
+
+- task/trace IDs;
+- query, actual mode, rewrite chain;
+- candidate path, rank, score, section ID, source;
+- embedding/reranker/LM version markers;
+- tenant/source;
+- no document body by default.
+
+MCP additions:
+
+- `notes_search` accepts `task_id`, `tenant`, `source`, and returns
+  `trace_id`/`task_id`;
+- `retrieval_feedback` records citation/correction/task_outcome/permission
+  with separate relevance/correctness/permission fields;
+- `retrieval_trace` reads the stored trace;
+- `NotesGateway`/CLI accept an optional feedback database.
+
+Tests cover trace recording, content minimization, MCP feedback round-trip,
+unknown trace rejection and task correlation.

@@ -99,3 +99,57 @@ def test_feedback_store_minimizes_content_and_requires_trace(tmp_path: Path) -> 
     assert events[0]["relevance"] == "weak_positive"
     with pytest.raises(ValueError):
         store.add_feedback(FeedbackEvent(trace_id="missing", task_id="x", kind="citation"))
+
+
+def test_retriever_records_trace_and_mcp_feedback_roundtrip(tmp_path: Path) -> None:
+    from memfw.notes import HashEmbeddingProvider, NotesIndex, NotesRetriever, RetrievalConfig
+    from memfw.notes.mcp import NotesGateway, handle_request
+
+    root = tmp_path / "vault"
+    root.mkdir()
+    (root / "a.md").write_text("# A\n\ncorpus alpha\n", encoding="utf-8")
+    index = NotesIndex(tmp_path / "index.sqlite", embedder=HashEmbeddingProvider(8))
+    index.index(root)
+    store = FeedbackStore(tmp_path / "feedback.sqlite")
+    retriever = NotesRetriever(
+        index,
+        config=RetrievalConfig(final_k=2),
+        trace_store=store,
+    )
+    result = retriever.search("corpus", task_id="task-1", tenant="t1", source="test")
+    assert result.trace_id
+    trace = store.trace(result.trace_id)
+    assert trace and trace["task_id"] == "task-1"
+    assert "content" not in trace["candidates"][0]
+
+    gateway = NotesGateway(root, tmp_path / "index.sqlite", feedback_store=store)
+    searched = gateway.call(
+        "notes_search",
+        {"query": "corpus", "task_id": "task-2", "tenant": "t1", "source": "mcp"},
+    )
+    assert searched["trace_id"]
+    assert searched["results"][0]["path"] == "a.md"
+    feedback_id = gateway.call(
+        "retrieval_feedback",
+        {
+            "trace_id": searched["trace_id"],
+            "task_id": "task-2",
+            "kind": "citation",
+            "candidate_path": "a.md",
+            "relevance": "weak_positive",
+        },
+    )["feedback_id"]
+    assert feedback_id
+    trace_response = handle_request(
+        gateway,
+        {
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "tools/call",
+            "params": {
+                "name": "retrieval_trace",
+                "arguments": {"trace_id": searched["trace_id"]},
+            },
+        },
+    )
+    assert trace_response and trace_response["result"]["isError"] is False

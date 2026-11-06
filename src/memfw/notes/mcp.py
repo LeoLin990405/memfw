@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .feedback import FeedbackEvent, FeedbackStore
 from .index import HttpEmbeddingProvider, NotesIndex
 from .retrieval import HttpRerankerProvider, NotesRetriever, RetrievalConfig
 
@@ -42,6 +43,9 @@ TOOLS: list[dict[str, Any]] = [
                 },
                 "candidates": {"type": "integer", "default": 50},
                 "rrf_k": {"type": "integer", "default": 60},
+                "task_id": {"type": "string"},
+                "tenant": {"type": "string"},
+                "source": {"type": "string"},
                 "rerank_candidates": {"type": "integer", "default": 0},
                 "rerank_endpoint": {"type": "string"},
                 "rerank_model": {"type": "string", "default": "reranker"},
@@ -69,6 +73,40 @@ TOOLS: list[dict[str, Any]] = [
         "description": "Report notes index counts, tokenizer and vector state.",
         "inputSchema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "retrieval_feedback",
+        "description": "Record explicit client feedback for a retrieval trace. "
+        "Uncited results are not positives; no label is inferred.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "trace_id": {"type": "string"},
+                "task_id": {"type": "string"},
+                "kind": {
+                    "type": "string",
+                    "enum": ["citation", "correction", "task_outcome", "permission"],
+                },
+                "candidate_path": {"type": "string"},
+                "relevance": {"type": "string"},
+                "correctness": {"type": "string"},
+                "permission": {"type": "string"},
+                "confidence": {"type": "number"},
+                "note": {"type": "string"},
+                "actor": {"type": "string"},
+                "source": {"type": "string"},
+            },
+            "required": ["trace_id", "task_id", "kind"],
+        },
+    },
+    {
+        "name": "retrieval_trace",
+        "description": "Read a stored retrieval trace by trace_id (no body by default).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"trace_id": {"type": "string"}},
+            "required": ["trace_id"],
+        },
+    },
 ]
 
 
@@ -80,12 +118,40 @@ class NotesGateway:
         *,
         embedder: HttpEmbeddingProvider | None = None,
         reranker: HttpRerankerProvider | None = None,
+        feedback_store: FeedbackStore | None = None,
     ) -> None:
         self.root = root.expanduser().resolve()
         self.index = NotesIndex(db, embedder=embedder)
         self.reranker = reranker
+        self.feedback_store = feedback_store
 
     def call(self, name: str, args: dict[str, Any]) -> Any:
+        if name == "retrieval_feedback":
+            if self.feedback_store is None:
+                raise RuntimeError("feedback store is not configured")
+            feedback_id = self.feedback_store.add_feedback(
+                FeedbackEvent(
+                    trace_id=str(args.get("trace_id") or ""),
+                    task_id=str(args.get("task_id") or ""),
+                    kind=str(args.get("kind") or "") or "citation",  # type: ignore[arg-type]
+                    candidate_path=str(args.get("candidate_path") or ""),
+                    relevance=str(args.get("relevance") or "unknown"),
+                    correctness=str(args.get("correctness") or "unknown"),
+                    permission=str(args.get("permission") or "unknown"),
+                    confidence=float(args.get("confidence") or 0.0),
+                    note=str(args.get("note") or "")[:500],
+                    actor=str(args.get("actor") or ""),
+                    source=str(args.get("source") or ""),
+                )
+            )
+            return {"feedback_id": feedback_id}
+        if name == "retrieval_trace":
+            if self.feedback_store is None:
+                raise RuntimeError("feedback store is not configured")
+            trace = self.feedback_store.trace(str(args.get("trace_id") or ""))
+            if trace is None:
+                raise ValueError("unknown trace")
+            return trace
         if name == "notes_status":
             return self.index.status()
         if name == "notes_get":
@@ -116,10 +182,14 @@ class NotesGateway:
                     rerank_candidates=max(0, min(int(args.get("rerank_candidates", 0)), 500)),
                 ),
                 reranker=reranker,
+                trace_store=self.feedback_store,
             )
             result = retriever.search(
                 query,
                 limit=limit,
+                task_id=args.get("task_id"),
+                tenant=str(args.get("tenant") or ""),
+                source=str(args.get("source") or ""),
                 path_prefix=args.get("path_prefix"),
                 tags=[str(tag) for tag in tags],
                 course=args.get("course"),
@@ -136,6 +206,8 @@ class NotesGateway:
                 "rewrites": result.rewrites,
                 "errors": result.errors,
                 "candidates": result.candidates,
+                "trace_id": result.trace_id,
+                "task_id": result.task_id,
                 "results": [hit.as_dict() for hit in result.hits],
             }
         raise KeyError(name)
@@ -211,6 +283,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--model", default="embedding-model")
     parser.add_argument("--dimension", type=int, default=1024)
     parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--feedback-db", type=Path)
     args = parser.parse_args(argv)
     embedder = None
     if args.endpoint:
@@ -220,7 +293,15 @@ def main(argv: list[str] | None = None) -> None:
             dimension=args.dimension,
             batch_size=args.batch_size,
         )
-    serve(NotesGateway(args.root, args.db, embedder=embedder))
+    feedback_store = FeedbackStore(args.feedback_db) if args.feedback_db else None
+    serve(
+        NotesGateway(
+            args.root,
+            args.db,
+            embedder=embedder,
+            feedback_store=feedback_store,
+        )
+    )
 
 
 if __name__ == "__main__":

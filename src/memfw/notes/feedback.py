@@ -191,6 +191,26 @@ class FeedbackStore:
             for row in rows
         ]
 
+    def trace(self, trace_id: str) -> dict[str, Any] | None:
+        with sqlite3.connect(self.path) as connection:
+            row = connection.execute(
+                "SELECT * FROM traces WHERE trace_id=?", (trace_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "trace_id": row[0],
+            "task_id": row[1],
+            "query": row[2],
+            "mode": row[3],
+            "rewrites": json.loads(row[4]),
+            "candidates": json.loads(row[5]),
+            "model_versions": json.loads(row[6]),
+            "tenant": row[7],
+            "source": row[8],
+            "created_at": row[9],
+        }
+
     def feedback(self, *, trace_id: str | None = None) -> list[dict[str, Any]]:
         with sqlite3.connect(self.path) as connection:
             if trace_id is None:
