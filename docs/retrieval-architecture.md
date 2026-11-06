@@ -445,3 +445,17 @@ Frozen test split (12 queries: 6 answerable, 6 no-answer):
 The threshold is a small-sample experiment, not a production default. The dev
 set has one false abstention (a human-labelled answerable query with low
 lexical overlap); more no-answer data is required before enabling by default.
+
+
+## Cross-LLM judging (diagnostic only)
+
+Two local judges were compared against the human batch on 216 candidate
+decisions:
+
+| Judge | F1 | Answerable accuracy | Kappa vs human |
+|---|---:|---:|---:|
+| Qwen2.5-1.5B | 0.061 | 0.107 | 0.052 |
+| Phi-3.5-mini | 0.561 | 0.893 | 0.464 |
+
+Cross-judge kappa: 0.030. Neither model is adopted as an annotator; LLM labels
+are diagnostics only. Human labels remain the ground truth.
