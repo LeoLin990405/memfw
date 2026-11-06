@@ -105,9 +105,12 @@ def _create_schema(connection: sqlite3.Connection, tokenizer: _TOKENIZER) -> Non
         "tags TEXT NOT NULL, version INTEGER NOT NULL, summary TEXT NOT NULL, "
         "is_stub INTEGER NOT NULL, "
         "archive_ref TEXT NOT NULL, archived_hash TEXT NOT NULL, "
-        "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
-        "valid_from TEXT NOT NULL DEFAULT '', valid_to TEXT NOT NULL DEFAULT '', "
-        "superseded_by TEXT NOT NULL DEFAULT '')"
+        "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+    )
+    connection.execute(
+        "CREATE TABLE memory_temporal ("
+        "id TEXT PRIMARY KEY, valid_from TEXT NOT NULL DEFAULT '', "
+        "valid_to TEXT NOT NULL DEFAULT '', superseded_by TEXT NOT NULL DEFAULT '')"
     )
     connection.execute(
         "CREATE VIRTUAL TABLE memory_fts USING fts5("
@@ -139,14 +142,17 @@ def _insert_documents(
         # Preserve the public raw row contract (cold stubs have an empty body)
         # while keeping a separately verified search projection for retrieval.
         connection.execute(
-            "UPDATE memory_rows SET search_body=?, valid_from=?, valid_to=?, superseded_by=? "
-            "WHERE id=?",
+            "UPDATE memory_rows SET search_body=? WHERE id=?",
+            (effective_body, document.id),
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO memory_temporal"
+            "(id,valid_from,valid_to,superseded_by) VALUES (?,?,?,?)",
             (
-                effective_body,
+                document.id,
                 document.valid_from.isoformat() if document.valid_from else "",
                 document.valid_to.isoformat() if document.valid_to else "",
                 document.superseded_by or "",
-                document.id,
             ),
         )
         fts_values = (
@@ -253,7 +259,8 @@ class MemoryIndex:
                 # lookup across every user-visible searchable field.
                 rows = connection.execute(
                     "SELECT id,title FROM memory_rows "
-                    "WHERE valid_to='' AND (instr(title, ?) > 0 OR instr(search_body, ?) > 0 "
+                    "WHERE id NOT IN (SELECT id FROM memory_temporal WHERE valid_to != '') "
+                    "AND (instr(title, ?) > 0 OR instr(search_body, ?) > 0 "
                     "OR instr(summary, ?) > 0 OR instr(tags, ?) > 0) "
                     "ORDER BY id LIMIT ?",
                     (needle, needle, needle, needle, limit),
@@ -271,7 +278,8 @@ class MemoryIndex:
             rows = connection.execute(
                 "SELECT r.id,r.title FROM memory_fts AS f "
                 "JOIN memory_rows AS r ON r.id=f.id "
-                "WHERE memory_fts MATCH ? AND r.valid_to='' "
+                "WHERE memory_fts MATCH ? AND r.id NOT IN "
+                "(SELECT id FROM memory_temporal WHERE valid_to != '') "
                 "ORDER BY bm25(memory_fts),r.id LIMIT ?",
                 (match, limit),
             )
@@ -296,7 +304,9 @@ class MemoryIndex:
                 if len(needle) == 2:
                     rows = connection.execute(
                         "SELECT id,title FROM memory_rows "
-                        "WHERE valid_to='' AND (instr(title, ?) > 0 OR instr(search_body, ?) > 0 "
+                        "WHERE id NOT IN "
+                        "(SELECT id FROM memory_temporal WHERE valid_to != '') "
+                        "AND (instr(title, ?) > 0 OR instr(search_body, ?) > 0 "
                         "OR instr(summary, ?) > 0 OR instr(tags, ?) > 0) "
                         "ORDER BY id LIMIT ?",
                         (needle, needle, needle, needle, limit),
@@ -314,7 +324,8 @@ class MemoryIndex:
                     rows = connection.execute(
                         "SELECT r.id,r.title FROM memory_fts AS f "
                         "JOIN memory_rows AS r ON r.id=f.id "
-                        "WHERE memory_fts MATCH ? AND r.valid_to='' "
+                        "WHERE memory_fts MATCH ? AND r.id NOT IN "
+                        "(SELECT id FROM memory_temporal WHERE valid_to != '') "
                         "ORDER BY bm25(memory_fts),r.id LIMIT ?",
                         (match, limit),
                     )
@@ -336,7 +347,8 @@ class MemoryIndex:
             raise ValueError("ranking must be 'bm25' or 'count'")
         with closing(sqlite3.connect(self.path)) as connection:
             rows = connection.execute(
-                "SELECT id,title,search_body,summary,tags,valid_to FROM memory_rows ORDER BY id"
+                "SELECT r.id,r.title,r.search_body,r.summary,r.tags,t.valid_to "
+                "FROM memory_rows r LEFT JOIN memory_temporal t ON t.id=r.id ORDER BY r.id"
             ).fetchall()
         allowed = None if candidate_ids is None else set(candidate_ids)
         retained = [
