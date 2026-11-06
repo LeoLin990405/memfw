@@ -4,7 +4,15 @@ from pathlib import Path
 
 import pytest
 
-from memfw.notes import GoldenAnnotator, NotesIndex, load_cases
+from memfw.notes import (
+    GoldenAnnotator,
+    NotesIndex,
+    is_finish,
+    load_cases,
+    normalize_kind,
+    path_search_term,
+    path_selection,
+)
 
 
 def test_annotator_appends_validates_and_resumes(tmp_path: Path) -> None:
@@ -32,3 +40,15 @@ def test_annotator_appends_validates_and_resumes(tmp_path: Path) -> None:
     cases = load_cases(out)
     assert [case.query_id for case in cases] == ["h001", "h002"]
     assert cases[1].answerable is False
+
+
+def test_voice_command_aliases() -> None:
+    assert is_finish("结束")
+    assert is_finish("done")
+    assert normalize_kind("无答案") == "no_answer"
+    assert normalize_kind("中文") == "chinese"
+    assert normalize_kind("") == "answerable"
+    assert path_search_term("搜索 Korsgaard") == "Korsgaard"
+    assert path_search_term("?corpus") == "corpus"
+    assert path_selection("选择 2") == 2
+    assert path_selection("第3个") == 3

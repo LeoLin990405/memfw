@@ -93,3 +93,15 @@ memfw notes annotate --db notes.sqlite --out golden-human.yml --annotator leo
 - Voice: use the operating system's dictation into the terminal (macOS fn-fn);
   memfw receives only text and never records or uploads audio.
 - The resulting YAML is accepted by `memfw notes eval`.
+
+
+### Typeless / voice input
+
+`memfw notes annotate` is plain terminal input, so Typeless can dictate each
+prompt directly. Voice-friendly shortcuts:
+
+- query: say `结束` or `完成` to finish;
+- kind: `无答案` / `无法回答` -> `no_answer`; `中文` -> `chinese`;
+- paths: say `搜索 Korsgaard` to list candidates, then `选择 2` to pick;
+- paths: `完成` to end the path list;
+- Typeless never needs to dictate a full long path.
