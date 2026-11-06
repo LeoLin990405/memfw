@@ -1,0 +1,7 @@
+{
+  "contract": "memfw-http/2",
+  "error": {
+    "code": "too_large",
+    "message": "content too large"
+  }
+}

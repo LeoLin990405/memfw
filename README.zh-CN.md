@@ -156,17 +156,21 @@ OKF bundle 是可重建的派生投影；Markdown 仍是权威。字段映射与
 
 ## 🛠️ 开发
 
-```sh
-python -m venv .venv
-. .venv/bin/activate
-pip install -e '.[dev]'
+一条命令安装运行时、测试工具和 `sqlite-vec`：
 
-pytest -q
-mypy src
-ruff check src/memfw tests
+```sh
+uv sync --frozen --extra dev
 ```
 
-在参考机器上，`pytest -q --ignore=tests/test_mlx_transport.py` 为 **535 passed、2 skipped**。
+然后在这个环境里运行：
+
+```sh
+.venv/bin/python -m pytest -q --ignore=tests/test_mlx_transport.py
+.venv/bin/python -m mypy src
+.venv/bin/python -m ruff check src/memfw tests
+```
+
+在参考机器上，`.venv/bin/python -m pytest -q --ignore=tests/test_mlx_transport.py` 为 **577 passed、2 skipped**。
 MLX transport 测试受主机负载守卫控制
 （不满足 MLX 负载条件的机器会跳过），不同机器结果可能不同。
 

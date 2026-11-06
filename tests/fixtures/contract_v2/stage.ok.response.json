@@ -1,0 +1,8 @@
+{
+  "authority": false,
+  "candidate_id": "conductor-sample-ok",
+  "contract": "memfw-http/2",
+  "duplicate": false,
+  "path": "_candidates/remember/conductor-sample-ok.md",
+  "staged": true
+}

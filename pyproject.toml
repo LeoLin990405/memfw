@@ -12,7 +12,13 @@ license = { text = "Apache-2.0" }
 dependencies = ["pydantic>=2.8", "PyYAML>=6.0", "typer>=0.12", "zstandard>=0.23", "filelock>=3.15", "jieba>=0.42.1"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.11", "types-PyYAML>=6.0"]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "types-PyYAML>=6.0",
+    "sqlite-vec>=0.1.9",
+]
 notes = ["sqlite-vec>=0.1.9"]
 
 [project.scripts]
