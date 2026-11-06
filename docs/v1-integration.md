@@ -1,0 +1,48 @@
+# MemFW V1 integration status
+
+V1 is a **read-only federation candidate**, not a production cutover and not a
+complete replacement of Conductor's proposal/approval memory.
+
+## Stable V1 surface
+
+- Markdown is authoritative; hash-chained JSONL events remain the audit log.
+- `memory_search` defaults to FTS5 and optionally delegates to the shared
+  NotesRetriever hybrid when a local OpenAI-compatible embedding endpoint is
+  configured; unavailable embeddings degrade to FTS.
+- `memory_get`, `memory_remember` (staging only), `memory_context`, and
+  `memory_status` are available over local MCP.
+- Temporal fields `valid_from`, `valid_to`, `superseded_by` live in Markdown and
+  are projected separately; Conductor's existing `memory_rows` schema stays
+  byte-compatible.
+- A human `supersede` keeps the old body, marks its validity end, and appends a
+  `supersede` event.
+- Optional tenant/source allowlists are local-bound, not a centralized account
+  service.
+
+## Conductor adapter
+
+The Conductor V1 adapter is prepared in the isolated worktree
+`/Users/leo/conductor-wt/memfw-v1`, branch `feat/memfw-v1-federation`:
+
+- accepts MemFW `supersede` events;
+- excludes documents with `valid_to`/`superseded_by` from current recall;
+- preserves temporal/tenant/related metadata in hits;
+- binds `local-dev-user` to an absolute local MemFW path;
+- supports `MEMFW_PRIMARY=1` for MemFW-primary recall while Conductor PG remains
+  the proposal destination.
+
+Focused Conductor federation tests: 91 passed.
+
+## Remaining replacement gap
+
+A full replacement needs:
+
+1. an authoritative MemFW vault path reachable by Conductor (a local snapshot is
+   not enough);
+2. a write bridge from approved Conductor proposals to MemFW
+   `_candidates/` / human confirmation / Markdown + event;
+3. a restart/cutover window and rollback;
+4. real-user evaluation of the bound vault.
+
+Until then, V1 is read-only and does not bypass MemFW's human-confirmation
+principle.

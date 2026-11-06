@@ -254,3 +254,10 @@ memfw code map --db /tmp/memfw-code.sqlite
 For semantic code search, add `--embedding-url`, `--embedding-model`, and `--dimension` to
 `index` and `search`. Code chunks, symbols, and vectors are disposable projections; source files
 remain authoritative.
+
+
+## V1 integration status
+
+See [`docs/v1-integration.md`](docs/v1-integration.md) for the read-only MemFW V1
+surface and the Conductor federation adapter. V1 does not replace Conductor's
+proposal/approval lifecycle or write into MemFW automatically.
