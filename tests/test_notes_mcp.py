@@ -22,6 +22,7 @@ def test_notes_mcp_search_get_status(tmp_path: Path) -> None:
         "notes_search",
         "notes_get",
         "notes_status",
+        "notes_related",
         "retrieval_feedback",
         "retrieval_trace",
     }

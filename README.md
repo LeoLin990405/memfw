@@ -172,7 +172,7 @@ mypy src
 ruff check src/memfw tests
 ```
 
-On the reference host, `pytest -q --ignore=tests/test_mlx_transport.py` reports **529 passed and
+On the reference host, `pytest -q --ignore=tests/test_mlx_transport.py` reports **531 passed and
 2 skipped**. The MLX transport tests are host-load gated: they fail by design when the one-minute
 load average is at least 9. Run the full suite only when the host is quiet.
 
@@ -275,7 +275,12 @@ memfw memory-related-build --root ./vault --related-db /tmp/related.sqlite
 memfw memory-related memory-id --related-db /tmp/related.sqlite
 ```
 
-The MCP tool `memory_related` exposes memory edges. Edges are derived, never
-write Markdown, and only current memories are indexed. Semantic edges are not
-enabled yet: they require a shared embedding fingerprint across both sources,
-and QMD notes do not currently expose local vectors.
+The MCP tool `memory_related` exposes memory edges; `notes_related` is available
+through the notes MCP when a related DB is configured. Edges are derived, never
+write Markdown, and only current memories are indexed.
+
+Semantic edges are opt-in: add `--embedding-url`/`--embedding-model` to the
+rebuild command and `sqlite-vec` is used for KNN. All indexed sources must be
+embedded with the same model/fingerprint; QMD notes are not included until they
+have a local vector index. Semantic scores are kept as a separate method and do
+not replace explicit links.

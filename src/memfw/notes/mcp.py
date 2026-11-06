@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from ..related import RelatedIndex
 from .feedback import FeedbackEvent, FeedbackStore
 from .index import HttpEmbeddingProvider, NotesIndex
 from .retrieval import HttpRerankerProvider, NotesRetriever, RetrievalConfig
@@ -66,6 +67,18 @@ TOOLS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "notes_related",
+        "description": "Read derived note-to-note relatedness edges; never writes notes.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "limit": {"type": "integer", "default": 10},
+            },
             "required": ["path"],
         },
     },
@@ -120,11 +133,13 @@ class NotesGateway:
         embedder: HttpEmbeddingProvider | None = None,
         reranker: HttpRerankerProvider | None = None,
         feedback_store: FeedbackStore | None = None,
+        related_db: Path | None = None,
     ) -> None:
         self.root = root.expanduser().resolve()
         self.index = NotesIndex(db, embedder=embedder)
         self.reranker = reranker
         self.feedback_store = feedback_store
+        self.related = RelatedIndex(related_db) if related_db else None
 
     def call(self, name: str, args: dict[str, Any]) -> Any:
         if name == "retrieval_feedback":
@@ -153,6 +168,16 @@ class NotesGateway:
             if trace is None:
                 raise ValueError("unknown trace")
             return trace
+        if name == "notes_related":
+            if self.related is None:
+                raise RuntimeError("related index is not configured")
+            identifier = str(args.get("path") or "")
+            return {
+                "path": identifier,
+                "related": self.related.related(
+                    "notes", identifier, limit=max(1, min(int(args.get("limit", 10)), 50))
+                ),
+            }
         if name == "notes_status":
             return self.index.status()
         if name == "notes_get":

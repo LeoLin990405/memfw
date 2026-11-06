@@ -68,6 +68,7 @@ token rotation and HA remain follow-ups.
 
 `memfw.related` is a rebuildable edge projection over current memories and notes.
 V1 implements explicit links/`related`, shared tags/courses, shared entities, and
-lexical overlap. `memory_related` is exposed over MCP. Semantic edges are
-deliberately deferred until notes and memory share a verified embedding
-fingerprint; QMD notes do not expose local vectors today.
+lexical overlap. `memory_related` is exposed over MCP; `notes_related` is available from the
+notes MCP when configured. Semantic edges are opt-in through `build_semantic`
+using sqlite-vec KNN and one shared embedding fingerprint. QMD notes remain
+outside semantic edges until a local vector index is available.

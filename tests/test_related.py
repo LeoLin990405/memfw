@@ -10,7 +10,9 @@ from memfw.related import RelatedIndex
 def test_notes_and_memory_related_edges(tmp_path: Path) -> None:
     notes = tmp_path / "notes"
     notes.mkdir()
-    (notes / "a.md").write_text("# Corpus collocations\n\nKWIC and log Dice", encoding="utf-8")
+    (notes / "a.md").write_text(
+        "# Corpus collocations\n\nKWIC and log Dice [[b]]", encoding="utf-8"
+    )
     (notes / "b.md").write_text("# Corpus methods\n\nKWIC and collocations", encoding="utf-8")
     (notes / "c.md").write_text("# NAS backup\n\nsynology hyper backup", encoding="utf-8")
     notes_index = NotesIndex(tmp_path / "notes.sqlite")
@@ -30,3 +32,45 @@ def test_notes_and_memory_related_edges(tmp_path: Path) -> None:
     memory_rows = related.related("memory", "m1", limit=5)
     assert any(row["id"] == "m2" for row in memory_rows)
     assert all(row["source"] == "memory" for row in memory_rows)
+
+
+def test_related_returns_backlinks_and_memory_explicit(tmp_path: Path) -> None:
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    (notes / "a.md").write_text("# A\n\n[[b]] unique alpha", encoding="utf-8")
+    (notes / "b.md").write_text("# B\n\nunique beta", encoding="utf-8")
+    index = NotesIndex(tmp_path / "notes.sqlite")
+    index.index(notes)
+    related = RelatedIndex(tmp_path / "related.sqlite")
+    related.rebuild_notes(index.db_path)
+    backlinks = related.related("notes", "b.md", limit=5)
+    assert any(row["id"] == "a.md" and row["source"] == "notes" for row in backlinks)
+
+    repo = Repository(tmp_path / "vault")
+    repo.init()
+    repo.add("A", "alpha", memory_id="a")
+    repo.add("B", "beta", memory_id="b", related=["a"])
+    related.rebuild_memory(repo)
+    rows = related.related("memory", "a", limit=5)
+    assert any(row["id"] == "b" for row in rows)
+
+
+def test_semantic_edges_are_opt_in_and_cross_source(tmp_path: Path) -> None:
+    from memfw.notes import HashEmbeddingProvider
+
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    (notes / "a.md").write_text("# Alpha\n\nalpha corpus", encoding="utf-8")
+    (notes / "b.md").write_text("# Beta\n\nbeta corpus", encoding="utf-8")
+    notes_index = NotesIndex(tmp_path / "notes.sqlite")
+    notes_index.index(notes)
+    related = RelatedIndex(tmp_path / "related.sqlite")
+    related.rebuild_notes(notes_index.db_path)
+    repo = Repository(tmp_path / "vault")
+    repo.init()
+    repo.add("Alpha memory", "alpha corpus", memory_id="m-alpha")
+    related.rebuild_memory(repo)
+    assert related.build_semantic(HashEmbeddingProvider(8), limit=3) > 0
+    rows = related.related("memory", "m-alpha", limit=10)
+    assert any(row["source"] == "notes" for row in rows)
+    assert any("semantic" in row["methods"] for row in rows)

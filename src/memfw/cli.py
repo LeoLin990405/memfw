@@ -238,11 +238,19 @@ def notes_serve(
     ] = None,
     model: Annotated[str, typer.Option("--model")] = "embedding-model",
     dimension: Annotated[int, typer.Option("--dimension")] = 1024,
+    related_db: Annotated[Path | None, typer.Option("--related-db")] = None,
 ) -> None:
     """Serve read-only notes tools over stdio MCP."""
 
     embedder = _notes_embedder(endpoint, model, dimension, 16)
-    serve_notes_mcp(NotesGateway(root, db, embedder=embedder))
+    serve_notes_mcp(
+        NotesGateway(
+            root,
+            db,
+            embedder=embedder,
+            related_db=related_db,
+        )
+    )
 
 
 @notes_app.command("annotate-batch")
@@ -476,10 +484,24 @@ def notes_manifest_verify(
 def notes_related_build(
     notes_db: Annotated[Path, typer.Option("--notes-db")],
     related_db: Annotated[Path, typer.Option("--related-db")] = Path(".memfw-related.sqlite"),
+    endpoint: Annotated[str | None, typer.Option("--embedding-url")] = None,
+    model: Annotated[str, typer.Option("--embedding-model")] = "embedding-model",
+    dimension: Annotated[int, typer.Option("--dimension")] = 1024,
 ) -> None:
-    """Rebuild note-to-note relatedness edges."""
-    count = RelatedIndex(related_db).rebuild_notes(notes_db)
-    typer.echo(json.dumps({"related_db": str(related_db), "edges": count}, ensure_ascii=False))
+    """Rebuild note-to-note relatedness edges, optionally with semantic edges."""
+    index = RelatedIndex(related_db)
+    count = index.rebuild_notes(notes_db)
+    semantic = 0
+    if endpoint:
+        semantic = index.build_semantic(
+            HttpEmbeddingProvider(endpoint, model=model, dimension=dimension)
+        )
+    typer.echo(
+        json.dumps(
+            {"related_db": str(related_db), "edges": count, "semantic_edges": semantic},
+            ensure_ascii=False,
+        )
+    )
 
 
 @notes_app.command("related")
@@ -615,10 +637,24 @@ def candidates_list(
 def memory_related_build(
     root: Annotated[Path, typer.Option("--root", "-r")] = Path("."),
     related_db: Annotated[Path, typer.Option("--related-db")] = Path(".memfw-related.sqlite"),
+    endpoint: Annotated[str | None, typer.Option("--embedding-url")] = None,
+    model: Annotated[str, typer.Option("--embedding-model")] = "embedding-model",
+    dimension: Annotated[int, typer.Option("--dimension")] = 1024,
 ) -> None:
-    """Rebuild memory-to-memory relatedness edges."""
-    count = RelatedIndex(related_db).rebuild_memory(_repo(root))
-    typer.echo(json.dumps({"related_db": str(related_db), "edges": count}, ensure_ascii=False))
+    """Rebuild memory-to-memory relatedness edges, optionally with semantics."""
+    index = RelatedIndex(related_db)
+    count = index.rebuild_memory(_repo(root))
+    semantic = 0
+    if endpoint:
+        semantic = index.build_semantic(
+            HttpEmbeddingProvider(endpoint, model=model, dimension=dimension)
+        )
+    typer.echo(
+        json.dumps(
+            {"related_db": str(related_db), "edges": count, "semantic_edges": semantic},
+            ensure_ascii=False,
+        )
+    )
 
 
 @app.command("memory-related")

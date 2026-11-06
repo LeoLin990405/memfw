@@ -19,6 +19,7 @@ from typing import Any
 
 from .core.repository import Repository
 from .entities import extract_entities, load_dictionary
+from .notes.index import EmbeddingProvider
 
 _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}|[\u4e00-\u9fff]{2,}")
 _STOP = {"the", "and", "for", "with", "from", "this", "that", "memory", "note"}
@@ -42,6 +43,7 @@ class RelatedItem:
     title: str
     path: str
     hash: str
+    text: str = ""
 
 
 def _tokens(text: str) -> set[str]:
@@ -63,7 +65,7 @@ class RelatedIndex:
             """
             CREATE TABLE IF NOT EXISTS related_items (
                 source TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL,
-                path TEXT NOT NULL, hash TEXT NOT NULL,
+                path TEXT NOT NULL, hash TEXT NOT NULL, text TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY (source, id)
             );
             CREATE TABLE IF NOT EXISTS related_edges (
@@ -88,8 +90,8 @@ class RelatedIndex:
         connection.execute("DELETE FROM related_items WHERE source=?", (source,))
         for item in items:
             connection.execute(
-                "INSERT INTO related_items(source,id,title,path,hash) VALUES (?,?,?,?,?)",
-                (item.source, item.id, item.title, item.path, item.hash),
+                "INSERT INTO related_items(source,id,title,path,hash,text) VALUES (?,?,?,?,?,?)",
+                (item.source, item.id, item.title, item.path, item.hash, item.text),
             )
         count = 0
         for src_id, neighbors in candidates.items():
@@ -205,6 +207,7 @@ class RelatedIndex:
                 str(meta["title"]),
                 path,
                 "",
+                " ".join([str(meta["title"]), str(meta["course"])]),
             )
             for path, meta in metadata.items()
         ]
@@ -238,12 +241,15 @@ class RelatedIndex:
                     doc.title,
                     f"memories/{doc.id}.md",
                     str(doc.updated_at),
+                    " ".join([doc.title, doc.body, " ".join(doc.tags)]),
                 )
             )
             for entity in entities[doc.id]:
                 inverted["e:" + entity.lower()].add(doc.id)
             for token in tokens[doc.id]:
                 inverted["t:" + token].add(doc.id)
+            for tag in doc.tags:
+                inverted["tag:" + str(tag).lower()].add(doc.id)
             for related in doc.related:
                 inverted["r:" + related].add(doc.id)
         for doc in docs:
@@ -251,6 +257,14 @@ class RelatedIndex:
             for related in doc.related:
                 if related in {item.id for item in items}:
                     neighbors[("memory", related)] = (3.0, {"method": "explicit"})
+            for tag in doc.tags:
+                for other in inverted.get("tag:" + str(tag).lower(), set()):
+                    if other != doc.id:
+                        old, evidence = neighbors.get(("memory", other), (0.0, {}))
+                        neighbors[("memory", other)] = (
+                            max(old, 0.8),
+                            {"method": "tag", "tag": tag, **evidence},
+                        )
             for entity in entities[doc.id]:
                 for other in inverted.get("e:" + entity.lower(), set()):
                     if other != doc.id:
@@ -274,6 +288,93 @@ class RelatedIndex:
         finally:
             connection.close()
 
+    def build_semantic(
+        self,
+        embedder: EmbeddingProvider,
+        *,
+        limit: int = 10,
+    ) -> int:
+        """Build semantic edges across all indexed sources with one model.
+
+        The embedding fingerprint is recorded in each edge. This method is opt-in
+        and never runs automatically.
+        """
+        try:
+            import sqlite_vec  # type: ignore[import-untyped]
+        except ImportError as exc:  # pragma: no cover - optional dependency
+            raise RuntimeError("sqlite_vec is required for semantic relatedness") from exc
+        connection = self._connect()
+        try:
+            connection.execute("DELETE FROM related_edges WHERE method='semantic'")
+            columns = {
+                str(row[1]) for row in connection.execute("PRAGMA table_info(related_items)")
+            }
+            if "text" not in columns:
+                connection.execute(
+                    "ALTER TABLE related_items ADD COLUMN text TEXT NOT NULL DEFAULT ''"
+                )
+            rows = connection.execute(
+                "SELECT rowid,source,id,title,text FROM related_items ORDER BY rowid"
+            ).fetchall()
+            if not rows:
+                return 0
+            connection.execute("DROP TABLE IF EXISTS related_vectors")
+            dimension = int(getattr(embedder, "dimension", 0) or 0)
+            if dimension <= 0:
+                raise ValueError("embedder dimension must be positive")
+            connection.enable_load_extension(True)
+            sqlite_vec.load(connection)
+            connection.enable_load_extension(False)
+            connection.execute(
+                f"CREATE VIRTUAL TABLE related_vectors USING vec0(embedding float[{dimension}])"
+            )
+            texts = [str(row["title"]) + " " + str(row["text"]) for row in rows]
+            vectors = embedder.embed(texts, role="document")
+            for row, vector in zip(rows, vectors, strict=False):
+                connection.execute(
+                    "INSERT INTO related_vectors(rowid,embedding) VALUES (?,?)",
+                    (int(row["rowid"]), json.dumps(vector)),
+                )
+            fingerprint = str(
+                getattr(embedder, "fingerprint", "") or getattr(embedder, "model", "")
+            )
+            count = 0
+            for row, query_vector in zip(rows, vectors, strict=False):
+                neighbors = connection.execute(
+                    "SELECT rowid,distance FROM related_vectors WHERE embedding MATCH ? AND k = ?",
+                    (json.dumps(query_vector), min(limit + 1, len(rows))),
+                ).fetchall()
+                for neighbor in neighbors:
+                    if int(neighbor["rowid"]) == int(row["rowid"]):
+                        continue
+                    target = next(
+                        item for item in rows if int(item["rowid"]) == int(neighbor["rowid"])
+                    )
+                    score = 1.0 / (1.0 + float(neighbor["distance"]))
+                    connection.execute(
+                        "INSERT OR REPLACE INTO related_edges"
+                        "(src_source,src_id,dst_source,dst_id,method,score,evidence) "
+                        "VALUES (?,?,?,?,?,?,?)",
+                        (
+                            str(row["source"]),
+                            str(row["id"]),
+                            str(target["source"]),
+                            str(target["id"]),
+                            "semantic",
+                            score,
+                            json.dumps(
+                                {"method": "semantic", "model": fingerprint},
+                                ensure_ascii=False,
+                                sort_keys=True,
+                            ),
+                        ),
+                    )
+                    count += 1
+            connection.commit()
+            return count
+        finally:
+            connection.close()
+
     def related(
         self,
         source: str,
@@ -287,25 +388,45 @@ class RelatedIndex:
             return []
         with sqlite3.connect(self.path) as connection:
             connection.row_factory = sqlite3.Row
-            rows = connection.execute(
+            outgoing = connection.execute(
                 "SELECT e.*, i.title, i.path FROM related_edges e "
                 "LEFT JOIN related_items i ON i.source=e.dst_source AND i.id=e.dst_id "
-                "WHERE e.src_source=? AND e.src_id=? "
-                "ORDER BY e.score DESC, e.dst_id LIMIT ?",
-                (source, identifier, max(0, limit)),
+                "WHERE e.src_source=? AND e.src_id=?",
+                (source, identifier),
             ).fetchall()
-        return [
-            {
-                "source": row["dst_source"],
-                "id": row["dst_id"],
-                "title": row["title"] or "",
-                "path": row["path"] or "",
-                "method": row["method"],
-                "score": row["score"],
-                "evidence": json.loads(row["evidence"]),
-            }
-            for row in rows
-        ]
+            incoming = connection.execute(
+                "SELECT e.*, i.title, i.path FROM related_edges e "
+                "LEFT JOIN related_items i ON i.source=e.src_source AND i.id=e.src_id "
+                "WHERE e.dst_source=? AND e.dst_id=?",
+                (source, identifier),
+            ).fetchall()
+        merged: dict[tuple[str, str], dict[str, Any]] = {}
+        for row, direction in [(row, "outgoing") for row in outgoing] + [
+            (row, "incoming") for row in incoming
+        ]:
+            other_source = row["dst_source"] if direction == "outgoing" else row["src_source"]
+            other_id = row["dst_id"] if direction == "outgoing" else row["src_id"]
+            key = (str(other_source), str(other_id))
+            item = merged.get(key)
+            if item is None:
+                item = {
+                    "source": str(other_source),
+                    "id": str(other_id),
+                    "title": row["title"] or "",
+                    "path": row["path"] or "",
+                    "methods": [],
+                    "score": 0.0,
+                    "evidence": [],
+                }
+                merged[key] = item
+            item["score"] = max(float(item["score"]), float(row["score"]))
+            item["methods"].append(str(row["method"]))
+            item["evidence"].append(
+                {"direction": direction, "method": row["method"], **json.loads(row["evidence"])}
+            )
+        return sorted(
+            merged.values(), key=lambda item: (-item["score"], item["source"], item["id"])
+        )[: max(0, limit)]
 
 
 __all__ = ["RelatedEdge", "RelatedIndex", "RelatedItem"]
