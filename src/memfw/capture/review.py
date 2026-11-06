@@ -138,14 +138,60 @@ def validate_candidate_hash(candidate: Candidate) -> None:
         raise IntegrityError("hash_mismatch")
 
 
+def _escape_provenance_value(value: str) -> str:
+    return value.replace("%", "%25").replace(";", "%3B").replace("=", "%3D")
+
+
+def _unescape_provenance_value(value: str) -> str | None:
+    if not value or "=" in value:
+        return None
+    index = value.find("%")
+    while index >= 0:
+        if value[index : index + 3] not in ("%25", "%3B", "%3D"):
+            return None
+        index = value.find("%", index + 3)
+    return value.replace("%3B", ";").replace("%3D", "=").replace("%25", "%")
+
+
 def candidate_provenance(candidate: Candidate) -> str:
-    parts = [f"candidate:{candidate.candidate_id}"]
+    parts = [f"candidate:{_escape_provenance_value(candidate.candidate_id)}"]
     if candidate.proposal_id:
-        parts.append(f"proposal_id={candidate.proposal_id}")
-    parts.append(f"source={candidate.source or 'candidate'}")
+        parts.append(f"proposal_id={_escape_provenance_value(candidate.proposal_id)}")
+    parts.append(f"source={_escape_provenance_value(candidate.source or 'candidate')}")
     if candidate.content_hash:
-        parts.append(f"content_hash={candidate.content_hash}")
+        parts.append(f"content_hash={_escape_provenance_value(candidate.content_hash)}")
     return ";".join(parts)
+
+
+def parse_candidate_provenance(provenance: str) -> dict[str, str] | None:
+    parts = provenance.split(";")
+    if not 2 <= len(parts) <= 4 or not parts[0].startswith("candidate:"):
+        return None
+
+    raw_values = {"candidate_id": parts[0].removeprefix("candidate:")}
+    index = 1
+    if parts[index].startswith("proposal_id="):
+        raw_values["proposal_id"] = parts[index].removeprefix("proposal_id=")
+        index += 1
+    if index >= len(parts) or not parts[index].startswith("source="):
+        return None
+    raw_values["source"] = parts[index].removeprefix("source=")
+    index += 1
+    if index < len(parts):
+        if not parts[index].startswith("content_hash="):
+            return None
+        raw_values["content_hash"] = parts[index].removeprefix("content_hash=")
+        index += 1
+    if index != len(parts):
+        return None
+
+    values: dict[str, str] = {}
+    for key, raw_value in raw_values.items():
+        value = _unescape_provenance_value(raw_value)
+        if value is None:
+            return None
+        values[key] = value
+    return values
 
 
 def list_staged_candidates(root: Path | str) -> list[dict[str, Any]]:
@@ -166,6 +212,7 @@ __all__ = [
     "candidate_dict",
     "candidate_provenance",
     "list_staged_candidates",
+    "parse_candidate_provenance",
     "read_candidate",
     "validate_candidate_hash",
 ]

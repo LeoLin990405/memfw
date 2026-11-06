@@ -15,6 +15,7 @@ from .review import (
     candidate_content_hash,
     candidate_dict,
     candidate_provenance,
+    parse_candidate_provenance,
     read_candidate,
     validate_candidate_hash,
 )
@@ -70,16 +71,16 @@ def mark_candidate_applied(candidate: Candidate, memory_id: str) -> None:
 
 
 def find_applied_memory_id(repository: RepositoryHost, candidate: Candidate) -> str | None:
-    documents = repository.list()
-    candidate_marker = f"candidate:{candidate.candidate_id}"
-    for document in documents:
-        if candidate_marker in document.provenance.split(";"):
+    expected = parse_candidate_provenance(candidate_provenance(candidate))
+    identity_fields = ("candidate_id", "proposal_id", "content_hash")
+    if expected is None or any(field not in expected for field in identity_fields):
+        return None
+    for document in repository.list():
+        actual = parse_candidate_provenance(document.provenance)
+        if actual is not None and all(
+            actual.get(field) == expected[field] for field in identity_fields
+        ):
             return document.id
-    if candidate.proposal_id:
-        proposal_marker = f"proposal_id={candidate.proposal_id}"
-        for document in documents:
-            if proposal_marker in document.provenance.split(";"):
-                return document.id
     return None
 
 
@@ -90,6 +91,7 @@ __all__ = [
     "candidate_provenance",
     "find_applied_memory_id",
     "mark_candidate_applied",
+    "parse_candidate_provenance",
     "read_candidate",
     "validate_candidate_hash",
 ]

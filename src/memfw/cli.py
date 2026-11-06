@@ -597,6 +597,18 @@ def candidate_apply(
     if dry_run:
         staged = read_candidate(candidate)
         details = candidate_dict(staged)
+        if staged.content_hash is None or staged.content_hash == "":
+            typer.echo(
+                json.dumps(
+                    {
+                        **details,
+                        "error": "missing_content_hash",
+                        "status": "missing_content_hash",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            raise typer.Exit(code=1)
         if staged.content_hash:
             try:
                 validate_candidate_hash(staged)
@@ -629,6 +641,18 @@ def candidate_apply(
             raise typer.BadParameter("Vault has a pending transaction; run `memfw recover` first")
         staged = read_candidate(candidate)
         details = candidate_dict(staged)
+        if staged.content_hash is None or staged.content_hash == "":
+            typer.echo(
+                json.dumps(
+                    {
+                        **details,
+                        "error": "missing_content_hash",
+                        "status": "missing_content_hash",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            raise typer.Exit(code=1)
         if staged.status == "applied" or staged.applied_memory_id is not None:
             memory_id = staged.applied_memory_id
             typer.echo(
