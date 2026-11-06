@@ -21,8 +21,10 @@ def test_notes_cli_index_search_status(tmp_path: Path) -> None:
     assert payload["counts"]["updated"] == 1
     searched = runner.invoke(app, ["notes", "search", "corpus", "--db", str(db)])
     assert searched.exit_code == 0, searched.stdout
-    hits = json.loads(searched.stdout)
+    payload = json.loads(searched.stdout)
+    hits = payload["results"]
     assert hits and hits[0]["path"] == "note.md"
+    assert payload["mode"] in {"hybrid", "fts", "vector"}
     status = runner.invoke(app, ["notes", "status", "--db", str(db)])
     assert status.exit_code == 0, status.stdout
     assert json.loads(status.stdout)["notes"] == 1

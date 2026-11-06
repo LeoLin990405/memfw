@@ -22,6 +22,8 @@ def test_notes_mcp_search_get_status(tmp_path: Path) -> None:
         "notes_search",
         "notes_get",
         "notes_status",
+        "retrieval_feedback",
+        "retrieval_trace",
     }
     searched = handle_request(
         gateway,
@@ -33,7 +35,8 @@ def test_notes_mcp_search_get_status(tmp_path: Path) -> None:
         },
     )
     payload = json.loads(searched["result"]["content"][0]["text"])
-    assert payload[0]["path"] == "a.md"
+    assert payload["results"][0]["path"] == "a.md"
+    assert payload["mode"] in {"hybrid", "fts", "vector"}
     fetched = handle_request(
         gateway,
         {
