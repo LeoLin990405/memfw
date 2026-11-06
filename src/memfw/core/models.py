@@ -73,6 +73,8 @@ class MemoryDocument(BaseModel):
     layer: Layer = Layer.CURRENT
     tier: Tier = Tier.HOT
     type: str | None = None
+    tenant: str = ""
+    related: list[str] = Field(default_factory=list)
     source: str = "manual"
     provenance: str = "human-authored"
     anchor: str | None = None

@@ -44,6 +44,7 @@ class MemoryHybridRetriever:
         rrf_k: int = 60,
         entity_enabled: bool = False,
         entity_dictionary: Path | str | None = None,
+        tenant: str = "",
     ) -> None:
         self.repository = repository
         self.embedder = embedder
@@ -57,6 +58,7 @@ class MemoryHybridRetriever:
         self.candidates = max(1, candidates)
         self.rrf_k = max(1, rrf_k)
         self.entity_enabled = entity_enabled
+        self.tenant = tenant
         self.entity_index = EntityIndex(
             repository.root / ".memory-entities.sqlite",
             dictionary=load_dictionary(entity_dictionary),
@@ -127,6 +129,7 @@ class MemoryHybridRetriever:
         *,
         include_history: bool = False,
         as_of: datetime | None = None,
+        tenant: str = "",
     ) -> tuple[list[dict[str, Any]], list[str]]:
         errors: list[str] = []
         notes_result = None
@@ -151,6 +154,8 @@ class MemoryHybridRetriever:
                 try:
                     document = self.repository.get(memory_id)
                 except Exception:
+                    continue
+                if document.tenant != tenant:
                     continue
                 if not self._visible(document, include_history=include_history, as_of=as_of):
                     continue
@@ -178,6 +183,8 @@ class MemoryHybridRetriever:
         results = []
         for memory_id in legacy:
             document = self.repository.get(memory_id)
+            if document.tenant != tenant:
+                continue
             if not self._visible(document, include_history=include_history, as_of=as_of):
                 continue
             if source and document.source != source:
@@ -202,6 +209,7 @@ class MemoryHybridRetriever:
         source: str = "",
         include_history: bool = False,
         as_of: str | datetime | None = None,
+        tenant: str | None = None,
     ) -> dict[str, Any]:
         if not query.strip():
             raise ValueError("query required")
@@ -209,6 +217,7 @@ class MemoryHybridRetriever:
         if mode not in {"fts", "hybrid", "vector"}:
             raise ValueError("mode must be fts, hybrid or vector")
         as_of_dt = self._parse_as_of(as_of)
+        tenant_value = self.tenant if tenant is None else tenant
         errors: list[str] = []
         mode_used = "fts"
         degraded = mode != "fts"
@@ -240,6 +249,8 @@ class MemoryHybridRetriever:
                     if document.is_stub or document.tier == Tier.COLD:
                         self.repository.autowarm(memory_id, actor="mechanism")
                         document = self.repository.get(memory_id)
+                    if document.tenant != tenant_value:
+                        continue
                     if source and document.source != source:
                         continue
                     if not self._visible(document, include_history=include_history, as_of=as_of_dt):
@@ -271,6 +282,7 @@ class MemoryHybridRetriever:
                 source,
                 include_history=include_history,
                 as_of=as_of_dt,
+                tenant=tenant_value,
             )
             errors.extend(fts_errors)
             mode_used = "fts"
@@ -293,6 +305,8 @@ class MemoryHybridRetriever:
                     try:
                         document = self.repository.get(memory_id)
                     except Exception:
+                        continue
+                    if document.tenant != tenant_value:
                         continue
                     if not self._visible(document, include_history=include_history, as_of=as_of_dt):
                         continue

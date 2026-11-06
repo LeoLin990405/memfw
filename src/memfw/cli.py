@@ -15,6 +15,7 @@ import typer
 from .budget import BYTE_BUDGETS, BudgetLimits, BudgetProfile
 from .capture.cli import app as capture_app
 from .capture.confirm import confirm_command
+from .capture.review import list_staged_candidates
 from .code_retrieval import CodeIndex, index_code
 from .core.errors import IntegrityError, MemfwError
 from .core.models import Layer, Tier
@@ -536,6 +537,10 @@ def candidate_apply(
         metadata = {}
     title = str(parsed.get("name") or "memory")[:120]
     tags = [str(item) for item in (metadata.get("tags") or [])]
+    related = [str(item) for item in (metadata.get("related") or [])]
+    for related_id in related:
+        repository.get(related_id)
+    tenant = str(metadata.get("tenant") or "")
     if dry_run:
         typer.echo(
             json.dumps(
@@ -543,6 +548,8 @@ def candidate_apply(
                     "dry_run": True,
                     "title": title,
                     "tags": tags,
+                    "related": related,
+                    "tenant": tenant,
                     "authority": False,
                 },
                 ensure_ascii=False,
@@ -554,11 +561,27 @@ def candidate_apply(
         title,
         body.strip(),
         tags=tags,
+        tenant=tenant,
+        related=related,
         source="candidate",
         provenance=f"candidate:{candidate.name}",
         actor="human",
     )
     typer.echo(json.dumps({"memory_id": document.id, "tags": document.tags}, ensure_ascii=False))
+
+
+@app.command("candidates")
+def candidates_list(
+    root: Annotated[Path, typer.Option("--root", "-r")] = Path("."),
+) -> None:
+    """Show staged candidates with tags, related ids, and duplicate/conflict suggestions."""
+    typer.echo(
+        json.dumps(
+            {"candidates": list_staged_candidates(root)},
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 @app.command("review")

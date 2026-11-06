@@ -192,6 +192,8 @@ class MarkdownStorageMixin:
                 "layer",
                 "tier",
                 "type",
+                "tenant",
+                "related",
                 "source",
                 "provenance",
                 "anchor",

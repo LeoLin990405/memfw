@@ -107,8 +107,10 @@ class Gateway:
         root: Path | str,
         *,
         embedder: HttpEmbeddingProvider | None = None,
+        tenant: str | None = None,
     ) -> None:
         self.root = Path(root).expanduser()
+        self.tenant = tenant if tenant is not None else os.environ.get("MEMFW_TENANT", "")
         if embedder is None:
             endpoint = os.environ.get("MEMFW_EMBEDDING_URL")
             if endpoint:
@@ -128,6 +130,7 @@ class Gateway:
         return MemoryHybridRetriever(
             repository,
             embedder=self.embedder,
+            tenant=self.tenant,
         )
 
     def search(
@@ -151,6 +154,7 @@ class Gateway:
             source=source,
             include_history=include_history,
             as_of=as_of,
+            tenant=self.tenant,
         )
         rows = []
         for item in result["results"]:
@@ -181,6 +185,8 @@ class Gateway:
 
     def get(self, memory_id: str) -> dict[str, Any]:
         document = self._repo().get(memory_id)
+        if document.tenant != self.tenant:
+            raise ValueError("memory is not visible in this tenant")
         return {
             "id": document.id,
             "title": document.title,
@@ -214,6 +220,7 @@ class Gateway:
             "type": "candidate",
             "lifecycle": "active",
             "created_at": stamp,
+            "tenant": self.tenant,
             "tags": tags or [],
             "related": related or [item.memory_id for item in suggestions],
             "suggestions": [item.as_dict() for item in suggestions],
@@ -243,6 +250,7 @@ class Gateway:
             document
             for document in repository.list()
             if document.valid_to is None
+            and document.tenant == self.tenant
             and (document.layer == Layer.ANCHOR or document.anchor or document.type == "procedural")
         ]
         selected.sort(

@@ -558,3 +558,18 @@ annotation was adopted.
 Still not implemented: automatic candidate tag persistence after human confirm,
 a review UI for suggestions, the full 5-class LongMemEval/LoCoMo suite, training,
 permission ACLs, and production cutover.
+
+
+## Tenant, related links, and review UI
+
+- Memory documents now carry optional `tenant` and `related` fields alongside
+  `valid_from`/`valid_to`/`superseded_by`.
+- A `Gateway` is bound to one vault and one tenant; cross-tenant `get`/search
+  are rejected. This is a single-vault gate, not a full account ACL.
+- `memfw candidates` shows staged candidates, tags, related ids, and
+  duplicate/conflict suggestions; `memfw candidate-apply` is dry-run by default
+  and requires an explicit human `--apply`.
+- Human apply persists `tags`, `related`, and `tenant` into the new memory.
+- `memory_eval.py` provides a generated five-class local evaluation scaffold
+  (single-hop, multi-hop, temporal, update, refusal); it is not a substitute for
+  the human-labelled LongMemEval/LoCoMo suite.

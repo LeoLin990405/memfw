@@ -123,3 +123,47 @@ def test_candidate_apply_requires_explicit_human_apply(tmp_path: Path) -> None:
     assert applied.exit_code == 0, applied.output
     assert len(repository.list()) == 3
     assert any("new" in doc.tags for doc in repository.list())
+
+
+def test_tenant_gate_isolates_results(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "vault")
+    repository.init()
+    repository.add("A", "tenant a corpus", memory_id="a", tenant="tenant-a")
+    repository.add("B", "tenant b corpus", memory_id="b", tenant="tenant-b")
+    gateway = Gateway(repository.root, tenant="tenant-a")
+    payload = gateway.search("corpus", limit=5, mode="fts")
+    assert [item["id"] for item in payload["results"]] == ["a"]
+    try:
+        gateway.get("b")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("cross-tenant get must fail")
+    assert gateway.context(limit_tokens=100)["entries"] == []
+
+
+def test_candidates_list_and_related_apply(tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    from memfw.cli import app
+
+    repository = _vault(tmp_path)
+    gateway = Gateway(repository.root)
+    payload = gateway.remember(
+        "new body",
+        title="New memory",
+        tags=["new"],
+        related=["m-corpus"],
+    )
+    listed = CliRunner().invoke(app, ["candidates", "--root", str(repository.root)])
+    assert listed.exit_code == 0, listed.output
+    assert "m-corpus" in listed.output
+    applied = CliRunner().invoke(
+        app,
+        ["candidate-apply", payload["staged_candidate"], "--root", str(repository.root), "--apply"],
+    )
+    assert applied.exit_code == 0, applied.output
+    document = next(doc for doc in repository.list() if doc.title == "New memory")
+    assert document.tags == ["new"]
+    assert document.related == ["m-corpus"]
+    assert document.tenant == ""
