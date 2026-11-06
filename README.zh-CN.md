@@ -105,6 +105,7 @@ memfw-mcp --root localdata/demo-vault
 | `memory_search` | 检索 vault：默认 FTS5；配置本地 embedding 端点时使用 NotesRetriever hybrid；支持 mode/source/include_history/as_of |
 | `memory_get` | 按 id 读取单条记忆（只读） |
 | `memory_remember` | 暂存候选到 `_candidates/remember/`，绝不写入 vault |
+| `memory_related` | 读取派生的记忆关联边（只读） |
 | `memory_context` | 按 token 预算返回常驻上下文：anchor 与 procedural 优先 |
 | `memory_status` | vault 规模、layer/tier 统计与日志摘要 |
 
@@ -175,8 +176,9 @@ MLX transport 测试受主机负载守卫控制
    内容与 anchor 决策仍由人负责。
 2. **推断不是用户原话。** 模型推断内容必须与用户直接陈述可区分，并保留来源与不确定性。
 3. **用户数据默认留在本地。** 核心与演示流程不上传用户数据。
-4. **检索按设计是词法的。** FTS5 有真实上限（见评估）；需要语义检索时请在上游接入，
-   把这个 vault 当作耐久投影。
+4. **核心是词法且不依赖模型；hybrid/relatedness 是可选项。** 默认 FTS5；配置本地
+   OpenAI 兼容 embedding 端点后才走共享 notes hybrid。rerank/query rewrite 默认关闭，
+   所有 SQLite 投影可从 Markdown 重建。
 5. **小样本。** 保留评估只针对一个数据集和这些设置，是有边界的证据，不声明生产质量或用户级泛化。
 
 ## 🤝 参与贡献
@@ -216,3 +218,24 @@ memfw notes serve --root ~/notes --db /tmp/notes.sqlite \
 ```
 
 安装可选扩展：`pip install 'memfw[notes]'`。
+
+
+## 关联性投影
+
+`memfw.related` 从显式 wikilink/`related`、共享 tag/课程、共享实体和词法重叠构建可重建边：
+
+```bash
+memfw notes related-build --notes-db /tmp/notes.sqlite --related-db /tmp/related.sqlite
+memfw notes related "Week 02/...md" --related-db /tmp/related.sqlite
+memfw notes related-sections-build --notes-db /tmp/notes.sqlite \
+  --related-db /tmp/related.sqlite --max-sections 2000
+memfw memory-related-build --root ./vault --related-db /tmp/related.sqlite
+memfw memory-related memory-id --related-db /tmp/related.sqlite
+```
+
+可用 `--embedding-url`/`--embedding-model` 构建语义边；同一次构建共享 embedder
+fingerprint，语义分不会覆盖显式链接。MCP 工具为 `notes_related` / `memory_related`。
+
+当前 QMD 语义关联基于本地 4,979-note memfw notes index；纯远程 QMD 结果在本地向量投影
+建立前不参与语义边。100 对人工标注包与校准工具见
+`~/Documents/Codex/memfw-related-annotation-20261106/`。

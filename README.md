@@ -110,6 +110,7 @@ Example client configuration (stdio):
 | `memory_search` | Search the vault: FTS5 by default, optional NotesRetriever hybrid when an embedding endpoint is configured; supports `mode`, `source`, `include_history`, `as_of` |
 | `memory_get` | Read one memory by id (read-only) |
 | `memory_remember` | Stage a candidate under `_candidates/remember/` with tags/related/suggestions; never writes the vault |
+| `memory_related` | Read derived related-memory edges (read-only) |
 | `memory_context` | Token-budgeted resident context: anchors and procedural memories first |
 | `memory_status` | Vault size, layer/tier counts, and log summary |
 
@@ -204,6 +205,13 @@ Licensed under the [Apache License 2.0](LICENSE). This distribution contains no 
 source code; see [`NOTICE`](NOTICE).
 
 
+## Notes MCP tools
+
+- `notes_search` — FTS/vector/hybrid section search;
+- `notes_related` — derived note-to-note edges;
+- `notes_get`, `notes_status`;
+- `retrieval_feedback`, `retrieval_trace`.
+
 ## Notes index
 
 `memfw.notes` is a derived, section-level index for a Markdown notes tree. It is
@@ -287,7 +295,8 @@ through the notes MCP when a related DB is configured. Edges are derived, never
 write Markdown, and only current memories are indexed.
 
 Semantic edges are opt-in: add `--embedding-url`/`--embedding-model` to the
-rebuild command and `sqlite-vec` is used for KNN. All indexed sources must be
-embedded with the same model/fingerprint; QMD notes are not included until they
-have a local vector index. Semantic scores are kept as a separate method and do
-not replace explicit links.
+rebuild command and `sqlite-vec` is used for KNN. All indexed sources in one
+build share the same embedder/fingerprint. The current QMD coverage uses the
+local 4,979-note memfw notes index; remote-only QMD hits are not included until
+they have a local vector projection. Semantic scores remain a separate method
+and never replace explicit links.
