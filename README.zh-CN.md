@@ -102,9 +102,10 @@ memfw-mcp --root localdata/demo-vault
 
 | 工具 | 用途 |
 |---|---|
-| `memory_search` | 用可重建 FTS5 索引检索 vault |
+| `memory_search` | 检索 vault：默认 FTS5；配置本地 embedding 端点时使用 NotesRetriever hybrid；支持 mode/source/include_history/as_of |
 | `memory_get` | 按 id 读取单条记忆（只读） |
 | `memory_remember` | 暂存候选到 `_candidates/remember/`，绝不写入 vault |
+| `memory_context` | 按 token 预算返回常驻上下文：anchor 与 procedural 优先 |
 | `memory_status` | vault 规模、layer/tier 统计与日志摘要 |
 
 服务刻意保持本地化：无 SSH、无远程主机、无外部检索后端。需要这些能力时，请在应用或适配器中实现。
@@ -145,7 +146,7 @@ OKF bundle 是可重建的派生投影；Markdown 仍是权威。字段映射与
 
 | 路径 | 内容 |
 |---|---|
-| `src/memfw/` | repository、storage、哈希链日志、FTS5 索引/检索、保留策略与预算、curation、capture、agents、本地 MCP 服务 |
+| `src/memfw/` | repository、storage、哈希链日志、FTS5/hybrid 检索、保留策略与预算、curation、capture、agents、本地 MCP 服务、代码检索 |
 | `eval/`、`scripts/` | 评估流水线与本地 portfolio demo |
 | `reports/`、`results/` | 可复现的评估报告与产物 |
 | `docs/` | 架构说明、评估详解、设计笔记 |
@@ -164,7 +165,7 @@ mypy src
 ruff check src/memfw tests
 ```
 
-在参考机器上测试结果为 **493 passed、2 skipped**。MLX transport 测试受环境守卫控制
+在参考机器上测试结果为 **533 passed、2 skipped**。MLX transport 测试受环境守卫控制
 （不满足 MLX 负载条件的机器会跳过），不同机器结果可能不同。
 
 ## 🧭 设计原则与边界

@@ -1,5 +1,20 @@
 # Retrieval architecture and staged plan
 
+## 0. Current implementation status
+
+The repository now contains more than the Stage A interface layer:
+
+- notes hybrid retrieval: FTS + optional sqlite-vec + RRF, filters, opt-in abstention;
+- memory_search: FTS by default, optional NotesRetriever hybrid, mode/degraded reporting;
+- temporal memory fields (`valid_from`, `valid_to`, `superseded_by`) and human-only supersede;
+- opt-in entity third route for memory retrieval;
+- feedback, evaluation, shadow/manifest, AI cross-label diagnostics, and code retrieval;
+- rerank and query rewrite remain default-off because measured results were negative;
+- training/distillation, production cutover, and permission ACLs are not implemented.
+
+The stage sections below are historical design notes; use this section, the code, and
+README as the current behavior contract.
+
 Status: Stage A implemented; Stages B-E are planned, not implemented.
 This document is based on the repository at commit `fc112bc` plus the local
 Stage A changes.
@@ -514,3 +529,32 @@ StepFun Step Plan (`step-5-preview`) judged the same 216 candidate decisions:
 Pairwise kappa with MiniMax/Doubao/DeepSeek was 0.979. The external judges are
 stable with each other but still differ from human labels; no automatic
 annotation was adopted.
+
+
+## Memory vault integration (implemented)
+
+- `memory_search` uses `MemoryHybridRetriever`, which reuses the notes
+  `NotesRetriever`/RRF/index manifest instead of a parallel retriever.
+  FTS is the default; a local `MEMFW_EMBEDDING_URL` enables hybrid; failures
+  degrade to FTS with mode/degraded/errors reported.
+- One MCP server is bound to one vault; `source` narrows further. There is no
+  account/tenant ACL system.
+- Memory documents support optional `valid_from`, `valid_to`, `superseded_by`;
+  `memfw supersede` creates a replacement and marks the old document historical
+  without deleting its body. `include_history` and `as_of` are supported by
+  memory search.
+- Optional entity projection (`.memory-entities.sqlite`) is a rebuildable third
+  RRF route; default off pending a real-golden evaluation.
+- Candidate `memory_remember` writes duplicate/extends/conflicts suggestions to
+  candidate metadata only; it never writes the vault.
+- `memfw consolidate` writes a review-only candidate/forget-plan packet; dry-run
+  is the default.
+- `notes.ai_annotation` requires unanimous cross-model labels and a human-kappa
+  gate above 0.745; it produces an AI candidate set and a human queue, never
+  human golden or training data.
+- `memfw code` provides lexical + optional semantic + structure code retrieval,
+  with FTS+structure fallback and a repo map.
+
+Still not implemented: automatic candidate tag persistence after human confirm,
+a review UI for suggestions, the full 5-class LongMemEval/LoCoMo suite, training,
+permission ACLs, and production cutover.

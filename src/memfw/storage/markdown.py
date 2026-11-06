@@ -191,6 +191,7 @@ class MarkdownStorageMixin:
                 "updated_at",
                 "layer",
                 "tier",
+                "type",
                 "source",
                 "provenance",
                 "anchor",
@@ -205,6 +206,9 @@ class MarkdownStorageMixin:
                 "last_access_interval_days",
                 "manually_marked",
                 "group_key",
+                "valid_from",
+                "valid_to",
+                "superseded_by",
             )
         }
         frontmatter = yaml.safe_dump(ordered, allow_unicode=True, sort_keys=False).rstrip()

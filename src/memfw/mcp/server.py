@@ -21,9 +21,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from memfw.capture.suggestions import suggest_related
 from memfw.core.models import Layer, Tier
 from memfw.core.repository import Repository
-from memfw.retrieval import VaultRetriever
+from memfw.memory_hybrid import MemoryHybridRetriever
+from memfw.notes import HttpEmbeddingProvider
 
 SERVER_INFO = {"name": "memfw", "version": "0.1.0"}
 PROTOCOL = "2024-11-05"
@@ -43,6 +45,12 @@ TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "query": {"type": "string"},
                 "limit": {"type": "integer", "default": 10},
+                "mode": {
+                    "type": "string",
+                    "enum": ["fts", "hybrid", "vector"],
+                    "default": "hybrid",
+                },
+                "source": {"type": "string"},
             },
             "required": ["query"],
         },
@@ -66,6 +74,14 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "memory_context",
+        "description": "Return a token-budgeted context: anchors and procedural memories first.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"limit_tokens": {"type": "integer", "default": 2000}},
+        },
+    },
+    {
         "name": "memory_status",
         "description": "Return vault size, layer/tier counts, and log verification summary.",
         "inputSchema": {"type": "object", "properties": {}},
@@ -81,33 +97,82 @@ def _slug(text: str) -> str:
 class Gateway:
     """MCP tool implementations bound to one local vault root."""
 
-    def __init__(self, root: Path | str) -> None:
+    def __init__(
+        self,
+        root: Path | str,
+        *,
+        embedder: HttpEmbeddingProvider | None = None,
+    ) -> None:
         self.root = Path(root).expanduser()
+        if embedder is None:
+            endpoint = os.environ.get("MEMFW_EMBEDDING_URL")
+            if endpoint:
+                embedder = HttpEmbeddingProvider(
+                    endpoint,
+                    model=os.environ.get("MEMFW_EMBEDDING_MODEL", "embedding-model"),
+                    dimension=int(os.environ.get("MEMFW_EMBEDDING_DIMENSION", "1024")),
+                )
+        self.embedder = embedder
 
     def _repo(self) -> Repository:
         repository = Repository(self.root)
         repository.init()
         return repository
 
-    def search(self, query: str, limit: int = 10) -> dict[str, Any]:
+    def _retriever(self, repository: Repository) -> MemoryHybridRetriever:
+        return MemoryHybridRetriever(
+            repository,
+            embedder=self.embedder,
+        )
+
+    def search(
+        self,
+        query: str,
+        limit: int = 10,
+        *,
+        mode: str = "hybrid",
+        source: str = "",
+        include_history: bool = False,
+        as_of: str | None = None,
+    ) -> dict[str, Any]:
         if not query.strip():
             raise ValueError("query required")
         repository = self._repo()
-        retriever = VaultRetriever(repository)
-        identifiers = retriever.retrieve(query, limit=max(0, min(limit, 50)))
-        results = []
-        for memory_id in identifiers:
-            document = repository.get(memory_id)
-            results.append(
+        retriever = self._retriever(repository)
+        result = retriever.search(
+            query,
+            limit=max(0, min(limit, 50)),
+            mode=mode,
+            source=source,
+            include_history=include_history,
+            as_of=as_of,
+        )
+        rows = []
+        for item in result["results"]:
+            document = repository.get(item["id"])
+            rows.append(
                 {
                     "id": document.id,
                     "title": document.title,
                     "layer": document.layer.value,
                     "tier": document.tier.value,
                     "updated_at": document.updated_at.isoformat(),
+                    "valid_from": document.valid_from.isoformat() if document.valid_from else None,
+                    "valid_to": document.valid_to.isoformat() if document.valid_to else None,
+                    "superseded_by": document.superseded_by,
+                    "type": document.type,
+                    "score": item["score"],
+                    "source": document.source,
                 }
             )
-        return {"root": str(self.root), "results": results}
+        return {
+            "root": str(self.root),
+            "mode": result["mode"],
+            "degraded": result["degraded"],
+            "errors": result["errors"],
+            "model_versions": result["model_versions"],
+            "results": rows,
+        }
 
     def get(self, memory_id: str) -> dict[str, Any]:
         document = self._repo().get(memory_id)
@@ -117,6 +182,7 @@ class Gateway:
             "body": document.body,
             "layer": document.layer.value,
             "tier": document.tier.value,
+            "type": document.type,
             "source": document.source,
             "provenance": document.provenance,
             "tags": list(document.tags),
@@ -130,18 +196,76 @@ class Gateway:
         directory.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
         path = directory / f"{stamp}-{_slug(title)}.md"
+        repository = self._repo()
+        suggestions = suggest_related(repository, title, text, embedder=self.embedder)
+        metadata = {
+            "type": "candidate",
+            "lifecycle": "active",
+            "created_at": stamp,
+            "suggestions": [item.as_dict() for item in suggestions],
+            "related": [item.memory_id for item in suggestions],
+        }
         body = (
             "---\n"
             f"name: {json.dumps(title, ensure_ascii=False)}\n"
             "metadata:\n"
-            "  type: candidate\n"
-            "  lifecycle: active\n"
-            f"  created_at: {stamp}\n"
-            "---\n\n"
+            + "".join(
+                f"  {key}: {json.dumps(value, ensure_ascii=False)}\n"
+                for key, value in metadata.items()
+            )
+            + "---\n\n"
             f"{text}\n"
         )
         path.write_text(body, encoding="utf-8")
-        return {"staged_candidate": str(path), "authority": False}
+        return {
+            "staged_candidate": str(path),
+            "authority": False,
+            "suggestions": [item.as_dict() for item in suggestions],
+        }
+
+    def context(self, limit_tokens: int = 2000) -> dict[str, Any]:
+        repository = self._repo()
+        limit_chars = max(100, min(int(limit_tokens), 100_000) * 4)
+        selected = [
+            document
+            for document in repository.list()
+            if document.valid_to is None
+            and (document.layer == Layer.ANCHOR or document.anchor or document.type == "procedural")
+        ]
+        selected.sort(
+            key=lambda document: (
+                0 if document.layer == Layer.ANCHOR or document.anchor else 1,
+                0 if document.type == "procedural" else 1,
+                document.id,
+            )
+        )
+        entries = []
+        used = 0
+        for document in selected:
+            text = document.body or ""
+            if used + len(text) > limit_chars:
+                text = text[: max(0, limit_chars - used)]
+            if not text:
+                continue
+            entries.append(
+                {
+                    "id": document.id,
+                    "title": document.title,
+                    "type": document.type,
+                    "layer": document.layer.value,
+                    "anchor": document.anchor,
+                    "text": text,
+                }
+            )
+            used += len(text)
+            if used >= limit_chars:
+                break
+        return {
+            "root": str(self.root),
+            "limit_tokens": limit_tokens,
+            "used_chars": used,
+            "entries": entries,
+        }
 
     def status(self) -> dict[str, Any]:
         repository = self._repo()
@@ -167,12 +291,18 @@ class Gateway:
     def handlers(self) -> dict[str, Callable[[dict[str, Any]], Any]]:
         return {
             "memory_search": lambda args: self.search(
-                str(args.get("query") or ""), int(args.get("limit") or 10)
+                str(args.get("query") or ""),
+                int(args.get("limit") or 10),
+                mode=str(args.get("mode") or "hybrid"),
+                source=str(args.get("source") or ""),
+                include_history=bool(args.get("include_history", False)),
+                as_of=(str(args["as_of"]) if args.get("as_of") else None),
             ),
             "memory_get": lambda args: self.get(str(args.get("memory_id") or "")),
             "memory_remember": lambda args: self.remember(
                 str(args.get("content") or ""), str(args.get("title") or "memory")
             ),
+            "memory_context": lambda args: self.context(int(args.get("limit_tokens") or 2000)),
             "memory_status": lambda _args: self.status(),
         }
 

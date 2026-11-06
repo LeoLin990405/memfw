@@ -1,5 +1,14 @@
 """Markdown notes retrieval: section index, hybrid search, optional embeddings."""
 
+from .ai_annotation import (
+    AILabel,
+    CrossAnnotationResult,
+    Judge,
+    JudgeVerdict,
+    OpenAIJudge,
+    cross_annotate,
+    write_annotation_files,
+)
 from .annotation import (
     AnnotationEntry,
     GoldenAnnotator,
@@ -87,6 +96,13 @@ __all__ = [
     "FeedbackStore",
     "RetrievalTrace",
     "query_digest",
+    "AILabel",
+    "CrossAnnotationResult",
+    "Judge",
+    "JudgeVerdict",
+    "OpenAIJudge",
+    "cross_annotate",
+    "write_annotation_files",
     "AnnotationEntry",
     "BatchCandidate",
     "BatchQuery",

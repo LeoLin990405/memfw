@@ -107,9 +107,10 @@ Example client configuration (stdio):
 
 | Tool | Purpose |
 |---|---|
-| `memory_search` | Search the vault with its rebuildable FTS5 index |
+| `memory_search` | Search the vault: FTS5 by default, optional NotesRetriever hybrid when an embedding endpoint is configured; supports `mode`, `source`, `include_history`, `as_of` |
 | `memory_get` | Read one memory by id (read-only) |
 | `memory_remember` | Stage a candidate under `_candidates/remember/`; never writes the vault |
+| `memory_context` | Token-budgeted resident context: anchors and procedural memories first |
 | `memory_status` | Vault size, layer/tier counts, and log summary |
 
 The server is deliberately local-only: no SSH, no remote host, no external search backend. If you
@@ -152,7 +153,7 @@ logical retention projection rather than a physical-vault capacity test.
 
 | Path | Contents |
 |---|---|
-| `src/memfw/` | repository, storage, hash-linked log, FTS5 index/retrieval, retention policies and budgets, curation, capture, agents, local MCP server |
+| `src/memfw/` | repository, storage, hash-linked log, FTS5/hybrid retrieval, retention policies and budgets, curation, capture, agents, local MCP server, code retrieval |
 | `eval/`, `scripts/` | evaluation pipelines and the local portfolio demo |
 | `reports/`, `results/` | reproducible evaluation reports and artifacts |
 | `docs/` | architecture notes, evaluation deep-dive, design notes |
@@ -171,7 +172,7 @@ mypy src
 ruff check src/memfw tests
 ```
 
-On the reference host the suite reports **493 passed and 2 skipped**. The MLX transport tests are
+On the reference host the suite reports **533 passed and 2 skipped**. The MLX transport tests are
 environment-gated (they skip when the host cannot satisfy their MLX load guard), so results can vary
 by host.
 
@@ -182,8 +183,10 @@ by host.
 2. **Inference is not testimony.** Model-inferred content must be distinguishable from the user's
    own words, with sources and uncertainty preserved.
 3. **User data stays local by default.** The core and demo flows do not upload user data.
-4. **Retrieval is lexical by design.** The FTS5 index has a real ceiling (see the evaluation); use a
-   semantic backend upstream if you need one, and treat this vault as the durable projection.
+4. **The core is lexical and model-free; hybrid retrieval is optional.** `memory_search` uses the
+   rebuildable FTS5 projection by default. If a local OpenAI-compatible embedding endpoint is
+   configured, it delegates to the shared notes hybrid retriever; rerank and query rewrite remain
+   default-off. The SQLite projections are rebuildable from Markdown.
 5. **Small samples.** The retention evaluation is bounded evidence about one dataset and these
    settings; it is not a claim of production quality or user-level generalization.
 
@@ -231,3 +234,23 @@ checkpoint/resume behavior.
 Install the optional vector extension with `pip install 'memfw[notes]'`.
 Without it, the same API still works with full-text search and stores vectors
 as a fallback BLOB table.
+
+
+## Code retrieval
+
+`memfw code` provides an agent-oriented, local code search path without a new service:
+
+- chunks by Python file, top-level function/class (stdlib AST; no tree-sitter required);
+- lexical FTS + optional local Qwen3-Embedding + structural definition/caller lookup;
+- RRF fusion; lexical+structure fallback when embeddings are unavailable; rerank off;
+- lightweight repo map: entry files, directory summary, recent files.
+
+```bash
+memfw code index --root . --db /tmp/memfw-code.sqlite
+memfw code search "where is VaultRetriever defined" --db /tmp/memfw-code.sqlite
+memfw code map --db /tmp/memfw-code.sqlite
+```
+
+For semantic code search, add `--embedding-url`, `--embedding-model`, and `--dimension` to
+`index` and `search`. Code chunks, symbols, and vectors are disposable projections; source files
+remain authoritative.

@@ -240,7 +240,11 @@ class Repository(
     def _payload_hash(memory_id: str, operation: str, changes: dict[str, Any]) -> str:
         normalized: dict[str, Any] = {}
         for key, value in changes.items():
-            normalized[key] = value.value if hasattr(value, "value") else value
+            if hasattr(value, "value"):
+                value = value.value
+            if isinstance(value, datetime):
+                value = value.isoformat()
+            normalized[key] = value
         payload = {"memory_id": memory_id, "operation": operation, "changes": normalized}
         canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

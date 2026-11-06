@@ -31,10 +31,11 @@ class MemoryOperationsMixin:
         memory_id: str | None = None,
         layer: Layer = Layer.CURRENT,
         tier: Tier = Tier.HOT,
+        memory_type: str | None = None,
         source: str = "manual",
         provenance: str = "human-authored",
         anchor: str | None = None,
-        tags: list[str] | None = None,
+        tags: builtins.list[str] | None = None,
         actor: str = "human",
         agent_id: str | None = None,
         signature: str | None = None,
@@ -65,6 +66,7 @@ class MemoryOperationsMixin:
             body=body,
             layer=layer,
             tier=tier,
+            type=memory_type,
             source=source,
             provenance=provenance,
             anchor=anchor,
@@ -164,6 +166,7 @@ class MemoryOperationsMixin:
             "body",
             "layer",
             "tier",
+            "type",
             "source",
             "provenance",
             "anchor",
@@ -177,6 +180,9 @@ class MemoryOperationsMixin:
             "last_access_interval_days",
             "manually_marked",
             "group_key",
+            "valid_from",
+            "valid_to",
+            "superseded_by",
         }
         if (
             actor != "human"
@@ -238,6 +244,55 @@ class MemoryOperationsMixin:
         )
         self._prune_history(memory_id)
         return new_doc
+
+    @_serialized
+    def supersede(
+        self: RepositoryHost,
+        /,
+        memory_id: str,
+        title: str,
+        body: str,
+        *,
+        actor: str = "human",
+        memory_id_new: str | None = None,
+        tags: builtins.list[str] | None = None,
+        source: str | None = None,
+        provenance: str | None = None,
+    ) -> MemoryDocument:
+        """Create a replacement and mark the old version historical.
+
+        The old Markdown is never deleted. Its valid_to/superseded_by fields are
+        updated in place and a supersede event links the two records. Only a human
+        actor may apply this operation.
+        """
+        if actor != "human":
+            raise IntegrityError("Supersede requires a human actor")
+        old = self.get(memory_id)
+        if old.valid_to is not None:
+            raise IntegrityError(f"Memory is already superseded: {memory_id}")
+        new = self.add(
+            title,
+            body,
+            memory_id=memory_id_new,
+            source=source or old.source,
+            provenance=provenance or f"supersedes:{memory_id}",
+            tags=tags if tags is not None else old.tags,
+            actor="human",
+        )
+        now = self._now()
+        self.update(
+            memory_id,
+            actor="human",
+            valid_to=now,
+            superseded_by=new.id,
+        )
+        self._append_event(
+            EventKind.SUPERSEDE,
+            memory_id,
+            actor="human",
+            details={"new_memory_id": new.id, "old_memory_id": memory_id},
+        )
+        return new
 
     @_serialized
     def cold_archive(

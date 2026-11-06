@@ -6,7 +6,7 @@ import hashlib
 import json
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -15,10 +15,11 @@ import typer
 from .budget import BYTE_BUDGETS, BudgetLimits, BudgetProfile
 from .capture.cli import app as capture_app
 from .capture.confirm import confirm_command
+from .code_retrieval import CodeIndex, index_code
 from .core.errors import IntegrityError, MemfwError
 from .core.models import Layer, Tier
 from .core.repository import Repository
-from .curation.engine import enforce_budget, run_forget
+from .curation.engine import enforce_budget, plan_forget, run_forget
 from .curation.review_cli import review_command as run_review
 from .index import MemoryIndex
 from .notes import (
@@ -67,9 +68,11 @@ tier_alias_app = typer.Typer(help="Tier placement commands")
 layer_alias_app = typer.Typer(help="Layer classification commands")
 okf_app = typer.Typer(help="Export and validate an OKF v0.2 knowledge bundle")
 notes_app = typer.Typer(help="Index and search a Markdown notes tree (derived, rebuildable)")
+code_app = typer.Typer(help="Local code retrieval: lexical + optional semantic + structure")
 app.add_typer(index_app, name="index")
 app.add_typer(okf_app, name="okf")
 app.add_typer(notes_app, name="notes")
+app.add_typer(code_app, name="code")
 app.add_typer(log_app, name="log")
 app.add_typer(budget_app, name="budget")
 app.add_typer(forget_app, name="forget")
@@ -475,6 +478,42 @@ def notes_status(
 ) -> None:
     """Show notes index counts, tokenizer and vector state."""
     typer.echo(json.dumps(NotesIndex(db).status(), ensure_ascii=False, indent=2))
+
+
+@code_app.command("index")
+def code_index(
+    root: Annotated[Path, typer.Option("--root", "-r")] = Path("."),
+    db: Annotated[Path, typer.Option("--db")] = Path(".memfw-code.sqlite"),
+    endpoint: Annotated[str | None, typer.Option("--embedding-url")] = None,
+    model: Annotated[str, typer.Option("--embedding-model")] = "embedding-model",
+    dimension: Annotated[int, typer.Option("--dimension")] = 1024,
+) -> None:
+    """Build a disposable code index from Python symbols/files."""
+    embedder = _notes_embedder(endpoint, model, dimension, 16)
+    typer.echo(json.dumps(index_code(root, db, embedder=embedder), ensure_ascii=False))
+
+
+@code_app.command("search")
+def code_search(
+    query: Annotated[str, typer.Argument()],
+    db: Annotated[Path, typer.Option("--db")] = Path(".memfw-code.sqlite"),
+    limit: Annotated[int, typer.Option("--limit", "-n")] = 10,
+    endpoint: Annotated[str | None, typer.Option("--embedding-url")] = None,
+    model: Annotated[str, typer.Option("--embedding-model")] = "embedding-model",
+    dimension: Annotated[int, typer.Option("--dimension")] = 1024,
+) -> None:
+    """Search code by exact symbol, natural language, or structural question."""
+    embedder = _notes_embedder(endpoint, model, dimension, 16)
+    results = CodeIndex(db, embedder=embedder).search(query, limit=limit)
+    typer.echo(json.dumps({"query": query, "results": results}, ensure_ascii=False, indent=2))
+
+
+@code_app.command("map")
+def code_map(
+    db: Annotated[Path, typer.Option("--db")] = Path(".memfw-code.sqlite"),
+) -> None:
+    """Emit entry files, directory summary, and recent files."""
+    typer.echo(json.dumps(CodeIndex(db).repo_map(), ensure_ascii=False, indent=2))
 
 
 @app.command("review")
@@ -1081,6 +1120,71 @@ def budget_configure(
     typer.echo("Updated budget configuration")
 
 
+@app.command("consolidate")
+def consolidate(
+    since: Annotated[str, typer.Option("--since", help="e.g. 7d, 24h, or ISO date")] = "7d",
+    root: Annotated[Path, typer.Option("--root", "-r")] = Path("."),
+    dry_run: Annotated[bool, typer.Option("--dry-run/--apply")] = True,
+) -> None:
+    """Scan recent memory changes and write a review-only consolidation packet.
+
+    The command never writes memories or applies forgetting. Its output is an
+    idempotent candidate/forget-plan draft under _candidates/consolidate/.
+    """
+    repository = _repo(root)
+    now = repository._now()
+    if since.endswith("d") and since[:-1].isdigit():
+        cutoff = now - timedelta(days=int(since[:-1]))
+    elif since.endswith("h") and since[:-1].isdigit():
+        cutoff = now - timedelta(hours=int(since[:-1]))
+    else:
+        try:
+            parsed = datetime.fromisoformat(since)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=UTC)
+            cutoff = parsed.astimezone(UTC)
+        except ValueError as exc:
+            raise typer.BadParameter("--since must be N d/h or an ISO timestamp") from exc
+    recent = [
+        document
+        for document in repository.list()
+        if document.valid_to is None and document.updated_at >= cutoff
+    ]
+    plan = plan_forget(repository, PolicyName.FIFO, _limits(repository), now=now, scope="hot")
+    payload = {
+        "since": cutoff.isoformat(),
+        "dry_run": dry_run,
+        "candidates": [
+            {
+                "id": document.id,
+                "title": document.title,
+                "type": document.type,
+                "updated_at": document.updated_at.isoformat(),
+                "reason": "changed_since",
+            }
+            for document in recent
+        ],
+        "forget_plan": {
+            "policy": plan.policy.value,
+            "forgotten_ids": list(plan.forgotten_ids),
+            "retained_count": len(plan.retained_ids),
+            "satisfied": plan.satisfied,
+            "usage": {"count": plan.usage.count, "bytes": plan.usage.bytes},
+        },
+        "authority": False,
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
+    output = repository.root / "_candidates" / "consolidate" / f"consolidate-{digest}.json"
+    if dry_run:
+        payload["would_write"] = str(output)
+        typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+        return
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(encoded + "\n", encoding="utf-8")
+    typer.echo(json.dumps({**payload, "written": str(output)}, ensure_ascii=False, indent=2))
+
+
 @forget_app.command("run")
 def forget_run(
     policy: Annotated[PolicyName, typer.Option("--policy")],
@@ -1155,6 +1259,46 @@ def tier_run(
                 "cooled_ids": list(plan.cooled_ids),
                 "hot_usage_before": plan.hot_usage_before,
                 "hot_usage_after": plan.hot_usage_after,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+@app.command("supersede")
+def supersede(
+    memory_id: Annotated[str, typer.Argument()],
+    title: Annotated[str, typer.Option("--title")],
+    body: Annotated[str, typer.Option("--body")],
+    root: Annotated[Path, typer.Option("--root", "-r")] = Path("."),
+    dry_run: Annotated[bool, typer.Option("--dry-run/--apply")] = True,
+) -> None:
+    """Create a human-confirmed replacement and mark the old memory historical."""
+    repository = _repo(root)
+    old = repository.get(memory_id)
+    if dry_run:
+        typer.echo(
+            json.dumps(
+                {
+                    "dry_run": True,
+                    "old_memory_id": old.id,
+                    "new_title": title,
+                    "would_set": {"valid_to": repository._now().isoformat()},
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+    new = repository.supersede(memory_id, title, body, actor="human")
+    updated_old = repository.get(old.id)
+    typer.echo(
+        json.dumps(
+            {
+                "old_memory_id": old.id,
+                "new_memory_id": new.id,
+                "old_valid_to": updated_old.valid_to.isoformat() if updated_old.valid_to else None,
             },
             ensure_ascii=False,
             indent=2,

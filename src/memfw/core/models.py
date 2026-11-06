@@ -30,6 +30,7 @@ class EventKind(StrEnum):
     CREATE = "create"
     UPDATE = "update"
     DELETE = "delete"
+    SUPERSEDE = "supersede"
     LAYER_CHANGE = "layer_change"
     TIER_CHANGE = "tier_change"
     ANCHOR_SET = "anchor_set"
@@ -71,6 +72,7 @@ class MemoryDocument(BaseModel):
     title: str
     layer: Layer = Layer.CURRENT
     tier: Tier = Tier.HOT
+    type: str | None = None
     source: str = "manual"
     provenance: str = "human-authored"
     anchor: str | None = None
@@ -85,14 +87,17 @@ class MemoryDocument(BaseModel):
     last_access_interval_days: float | None = Field(default=None, ge=0.0)
     manually_marked: bool = False
     group_key: str | None = None
+    valid_from: datetime | None = None
+    valid_to: datetime | None = None
+    superseded_by: str | None = None
     created_at: datetime
     updated_at: datetime
     body: str
 
-    @field_validator("created_at", "updated_at")
+    @field_validator("created_at", "updated_at", "valid_from", "valid_to")
     @classmethod
-    def timestamps_are_utc(cls, value: datetime) -> datetime:
-        return _as_utc(value)
+    def timestamps_are_utc(cls, value: datetime | None) -> datetime | None:
+        return None if value is None else _as_utc(value)
 
 
 class Event(BaseModel):

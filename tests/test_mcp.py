@@ -20,7 +20,13 @@ def _vault(tmp_path: Path) -> Path:
 
 def test_mcp_tool_list() -> None:
     names = {tool["name"] for tool in TOOLS}
-    assert names == {"memory_search", "memory_get", "memory_remember", "memory_status"}
+    assert names == {
+        "memory_search",
+        "memory_get",
+        "memory_remember",
+        "memory_context",
+        "memory_status",
+    }
 
 
 def test_mcp_search_and_get(tmp_path: Path) -> None:
