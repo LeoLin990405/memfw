@@ -115,6 +115,7 @@ class HttpRerankerProvider:
                         source=f"rerank:{hit.source}",
                         tags=hit.tags,
                         section_id=hit.section_id,
+                        content_hash=hit.content_hash,
                     )
                     for position, (score, hit) in enumerate(scored[:top_k], start=1)
                 ]
@@ -193,6 +194,7 @@ class RetrievalResult:
     reranked: bool = False
     errors: list[str] = field(default_factory=list)
     candidates: int = 0
+    candidate_hits: list[NoteHit] = field(default_factory=list)
     trace_id: str | None = None
     task_id: str | None = None
 
@@ -254,15 +256,17 @@ class NotesRetriever:
             model_versions["reranker"] = str(getattr(self.reranker, "name", ""))
         if self.language_model is not None:
             model_versions["language_model"] = str(getattr(self.language_model, "name", ""))
+        trace_hits = result.candidate_hits or result.hits
         candidates = tuple(
             CandidateTrace(
                 path=hit.path,
                 rank=hit.rank,
                 score=float(hit.score),
                 section_id=hit.section_id,
+                content_hash=hit.content_hash,
                 source=hit.source,
             )
-            for hit in result.hits
+            for hit in trace_hits
         )
         try:
             self.trace_store.record_trace(
@@ -358,6 +362,7 @@ class NotesRetriever:
                     source=hit.source,
                     tags=hit.tags,
                     section_id=hit.section_id,
+                    content_hash=hit.content_hash,
                 )
             )
         if not candidates:
@@ -423,6 +428,7 @@ class NotesRetriever:
                 source=hit.source,
                 tags=hit.tags,
                 section_id=hit.section_id,
+                content_hash=hit.content_hash,
             )
         return self._record_trace(
             RetrievalResult(
@@ -435,6 +441,7 @@ class NotesRetriever:
                 reranked=reranked,
                 errors=errors,
                 candidates=len(candidates),
+                candidate_hits=list(candidates),
             ),
             task_id=task_id,
             tenant=tenant,
