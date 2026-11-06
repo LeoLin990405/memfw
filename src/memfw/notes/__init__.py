@@ -8,6 +8,14 @@ from .annotation import (
     path_search_term,
     path_selection,
 )
+from .annotation_batch import (
+    BatchCandidate,
+    BatchQuery,
+    create_batch,
+    import_batch,
+    load_batch_queries,
+    write_batch,
+)
 from .distillation import ExportReport, TrainingPair, check_pairs, export_pairs, write_pairs
 from .evaluation import (
     EvalCase,
@@ -80,6 +88,12 @@ __all__ = [
     "RetrievalTrace",
     "query_digest",
     "AnnotationEntry",
+    "BatchCandidate",
+    "BatchQuery",
+    "create_batch",
+    "import_batch",
+    "load_batch_queries",
+    "write_batch",
     "GoldenAnnotator",
     "is_finish",
     "normalize_kind",
