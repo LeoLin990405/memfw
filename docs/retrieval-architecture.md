@@ -477,3 +477,22 @@ candidate decisions were judged:
 
 Still not adopted as automatic labels. StepFun could not be used because the
 local config has only a web Oasis token, not an OpenAI-compatible API key.
+
+
+## External judge consensus (diagnostic)
+
+MiniMax-M3.1-Flash, Doubao-Seed-2.1-lite and DeepSeek-latest judged the same
+216 candidate decisions and produced identical predictions:
+
+| Metric | Value |
+|---|---:|
+| Accuracy | 0.940 |
+| Precision | 0.852 |
+| Recall | 0.719 |
+| F1 | 0.780 |
+| Kappa vs human | 0.745 |
+| Answerable accuracy | 0.964 |
+
+Pairwise kappa between external judges: 1.000. This is evidence of stability,
+not correctness; human labels remain ground truth. Local Phi-3.5 scored F1
+0.561; local Qwen1.5B scored 0.061.
