@@ -642,3 +642,101 @@ def test_candidates_list_surfaces_integrity_error_for_bad_frontmatter(tmp_path: 
 
     assert result.exit_code != 0
     assert isinstance(result.exception, IntegrityError)
+
+
+def _legacy_candidate_with_hash(root: Path, content: str, *, proposal_id: str | None) -> Path:
+    """A legacy-format candidate with a valid hash and no proposal_id."""
+    frontmatter: dict[str, Any] = {
+        "name": "Legacy candidate",
+        "metadata": {
+            "type": "candidate",
+            "lifecycle": "active",
+            "tags": [],
+            "related": [],
+            "tenant": "",
+            "suggestions": [],
+        },
+        "content_hash": _content_hash(content),
+        "status": "pending",
+    }
+    if proposal_id is not None:
+        frontmatter["proposal_id"] = proposal_id
+    return _write_candidate(root, "legacy-hashed.md", content, frontmatter)
+
+
+@pytest.mark.parametrize("mode", ["--dry-run", "--apply"])
+def test_a_legacy_candidate_without_proposal_id_is_refused_before_any_write(
+    tmp_path: Path, mode: str
+) -> None:
+    # B3: a candidate with no proposal_id has no identity a retry could match
+    # on, so the first write is refused rather than risking a duplicate.
+    repository = _repository(tmp_path)
+    candidate = _legacy_candidate_with_hash(
+        repository.root, "legacy body", proposal_id=None
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        ["candidate-apply", str(candidate), "--root", str(repository.root), mode],
+    )
+
+    assert result.exit_code != 0
+    payload = json.loads(result.output)
+    assert payload["error"] == "missing_proposal_id"
+    assert payload["status"] == "missing_proposal_id"
+    assert repository.list() == []
+    # the candidate itself is untouched
+    assert _frontmatter(candidate)["status"] == "pending"
+
+
+def test_the_refusal_tells_the_operator_to_restage(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    candidate = _legacy_candidate_with_hash(
+        repository.root, "legacy body", proposal_id=None
+    )
+
+    result = CliRunner().invoke(app, _apply(candidate, repository))
+
+    assert result.exit_code != 0
+    assert "/stage" in json.loads(result.output)["message"]
+
+
+def test_a_retry_after_a_failed_mark_writes_one_memory(tmp_path: Path, monkeypatch) -> None:
+    # The control group for B3: with a proposal_id, a first write that succeeds
+    # but fails to mark is recovered by the retry instead of duplicated.
+    from memfw.capture import lifecycle
+
+    repository = _repository(tmp_path)
+    candidate = _legacy_candidate_with_hash(
+        repository.root, "retry body", proposal_id="proposal-retry"
+    )
+    calls: list[str] = []
+    real_mark = lifecycle.mark_candidate_applied
+
+    def flaky_mark(staged, memory_id: str) -> None:
+        calls.append(memory_id)
+        if len(calls) == 1:
+            raise OSError("marker write failed")
+        return real_mark(staged, memory_id)
+
+    # cli.py imports the name inside the command, so patching the module
+    # attribute is what the call site actually resolves.
+    monkeypatch.setattr(lifecycle, "mark_candidate_applied", flaky_mark)
+
+    first = CliRunner().invoke(app, _apply(candidate, repository))
+    assert first.exit_code != 0
+
+    second = CliRunner().invoke(app, _apply(candidate, repository))
+
+    # The retry recovers the memory the first attempt already wrote instead of
+    # writing a second one.
+    recovered = json.loads(second.output)
+    assert recovered["status"] == "already_applied"
+    assert recovered["error"] == "already_applied"
+    assert recovered["memory_id"]
+    documents = repository.list()
+    assert len(documents) == 1
+    assert documents[0].id == recovered["memory_id"]
+    # the first attempt wrote and failed to mark; the second one only marked
+    assert len(calls) == 2

@@ -115,6 +115,7 @@ def test_candidate_apply_requires_explicit_human_apply(tmp_path: Path) -> None:
     # The staged candidate carries a content hash, so it is applyable; the
     # explicit human flag is what this test is about.
     _stamp_content_hash(candidate)
+    _stamp_proposal_id(candidate)
     runner = CliRunner()
     preview = runner.invoke(app, ["candidate-apply", candidate, "--root", str(repository.root)])
     assert preview.exit_code == 0, preview.output
@@ -162,6 +163,7 @@ def test_candidates_list_and_related_apply(tmp_path: Path) -> None:
     assert listed.exit_code == 0, listed.output
     assert "m-corpus" in listed.output
     _stamp_content_hash(payload["staged_candidate"])
+    _stamp_proposal_id(payload["staged_candidate"])
     applied = CliRunner().invoke(
         app,
         ["candidate-apply", payload["staged_candidate"], "--root", str(repository.root), "--apply"],
@@ -171,6 +173,24 @@ def test_candidates_list_and_related_apply(tmp_path: Path) -> None:
     assert document.tags == ["new"]
     assert document.related == ["m-corpus"]
     assert document.tenant == ""
+
+
+def _stamp_proposal_id(candidate: str | Path) -> None:
+    """Give a staged candidate the proposal_id the apply path now requires.
+
+    A candidate without one cannot be recovered after a failed first write, so
+    it is refused before anything is written; re-staging through /stage is how
+    a real one is obtained.
+    """
+    import re
+
+    path = Path(candidate)
+    text = path.read_text(encoding="utf-8")
+    if "proposal_id:" in text:
+        text = re.sub(r"proposal_id:.*", "proposal_id: p-test", text, count=1)
+    else:
+        text = text.replace("---\n", "---\nproposal_id: p-test\n", 1)
+    path.write_text(text, encoding="utf-8")
 
 
 def _stamp_content_hash(candidate: str | Path) -> None:

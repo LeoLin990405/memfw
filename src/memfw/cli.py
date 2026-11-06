@@ -577,6 +577,32 @@ def code_map(
     typer.echo(json.dumps(CodeIndex(db).repo_map(), ensure_ascii=False, indent=2))
 
 
+def _reject_missing_proposal_id(details: dict[str, object]) -> None:
+    """Refuse a candidate that cannot be safely recovered after a retry.
+
+    A legacy candidate without a proposal_id has no identity the recovery path
+    can match on, so a failed first write followed by a retry would write a
+    second, duplicate memory. Refusing before the first write is the only way
+    to keep that from happening, and re-staging through ``/stage`` is how an
+    operator gets a proposal_id onto the candidate.
+    """
+    typer.echo(
+        json.dumps(
+            {
+                **details,
+                "error": "missing_proposal_id",
+                "status": "missing_proposal_id",
+                "message": (
+                    "this candidate has no proposal_id, so a retry could not find "
+                    "the memory it already wrote; re-stage it with /stage to get one"
+                ),
+            },
+            ensure_ascii=False,
+        )
+    )
+    raise typer.Exit(code=1)
+
+
 @app.command("candidate-apply")
 def candidate_apply(
     candidate: Annotated[Path, typer.Argument(help="staged candidate Markdown")],
@@ -609,6 +635,8 @@ def candidate_apply(
                 )
             )
             raise typer.Exit(code=1)
+        if not staged.proposal_id:
+            _reject_missing_proposal_id(details)
         if staged.content_hash:
             try:
                 validate_candidate_hash(staged)
@@ -653,6 +681,8 @@ def candidate_apply(
                 )
             )
             raise typer.Exit(code=1)
+        if not staged.proposal_id:
+            _reject_missing_proposal_id(details)
         if staged.status == "applied" or staged.applied_memory_id is not None:
             memory_id = staged.applied_memory_id
             typer.echo(

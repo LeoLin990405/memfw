@@ -70,22 +70,41 @@ def mark_candidate_applied(candidate: Candidate, memory_id: str) -> None:
     candidate.applied_memory_id = memory_id
 
 
+def recoverable_identity(candidate: Candidate) -> bool:
+    """Whether a retry could find the memory this candidate already wrote.
+
+    The recovery path matches on the three identity fields, so a candidate that
+    is missing one of them -- a legacy candidate with no ``proposal_id`` -- has
+    nothing to match on. Applying it anyway would write a second, duplicate
+    memory if the first write succeeded but the marking failed, so the caller
+    refuses such a candidate before the first write.
+    """
+    expected = parse_candidate_provenance(candidate_provenance(candidate))
+    if expected is None:
+        return False
+    return all(field in expected for field in _IDENTITY_FIELDS)
+
+
 def find_applied_memory_id(repository: RepositoryHost, candidate: Candidate) -> str | None:
     expected = parse_candidate_provenance(candidate_provenance(candidate))
-    identity_fields = ("candidate_id", "proposal_id", "content_hash")
-    if expected is None or any(field not in expected for field in identity_fields):
+    if expected is None or any(field not in expected for field in _IDENTITY_FIELDS):
         return None
     for document in repository.list():
         actual = parse_candidate_provenance(document.provenance)
         if actual is not None and all(
-            actual.get(field) == expected[field] for field in identity_fields
+            actual.get(field) == expected[field] for field in _IDENTITY_FIELDS
         ):
             return document.id
     return None
 
 
+#: The provenance fields a retry matches on. A candidate missing one of them
+#: cannot be recovered, so it is refused before the first write.
+_IDENTITY_FIELDS = ("candidate_id", "proposal_id", "content_hash")
+
 __all__ = [
     "Candidate",
+    "recoverable_identity",
     "candidate_content_hash",
     "candidate_dict",
     "candidate_provenance",
