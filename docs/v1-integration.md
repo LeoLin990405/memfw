@@ -179,6 +179,11 @@ monotonic in their input.
   to lexical FTS and reports `mode: "fts"`, `degraded: true` and
   `reasons: ["lexical"]`.
 
+`reasons` is drawn from the fixed contract vocabulary `link`, `related_field`,
+`shared_tag`, `shared_course`, `shared_entity`, `lexical`, `semantic` and
+`section` (edge methods map onto it, an unknown method is reported as
+`lexical`), and the lexical fallback emits only `lexical`.
+
 ### `/search` result fields
 
 Each result carries `id`, `title`, `summary` (≤ 500 characters), `source`,
@@ -322,6 +327,20 @@ The candidate file's frontmatter carries `proposal_id`, `source`, `tenant`,
 
 `path` is relative to the vault root and never a host path.
 
+Publication is atomic: the candidate is written to a unique temporary file in
+the directory and hard-linked into place, so concurrent requests for the same
+`proposal_id` converge on one file - the winner publishes, the others get
+`duplicate: true` for the same content or 409 for different content, and no
+writer can replace an existing candidate. A `_candidates` (or `remember`)
+component that is a symlink, or that resolves outside the vault, is refused with
+500 `internal` and nothing is written; the same applies to a symlinked target
+file. `source` is refused with 400 `bad_request` when it contains control
+characters or line breaks. The other string fields (`title`, `tenant`, `tags`,
+`related`) accept multi-line values: the frontmatter escapes every string onto
+one double-quoted YAML line, so a value cannot carry the `---` frontmatter
+delimiter into the header, `memfw candidates` still reads the candidate, and a
+retry with the same content is `duplicate: true` rather than 409.
+
 A human still has to apply the candidate with
 `memfw candidate-apply --apply` before it becomes an authoritative memory.
 
@@ -335,5 +354,10 @@ The HA500 service is a systemd user unit:
 ~/.config/systemd/user/memfw-readonly.service
 ```
 
-with `EnvironmentFile=/home/leo/memfw-remote/memfw-readonly.env`; it carries the
-read and write tokens (mode 0600) and the unit is enabled and active.
+with `EnvironmentFile=/home/leo/memfw-remote/memfw-readonly.env`. Deployment
+requirement: that file holds the read credential and, once `/stage` is used, the
+write credential, both mode 0600; the unit is enabled and started with
+`systemctl --user enable --now memfw-readonly`, and `GET /health` must return
+`"contract": "memfw-http/2"`. The v1 deployment note recorded the host running
+this unit with the read credential; this round did not observe the host, and the
+write credential is added at migration (see "Migrating from v1").

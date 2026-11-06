@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import multiprocessing
 import os
 import threading
 import urllib.error
@@ -781,6 +782,292 @@ def test_unit_file_binds_loopback_and_names_the_tailnet_override() -> None:
     assert "EnvironmentFile=" in text
     for forbidden in ("0.0.0.0", "nohup"):
         assert forbidden not in text
+
+
+def _candidate_body(path: Path) -> str:
+    _head, body = path.read_text(encoding="utf-8").split("---\n", 2)[1:]
+    return body.strip("\n")
+
+
+def _stage_in_child(root: str, content: str, results: multiprocessing.Queue) -> None:
+    try:
+        outcome = stage_candidate(
+            Path(root),
+            {"proposal_id": "process-race", "title": "Race", "content": content},
+        )
+        results.put(("ok", content, outcome["duplicate"]))
+    except ServiceError as error:
+        results.put(("error", content, error.status))
+
+
+def test_stage_is_atomic_under_thread_contention(tmp_path: Path) -> None:
+    root = seed_vault(tmp_path / "vault")
+    barrier = threading.Barrier(8)
+    outcomes: list[tuple] = []
+    lock = threading.Lock()
+
+    def worker(content: str) -> None:
+        barrier.wait()
+        try:
+            result = stage_candidate(
+                root, {"proposal_id": "thread-race", "title": "Race", "content": content}
+            )
+            with lock:
+                outcomes.append(("ok", content, result["duplicate"]))
+        except ServiceError as error:
+            with lock:
+                outcomes.append(("error", content, error.status))
+
+    threads = [
+        threading.Thread(target=worker, args=(content,))
+        for content in ("alpha", "alpha", "alpha", "alpha", "beta", "beta", "beta", "beta")
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    winners = [item for item in outcomes if item[0] == "ok" and item[2] is False]
+    assert len(winners) == 1, outcomes
+    winner_content = winners[0][1]
+    path = root / "_candidates" / "remember" / "conductor-thread-race.md"
+    assert _candidate_body(path) == winner_content
+    for item in outcomes:
+        if item[0] == "error":
+            assert item[2] == 409
+        elif item[2] is False:
+            continue
+        else:
+            assert item[1] == winner_content, outcomes
+
+
+def test_stage_is_atomic_across_processes(tmp_path: Path) -> None:
+    root = seed_vault(tmp_path / "vault")
+    context = multiprocessing.get_context("spawn")
+    results = context.Queue()
+    processes = [
+        context.Process(target=_stage_in_child, args=(str(root), content, results))
+        for content in ("alpha", "beta")
+    ]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=30)
+    collected = [results.get(timeout=5) for _ in processes]
+    published = [item for item in collected if item[0] == "ok" and item[2] is False]
+    assert len(published) == 1, collected
+    winner_content = published[0][1]
+    path = root / "_candidates" / "remember" / "conductor-process-race.md"
+    assert _candidate_body(path) == winner_content
+    for item in collected:
+        if item[0] == "error":
+            assert item[2] == 409
+        elif item[2] is True:
+            assert item[1] == winner_content
+
+
+def test_stage_refuses_symlinked_candidate_directories(tmp_path: Path) -> None:
+    root = seed_vault(tmp_path / "vault")
+    (root / "_candidates").symlink_to(root / "memories")
+    with pytest.raises(ServiceError) as first:
+        stage_candidate(root, {"proposal_id": "bypass", "title": "T", "content": "x"})
+    assert first.value.status == 500
+    assert not (root / "memories" / "conductor-bypass.md").exists()
+
+    root_link = seed_vault(tmp_path / "vault3")
+    (root_link / "_candidates").mkdir()
+    (root_link / "_candidates" / "remember").symlink_to(root_link / "memories")
+    with pytest.raises(ServiceError) as third:
+        stage_candidate(root_link, {"proposal_id": "bypass3", "title": "T", "content": "x"})
+    assert third.value.status == 500
+    assert not list((root_link / "memories").glob("conductor-*.md"))
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    root2 = seed_vault(tmp_path / "vault2")
+    (root2 / "_candidates").mkdir()
+    (root2 / "_candidates" / "remember").symlink_to(outside)
+    with pytest.raises(ServiceError) as second:
+        stage_candidate(root2, {"proposal_id": "bypass2", "title": "T", "content": "x"})
+    assert second.value.status == 500
+    assert not list(outside.glob("*.md"))
+
+
+def test_stage_serialises_multiline_values_safely(tmp_path: Path) -> None:
+    root = seed_vault(tmp_path / "vault")
+    payload = {
+        "proposal_id": "multiline",
+        "title": "A---\nB",
+        "content": "multiline body",
+        "tenant": "t\n---\nu",
+        "tags": ["x---\ny", "z"],
+        "related": ["r\n---\ns"],
+    }
+    first = stage_candidate(root, payload)
+    assert first["duplicate"] is False
+    path = root / "_candidates" / "remember" / "conductor-multiline.md"
+    text = path.read_text(encoding="utf-8")
+    header_text = text.split("---\n", 2)[1]
+    assert "---\n" not in header_text + "\n"
+    header = yaml.safe_load(header_text)
+    assert header["title"] == "A---\nB"
+    assert header["tenant"] == "t\n---\nu"
+    assert header["tags"] == ["x---\ny", "z"]
+    assert header["content_hash"] == (
+        "sha256:" + hashlib.sha256(b"multiline body").hexdigest()
+    )
+    staged = list_staged_candidates(root)
+    assert [item["title"] for item in staged] == ["A---\nB"]
+    assert staged[0]["tags"] == ["x---\ny", "z"]
+    retry = stage_candidate(root, payload)
+    assert retry["duplicate"] is True
+
+
+def test_stage_source_with_control_characters_is_400(tmp_path: Path) -> None:
+    root = seed_vault(tmp_path / "vault")
+    for source in (
+        "a\n---\nb",
+        "a\x00b",
+        "a\tb",
+        "a\u0085b",
+        "a\u2028b",
+        "a\u2029b",
+    ):
+        payload = {"proposal_id": "src", "title": "T", "content": "x", "source": source}
+        with pytest.raises(ServiceError) as rejected:
+            stage_candidate(root, payload)
+        assert rejected.value.status == 400, source
+    assert not list((root / "_candidates").rglob("*.md"))
+
+
+def test_related_reasons_stay_in_the_contract_vocabulary(tmp_path: Path) -> None:
+    root = seed_vault(tmp_path / "vault")
+    related_db = build_related(root)
+    result = related_vault(root, "mem-alpha", limit=10, related_db=related_db)
+    reasons = {reason for item in result["results"] for reason in item["reasons"]}
+    assert reasons <= service.ALLOWED_REASONS
+    for method, expected in (
+        ("explicit", "link"),
+        ("related", "related_field"),
+        ("tag", "shared_tag"),
+        ("course", "shared_course"),
+        ("entity", "shared_entity"),
+        ("lexical", "lexical"),
+        ("semantic", "semantic"),
+        ("section", "section"),
+    ):
+        assert service._reason_name(method) == expected
+    assert service._reason_name("something-new") == "lexical"
+    assert service._reason_name("mixed") == "lexical"
+    fallback = related_vault(root, "mem-alpha", limit=5)
+    fallback_reasons = {
+        reason for item in fallback["results"] for reason in item["reasons"]
+    }
+    assert fallback_reasons == {"lexical"}
+
+
+def test_stage_is_atomic_under_same_content_thread_contention(tmp_path: Path) -> None:
+    root = seed_vault(tmp_path / "vault")
+    barrier = threading.Barrier(6)
+    outcomes: list[tuple] = []
+    lock = threading.Lock()
+
+    def worker() -> None:
+        barrier.wait()
+        try:
+            result = stage_candidate(
+                root, {"proposal_id": "thread-same", "title": "Race", "content": "same"}
+            )
+            with lock:
+                outcomes.append(("ok", result["duplicate"]))
+        except ServiceError as error:
+            with lock:
+                outcomes.append(("error", error.status))
+
+    threads = [threading.Thread(target=worker) for _ in range(6)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    published = [item for item in outcomes if item == ("ok", False)]
+    duplicates = [item for item in outcomes if item == ("ok", True)]
+    assert len(published) == 1, outcomes
+    assert len(duplicates) == 5, outcomes
+    path = root / "_candidates" / "remember" / "conductor-thread-same.md"
+    assert _candidate_body(path) == "same"
+
+
+def test_stage_is_atomic_across_processes_for_the_same_content(tmp_path: Path) -> None:
+    root = seed_vault(tmp_path / "vault")
+    context = multiprocessing.get_context("spawn")
+    results = context.Queue()
+    processes = [
+        context.Process(target=_stage_in_child, args=(str(root), "same", results))
+        for _ in range(3)
+    ]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=30)
+    collected = [results.get(timeout=5) for _ in processes]
+    assert len([item for item in collected if item[0] == "ok" and item[2] is False]) == 1
+    assert len([item for item in collected if item[0] == "ok" and item[2] is True]) == 2
+    assert not [item for item in collected if item[0] == "error"]
+
+
+def test_candidate_directory_walk_refuses_a_symlink_after_the_precheck(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fd walk, not the pre-check, is what stops a swapped-in symlink."""
+    root = seed_vault(tmp_path / "vault")
+    (root / "_candidates").symlink_to(root / "memories")
+    monkeypatch.setattr(
+        service, "_assert_safe_candidate_directory", lambda *_args, **_kwargs: None
+    )
+    with pytest.raises(ServiceError) as refused:
+        stage_candidate(root, {"proposal_id": "race", "title": "T", "content": "x"})
+    assert refused.value.status == 500
+    assert not list((root / "memories").glob("conductor-*.md"))
+
+
+def test_stage_proposal_id_boundaries(tmp_path: Path) -> None:
+    root = seed_vault(tmp_path / "vault")
+    longest = "a" * 128
+    result = stage_candidate(root, {"proposal_id": longest, "title": "T", "content": "x"})
+    assert result["candidate_id"] == f"conductor-{longest}"
+    assert (root / "_candidates" / "remember" / f"conductor-{longest}.md").is_file()
+    for bad in ("a" * 129, "", "abc\n", "abc def", "abc/def", "abc.def", "abc:déf"):
+        with pytest.raises(ServiceError) as rejected:
+            stage_candidate(root, {"proposal_id": bad, "title": "T", "content": "x"})
+        assert rejected.value.status == 400, bad
+    assert [path.name for path in (root / "_candidates" / "remember").iterdir()] == [
+        f"conductor-{longest}.md"
+    ]
+
+
+def test_non_ascii_credential_is_401_not_500(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
+    status, payload = _post(httpd, "/search", {"query": "corpus"}, "tökén")
+    assert status == 401
+    _assert_error(payload, "unauthorized")
+
+
+def test_stage_control_characters_are_400_over_http(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = seed_vault(tmp_path / "vault")
+    _use_vault(monkeypatch, root)
+    payloads = [
+        {"proposal_id": "p1", "title": "A---\nB", "content": "x", "source": "s\nu"},
+        {"proposal_id": "p2", "title": "T", "content": "x", "source": "s\x00"},
+        {"proposal_id": "p3", "title": "T", "content": "x", "source": "s\tt"},
+    ]
+    for payload in payloads:
+        status, body = _post(httpd, "/stage", payload, WRITE_TOKEN)
+        assert status == 400, payload
+        _assert_error(body, "bad_request")
+    assert not list((root / "_candidates").rglob("*.md") if (root / "_candidates").exists() else [])
 
 
 # ---------------------------------------------------------------------------

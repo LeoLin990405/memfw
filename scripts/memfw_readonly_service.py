@@ -45,6 +45,7 @@ import re
 import sqlite3
 import sys
 import traceback
+import uuid
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -62,7 +63,12 @@ MAX_TITLE_CHARS = 200
 MAX_CONTENT_BYTES = 64 * 1024
 SEARCH_BODY_BYTES = 8 * 1024
 STAGE_BODY_BYTES = 128 * 1024
-PROPOSAL_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+PROPOSAL_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,128}")
+CONTROL_CHARACTERS = (
+    frozenset(chr(code) for code in range(0x20))
+    | frozenset(chr(code) for code in range(0x7F, 0xA0))
+    | {"\u2028", "\u2029"}
+)
 CANDIDATE_DIRECTORY = ("_candidates", "remember")
 INTERNAL_MESSAGE = "internal error"
 ERROR_CODES = {
@@ -474,19 +480,34 @@ def _memory_metadata(root: Path, memory_id: str, tenant: str) -> tuple[Path, dic
     return path, metadata
 
 
-# Edge methods in the projection map to the reason tokens the contract shows.
+# Contract section 7 fixes this vocabulary; the projection's edge methods map
+# onto it and an unknown method is reported as the lexical bucket.
+ALLOWED_REASONS = frozenset(
+    {
+        "link",
+        "related_field",
+        "shared_tag",
+        "shared_course",
+        "shared_entity",
+        "lexical",
+        "semantic",
+        "section",
+    }
+)
 _REASON_NAMES = {
     "explicit": "link",
+    "related": "related_field",
     "tag": "shared_tag",
+    "course": "shared_course",
     "entity": "shared_entity",
     "lexical": "lexical",
     "semantic": "semantic",
-    "mixed": "mixed",
+    "section": "section",
 }
 
 
 def _reason_name(method: str) -> str:
-    return _REASON_NAMES.get(method, method)
+    return _REASON_NAMES.get(method, "lexical")
 
 
 def _related_from_edges(
@@ -639,16 +660,38 @@ def related_vault(
 # ---------------------------------------------------------------------------
 
 
+def _header_text(
+    value: Any,
+    field: str,
+    *,
+    required: bool = False,
+    max_length: int | None = None,
+    single_line: bool = False,
+) -> str:
+    """Validate a scalar rendered into the candidate's YAML frontmatter.
+
+    Multi-line values are allowed because the frontmatter escapes every string
+    onto one double-quoted line, so a value cannot carry the ``---`` delimiter
+    into the header. ``source`` is the exception: it names where the candidate
+    came from, so control characters and line breaks are refused.
+    """
+    if not isinstance(value, str):
+        raise _bad_request(f"{field} must be a string")
+    text = value.strip() if required else value
+    if required and not text:
+        raise _bad_request(f"{field} is required")
+    if single_line and any(character in CONTROL_CHARACTERS for character in text):
+        raise _bad_request(f"{field} must not contain control characters or line breaks")
+    if max_length is not None and len(text) > max_length:
+        raise _bad_request(f"{field} must be at most {max_length} characters")
+    return text
+
+
 def _validate_stage_payload(payload: dict[str, Any]) -> dict[str, Any]:
     proposal_id = payload.get("proposal_id")
-    if not isinstance(proposal_id, str) or not PROPOSAL_ID_PATTERN.match(proposal_id):
-        raise _bad_request("proposal_id must match ^[A-Za-z0-9_-]{1,128}$")
-    title = payload.get("title")
-    if not isinstance(title, str) or not title.strip():
-        raise _bad_request("title is required and must be 1..200 characters")
-    title = title.strip()
-    if len(title) > MAX_TITLE_CHARS:
-        raise _bad_request("title is required and must be 1..200 characters")
+    if not isinstance(proposal_id, str) or PROPOSAL_ID_PATTERN.fullmatch(proposal_id) is None:
+        raise _bad_request("proposal_id must match [A-Za-z0-9_-]{1,128}")
+    title = _header_text(payload.get("title"), "title", required=True, max_length=MAX_TITLE_CHARS)
     content = payload.get("content")
     if not isinstance(content, str) or not content:
         raise _bad_request("content is required")
@@ -660,21 +703,43 @@ def _validate_stage_payload(payload: dict[str, Any]) -> dict[str, Any]:
     related = payload.get("related", [])
     if not isinstance(related, list) or any(not isinstance(item, str) for item in related):
         raise _bad_request("related must be an array of strings")
-    tenant = payload.get("tenant", "")
-    if not isinstance(tenant, str):
-        raise _bad_request("tenant must be a string")
-    source = payload.get("source", "conductor")
-    if not isinstance(source, str):
-        raise _bad_request("source must be a string")
+    tenant = _header_text(payload.get("tenant", ""), "tenant")
+    source = _header_text(payload.get("source", "conductor"), "source", single_line=True)
     return {
         "proposal_id": proposal_id,
         "title": title,
         "content": content,
-        "tags": list(tags),
-        "related": list(related),
+        "tags": [_header_text(item, "tags entries") for item in tags],
+        "related": [_header_text(item, "related entries") for item in related],
         "tenant": tenant,
         "source": source or "conductor",
     }
+
+
+class _SingleLine(str):
+    """A string rendered as one double-quoted YAML scalar."""
+
+
+class _CandidateDumper(yaml.SafeDumper):
+    """Dumper that renders ``_SingleLine`` values on one escaped line."""
+
+
+def _represent_single_line(dumper: yaml.SafeDumper, data: _SingleLine) -> yaml.Node:
+    return dumper.represent_scalar("tag:yaml.org,2002:str", str(data), style='"')
+
+
+_CandidateDumper.add_representer(_SingleLine, _represent_single_line)
+
+
+def _single_line(value: Any) -> Any:
+    """Recursively escape every string so the frontmatter stays one line per value."""
+    if isinstance(value, dict):
+        return {key: _single_line(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_single_line(item) for item in value]
+    if isinstance(value, str):
+        return _SingleLine(value)
+    return value
 
 
 def _candidate_markdown(metadata: dict[str, Any], content: str) -> str:
@@ -706,12 +771,141 @@ def _candidate_markdown(metadata: dict[str, Any], content: str) -> str:
             }
         ),
     }
-    rendered = yaml.safe_dump(header, allow_unicode=True, sort_keys=False).rstrip()
+    rendered = yaml.dump(
+        _single_line(header),
+        Dumper=_CandidateDumper,
+        allow_unicode=True,
+        sort_keys=False,
+        width=10**9,
+    ).rstrip()
+    if "---\n" in rendered + "\n":
+        raise _internal()
     return f"---\n{rendered}\n---\n\n{content}\n"
 
 
 def _relative_candidate_path(proposal_id: str) -> str:
     return "/".join((*CANDIDATE_DIRECTORY, f"conductor-{proposal_id}.md"))
+
+
+def _assert_safe_candidate_directory(base: Path, directory: Path) -> None:
+    """Refuse candidate directories that leave the vault through a symlink.
+
+    The service is only allowed to write below ``<root>/_candidates/remember``;
+    a symlinked component would let a request create a file in ``memories/`` or
+    outside the vault.
+    """
+    current = base
+    for part in CANDIDATE_DIRECTORY:
+        current = current / part
+        if current.is_symlink():
+            raise _internal()
+    try:
+        resolved = directory.resolve(strict=False)
+        root = base.resolve()
+    except OSError as exc:
+        raise _internal() from exc
+    if resolved != root and root not in resolved.parents:
+        raise _internal()
+
+
+def _published_candidate_hash(base: Path, relative: str) -> str:
+    path = base / relative
+    if path.is_symlink() or not path.is_file():
+        raise _internal()
+    metadata = _metadata(path)
+    return str(metadata.get("content_hash") or "")
+
+
+class _DirectoryHandle:
+    """A directory fd for <root>/_candidates/remember that followed no symlink."""
+
+    def __init__(self, descriptor: int) -> None:
+        self.descriptor = descriptor
+
+    def close(self) -> None:
+        if self.descriptor >= 0:
+            os.close(self.descriptor)
+            self.descriptor = -1
+
+    def __enter__(self) -> _DirectoryHandle:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+
+def _open_candidate_directory(base: Path) -> _DirectoryHandle:
+    """Create and open ``<root>/_candidates/remember`` one component at a time.
+
+    Each component is opened relative to its parent with ``O_NOFOLLOW``, so a
+    symlink - including one swapped in after an earlier check - cannot redirect
+    the write outside the vault.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        root_fd = os.open(base, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    except OSError as exc:
+        raise _internal() from exc
+    current = root_fd
+    try:
+        for part in CANDIDATE_DIRECTORY:
+            try:
+                os.mkdir(part, 0o777, dir_fd=current)
+            except FileExistsError:
+                pass
+            except OSError as exc:
+                raise _internal() from exc
+            try:
+                next_fd = os.open(part, flags, dir_fd=current)
+            except OSError as exc:
+                raise _internal() from exc
+            if current != root_fd:
+                os.close(current)
+            current = next_fd
+        return _DirectoryHandle(current)
+    except BaseException:
+        if current != root_fd:
+            os.close(current)
+        raise
+    finally:
+        os.close(root_fd)
+
+
+def _publish_candidate(directory_fd: int, candidate_id: str, markdown_text: str) -> bool:
+    """Write ``candidate_id`` atomically; return False when another writer won.
+
+    The candidate is written to a unique temporary file inside the directory
+    and published with ``os.link``: link is atomic and fails when the target
+    exists, so two processes staging the same proposal cannot both publish and
+    neither can replace the winner. Concurrent writers converge on one file.
+    """
+    final_name = f"{candidate_id}.md"
+    temporary_name = f".{candidate_id}.{uuid.uuid4().hex}.tmp"
+    descriptor = os.open(
+        temporary_name,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o600,
+        dir_fd=directory_fd,
+    )
+    with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(markdown_text)
+        handle.flush()
+        os.fsync(handle.fileno())
+    try:
+        os.link(
+            temporary_name,
+            final_name,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+        )
+        return True
+    except FileExistsError:
+        return False
+    finally:
+        try:
+            os.unlink(temporary_name, dir_fd=directory_fd)
+        except FileNotFoundError:
+            pass
 
 
 def stage_candidate(root: Path | str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -722,20 +916,20 @@ def stage_candidate(root: Path | str, payload: dict[str, Any]) -> dict[str, Any]
     values = _validate_stage_payload(payload)
     relative = _relative_candidate_path(values["proposal_id"])
     directory = base.joinpath(*CANDIDATE_DIRECTORY)
-    path = base / relative
+    _assert_safe_candidate_directory(base, directory)
     candidate_id = f"conductor-{values['proposal_id']}"
     content_hash = "sha256:" + hashlib.sha256(values["content"].encode("utf-8")).hexdigest()
-    if path.is_file():
-        existing = _metadata(path)
-        if str(existing.get("content_hash") or "") == content_hash:
-            return {
-                "contract": CONTRACT,
-                "staged": True,
-                "duplicate": True,
-                "candidate_id": candidate_id,
-                "path": relative,
-                "authority": False,
-            }
+    duplicate_response = {
+        "contract": CONTRACT,
+        "staged": True,
+        "duplicate": True,
+        "candidate_id": candidate_id,
+        "path": relative,
+        "authority": False,
+    }
+    if (base / relative).exists() or (base / relative).is_symlink():
+        if _published_candidate_hash(base, relative) == content_hash:
+            return duplicate_response
         raise ServiceError(409, "candidate exists with different content")
     created_at = datetime.now(UTC).isoformat()
     header = {
@@ -749,16 +943,13 @@ def stage_candidate(root: Path | str, payload: dict[str, Any]) -> dict[str, Any]
         "content_hash": content_hash,
         "authority": False,
     }
-    directory.mkdir(parents=True, exist_ok=True)
-    temporary = directory / f".{candidate_id}.{os.getpid()}.{int(datetime.now().timestamp())}.tmp"
-    try:
-        with open(temporary, "x", encoding="utf-8") as handle:
-            handle.write(_candidate_markdown(header, values["content"]))
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    markdown_text = _candidate_markdown(header, values["content"])
+    with _open_candidate_directory(base) as directory_handle:
+        published = _publish_candidate(directory_handle.descriptor, candidate_id, markdown_text)
+    if not published:
+        if _published_candidate_hash(base, relative) == content_hash:
+            return duplicate_response
+        raise ServiceError(409, "candidate exists with different content")
     return {
         "contract": CONTRACT,
         "staged": True,
@@ -796,7 +987,10 @@ def health_payload() -> dict[str, Any]:
 def _matches(provided: str, expected: str) -> bool:
     if not provided or not expected:
         return False
-    return hmac.compare_digest(expected, provided)
+    return hmac.compare_digest(
+        provided.encode("utf-8", "surrogateescape"),
+        expected.encode("utf-8", "surrogateescape"),
+    )
 
 
 class Handler(BaseHTTPRequestHandler):
