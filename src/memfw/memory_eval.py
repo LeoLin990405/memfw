@@ -33,6 +33,8 @@ class MemoryQuestion:
 class MemoryEvalReport:
     queries: int
     recall_at_k: float
+    mrr: float
+    ndcg_at_k: float
     stale_fact_rate: float
     as_of_accuracy: float
     refusal_accuracy: float
@@ -41,6 +43,8 @@ class MemoryEvalReport:
         return {
             "queries": float(self.queries),
             "recall_at_k": self.recall_at_k,
+            "mrr": self.mrr,
+            "ndcg_at_k": self.ndcg_at_k,
             "stale_fact_rate": self.stale_fact_rate,
             "as_of_accuracy": self.as_of_accuracy,
             "refusal_accuracy": self.refusal_accuracy,
@@ -86,6 +90,23 @@ def generate_questions(
                 (left.id, right.id),
             )
         )
+    if len([item for item in output if item.kind == "multi_hop"]) < per_class:
+        for index, left in enumerate(current):
+            if len([item for item in output if item.kind == "multi_hop"]) >= per_class:
+                break
+            for right in current[index + 1 :]:
+                left_tokens = set(left.title.split())
+                right_tokens = set(right.title.split())
+                if left.source == right.source or left_tokens & right_tokens:
+                    output.append(
+                        MemoryQuestion(
+                            f"multi-{left.id}-{right.id}",
+                            f"{left.title} {right.title}",
+                            "multi_hop",
+                            (left.id, right.id),
+                        )
+                    )
+                    break
     for doc in historical[:per_class]:
         candidates = [
             other for other in current if other.id == doc.superseded_by or other.title == doc.title
@@ -115,7 +136,7 @@ def generate_questions(
                 )
             )
     no_answer_tokens = ["火星", "moon base", "quantum refrigerator", "虚构项目"]
-    for index in range(min(per_class, max(1, len(current) // 4))):
+    for index in range(per_class):
         output.append(
             MemoryQuestion(
                 f"refusal-{index}",
@@ -134,6 +155,8 @@ def evaluate_questions(
 ) -> MemoryEvalReport:
     answerable = [item for item in questions if item.kind != "refusal" and item.expected_ids]
     hits = 0
+    reciprocal = 0.0
+    ndcg = 0.0
     stale_hits = 0
     stale_total = 0
     as_of_total = 0
@@ -157,8 +180,15 @@ def evaluate_questions(
             as_of_total += 1
             if set(question.expected_ids) & ids:
                 as_of_hits += 1
+        ranked = [item["id"] for item in result["results"]]
         if set(question.expected_ids) & ids:
             hits += 1
+        for rank, identifier in enumerate(ranked, start=1):
+            if identifier in question.expected_ids:
+                reciprocal += 1.0 / rank
+                if rank <= limit:
+                    ndcg += 1.0 / __import__("math").log2(rank + 1)
+                break
         if question.stale_ids:
             stale_total += 1
             if set(question.stale_ids) & ids:
@@ -167,6 +197,8 @@ def evaluate_questions(
     return MemoryEvalReport(
         queries=len(questions),
         recall_at_k=hits / denominator,
+        mrr=reciprocal / denominator,
+        ndcg_at_k=ndcg / denominator,
         stale_fact_rate=stale_hits / max(1, stale_total),
         as_of_accuracy=as_of_hits / max(1, as_of_total),
         refusal_accuracy=refusal_hits / max(1, refusal_total),

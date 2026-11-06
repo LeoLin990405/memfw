@@ -108,9 +108,15 @@ class Gateway:
         *,
         embedder: HttpEmbeddingProvider | None = None,
         tenant: str | None = None,
+        entity_enabled: bool | None = None,
     ) -> None:
         self.root = Path(root).expanduser()
         self.tenant = tenant if tenant is not None else os.environ.get("MEMFW_TENANT", "")
+        self.entity_enabled = (
+            entity_enabled
+            if entity_enabled is not None
+            else os.environ.get("MEMFW_ENTITY_ENABLED", "").lower() in {"1", "true", "yes"}
+        )
         if embedder is None:
             endpoint = os.environ.get("MEMFW_EMBEDDING_URL")
             if endpoint:
@@ -131,6 +137,7 @@ class Gateway:
             repository,
             embedder=self.embedder,
             tenant=self.tenant,
+            entity_enabled=self.entity_enabled,
         )
 
     def search(

@@ -573,3 +573,37 @@ permission ACLs, and production cutover.
 - `memory_eval.py` provides a generated five-class local evaluation scaffold
   (single-hop, multi-hop, temporal, update, refusal); it is not a substitute for
   the human-labelled LongMemEval/LoCoMo suite.
+
+
+## Memory golden derived benchmark and entity decision
+
+A 100-question benchmark was generated from 40 real pilot-vault documents
+(20 single-hop, 20 multi-hop, 20 temporal, 20 update, 20 refusal). Twenty
+documents were superseded in a temporary copy to create update/temporal cases.
+
+Entity route on/off (Qwen3-Embedding hybrid, top-10):
+
+| Entity | Recall@10 | MRR | nDCG@10 | Stale fact | As-of | Refusal |
+|---|---:|---:|---:|---:|---:|---:|
+| off | 1.000 | 0.9792 | 0.9845 | 0.000 | 1.000 | 0.000 |
+| on | 1.000 | 1.0000 | 1.0000 | 0.000 | 1.000 | 0.000 |
+
+Default remains **off**: labels are generated from source Markdown, not human;
+the sample is small and easy, and refusal accuracy is zero. Enable with
+`MEMFW_ENTITY_ENABLED=true` only after a human memory golden confirms the gain.
+
+
+## Actual AI-labeled batch
+
+Using MiniMax-M3.1-Flash and Doubao-Seed-2.1-Lite on the existing 28-query /
+216-candidate set:
+
+- human kappa: 0.745098 (just above the >0.745 gate);
+- accepted AI labels: 27;
+- human queue: 1 (judge parse error on a no-answer query);
+- disagreements: 0;
+- confidence threshold: 0.80.
+
+The accepted set overlaps the human evaluation set, so it is a pipeline
+demonstration, not independent validation and not training data. No human
+golden was overwritten and no model was trained.
