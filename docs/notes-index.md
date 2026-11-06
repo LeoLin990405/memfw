@@ -105,3 +105,27 @@ prompt directly. Voice-friendly shortcuts:
 - paths: say `搜索 Korsgaard` to list candidates, then `选择 2` to pick;
 - paths: `完成` to end the path list;
 - Typeless never needs to dictate a full long path.
+
+
+## Batch manual annotation
+
+Generate a batch packet:
+
+```bash
+memfw notes annotate-batch   --queries queries.jsonl   --db notes.sqlite   --out annotation-batch.csv   --markdown annotation-batch.md   --meta annotation-batch.json   --candidates 8   --mode hybrid   --endpoint http://127.0.0.1:8001/v1/embeddings   --model qwen3-embedding --dimension 1024
+```
+
+- CSV: one row per query/candidate; fill `relevant=1` for directly answering notes;
+- `answerable=0` marks a query the vault cannot answer;
+- `extra_paths` accepts additional paths separated by `;`;
+- Markdown is a human-readable review sheet;
+- No labels are inferred; blank cells stay unlabeled.
+
+Import after manual review:
+
+```bash
+memfw notes annotate-import   --csv annotation-batch.csv   --db notes.sqlite   --out golden-human.yml   --annotator leo
+```
+
+- Unknown paths, duplicate queries and invalid no-answer entries are rejected;
+- The result is immediately usable by `memfw notes eval`.

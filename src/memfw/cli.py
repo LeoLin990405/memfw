@@ -32,15 +32,19 @@ from .notes import (
     build_manifest,
     check_pairs,
     compare_indexes,
+    create_batch,
     evaluate_retriever,
     export_pairs,
+    import_batch,
     is_finish,
+    load_batch_queries,
     load_cases,
     normalize_kind,
     path_search_term,
     path_selection,
     read_manifest,
     verify_manifest,
+    write_batch,
     write_manifest,
     write_pairs,
 )
@@ -230,6 +234,57 @@ def notes_serve(
 
     embedder = _notes_embedder(endpoint, model, dimension, 16)
     serve_notes_mcp(NotesGateway(root, db, embedder=embedder))
+
+
+@notes_app.command("annotate-batch")
+def notes_annotate_batch(
+    queries: Annotated[Path, typer.Option("--queries", help="query JSONL/JSON/YAML")],
+    db: Annotated[Path, typer.Option("--db")],
+    out: Annotated[Path, typer.Option("--out", help="CSV annotation packet")],
+    markdown: Annotated[Path | None, typer.Option("--markdown")] = None,
+    meta: Annotated[Path | None, typer.Option("--meta")] = None,
+    annotator: Annotated[str, typer.Option("--annotator")] = "",
+    candidates: Annotated[int, typer.Option("--candidates")] = 8,
+    mode: Annotated[str, typer.Option("--mode")] = "fts",
+    endpoint: Annotated[str | None, typer.Option("--endpoint")] = None,
+    model: Annotated[str, typer.Option("--model")] = "embedding-model",
+    dimension: Annotated[int, typer.Option("--dimension")] = 1024,
+) -> None:
+    """Generate a batch annotation packet for manual review.
+
+    The CSV is the source of truth. Fill relevant=1 and answerable=0/1, then run
+    `memfw notes annotate-import`.
+    """
+    parsed = load_batch_queries(queries)
+    index = NotesIndex(db, embedder=_notes_embedder(endpoint, model, dimension, 16))
+    rows = create_batch(index, parsed, candidates=candidates, mode=mode)
+    info = write_batch(
+        rows,
+        csv_path=out,
+        md_path=markdown,
+        meta_path=meta,
+        annotator=annotator,
+    )
+    typer.echo(json.dumps(info, ensure_ascii=False, indent=2))
+
+
+@notes_app.command("annotate-import")
+def notes_annotate_import(
+    csv_path: Annotated[Path, typer.Option("--csv")],
+    db: Annotated[Path, typer.Option("--db")],
+    out: Annotated[Path, typer.Option("--out")],
+    annotator: Annotated[str, typer.Option("--annotator")] = "",
+) -> None:
+    """Import a filled batch CSV into golden YAML with path validation."""
+    import os
+
+    entries = import_batch(
+        csv_path,
+        db=db,
+        out=out,
+        annotator=annotator or os.environ.get("USER") or "human",
+    )
+    typer.echo(json.dumps({"out": str(out), "entries": len(entries)}, ensure_ascii=False))
 
 
 @notes_app.command("annotate")
