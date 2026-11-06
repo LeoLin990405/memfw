@@ -21,7 +21,13 @@ from .core.repository import Repository
 from .curation.engine import enforce_budget, run_forget
 from .curation.review_cli import review_command as run_review
 from .index import MemoryIndex
-from .notes import HttpEmbeddingProvider, NotesIndex
+from .notes import (
+    HttpEmbeddingProvider,
+    HttpRerankerProvider,
+    NotesIndex,
+    NotesRetriever,
+    RetrievalConfig,
+)
 from .notes.mcp import NotesGateway
 from .notes.mcp import serve as serve_notes_mcp
 from .okf import export_okf, validate_okf_bundle
@@ -108,18 +114,77 @@ def notes_search(
     path_prefix: Annotated[str | None, typer.Option("--path-prefix")] = None,
     tag: Annotated[list[str] | None, typer.Option("--tag")] = None,
     course: Annotated[str | None, typer.Option("--course")] = None,
+    mode: Annotated[str, typer.Option("--mode", help="fts, vector or hybrid")] = "hybrid",
+    candidates: Annotated[int, typer.Option("--candidates")] = 50,
+    rrf_k: Annotated[int, typer.Option("--rrf-k")] = 60,
+    rerank_endpoint: Annotated[
+        str | None, typer.Option("--rerank-endpoint", help="llama.cpp /v1/rerank URL")
+    ] = None,
+    rerank_model: Annotated[str, typer.Option("--rerank-model")] = "reranker",
+    rerank_candidates: Annotated[int, typer.Option("--rerank-candidates")] = 0,
+    rerank_timeout: Annotated[float, typer.Option("--rerank-timeout")] = 60.0,
+    meta: Annotated[
+        list[str] | None, typer.Option("--meta", help="key=value metadata filter")
+    ] = None,
+    since: Annotated[
+        float | None, typer.Option("--since", help="mtime lower bound, epoch seconds")
+    ] = None,
+    until: Annotated[
+        float | None, typer.Option("--until", help="mtime upper bound, epoch seconds")
+    ] = None,
 ) -> None:
     """Search the notes index; automatically degrades to FTS without an embedder."""
 
     index = NotesIndex(db, embedder=_notes_embedder(endpoint, model, dimension, 16))
-    hits = index.search(
+    reranker = None
+    if rerank_endpoint:
+        reranker = HttpRerankerProvider(
+            rerank_endpoint,
+            model=rerank_model,
+            timeout=rerank_timeout,
+        )
+    retriever = NotesRetriever(
+        index,
+        config=RetrievalConfig(
+            mode=mode,  # type: ignore[arg-type]
+            candidates=candidates,
+            final_k=limit,
+            rrf_k=rrf_k,
+            rerank_candidates=rerank_candidates,
+        ),
+        reranker=reranker,
+    )
+    metadata: dict[str, str] = {}
+    for item in meta or []:
+        if "=" not in item:
+            raise typer.BadParameter("--meta must be key=value")
+        key, value = item.split("=", 1)
+        if not key:
+            raise typer.BadParameter("--meta key must not be empty")
+        metadata[key] = value
+    result = retriever.search(
         query,
         limit=limit,
         path_prefix=path_prefix,
         tags=tag or (),
         course=course,
+        metadata=metadata or None,
+        since=since,
+        until=until,
     )
-    typer.echo(json.dumps([hit.as_dict() for hit in hits], ensure_ascii=False, indent=2))
+    typer.echo(
+        json.dumps(
+            {
+                "mode": result.mode_used,
+                "degraded": result.degraded,
+                "rewrites": result.rewrites,
+                "errors": result.errors,
+                "results": [hit.as_dict() for hit in result.hits],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 @notes_app.command("serve")

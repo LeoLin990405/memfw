@@ -46,3 +46,17 @@ matches the index dimension.
 - `notes_status`
 
 The server is read-only and local-only.
+
+
+## Retrieval policy
+
+`NotesRetriever` wraps `NotesIndex` with `RetrievalConfig`:
+
+- `mode`: `fts`, `vector` or `hybrid`;
+- `candidates`, `final_k`, `rrf_k`;
+- optional `RerankerProvider`, `LanguageModelProvider`, `SparseRetriever`;
+- optional query rewrite; the original query is always retained;
+- reports actual mode, degradation, rewrites and errors.
+
+See [retrieval architecture](retrieval-architecture.md) for the staged plan
+and Stage A evaluation.

@@ -1,5 +1,20 @@
 """Markdown notes retrieval: section index, hybrid search, optional embeddings."""
 
+from .distillation import ExportReport, TrainingPair, check_pairs, export_pairs, write_pairs
+from .evaluation import (
+    EvalCase,
+    EvalReport,
+    cases_from_rows,
+    evaluate_ablation,
+    evaluate_retriever,
+)
+from .feedback import (
+    CandidateTrace,
+    FeedbackEvent,
+    FeedbackStore,
+    RetrievalTrace,
+    query_digest,
+)
 from .index import (
     EmbeddingProvider,
     HashEmbeddingProvider,
@@ -9,13 +24,76 @@ from .index import (
     NotesIndex,
     parse_markdown,
 )
+from .language_model import (
+    HttpLanguageModelProvider,
+    MemoryCandidate,
+    MemorySummary,
+    NullLanguageModel,
+    RelationshipSuggestion,
+)
+from .retrieval import (
+    HttpRerankerProvider,
+    LanguageModelProvider,
+    NoOpReranker,
+    NotesRetriever,
+    QueryRewrite,
+    RerankerProvider,
+    RetrievalConfig,
+    RetrievalResult,
+    SparseRetriever,
+)
+from .versioning import (
+    CHUNKER_VERSION,
+    IndexCompatibilityError,
+    IndexManifest,
+    build_manifest,
+    read_manifest,
+    verify_manifest,
+    write_manifest,
+)
 
 __all__ = [
     "EmbeddingProvider",
+    "EvalCase",
+    "EvalReport",
     "HashEmbeddingProvider",
     "HttpEmbeddingProvider",
-    "NotesIndex",
+    "HttpRerankerProvider",
+    "HttpLanguageModelProvider",
+    "MemoryCandidate",
+    "MemorySummary",
+    "NullLanguageModel",
+    "RelationshipSuggestion",
+    "CandidateTrace",
+    "FeedbackEvent",
+    "FeedbackStore",
+    "RetrievalTrace",
+    "query_digest",
+    "ExportReport",
+    "TrainingPair",
+    "check_pairs",
+    "export_pairs",
+    "write_pairs",
+    "CHUNKER_VERSION",
+    "IndexCompatibilityError",
+    "IndexManifest",
+    "build_manifest",
+    "read_manifest",
+    "verify_manifest",
+    "write_manifest",
+    "LanguageModelProvider",
+    "NoOpReranker",
     "NoteHit",
     "NoteParseError",
+    "NotesIndex",
+    "NotesRetriever",
+    "QueryRewrite",
+    "RerankerProvider",
+    "RetrievalConfig",
+    "RetrievalResult",
+    "SparseRetriever",
+    "cases_from_rows",
+    "evaluate_ablation",
+    "evaluate_retriever",
     "parse_markdown",
 ]

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import inspect
 import json
 import math
 import re
@@ -47,8 +48,8 @@ class NoteParseError(RuntimeError):
 class EmbeddingProvider(Protocol):
     dimension: int
 
-    def embed(self, texts: Sequence[str]) -> list[list[float]]:
-        """Return one vector per input text."""
+    def embed(self, texts: Sequence[str], *, role: str = "document") -> list[list[float]]:
+        """Return one vector per input text; role selects query/document policy."""
 
 
 class HashEmbeddingProvider:
@@ -57,7 +58,8 @@ class HashEmbeddingProvider:
     def __init__(self, dimension: int = 32) -> None:
         self.dimension = dimension
 
-    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+    def embed(self, texts: Sequence[str], *, role: str = "document") -> list[list[float]]:
+        del role
         vectors: list[list[float]] = []
         for text in texts:
             digest = hashlib.sha256(text.encode("utf-8")).digest()
@@ -82,6 +84,8 @@ class HttpEmbeddingProvider:
         batch_size: int = 16,
         timeout: float = 120.0,
         retries: int = 3,
+        query_instruction: str = "",
+        document_instruction: str = "",
     ) -> None:
         self.endpoint = endpoint
         self.model = model
@@ -90,11 +94,22 @@ class HttpEmbeddingProvider:
         self.batch_size = max(1, batch_size)
         self.timeout = timeout
         self.retries = max(0, retries)
+        self.query_instruction = query_instruction
+        self.document_instruction = document_instruction
 
-    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+    @property
+    def fingerprint(self) -> str:
+        marker = (
+            f"{self.model}|{self.dimension}|{self.query_instruction}|{self.document_instruction}"
+        )
+        return hashlib.sha256(marker.encode("utf-8")).hexdigest()[:16]
+
+    def embed(self, texts: Sequence[str], *, role: str = "document") -> list[list[float]]:
+        instruction = self.query_instruction if role == "query" else self.document_instruction
+        prepared = [instruction + text if instruction else text for text in texts]
         vectors: list[list[float]] = []
-        for start in range(0, len(texts), self.batch_size):
-            batch = list(texts[start : start + self.batch_size])
+        for start in range(0, len(prepared), self.batch_size):
+            batch = list(prepared[start : start + self.batch_size])
             payload = json.dumps({"model": self.model, "input": batch}).encode("utf-8")
             headers = {"Content-Type": "application/json"}
             if self.api_key:
@@ -158,9 +173,10 @@ class NoteHit:
     rank: int
     source: str
     tags: list[str] = field(default_factory=list)
+    section_id: int | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "path": self.path,
             "title": self.title,
             "heading": self.heading,
@@ -170,6 +186,21 @@ class NoteHit:
             "source": self.source,
             "tags": self.tags,
         }
+        if self.section_id is not None:
+            payload["section_id"] = self.section_id
+        return payload
+
+
+def _embed(provider: EmbeddingProvider, texts: Sequence[str], *, role: str) -> list[list[float]]:
+    """Call role-aware providers while tolerating older embed(texts) implementations."""
+    method = provider.embed
+    try:
+        parameters = inspect.signature(method).parameters
+    except (TypeError, ValueError):
+        return method(texts)
+    if "role" in parameters:
+        return method(texts, role=role)
+    return method(texts)
 
 
 def _sha256(value: str | bytes) -> str:
@@ -398,6 +429,11 @@ class NotesIndex:
                 "INSERT OR REPLACE INTO meta(key,value) VALUES ('embedding_model',?)",
                 (type(self.embedder).__name__ if self.embedder else "",),
             )
+            fingerprint = getattr(self.embedder, "fingerprint", "") if self.embedder else ""
+            connection.execute(
+                "INSERT OR REPLACE INTO meta(key,value) VALUES ('embedding_fingerprint',?)",
+                (str(fingerprint),),
+            )
             connection.execute(
                 "INSERT OR REPLACE INTO meta(key,value) VALUES ('dimension',?)",
                 (str(dimension),),
@@ -555,7 +591,7 @@ class NotesIndex:
                         (note.title + "\n" + heading + "\n" + content)[:EMBED_MAX_CHARS]
                         for _, heading, content in section_rows
                     ]
-                    vectors = self.embedder.embed(texts)
+                    vectors = _embed(self.embedder, texts, role="document")
                     for (section_id, _, _), vector in zip(section_rows, vectors, strict=True):
                         if len(vector) != self._dimension():
                             raise RuntimeError("embedding dimension mismatch")
@@ -583,28 +619,75 @@ class NotesIndex:
             connection.commit()
         return counts
 
+    @staticmethod
+    def _fts_terms(needle: str) -> list[str]:
+        """Build a small OR query from mixed Latin/CJK terms.
+
+        Trigram FTS5 does substring matching, so a whole sentence as one quoted
+        phrase only matches exact wording. Splitting into the original phrase
+        plus useful tokens gives BM25 a chance to rank documents that contain
+        only part of a natural-language query.
+        """
+        stripped = needle.strip()
+        if len(stripped) >= 2 and stripped[0] == '"' and stripped[-1] == '"':
+            phrase = stripped[1:-1].strip()
+            return [phrase] if len(phrase) >= 3 else []
+        tokens: list[str] = []
+        for part in stripped.split():
+            if len(part) < 3:
+                continue
+            if re.fullmatch(r"[A-Za-z0-9_./+-]+", part):
+                tokens.append(part)
+                continue
+            try:
+                import jieba
+
+                pieces = [piece.strip() for piece in jieba.lcut(part)]
+            except ImportError:  # pragma: no cover - declared dependency
+                pieces = [part]
+            tokens.extend(piece for piece in pieces if len(piece) >= 3)
+        seen: set[str] = set()
+        output: list[str] = []
+        for token in tokens:
+            if token not in seen:
+                seen.add(token)
+                output.append(token)
+        return output
+
     def _fts_search(
         self, connection: sqlite3.Connection, query: str, limit: int
     ) -> list[tuple[int, float]]:
         needle = query.strip()
         if not needle:
             return []
-        if len(needle) < 3:
+        terms = self._fts_terms(needle)
+        rows: list[sqlite3.Row] = []
+        if terms:
+            expression = " OR ".join('"' + term.replace('"', '""') + '"' for term in terms)
+            try:
+                rows = connection.execute(
+                    "SELECT rowid AS id, bm25(sections_fts) AS score FROM sections_fts "
+                    "WHERE sections_fts MATCH ? ORDER BY score LIMIT ?",
+                    (expression, limit),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                rows = []
+        if not rows and len(needle) < 3:
             rows = connection.execute(
                 "SELECT s.id, 0.0 AS score FROM sections s "
                 "JOIN notes n ON n.id=s.note_id "
                 "WHERE s.content LIKE ? OR s.heading LIKE ? OR n.title LIKE ? LIMIT ?",
                 (f"%{needle}%", f"%{needle}%", f"%{needle}%", limit),
             ).fetchall()
-            return [(int(row["id"]), float(row["score"])) for row in rows]
-        try:
+        if not rows and terms:
+            # A short final CJK fragment (e.g. "工具") has no trigram; fall back
+            # to a bounded substring probe rather than dropping the query.
             rows = connection.execute(
-                "SELECT rowid AS id, bm25(sections_fts) AS score FROM sections_fts "
-                "WHERE sections_fts MATCH ? ORDER BY score LIMIT ?",
-                ('"' + needle.replace('"', '""') + '"', limit),
+                "SELECT s.id, 0.0 AS score FROM sections s "
+                "JOIN notes n ON n.id=s.note_id "
+                "WHERE s.content LIKE ? OR s.heading LIKE ? OR n.title LIKE ? LIMIT ?",
+                (f"%{needle}%", f"%{needle}%", f"%{needle}%", limit),
             ).fetchall()
-        except sqlite3.OperationalError:
-            return []
         return [(int(row["id"]), float(row["score"])) for row in rows]
 
     def _vector_search(
@@ -613,7 +696,7 @@ class NotesIndex:
         if self.embedder is None:
             return []
         try:
-            vector = self.embedder.embed([query])[0]
+            vector = _embed(self.embedder, [query], role="query")[0]
         except Exception:  # noqa: BLE001 - degrade to FTS
             return []
         if len(vector) != self._dimension():
@@ -651,29 +734,61 @@ class NotesIndex:
         path_prefix: str | None = None,
         tags: Sequence[str] = (),
         course: str | None = None,
+        metadata: dict[str, str] | None = None,
+        since: float | None = None,
+        until: float | None = None,
+        mode: str = "hybrid",
+        candidates: int | None = None,
+        rrf_k: int = FTS_K,
     ) -> list[NoteHit]:
         if not query.strip() or limit <= 0 or not self.db_path.exists():
             return []
+        if mode not in {"fts", "vector", "hybrid"}:
+            raise ValueError("mode must be fts, vector or hybrid")
+        if candidates is not None and candidates < 1:
+            raise ValueError("candidates must be positive")
+        candidate_limit = candidates or max(limit * 8, 50)
         with self._connect() as connection:
             self._load_vec(connection)
-            lexical = self._fts_search(connection, query, max(limit * 8, 50))
-            semantic = self._vector_search(connection, query, max(limit * 8, 50))
+            lexical = (
+                self._fts_search(connection, query, candidate_limit)
+                if mode in {"fts", "hybrid"}
+                else []
+            )
+            semantic = (
+                self._vector_search(connection, query, candidate_limit)
+                if mode in {"vector", "hybrid"}
+                else []
+            )
         fused: dict[int, tuple[float, str]] = {}
         for rank, (section_id, _) in enumerate(lexical, start=1):
             score, source = fused.get(section_id, (0.0, ""))
-            fused[section_id] = (score + 1.0 / (FTS_K + rank), source + "fts")
+            fused[section_id] = (score + 1.0 / (rrf_k + rank), source + "fts")
         for rank, (section_id, _) in enumerate(semantic, start=1):
             score, source = fused.get(section_id, (0.0, ""))
-            fused[section_id] = (score + 1.0 / (FTS_K + rank), source + "vec")
+            fused[section_id] = (score + 1.0 / (rrf_k + rank), source + "vec")
         if not fused:
             return []
+        clauses = [f"s.id IN ({','.join('?' for _ in fused)})"]
+        parameters: list[object] = list(fused)
+        if since is not None:
+            clauses.append("n.mtime >= ?")
+            parameters.append(float(since))
+        if until is not None:
+            clauses.append("n.mtime <= ?")
+            parameters.append(float(until))
+        for key, value in (metadata or {}).items():
+            if not re.fullmatch(r"[A-Za-z0-9_]+", key):
+                raise ValueError("metadata filter keys must be identifiers")
+            clauses.append(f"json_extract(n.frontmatter, '$.{key}') = ?")
+            parameters.append(str(value))
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT s.id AS section_id, s.heading, s.content, s.ordinal, "
                 "n.path, n.title, n.tags, n.course "
                 "FROM sections s JOIN notes n ON n.id=s.note_id "
-                "WHERE s.id IN (" + ",".join("?" for _ in fused) + ")",
-                tuple(fused),
+                "WHERE " + " AND ".join(clauses),
+                tuple(parameters),
             ).fetchall()
         hits: list[NoteHit] = []
         seen_notes: set[str] = set()
@@ -698,8 +813,15 @@ class NotesIndex:
                     content=str(row["content"]),
                     score=fused_score,
                     rank=len(hits) + 1,
-                    source="hybrid" if "vec" in sources else "fts",
+                    source=(
+                        "hybrid"
+                        if "fts" in sources and "vec" in sources
+                        else "vector"
+                        if "vec" in sources
+                        else "fts"
+                    ),
                     tags=note_tags,
+                    section_id=int(row["section_id"]),
                 )
             )
             if len(hits) >= limit:

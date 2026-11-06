@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from .index import HttpEmbeddingProvider, NotesIndex
+from .retrieval import HttpRerankerProvider, NotesRetriever, RetrievalConfig
 
 SERVER_INFO = {"name": "memfw-notes", "version": "0.1.0"}
 PROTOCOL = "2024-11-05"
@@ -34,6 +35,22 @@ TOOLS: list[dict[str, Any]] = [
                 "path_prefix": {"type": "string"},
                 "tags": {"type": "array", "items": {"type": "string"}},
                 "course": {"type": "string"},
+                "mode": {
+                    "type": "string",
+                    "enum": ["fts", "vector", "hybrid"],
+                    "default": "hybrid",
+                },
+                "candidates": {"type": "integer", "default": 50},
+                "rrf_k": {"type": "integer", "default": 60},
+                "rerank_candidates": {"type": "integer", "default": 0},
+                "rerank_endpoint": {"type": "string"},
+                "rerank_model": {"type": "string", "default": "reranker"},
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                },
+                "since": {"type": "number"},
+                "until": {"type": "number"},
             },
             "required": ["query"],
         },
@@ -57,10 +74,16 @@ TOOLS: list[dict[str, Any]] = [
 
 class NotesGateway:
     def __init__(
-        self, root: Path, db: Path, *, embedder: HttpEmbeddingProvider | None = None
+        self,
+        root: Path,
+        db: Path,
+        *,
+        embedder: HttpEmbeddingProvider | None = None,
+        reranker: HttpRerankerProvider | None = None,
     ) -> None:
         self.root = root.expanduser().resolve()
         self.index = NotesIndex(db, embedder=embedder)
+        self.reranker = reranker
 
     def call(self, name: str, args: dict[str, Any]) -> Any:
         if name == "notes_status":
@@ -77,14 +100,44 @@ class NotesGateway:
             query = str(args.get("query") or "")
             limit = max(1, min(int(args.get("limit", 10)), 50))
             tags = args.get("tags") or []
-            hits = self.index.search(
+            reranker = self.reranker
+            if args.get("rerank_endpoint"):
+                reranker = HttpRerankerProvider(
+                    str(args["rerank_endpoint"]),
+                    model=str(args.get("rerank_model") or "reranker"),
+                )
+            retriever = NotesRetriever(
+                self.index,
+                config=RetrievalConfig(
+                    mode=str(args.get("mode") or "hybrid"),  # type: ignore[arg-type]
+                    candidates=max(1, min(int(args.get("candidates", 50)), 500)),
+                    final_k=limit,
+                    rrf_k=max(1, min(int(args.get("rrf_k", 60)), 1000)),
+                    rerank_candidates=max(0, min(int(args.get("rerank_candidates", 0)), 500)),
+                ),
+                reranker=reranker,
+            )
+            result = retriever.search(
                 query,
                 limit=limit,
                 path_prefix=args.get("path_prefix"),
                 tags=[str(tag) for tag in tags],
                 course=args.get("course"),
+                metadata={
+                    str(key): str(value) for key, value in (args.get("metadata") or {}).items()
+                }
+                or None,
+                since=args.get("since"),
+                until=args.get("until"),
             )
-            return [hit.as_dict() for hit in hits]
+            return {
+                "mode": result.mode_used,
+                "degraded": result.degraded,
+                "rewrites": result.rewrites,
+                "errors": result.errors,
+                "candidates": result.candidates,
+                "results": [hit.as_dict() for hit in result.hits],
+            }
         raise KeyError(name)
 
 
