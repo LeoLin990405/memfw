@@ -62,3 +62,12 @@ is performed.
 
 The current service is started by `setsid/nohup`; durable systemd management,
 token rotation and HA remain follow-ups.
+
+
+## Relatedness
+
+`memfw.related` is a rebuildable edge projection over current memories and notes.
+V1 implements explicit links/`related`, shared tags/courses, shared entities, and
+lexical overlap. `memory_related` is exposed over MCP. Semantic edges are
+deliberately deferred until notes and memory share a verified embedding
+fingerprint; QMD notes do not expose local vectors today.

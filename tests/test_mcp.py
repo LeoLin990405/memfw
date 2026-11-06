@@ -24,6 +24,7 @@ def test_mcp_tool_list() -> None:
         "memory_search",
         "memory_get",
         "memory_remember",
+        "memory_related",
         "memory_context",
         "memory_status",
     }

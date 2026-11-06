@@ -165,7 +165,7 @@ mypy src
 ruff check src/memfw tests
 ```
 
-在参考机器上，`pytest -q --ignore=tests/test_mlx_transport.py` 为 **528 passed、2 skipped**。
+在参考机器上，`pytest -q --ignore=tests/test_mlx_transport.py` 为 **529 passed、2 skipped**。
 MLX transport 测试受主机负载守卫控制
 （不满足 MLX 负载条件的机器会跳过），不同机器结果可能不同。
 

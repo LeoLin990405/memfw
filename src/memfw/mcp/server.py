@@ -26,6 +26,7 @@ from memfw.core.models import Layer, Tier
 from memfw.core.repository import Repository
 from memfw.memory_hybrid import MemoryHybridRetriever
 from memfw.notes import HttpEmbeddingProvider
+from memfw.related import RelatedIndex
 
 SERVER_INFO = {"name": "memfw", "version": "0.1.0"}
 PROTOCOL = "2024-11-05"
@@ -76,6 +77,18 @@ TOOLS: list[dict[str, Any]] = [
                 "related": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["content"],
+        },
+    },
+    {
+        "name": "memory_related",
+        "description": "Read derived related-memory edges; never writes memories.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "memory_id": {"type": "string"},
+                "limit": {"type": "integer", "default": 10},
+            },
+            "required": ["memory_id"],
         },
     },
     {
@@ -260,6 +273,12 @@ class Gateway:
             "suggestions": [item.as_dict() for item in suggestions],
         }
 
+    def related(self, memory_id: str, limit: int = 10) -> dict[str, Any]:
+        related = RelatedIndex(self.root / ".memfw-related.sqlite").related(
+            "memory", memory_id, limit=max(1, min(limit, 50))
+        )
+        return {"root": str(self.root), "memory_id": memory_id, "related": related}
+
     def context(self, limit_tokens: int = 2000) -> dict[str, Any]:
         repository = self._repo()
         limit_chars = max(100, min(int(limit_tokens), 100_000) * 4)
@@ -342,6 +361,9 @@ class Gateway:
                 str(args.get("title") or "memory"),
                 tags=[str(item) for item in (args.get("tags") or [])],
                 related=[str(item) for item in (args.get("related") or [])],
+            ),
+            "memory_related": lambda args: self.related(
+                str(args.get("memory_id") or ""), int(args.get("limit") or 10)
             ),
             "memory_context": lambda args: self.context(int(args.get("limit_tokens") or 2000)),
             "memory_status": lambda _args: self.status(),

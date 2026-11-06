@@ -55,6 +55,7 @@ from .notes.mcp import serve as serve_notes_mcp
 from .notes.retrieval import Mode
 from .okf import export_okf, validate_okf_bundle
 from .policies import PolicyName
+from .related import RelatedIndex
 from .retrieval import VaultRetriever
 from .stats import measure_runtime
 from .tiers import BudgetAwareTierPolicy
@@ -471,6 +472,32 @@ def notes_manifest_verify(
     typer.echo(json.dumps({"ok": True}, ensure_ascii=False))
 
 
+@notes_app.command("related-build")
+def notes_related_build(
+    notes_db: Annotated[Path, typer.Option("--notes-db")],
+    related_db: Annotated[Path, typer.Option("--related-db")] = Path(".memfw-related.sqlite"),
+) -> None:
+    """Rebuild note-to-note relatedness edges."""
+    count = RelatedIndex(related_db).rebuild_notes(notes_db)
+    typer.echo(json.dumps({"related_db": str(related_db), "edges": count}, ensure_ascii=False))
+
+
+@notes_app.command("related")
+def notes_related(
+    path: Annotated[str, typer.Argument()],
+    related_db: Annotated[Path, typer.Option("--related-db")] = Path(".memfw-related.sqlite"),
+    limit: Annotated[int, typer.Option("--limit", "-n")] = 10,
+) -> None:
+    """Read related notes from the derived edge projection."""
+    typer.echo(
+        json.dumps(
+            {"path": path, "related": RelatedIndex(related_db).related("notes", path, limit=limit)},
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
 @notes_app.command("status")
 def notes_status(
     db: Annotated[Path, typer.Option("--db", help="Derived SQLite index path")] = Path(
@@ -578,6 +605,35 @@ def candidates_list(
     typer.echo(
         json.dumps(
             {"candidates": list_staged_candidates(root)},
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+@app.command("memory-related-build")
+def memory_related_build(
+    root: Annotated[Path, typer.Option("--root", "-r")] = Path("."),
+    related_db: Annotated[Path, typer.Option("--related-db")] = Path(".memfw-related.sqlite"),
+) -> None:
+    """Rebuild memory-to-memory relatedness edges."""
+    count = RelatedIndex(related_db).rebuild_memory(_repo(root))
+    typer.echo(json.dumps({"related_db": str(related_db), "edges": count}, ensure_ascii=False))
+
+
+@app.command("memory-related")
+def memory_related(
+    memory_id: Annotated[str, typer.Argument()],
+    related_db: Annotated[Path, typer.Option("--related-db")] = Path(".memfw-related.sqlite"),
+    limit: Annotated[int, typer.Option("--limit", "-n")] = 10,
+) -> None:
+    """Read related current memories from the derived edge projection."""
+    typer.echo(
+        json.dumps(
+            {
+                "memory_id": memory_id,
+                "related": RelatedIndex(related_db).related("memory", memory_id, limit=limit),
+            },
             ensure_ascii=False,
             indent=2,
         )

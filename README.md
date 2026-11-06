@@ -172,7 +172,7 @@ mypy src
 ruff check src/memfw tests
 ```
 
-On the reference host, `pytest -q --ignore=tests/test_mlx_transport.py` reports **528 passed and
+On the reference host, `pytest -q --ignore=tests/test_mlx_transport.py` reports **529 passed and
 2 skipped**. The MLX transport tests are host-load gated: they fail by design when the one-minute
 load average is at least 9. Run the full suite only when the host is quiet.
 
@@ -261,3 +261,21 @@ remain authoritative.
 See [`docs/v1-integration.md`](docs/v1-integration.md) for the read-only MemFW V1
 surface and the Conductor federation adapter. V1 does not replace Conductor's
 proposal/approval lifecycle or write into MemFW automatically.
+
+
+## Relatedness projection
+
+`memfw.related` builds a disposable edge table from explicit wikilinks/`related`,
+shared tags/courses, shared entities, and lexical overlap:
+
+```bash
+memfw notes related-build --notes-db /tmp/notes.sqlite --related-db /tmp/related.sqlite
+memfw notes related "Week 02/...md" --related-db /tmp/related.sqlite
+memfw memory-related-build --root ./vault --related-db /tmp/related.sqlite
+memfw memory-related memory-id --related-db /tmp/related.sqlite
+```
+
+The MCP tool `memory_related` exposes memory edges. Edges are derived, never
+write Markdown, and only current memories are indexed. Semantic edges are not
+enabled yet: they require a shared embedding fingerprint across both sources,
+and QMD notes do not currently expose local vectors.
