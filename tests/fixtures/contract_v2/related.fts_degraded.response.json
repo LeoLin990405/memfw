@@ -1,0 +1,16 @@
+{
+  "contract": "memfw-http/2",
+  "degraded": true,
+  "memory_id": "mem-alpha",
+  "mode": "fts",
+  "results": [
+    {
+      "id": "mem-beta",
+      "reasons": [
+        "lexical"
+      ],
+      "score": 9.793935968798402e-07,
+      "title": "Beta corpus note"
+    }
+  ]
+}

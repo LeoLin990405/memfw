@@ -1,0 +1,24 @@
+{
+  "contract": "memfw-http/2",
+  "degraded": false,
+  "memory_id": "mem-alpha",
+  "mode": "edges",
+  "results": [
+    {
+      "id": "mem-beta",
+      "reasons": [
+        "lexical"
+      ],
+      "score": 3.1999999999999993,
+      "title": "Beta corpus note"
+    },
+    {
+      "id": "mem-gamma",
+      "reasons": [
+        "lexical"
+      ],
+      "score": 0.1,
+      "title": "Gamma corpus note"
+    }
+  ]
+}

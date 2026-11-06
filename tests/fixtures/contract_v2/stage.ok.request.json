@@ -1,0 +1,13 @@
+{
+  "content": "Staged sample body.",
+  "proposal_id": "sample-ok",
+  "related": [
+    "mem-alpha"
+  ],
+  "source": "conductor",
+  "tags": [
+    "sample"
+  ],
+  "tenant": "tenant-a",
+  "title": "Staged sample"
+}

@@ -1,65 +1,1047 @@
+"""Handler-level and function-level tests for ``memfw-http/2`` (contract v2).
+
+The four v1 tests (current/tenant filtering, superseded exclusion, related
+items, staging never touching the vault) are kept in intent and updated to the
+v2 semantics by ``test_tenant_filter_returns_a_full_limit``,
+``test_include_history_and_superseded_documents``/``test_as_of_keeps_a_document_superseded_after_the_instant``,
+``test_related_edges_mode_and_no_write``/``test_related_falls_back_to_fts`` and
+``test_stage_writes_the_canonical_candidate``/``test_stage_never_touches_the_vault``;
+the staged path is now the relative ``_candidates/remember/conductor-<id>.md``.
+
+The suite finishes with the canonical sample set under
+``tests/fixtures/contract_v2/``: every pair is canonical JSON (``json.dumps``
+with ``ensure_ascii=False, indent=2, sort_keys=True`` plus a trailing newline)
+and is replayed against a deterministic seed vault.
+
+Regenerate the samples after an intentional contract change::
+
+    MEMFW_UPDATE_CONTRACT_FIXTURES=1 python -m pytest
+        tests/test_readonly_service.py -k contract_fixtures
+"""
+
 from __future__ import annotations
 
-import pathlib
+import hashlib
+import json
+import os
+import threading
+import urllib.error
+import urllib.request
+from datetime import UTC, datetime
+from http.client import HTTPConnection
+from http.server import ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 
+import pytest
+import yaml
+
+import scripts.memfw_readonly_service as service
+from memfw.capture.review import list_staged_candidates
+from memfw.core.models import MemoryDocument
 from memfw.core.repository import Repository
 from memfw.index import MemoryIndex
-from scripts.memfw_readonly_service import search_vault
+from memfw.related import RelatedIndex
+from memfw.storage.markdown import MarkdownStorageMixin
+from scripts.memfw_readonly_service import (
+    CONTRACT,
+    Handler,
+    ServiceError,
+    related_vault,
+    search_vault,
+    stage_candidate,
+)
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "contract_v2"
+READ_TOKEN = "read-token"
+WRITE_TOKEN = "write-token"
+BASE = datetime(2026, 11, 6, tzinfo=UTC)
 
 
-def test_readonly_service_filters_current_tenant(tmp_path: Path) -> None:
-    repository = Repository(tmp_path / "vault")
+# The suite-wide socket guard in conftest.py would refuse the loopback HTTP client.
+@pytest.fixture(autouse=True)
+def disable_network() -> None:
+    """These tests talk to a loopback server on purpose."""
+
+
+def _memory(
+    memory_id: str,
+    title: str,
+    body: str,
+    *,
+    tenant: str = "",
+    source: str = "manual",
+    tags: tuple[str, ...] = (),
+    related: tuple[str, ...] = (),
+    valid_from: datetime | None = None,
+    valid_to: datetime | None = None,
+    superseded_by: str | None = None,
+) -> MemoryDocument:
+    return MemoryDocument(
+        id=memory_id,
+        title=title,
+        body=body,
+        tenant=tenant,
+        source=source,
+        tags=list(tags),
+        related=list(related),
+        valid_from=valid_from,
+        valid_to=valid_to,
+        superseded_by=superseded_by,
+        created_at=BASE,
+        updated_at=BASE,
+    )
+
+
+SEED_DOCUMENTS = [
+    _memory(
+        "mem-alpha",
+        "Alpha corpus note",
+        "alpha corpus keyword",
+        tenant="tenant-a",
+        tags=("shared", "alpha"),
+        related=("mem-beta",),
+    ),
+    _memory(
+        "mem-beta",
+        "Beta corpus note",
+        "alpha corpus keyword companion",
+        tenant="tenant-a",
+        source="notes",
+        tags=("shared",),
+    ),
+    _memory(
+        "mem-gamma",
+        "Gamma corpus note",
+        "gamma corpus keyword other",
+        tenant="tenant-b",
+    ),
+    _memory(
+        "mem-old",
+        "Alpha early corpus note",
+        "alpha corpus keyword archive",
+        tenant="tenant-a",
+        valid_from=datetime(2026, 11, 6, 0, 10, tzinfo=UTC),
+        valid_to=datetime(2026, 11, 6, 0, 20, tzinfo=UTC),
+        superseded_by="mem-alpha",
+    ),
+]
+
+
+def seed_vault(root: Path, documents: list[MemoryDocument] | None = None) -> Path:
+    """Write a deterministic vault: fixed timestamps, rendered canonical Markdown."""
+    repository = Repository(root)
     repository.init()
-    repository.add("Alpha", "alpha corpus", memory_id="a", tenant="tenant-a")
-    repository.add("Beta", "beta corpus", memory_id="b", tenant="tenant-b")
+    (root / "memories").mkdir(exist_ok=True)
+    for document in documents if documents is not None else SEED_DOCUMENTS:
+        path = root / "memories" / f"{document.id}.md"
+        path.write_bytes(MarkdownStorageMixin.render(document).encode("utf-8"))
     MemoryIndex(repository.index_path).rebuild(repository)
-    result = search_vault(repository.root, "corpus", tenant="tenant-a", limit=5)
-    assert [item["id"] for item in result["results"]] == ["a"]
+    return root
+
+
+def build_related(root: Path) -> Path:
+    path = root / "related.sqlite3"
+    RelatedIndex(path).rebuild_memory(Repository(root))
+    return path
+
+
+@pytest.fixture
+def httpd(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("MEMFW_READONLY_TOKEN", READ_TOKEN)
+    monkeypatch.setenv("MEMFW_WRITE_TOKEN", WRITE_TOKEN)
+    monkeypatch.delenv("MEMFW_RELATED_DB", raising=False)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def _http(
+    base_url: str,
+    method: str,
+    path: str,
+    raw_body: bytes | None = None,
+    token: str | None = None,
+) -> tuple[int, dict]:
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers[service.TOKEN_HEADER] = token
+    request = urllib.request.Request(
+        base_url + path, data=raw_body, method=method, headers=headers
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        return error.code, json.loads(error.read().decode("utf-8"))
+
+
+def _post(base_url: str, path: str, payload: dict, token: str | None = READ_TOKEN):
+    return _http(base_url, "POST", path, _canonical(payload), token)
+
+
+def _canonical(value: object) -> bytes:
+    return (json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
+
+
+def _use_vault(monkeypatch: pytest.MonkeyPatch, root: Path, *, related: bool = False) -> None:
+    monkeypatch.setenv("MEMFW_READONLY_ROOT", str(root))
+    if related:
+        monkeypatch.setenv("MEMFW_RELATED_DB", str(root / "related.sqlite3"))
+    else:
+        monkeypatch.delenv("MEMFW_RELATED_DB", raising=False)
+
+
+# ---------------------------------------------------------------------------
+# HTTP contract surface
+# ---------------------------------------------------------------------------
+
+
+def test_health_needs_no_token_and_exposes_no_sensitive_fields(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = seed_vault(tmp_path / "vault")
+    build_related(root)
+    _use_vault(monkeypatch, root, related=True)
+    status, payload = _http(httpd, "GET", "/health")
+    assert status == 200
+    assert payload == {
+        "ok": True,
+        "service": "memfw",
+        "contract": CONTRACT,
+        "index_present": True,
+        "related_index_present": True,
+    }
+    text = json.dumps(payload)
+    assert str(root) not in text
+    assert READ_TOKEN not in text and WRITE_TOKEN not in text
+
+
+def test_health_without_related_projection(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = seed_vault(tmp_path / "vault")
+    _use_vault(monkeypatch, root)
+    status, payload = _http(httpd, "GET", "/health")
+    assert status == 200
+    assert payload["related_index_present"] is False
+    assert payload["index_present"] is True
+
+
+def test_missing_or_wrong_token_is_401(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
+    for token in (None, "wrong"):
+        status, payload = _post(httpd, "/search", {"query": "corpus"}, token)
+        assert status == 401
+        _assert_error(payload, "unauthorized")
+
+
+def test_read_token_cannot_stage(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
+    status, payload = _post(
+        httpd,
+        "/stage",
+        {"proposal_id": "p1", "title": "T", "content": "body"},
+        READ_TOKEN,
+    )
+    assert status == 403
+    _assert_error(payload, "forbidden")
+
+
+def test_stage_is_403_when_no_write_token_is_configured(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
+    monkeypatch.delenv("MEMFW_WRITE_TOKEN", raising=False)
+    monkeypatch.delenv("MEMFW_WRITE_TOKEN_FILE", raising=False)
+    status, payload = _post(
+        httpd, "/stage", {"proposal_id": "p1", "title": "T", "content": "body"}, WRITE_TOKEN
+    )
+    assert status == 403
+    _assert_error(payload, "forbidden")
+
+
+def test_tokens_can_come_from_files(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
+    read_file = tmp_path / "read.token"
+    read_file.write_text(f"  {READ_TOKEN}\n", encoding="utf-8")
+    write_file = tmp_path / "write.token"
+    write_file.write_text(f"{WRITE_TOKEN}\n", encoding="utf-8")
+    monkeypatch.delenv("MEMFW_READONLY_TOKEN", raising=False)
+    monkeypatch.delenv("MEMFW_WRITE_TOKEN", raising=False)
+    monkeypatch.setenv("MEMFW_READONLY_TOKEN_FILE", str(read_file))
+    monkeypatch.setenv("MEMFW_WRITE_TOKEN_FILE", str(write_file))
+    status, payload = _post(httpd, "/search", {"query": "corpus"}, READ_TOKEN)
+    assert status == 200 and payload["contract"] == CONTRACT
+    status, payload = _post(
+        httpd,
+        "/stage",
+        {"proposal_id": "p-file", "title": "T", "content": "body"},
+        WRITE_TOKEN,
+    )
+    assert status == 200 and payload["staged"] is True
+
+
+def test_unknown_path_and_wrong_method_are_404(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
+    for method, path, body in (
+        ("GET", "/nope", None),
+        ("POST", "/nope", b"{}"),
+        ("GET", "/search", None),
+        ("DELETE", "/search", b"{}"),
+        ("PUT", "/stage", b"{}"),
+    ):
+        status, payload = _http(httpd, method, path, body, READ_TOKEN)
+        assert status == 404, (method, path)
+        _assert_error(payload, "not_found")
+
+
+def test_request_validation_returns_400(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
+    cases = [
+        (b"{not json", "bad_request"),
+        (b"[1, 2]", "bad_request"),
+        (_canonical({"query": "corpus", "limit": "ten"}), "bad_request"),
+        (_canonical({"query": "corpus", "limit": True}), "bad_request"),
+        (_canonical({"query": "corpus", "as_of": "yesterday"}), "bad_request"),
+        (_canonical({"query": "corpus", "include_history": "yes"}), "bad_request"),
+        (_canonical({"query": ""}), "bad_request"),
+        (_canonical({"query": "x" * 513}), "bad_request"),
+    ]
+    for raw, code in cases:
+        status, payload = _http(httpd, "POST", "/search", raw, READ_TOKEN)
+        assert status == 400, raw[:40]
+        _assert_error(payload, code)
+
+
+def test_missing_content_length_returns_400(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
+    parts = urlsplit(httpd)
+    connection = HTTPConnection(parts.hostname, parts.port, timeout=10)
+    connection.putrequest("POST", "/search")
+    connection.putheader(service.TOKEN_HEADER, READ_TOKEN)
+    connection.endheaders(b'{"query": "corpus"}')
+    response = connection.getresponse()
+    payload = json.loads(response.read().decode("utf-8"))
+    connection.close()
+    assert response.status == 400
+    _assert_error(payload, "bad_request")
+
+
+def test_body_size_limits_return_413(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
+    # /search body > 8 KiB
+    status, payload = _http(
+        httpd,
+        "POST",
+        "/search",
+        _canonical({"query": "q" * 9000}),
+        READ_TOKEN,
+    )
+    assert status == 413
+    _assert_error(payload, "too_large")
+    # /stage body > 128 KiB
+    status, payload = _http(httpd, "POST", "/stage", b"x" * (129 * 1024), WRITE_TOKEN)
+    assert status == 413
+    _assert_error(payload, "too_large")
+    # /stage content > 64 KiB (body still under the 128 KiB request limit)
+    status, payload = _post(
+        httpd,
+        "/stage",
+        {"proposal_id": "large", "title": "Large", "content": "y" * (65_537)},
+        WRITE_TOKEN,
+    )
+    assert status == 413
+    _assert_error(payload, "too_large")
+
+
+def test_related_unknown_memory_is_404(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
+    status, payload = _post(httpd, "/related", {"memory_id": "mem-missing"})
+    assert status == 404
+    _assert_error(payload, "not_found")
+    status, payload = _post(httpd, "/related", {"memory_id": "../memories/mem-alpha"})
+    assert status == 400
+    _assert_error(payload, "bad_request")
+
+
+def test_internal_error_message_is_fixed(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
+
+    def explode(*_args: object, **_kwargs: object) -> dict:
+        raise RuntimeError(f"boom {tmp_path}/secret")
+
+    monkeypatch.setattr(service, "search_vault", explode)
+    status, payload = _post(httpd, "/search", {"query": "corpus"})
+    assert status == 500
+    assert payload == {
+        "contract": CONTRACT,
+        "error": {"code": "internal", "message": "internal error"},
+    }
+    text = json.dumps(payload)
+    assert "RuntimeError" not in text
+    assert str(tmp_path) not in text
+
+
+# ---------------------------------------------------------------------------
+# Search semantics
+# ---------------------------------------------------------------------------
+
+
+def test_tenant_filter_returns_a_full_limit(tmp_path: Path) -> None:
+    documents = []
+    for index in range(6):
+        documents.append(
+            _memory(
+                f"other-{index}",
+                "corpus keyword corpus keyword",
+                "corpus keyword corpus keyword",
+                tenant="tenant-b",
+            )
+        )
+    for index in range(4):
+        documents.append(
+            _memory(
+                f"target-{index}",
+                f"Corpus note {index}",
+                "corpus keyword",
+                tenant="tenant-a",
+                source="notes" if index < 3 else "manual",
+            )
+        )
+    root = seed_vault(tmp_path / "vault", documents)
+    result = search_vault(root, "corpus keyword", limit=3, tenant="tenant-a")
+    assert len(result["results"]) == 3
+    assert {item["tenant"] for item in result["results"]} == {"tenant-a"}
+
+
+def test_source_filter_runs_before_the_limit(tmp_path: Path) -> None:
+    documents = [
+        _memory(f"manual-{index}", "corpus keyword", "corpus keyword") for index in range(4)
+    ] + [
+        _memory(f"notes-{index}", "corpus keyword", "corpus keyword", source="notes")
+        for index in range(3)
+    ]
+    root = seed_vault(tmp_path / "vault", documents)
+    result = search_vault(root, "corpus keyword", limit=2, source="notes")
+    assert len(result["results"]) == 2
+    assert {item["source"] for item in result["results"]} == {"notes"}
+
+
+def test_score_is_normalised_and_monotonic(tmp_path: Path) -> None:
+    root = seed_vault(tmp_path / "vault")
+    result = search_vault(root, "corpus keyword", limit=10)
+    assert len(result["results"]) >= 2
+    scores = [item["score"] for item in result["results"]]
+    raw_scores = [item["raw_score"] for item in result["results"]]
+    assert all(0.0 <= score <= 1.0 for score in scores)
+    assert scores == sorted(scores, reverse=True)
+    assert raw_scores == sorted(raw_scores)
+    short = search_vault(root, "al", limit=5)
+    assert short["results"]
+    short_scores = [item["score"] for item in short["results"]]
+    assert short_scores == sorted(short_scores, reverse=True)
+    assert all(item["raw_score"] is None for item in short["results"])
+    assert all(0.0 <= score <= 1.0 for score in short_scores)
+    assert len(set(short_scores)) == len(short_scores)
+
+
+def test_as_of_keeps_a_document_superseded_after_the_instant(tmp_path: Path) -> None:
+    documents = [
+        _memory(
+            "mem-a",
+            "Alpha current",
+            "alpha phrase",
+            valid_from=datetime(2026, 11, 6, 0, 10, tzinfo=UTC),
+            valid_to=datetime(2026, 11, 6, 0, 20, tzinfo=UTC),
+            superseded_by="mem-b",
+        ),
+        _memory(
+            "mem-b",
+            "Beta replacement",
+            "alpha phrase",
+            valid_from=datetime(2026, 11, 6, 0, 20, tzinfo=UTC),
+        ),
+        _memory(
+            "mem-c",
+            "Gamma expired",
+            "alpha phrase",
+            valid_from=datetime(2026, 11, 6, 0, 0, tzinfo=UTC),
+            valid_to=datetime(2026, 11, 6, 0, 5, tzinfo=UTC),
+        ),
+        _memory(
+            "mem-d",
+            "Delta future",
+            "alpha phrase",
+            valid_from=datetime(2026, 11, 6, 0, 25, tzinfo=UTC),
+        ),
+    ]
+    root = seed_vault(tmp_path / "vault", documents)
+    current = search_vault(root, "alpha phrase", limit=10)
+    assert {item["id"] for item in current["results"]} == {"mem-b", "mem-d"}
+    at_instant = search_vault(
+        root, "alpha phrase", limit=10, as_of="2026-11-06T00:15:00+00:00"
+    )
+    assert {item["id"] for item in at_instant["results"]} == {"mem-a"}
+    history = search_vault(root, "alpha phrase", limit=10, include_history=True)
+    assert {item["id"] for item in history["results"]} == {
+        "mem-a",
+        "mem-b",
+        "mem-c",
+        "mem-d",
+    }
+
+
+def test_result_payload_carries_temporal_and_hash_fields(tmp_path: Path) -> None:
+    root = seed_vault(tmp_path / "vault")
+    result = search_vault(root, "corpus keyword", limit=10)
+    by_id = {item["id"]: item for item in result["results"]}
+    alpha = by_id["mem-alpha"]
+    assert alpha["related"] == ["mem-beta"]
+    assert alpha["valid_from"] is None
+    expected = "sha256:" + hashlib.sha256(
+        (root / "memories" / "mem-alpha.md").read_bytes()
+    ).hexdigest()
+    assert alpha["content_hash"] == expected
+    assert alpha["summary"] == "alpha corpus keyword"
+    assert alpha["title"] == "Alpha corpus note"
+
+
+def test_include_history_and_superseded_documents(tmp_path: Path) -> None:
+    root = seed_vault(tmp_path / "vault")
+    current = search_vault(root, "corpus keyword", limit=10)
+    assert "mem-old" not in {item["id"] for item in current["results"]}
+    history = search_vault(root, "corpus keyword", limit=10, include_history=True)
+    assert "mem-old" in {item["id"] for item in history["results"]}
+
+
+# ---------------------------------------------------------------------------
+# Related
+# ---------------------------------------------------------------------------
+
+
+def test_related_edges_mode_and_no_write(tmp_path: Path) -> None:
+    root = seed_vault(tmp_path / "vault")
+    related_db = build_related(root)
+    before = related_db.read_bytes()
+    result = related_vault(root, "mem-alpha", limit=5, related_db=related_db)
+    assert result["mode"] == "edges"
+    assert result["degraded"] is False
+    assert result["contract"] == CONTRACT
+    ids = [item["id"] for item in result["results"]]
+    assert "mem-alpha" not in ids
+    assert "mem-beta" in ids
+    beta = next(item for item in result["results"] if item["id"] == "mem-beta")
+    assert beta["reasons"]
+    assert "lexical" in beta["reasons"]
+    assert related_db.read_bytes() == before
+
+
+def test_related_falls_back_to_fts(tmp_path: Path) -> None:
+    root = seed_vault(tmp_path / "vault")
+    result = related_vault(root, "mem-alpha", limit=5)
     assert result["mode"] == "fts"
+    assert result["degraded"] is True
+    assert [item["reasons"] for item in result["results"]] == [["lexical"]]
+    assert all(item["id"] != "mem-alpha" for item in result["results"])
+    assert result["results"]
 
 
-def test_readonly_service_excludes_superseded(tmp_path: Path) -> None:
-    repository = Repository(tmp_path / "vault")
-    repository.init()
-    repository.add("Old", "old unique phrase", memory_id="old")
-    repository.supersede("old", "New", "new unique phrase", memory_id_new="new")
-    MemoryIndex(repository.index_path).rebuild(repository)
-    current = search_vault(repository.root, "unique phrase", limit=10)
-    assert {item["id"] for item in current["results"]} == {"new"}
-    history = search_vault(repository.root, "unique phrase", include_history=True, limit=10)
-    assert {item["id"] for item in history["results"]} == {"new", "old"}
+def test_related_rejects_invalid_ids_and_unknown_memory(tmp_path: Path) -> None:
+    root = seed_vault(tmp_path / "vault")
+    with pytest.raises(ServiceError) as invalid:
+        related_vault(root, "../memories/mem-alpha")
+    assert invalid.value.status == 400
+    with pytest.raises(ServiceError) as missing:
+        related_vault(root, "mem-missing")
+    assert missing.value.status == 404
 
 
-def test_readonly_service_related(tmp_path: Path) -> None:
-    from scripts.memfw_readonly_service import related_vault
-
-    repository = Repository(tmp_path / "vault")
-    repository.init()
-    repository.add("Corpus", "corpus KWIC collocations", memory_id="a")
-    repository.add("Corpus methods", "corpus KWIC", memory_id="b")
-    repository.add("NAS", "synology backup", memory_id="c")
-    MemoryIndex(repository.index_path).rebuild(repository)
-    result = related_vault(repository.root, "a", limit=5)
-    assert any(item["id"] == "b" for item in result["results"])
-    assert all(item["id"] != "a" for item in result["results"])
+# ---------------------------------------------------------------------------
+# Staging
+# ---------------------------------------------------------------------------
 
 
-def test_stage_candidate_never_writes_authority(tmp_path: Path) -> None:
-    from scripts.memfw_readonly_service import stage_candidate
-
-    root = tmp_path / "vault"
-    root.mkdir()
-    (root / "vault.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+def test_stage_writes_the_canonical_candidate(tmp_path: Path) -> None:
+    root = seed_vault(tmp_path / "vault")
+    memories_before = sorted((root / "memories").glob("*.md"))
     result = stage_candidate(
         root,
         {
             "proposal_id": "p-1",
             "title": "Proposal memory",
             "content": "candidate body",
-            "tags": ["x"],
+            "tags": ["x", "y"],
+            "related": ["mem-alpha"],
+            "tenant": "tenant-a",
         },
     )
+    assert result["contract"] == CONTRACT
     assert result["authority"] is False
-    assert "candidate body" in pathlib.Path(result["path"]).read_text(encoding="utf-8")
-    assert not list(root.rglob("*.md"))
+    assert result["staged"] is True
+    assert result["duplicate"] is False
+    assert result["candidate_id"] == "conductor-p-1"
+    assert result["path"] == "_candidates/remember/conductor-p-1.md"
+    path = root / "_candidates" / "remember" / "conductor-p-1.md"
+    assert path.is_file()
+    parsed = yaml.safe_load(path.read_text(encoding="utf-8").split("---\n")[1])
+    required = {
+        "proposal_id",
+        "source",
+        "tenant",
+        "tags",
+        "related",
+        "title",
+        "created_at",
+        "content_hash",
+        "authority",
+    }
+    assert required <= set(parsed)
+    assert parsed["authority"] is False
+    assert parsed["source"] == "conductor"
+    assert parsed["content_hash"] == (
+        "sha256:" + hashlib.sha256(b"candidate body").hexdigest()
+    )
+    assert parsed["metadata"]["proposal_id"] == "p-1"
+    staged = list_staged_candidates(root)
+    assert [item["title"] for item in staged] == ["Proposal memory"]
+    assert staged[0]["body"] == "candidate body"
+    assert staged[0]["tags"] == ["x", "y"]
+    assert sorted((root / "memories").glob("*.md")) == memories_before
+
+
+def test_stage_duplicate_does_not_rewrite(tmp_path: Path) -> None:
+    root = seed_vault(tmp_path / "vault")
+    payload = {"proposal_id": "p-2", "title": "T", "content": "same body"}
+    first = stage_candidate(root, payload)
+    path = root / first["path"]
+    before_mtime = path.stat().st_mtime_ns
+    before_bytes = path.read_bytes()
+    second = stage_candidate(root, payload)
+    assert second["duplicate"] is True
+    assert second["candidate_id"] == first["candidate_id"]
+    assert second["path"] == first["path"]
+    assert path.stat().st_mtime_ns == before_mtime
+    assert path.read_bytes() == before_bytes
+
+
+def test_stage_conflict_is_409(tmp_path: Path) -> None:
+    root = seed_vault(tmp_path / "vault")
+    stage_candidate(root, {"proposal_id": "p-3", "title": "T", "content": "one"})
+    with pytest.raises(ServiceError) as conflict:
+        stage_candidate(root, {"proposal_id": "p-3", "title": "T", "content": "two"})
+    assert conflict.value.status == 409
+    assert conflict.value.code == "conflict"
+
+
+def test_stage_validation(tmp_path: Path) -> None:
+    root = seed_vault(tmp_path / "vault")
+    for payload in (
+        {"title": "T", "content": "body"},
+        {"proposal_id": "bad id", "title": "T", "content": "body"},
+        {"proposal_id": "p", "content": "body"},
+        {"proposal_id": "p", "title": "x" * 201, "content": "body"},
+        {"proposal_id": "p", "title": "T", "content": ""},
+        {"proposal_id": "p", "title": "T", "content": "body", "tags": "x"},
+        {"proposal_id": "p", "title": "T", "content": "body", "related": [1]},
+    ):
+        with pytest.raises(ServiceError) as invalid:
+            stage_candidate(root, payload)
+        assert invalid.value.status == 400, payload
+    with pytest.raises(ServiceError) as too_large:
+        stage_candidate(root, {"proposal_id": "p", "title": "T", "content": "x" * 65_537})
+    assert too_large.value.status == 413
+
+
+def test_stage_never_touches_the_vault(tmp_path: Path) -> None:
+    root = seed_vault(tmp_path / "vault")
+    stage_candidate(root, {"proposal_id": "p-4", "title": "T", "content": "body"})
+    assert not (tmp_path / "_candidates").exists()
+    assert not (root / "_candidates").joinpath("memfw").exists()
+
+
+def test_envelope_fields_and_summary_truncation(tmp_path: Path) -> None:
+    documents = [_memory("mem-long", "Long note", "corpus " + "detail " * 200)]
+    root = seed_vault(tmp_path / "vault", documents)
+    result = search_vault(root, "corpus", limit=5)
+    assert result["mode"] == "fts"
+    assert result["degraded"] is False
+    assert result["errors"] == []
+    item = result["results"][0]
+    assert len(item["summary"]) == 500
+    assert item["summary"].startswith("corpus detail")
+
+
+def test_limit_is_clamped_and_not_an_error(tmp_path: Path) -> None:
+    root = seed_vault(tmp_path / "vault")
+    low = search_vault(root, "corpus keyword", limit=0)
+    assert len(low["results"]) == 1
+    high = search_vault(root, "corpus keyword", limit=999)
+    assert 1 <= len(high["results"]) <= 50
+    over = related_vault(root, "mem-alpha", limit=0)
+    assert isinstance(over["results"], list)
+
+
+def test_related_body_limit_returns_413(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
+    raw = _canonical({"memory_id": "mem-alpha", "padding": "p" * 9000})
+    status, payload = _http(httpd, "POST", "/related", raw, READ_TOKEN)
+    assert status == 413
+    _assert_error(payload, "too_large")
+
+
+def test_write_token_can_read(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
+    status, payload = _post(httpd, "/search", {"query": "corpus"}, WRITE_TOKEN)
+    assert status == 200
+    assert payload["contract"] == CONTRACT
+    status, payload = _post(httpd, "/related", {"memory_id": "mem-alpha"}, WRITE_TOKEN)
+    assert status == 200
+    assert payload["mode"] == "fts"
+
+
+def test_environment_credential_wins_over_file(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
+    credential_file = tmp_path / "file.credential"
+    credential_file.write_text("file-credential\n", encoding="utf-8")
+    monkeypatch.setenv("MEMFW_READONLY_TOKEN", "environment-credential")
+    monkeypatch.setenv("MEMFW_READONLY_TOKEN_FILE", str(credential_file))
+    status, _payload = _post(httpd, "/search", {"query": "corpus"}, "environment-credential")
+    assert status == 200
+    status, payload = _post(httpd, "/search", {"query": "corpus"}, "file-credential")
+    assert status == 401
+    _assert_error(payload, "unauthorized")
+
+
+def test_main_binds_loopback_and_requires_a_credential(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeServer:
+        def __init__(self, address: tuple[str, int], handler: object) -> None:
+            captured["address"] = address
+            captured["handler"] = handler
+
+        def serve_forever(self) -> None:
+            raise KeyboardInterrupt
+
+        def server_close(self) -> None:
+            pass
+
+    monkeypatch.setattr(service, "ThreadingHTTPServer", FakeServer)
+    monkeypatch.setenv("MEMFW_READONLY_TOKEN", READ_TOKEN)
+    monkeypatch.delenv("MEMFW_WRITE_TOKEN", raising=False)
+    assert service.main(["--root", str(tmp_path / "vault")]) == 0
+    assert captured["address"] == ("127.0.0.1", 18080)
+    monkeypatch.delenv("MEMFW_READONLY_TOKEN", raising=False)
+    monkeypatch.delenv("MEMFW_READONLY_TOKEN_FILE", raising=False)
+    with pytest.raises(SystemExit):
+        service.main(["--root", str(tmp_path / "vault")])
+
+
+def test_unit_file_binds_loopback_and_names_the_tailnet_override() -> None:
+    unit = (Path(__file__).resolve().parents[1] / "scripts" / "memfw-readonly.service")
+    text = unit.read_text(encoding="utf-8")
+    assert "--host 127.0.0.1" in text
+    assert "--related-db" in text
+    assert "EnvironmentFile=" in text
+    for forbidden in ("0.0.0.0", "nohup"):
+        assert forbidden not in text
+
+
+# ---------------------------------------------------------------------------
+# Canonical sample set (contract section 9)
+# ---------------------------------------------------------------------------
+
+STAGE_OK = {
+    "proposal_id": "sample-ok",
+    "title": "Staged sample",
+    "content": "Staged sample body.",
+    "tags": ["sample"],
+    "related": ["mem-alpha"],
+    "tenant": "tenant-a",
+    "source": "conductor",
+}
+
+SCENARIOS: dict[str, dict] = {
+    "health.ok": {
+        "status": 200,
+        "method": "GET",
+        "path": "/health",
+        "body": {},
+        "token": None,
+        "related": True,
+    },
+    "search.ok": {
+        "status": 200,
+        "method": "POST",
+        "path": "/search",
+        "body": {"query": "corpus keyword", "limit": 3},
+        "token": READ_TOKEN,
+        "related": True,
+    },
+    "search.as_of_superseded_after_t": {
+        "status": 200,
+        "method": "POST",
+        "path": "/search",
+        "body": {
+            "query": "corpus keyword",
+            "limit": 5,
+            "as_of": "2026-11-06T00:15:00+00:00",
+        },
+        "token": READ_TOKEN,
+        "related": True,
+    },
+    "search.unauthorized": {
+        "status": 401,
+        "method": "POST",
+        "path": "/search",
+        "body": {"query": "corpus keyword"},
+        "token": None,
+        "related": True,
+    },
+    "search.too_large": {
+        "status": 413,
+        "method": "POST",
+        "path": "/search",
+        "body": {"query": "q" * 9000},
+        "token": READ_TOKEN,
+        "related": True,
+    },
+    "related.edges_ok": {
+        "status": 200,
+        "method": "POST",
+        "path": "/related",
+        "body": {"memory_id": "mem-alpha", "limit": 3},
+        "token": READ_TOKEN,
+        "related": True,
+    },
+    "related.fts_degraded": {
+        "status": 200,
+        "method": "POST",
+        "path": "/related",
+        "body": {"memory_id": "mem-alpha", "limit": 3},
+        "token": READ_TOKEN,
+        "related": False,
+    },
+    "related.not_found": {
+        "status": 404,
+        "method": "POST",
+        "path": "/related",
+        "body": {"memory_id": "mem-missing"},
+        "token": READ_TOKEN,
+        "related": True,
+    },
+    "stage.ok": {
+        "status": 200,
+        "method": "POST",
+        "path": "/stage",
+        "body": STAGE_OK,
+        "token": WRITE_TOKEN,
+        "related": True,
+    },
+    "stage.duplicate": {
+        "status": 200,
+        "method": "POST",
+        "path": "/stage",
+        "body": STAGE_OK,
+        "token": WRITE_TOKEN,
+        "related": True,
+        "before": ["stage.ok"],
+    },
+    "stage.conflict": {
+        "status": 409,
+        "method": "POST",
+        "path": "/stage",
+        "body": {
+            "proposal_id": "sample-ok",
+            "title": "Staged sample",
+            "content": "Different body.",
+            "tags": ["sample"],
+            "tenant": "tenant-a",
+            "source": "conductor",
+        },
+        "token": WRITE_TOKEN,
+        "related": True,
+        "before": ["stage.ok"],
+    },
+    "stage.forbidden_read_token": {
+        "status": 403,
+        "method": "POST",
+        "path": "/stage",
+        "body": {
+            "proposal_id": "sample-forbidden",
+            "title": "Forbidden sample",
+            "content": "Forbidden sample body.",
+        },
+        "token": READ_TOKEN,
+        "related": True,
+    },
+    "stage.too_large": {
+        "status": 413,
+        "method": "POST",
+        "path": "/stage",
+        "body": {
+            "proposal_id": "sample-too-large",
+            "title": "Too large sample",
+            "content": "x" * 65_537,
+        },
+        "token": WRITE_TOKEN,
+        "related": True,
+    },
+}
+ENDPOINT_OF = {
+    "health.ok": "/health",
+    "search.ok": "/search",
+    "search.as_of_superseded_after_t": "/search",
+    "search.unauthorized": "/search",
+    "search.too_large": "/search",
+    "related.edges_ok": "/related",
+    "related.fts_degraded": "/related",
+    "related.not_found": "/related",
+    "stage.ok": "/stage",
+    "stage.duplicate": "/stage",
+    "stage.conflict": "/stage",
+    "stage.forbidden_read_token": "/stage",
+    "stage.too_large": "/stage",
+}
+
+
+def _scenario_response(
+    base_url: str, name: str, root: Path, monkeypatch: pytest.MonkeyPatch
+) -> dict:
+    scenario = SCENARIOS[name]
+    for previous in scenario.get("before", []):
+        _scenario_response(base_url, previous, root, monkeypatch)
+    if scenario["related"] and not (root / "related.sqlite3").exists():
+        build_related(root)
+    _use_vault(monkeypatch, root, related=scenario["related"])
+    raw = _canonical(scenario["body"])
+    if scenario["method"] == "GET":
+        status, payload = _http(base_url, "GET", scenario["path"], None, scenario["token"])
+    else:
+        status, payload = _http(
+            base_url, "POST", scenario["path"], raw, scenario["token"]
+        )
+    return {"status": status, "payload": payload}
+
+
+def _assert_error(payload: dict, code: str) -> None:
+    assert payload["contract"] == CONTRACT
+    assert set(payload) == {"contract", "error"}
+    assert set(payload["error"]) == {"code", "message"}
+    assert payload["error"]["code"] == code
+    assert isinstance(payload["error"]["message"], str) and payload["error"]["message"]
+
+
+def _assert_close(actual: object, expected: object, path: str = "") -> None:
+    if isinstance(expected, bool):
+        assert isinstance(actual, bool) and actual is expected, path
+    elif isinstance(expected, float):
+        assert isinstance(actual, int | float), path
+        assert abs(float(actual) - expected) <= max(1e-9, abs(expected) * 1e-6), path
+    elif isinstance(expected, dict):
+        assert isinstance(actual, dict), path
+        assert set(actual) == set(expected), path
+        for key, value in expected.items():
+            _assert_close(actual[key], value, f"{path}/{key}")
+    elif isinstance(expected, list):
+        assert isinstance(actual, list), path
+        assert len(actual) == len(expected), path
+        for index, value in enumerate(expected):
+            _assert_close(actual[index], value, f"{path}/{index}")
+    else:
+        assert actual == expected, path
+
+
+def _fixture_names() -> list[str]:
+    return sorted(
+        path.name[: -len(".request.json")]
+        for path in FIXTURES.glob("*.request.json")
+    )
+
+
+def test_contract_fixtures(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if os.environ.get("MEMFW_UPDATE_CONTRACT_FIXTURES") == "1":
+        _write_fixtures(httpd, tmp_path, monkeypatch)
+    names = _fixture_names()
+    assert names == sorted(SCENARIOS), names
+    for name in names:
+        request_path = FIXTURES / f"{name}.request.json"
+        response_path = FIXTURES / f"{name}.response.json"
+        request_body = json.loads(request_path.read_text(encoding="utf-8"))
+        assert request_path.read_bytes() == _canonical(request_body), name
+        expected = json.loads(response_path.read_text(encoding="utf-8"))
+        assert response_path.read_bytes() == _canonical(expected), name
+        assert expected["contract"] == CONTRACT, name
+        for path in (request_path, response_path):
+            text = path.read_text(encoding="utf-8")
+            for forbidden in (
+                "/Users/",
+                "/home/",
+                "/vol1/",
+                READ_TOKEN,
+                WRITE_TOKEN,
+            ):
+                assert forbidden not in text, (name, path.name, forbidden)
+        assert request_body == SCENARIOS[name]["body"], name
+        root = seed_vault(tmp_path / "replay" / f"vault-{name}")
+        result = _scenario_response(httpd, name, root, monkeypatch)
+        assert result["status"] == SCENARIOS[name]["status"], name
+        _assert_close(result["payload"], expected, name)
+    covered = {ENDPOINT_OF[name] for name in names}
+    assert covered == {"/health", "/search", "/related", "/stage"}
+    assert any("as_of" in SCENARIOS[name]["body"] for name in names)
+    as_of_response = json.loads(
+        (FIXTURES / "search.as_of_superseded_after_t.response.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert "mem-old" in {item["id"] for item in as_of_response["results"]}
+
+
+def _write_fixtures(httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    FIXTURES.mkdir(parents=True, exist_ok=True)
+    for name in sorted(SCENARIOS):
+        request_path = FIXTURES / f"{name}.request.json"
+        response_path = FIXTURES / f"{name}.response.json"
+        request_path.write_bytes(_canonical(SCENARIOS[name]["body"]))
+        root = seed_vault(tmp_path / "generate" / f"vault-{name}")
+        result = _scenario_response(httpd, name, root, monkeypatch)
+        response_path.write_bytes(_canonical(result["payload"]))

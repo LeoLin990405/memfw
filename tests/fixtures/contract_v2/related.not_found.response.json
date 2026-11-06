@@ -1,0 +1,7 @@
+{
+  "contract": "memfw-http/2",
+  "error": {
+    "code": "not_found",
+    "message": "memory not found"
+  }
+}
