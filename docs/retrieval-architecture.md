@@ -459,3 +459,21 @@ decisions:
 
 Cross-judge kappa: 0.030. Neither model is adopted as an annotator; LLM labels
 are diagnostics only. Human labels remain the ground truth.
+
+
+## MiniMax external judge (diagnostic)
+
+Using the user's existing MiniMax subscription (MiniMax-M3.1-Flash), 216
+candidate decisions were judged:
+
+| Metric | Value |
+|---|---:|
+| Accuracy | 0.940 |
+| Precision | 0.852 |
+| Recall | 0.719 |
+| F1 | 0.780 |
+| Kappa vs human | 0.745 |
+| Answerable accuracy | 0.964 |
+
+Still not adopted as automatic labels. StepFun could not be used because the
+local config has only a web Oasis token, not an OpenAI-compatible API key.
