@@ -1,0 +1,10 @@
+{
+  "content": "Different body.",
+  "proposal_id": "sample-ok",
+  "source": "conductor",
+  "tags": [
+    "sample"
+  ],
+  "tenant": "tenant-a",
+  "title": "Staged sample"
+}
