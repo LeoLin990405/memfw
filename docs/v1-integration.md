@@ -24,6 +24,7 @@ complete replacement of Conductor's proposal/approval memory.
 The Conductor V1 adapter is prepared in the isolated worktree
 `/Users/leo/conductor-wt/memfw-v1`, branch `feat/memfw-v1-federation`:
 
+- uses the read-only HTTP service, not a vault copy or mount;
 - accepts MemFW `supersede` events;
 - excludes documents with `valid_to`/`superseded_by` from current recall;
 - preserves temporal/tenant/related metadata in hits;
@@ -46,3 +47,18 @@ A full replacement needs:
 
 Until then, V1 is read-only and does not bypass MemFW's human-confirmation
 principle.
+
+
+## Read-only remote service
+
+`scripts/memfw_readonly_service.py` is a stdlib-only HTTP facade over an
+existing MemFW vault. It exposes `/health` and authenticated `/search`; it has no
+write endpoint. It reads the disposable SQLite index and Markdown only.
+
+On HA500, the V1 service is rooted at `/vol1/fleet-memory/memfw-vault`, bound to
+the tailnet on port 18080, and protected by `X-Memfw-Token`. Conductor binds
+`memfw_url` and reads `MEMFW_READONLY_TOKEN` from its environment. No vault sync
+is performed.
+
+The current service is started by `setsid/nohup`; durable systemd management,
+token rotation and HA remain follow-ups.
