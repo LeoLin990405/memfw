@@ -1,5 +1,6 @@
 """Markdown notes retrieval: section index, hybrid search, optional embeddings."""
 
+from .annotation import AnnotationEntry, GoldenAnnotator
 from .distillation import ExportReport, TrainingPair, check_pairs, export_pairs, write_pairs
 from .evaluation import (
     EvalCase,
@@ -71,6 +72,8 @@ __all__ = [
     "FeedbackStore",
     "RetrievalTrace",
     "query_digest",
+    "AnnotationEntry",
+    "GoldenAnnotator",
     "ExportReport",
     "TrainingPair",
     "check_pairs",

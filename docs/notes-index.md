@@ -77,3 +77,19 @@ memfw notes shadow --baseline-db old.sqlite --candidate-db new.sqlite \
 - `feedback-export` only uses explicit feedback; uncited results remain unknown.
 - manifest write/verify prevents mixing model/chunker generations.
 - shadow compares two indexes read-only; it never switches production.
+
+
+## Voice-assisted golden annotation
+
+```bash
+memfw notes annotate --db notes.sqlite --out golden-human.yml --annotator leo
+```
+
+- Records one query at a time; each entry is saved immediately.
+- Fields: query, kind, expected paths, evidence/notes.
+- Path prompt: empty finishes; `?keyword` searches note paths; number selects.
+- `no_answer` requires an explanation and no expected path.
+- Resume an existing file by running the same command again.
+- Voice: use the operating system's dictation into the terminal (macOS fn-fn);
+  memfw receives only text and never records or uploads audio.
+- The resulting YAML is accepted by `memfw notes eval`.

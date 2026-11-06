@@ -23,6 +23,7 @@ from .curation.review_cli import review_command as run_review
 from .index import MemoryIndex
 from .notes import (
     FeedbackStore,
+    GoldenAnnotator,
     HttpEmbeddingProvider,
     HttpRerankerProvider,
     NotesIndex,
@@ -225,6 +226,75 @@ def notes_serve(
 
     embedder = _notes_embedder(endpoint, model, dimension, 16)
     serve_notes_mcp(NotesGateway(root, db, embedder=embedder))
+
+
+@notes_app.command("annotate")
+def notes_annotate(
+    db: Annotated[Path, typer.Option("--db", help="notes index used to validate paths")],
+    out: Annotated[Path, typer.Option("--out")] = Path("golden-human.yml"),
+    annotator: Annotated[str, typer.Option("--annotator")] = "",
+) -> None:
+    """Record one golden query at a time; OS dictation can fill each prompt.
+
+    macOS: focus this terminal and press fn-fn before speaking. The tool only
+    receives text; it never records or uploads audio.
+    """
+    import os
+
+    owner = annotator or os.environ.get("USER") or "human"
+    try:
+        session = GoldenAnnotator(db, out, annotator=owner)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(f"golden file: {out} (existing entries: {len(session.entries)})")
+    typer.echo("Voice: use OS dictation; each prompt remains editable before save.")
+    typer.echo("Type ?keyword at a path prompt to search note paths.")
+    while True:
+        query = typer.prompt("Query (empty to finish)", default="", show_default=False)
+        if not query.strip():
+            break
+        kind = typer.prompt("Kind", default="answerable")
+        paths: list[str] = []
+        if kind != "no_answer":
+            while True:
+                raw = typer.prompt(
+                    "Expected path (empty=done, ?text=search)",
+                    default="",
+                    show_default=False,
+                ).strip()
+                if not raw:
+                    break
+                if raw.startswith("?"):
+                    hints = session.suggest_paths(raw[1:])
+                    if not hints:
+                        typer.echo("no matching note paths")
+                        continue
+                    for index, hint in enumerate(hints, start=1):
+                        typer.echo(f"  {index}. {hint}")
+                    chosen = typer.prompt(
+                        "Select number or paste path (empty=cancel)",
+                        default="",
+                        show_default=False,
+                    ).strip()
+                    if chosen.isdigit() and 1 <= int(chosen) <= len(hints):
+                        paths.append(hints[int(chosen) - 1])
+                    elif chosen:
+                        paths.append(chosen)
+                    continue
+                paths.append(raw)
+        evidence = typer.prompt("Evidence/notes (optional)", default="", show_default=False)
+        try:
+            entry = session.add(
+                query,
+                paths,
+                kind=kind,
+                notes=evidence,
+            )
+        except ValueError as exc:
+            typer.echo(f"not saved: {exc}")
+            continue
+        typer.echo(f"saved {entry.query_id}: {entry.query}")
+    typer.echo(f"wrote {len(session.entries)} entries to {out}")
 
 
 @notes_app.command("eval")
