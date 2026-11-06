@@ -496,3 +496,21 @@ MiniMax-M3.1-Flash, Doubao-Seed-2.1-lite and DeepSeek-latest judged the same
 Pairwise kappa between external judges: 1.000. This is evidence of stability,
 not correctness; human labels remain ground truth. Local Phi-3.5 scored F1
 0.561; local Qwen1.5B scored 0.061.
+
+
+## StepFun judge (diagnostic)
+
+StepFun Step Plan (`step-5-preview`) judged the same 216 candidate decisions:
+
+| Metric | Value |
+|---|---:|
+| Accuracy | 0.935 |
+| Precision | 0.821 |
+| Recall | 0.719 |
+| F1 | 0.767 |
+| Kappa vs human | 0.729 |
+| Answerable accuracy | 0.929 |
+
+Pairwise kappa with MiniMax/Doubao/DeepSeek was 0.979. The external judges are
+stable with each other but still differ from human labels; no automatic
+annotation was adopted.
