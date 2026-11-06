@@ -153,6 +153,7 @@ def notes_search(
     until: Annotated[
         float | None, typer.Option("--until", help="mtime upper bound, epoch seconds")
     ] = None,
+    min_query_coverage: Annotated[float | None, typer.Option("--min-query-coverage")] = None,
     feedback_db: Annotated[Path | None, typer.Option("--feedback-db")] = None,
     task_id: Annotated[str | None, typer.Option("--task-id")] = None,
     tenant: Annotated[str, typer.Option("--tenant")] = "",
@@ -176,6 +177,7 @@ def notes_search(
             final_k=limit,
             rrf_k=rrf_k,
             rerank_candidates=rerank_candidates,
+            min_query_coverage=min_query_coverage,
         ),
         reranker=reranker,
         trace_store=FeedbackStore(feedback_db) if feedback_db else None,
@@ -210,6 +212,8 @@ def notes_search(
                 "errors": result.errors,
                 "trace_id": result.trace_id,
                 "task_id": result.task_id,
+                "abstained": result.abstained,
+                "abstain_reason": result.abstain_reason,
                 "results": [hit.as_dict() for hit in result.hits],
             },
             ensure_ascii=False,

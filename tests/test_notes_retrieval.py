@@ -240,3 +240,21 @@ def test_time_and_metadata_filters_are_applied_before_results(tmp_path: Path) ->
     future = time.time() + 3600
     assert retriever.search("corpus", limit=5, since=future).hits == []
     assert retriever.search("corpus", limit=5, until=time.time() + 3600).hits
+
+
+def test_opt_in_query_coverage_abstention(tmp_path: Path) -> None:
+    root = tmp_path / "vault"
+    root.mkdir()
+    (root / "a.md").write_text("# A\n\ncorpus collocations\n", encoding="utf-8")
+    index = NotesIndex(tmp_path / "index.sqlite")
+    index.index(root)
+    retriever = NotesRetriever(
+        index,
+        config=RetrievalConfig(final_k=3, min_query_coverage=0.5),
+    )
+    kept = retriever.search("corpus", limit=3)
+    assert kept.hits and not kept.abstained
+    dropped = retriever.search("quantum refrigerator maintenance", limit=3)
+    assert dropped.hits == []
+    assert dropped.abstained
+    assert dropped.abstain_reason

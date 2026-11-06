@@ -8,11 +8,14 @@ loaded here: rerankers and language models are injected through protocols.
 from __future__ import annotations
 
 import json
+import re
 import urllib.request
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
+
+import jieba  # type: ignore[import-untyped]
 
 from .feedback import CandidateTrace, FeedbackStore, RetrievalTrace
 from .index import NoteHit, NotesIndex
@@ -168,6 +171,7 @@ class RetrievalConfig:
     rewrite: bool = False
     max_rewrites: int = 3
     auto_degrade: bool = True
+    min_query_coverage: float | None = None
 
     def __post_init__(self) -> None:
         if self.mode not in {"fts", "vector", "hybrid"}:
@@ -197,6 +201,8 @@ class RetrievalResult:
     candidate_hits: list[NoteHit] = field(default_factory=list)
     trace_id: str | None = None
     task_id: str | None = None
+    abstained: bool = False
+    abstain_reason: str = ""
 
 
 def _dedupe(hits: Sequence[NoteHit]) -> list[NoteHit]:
@@ -209,6 +215,27 @@ def _dedupe(hits: Sequence[NoteHit]) -> list[NoteHit]:
         seen.add(key)
         output.append(hit)
     return output
+
+
+def query_coverage(query: str, text: str) -> float:
+    """Fraction of query terms present in a candidate, for opt-in abstention."""
+
+    def terms(value: str) -> set[str]:
+        output: list[str] = []
+        for word in jieba.lcut(value.lower()):
+            word = word.strip()
+            if not word or re.fullmatch(r"[\W_]+", word):
+                continue
+            if len(word) == 1 and "\u4e00" <= word <= "\u9fff":
+                continue
+            output.append(word)
+        output.extend(re.findall(r"[a-z][a-z0-9-]+", value.lower()))
+        return set(output)
+
+    query_terms = terms(query)
+    if not query_terms:
+        return 0.0
+    return len(query_terms & terms(text)) / len(query_terms)
 
 
 class NotesRetriever:
@@ -375,6 +402,7 @@ class NotesRetriever:
                         final_k=final_k,
                         rrf_k=self.config.rrf_k,
                         auto_degrade=False,
+                        min_query_coverage=self.config.min_query_coverage,
                     ),
                 ).search(
                     query,
@@ -392,6 +420,10 @@ class NotesRetriever:
                 RetrievalResult(
                     query=query,
                     hits=[],
+                    abstained=self.config.min_query_coverage is not None,
+                    abstain_reason=(
+                        "no candidates" if self.config.min_query_coverage is not None else ""
+                    ),
                     mode_used=self.config.mode,
                     degraded=self.config.mode != "fts",
                     rewrites=rewrites,
@@ -430,10 +462,23 @@ class NotesRetriever:
                 section_id=hit.section_id,
                 content_hash=hit.content_hash,
             )
+        hits = candidates[:final_k]
+        abstained = False
+        reason = ""
+        threshold = self.config.min_query_coverage
+        if threshold is not None and hits:
+            coverage = query_coverage(
+                query,
+                hits[0].title + " " + hits[0].heading + " " + hits[0].content,
+            )
+            if coverage < threshold:
+                abstained = True
+                reason = f"top query coverage {coverage:.3f} < {threshold:.3f}"
+                hits = []
         return self._record_trace(
             RetrievalResult(
                 query=query,
-                hits=candidates[:final_k],
+                hits=hits,
                 mode_used=self.config.mode,
                 degraded=self.config.mode != "fts"
                 and not any(hit.source in {"vector", "hybrid"} for hit in candidates),
@@ -442,6 +487,8 @@ class NotesRetriever:
                 errors=errors,
                 candidates=len(candidates),
                 candidate_hits=list(candidates),
+                abstained=abstained,
+                abstain_reason=reason,
             ),
             task_id=task_id,
             tenant=tenant,

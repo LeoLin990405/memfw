@@ -129,3 +129,17 @@ memfw notes annotate-import   --csv annotation-batch.csv   --db notes.sqlite   -
 
 - Unknown paths, duplicate queries and invalid no-answer entries are rejected;
 - The result is immediately usable by `memfw notes eval`.
+
+
+## Opt-in abstention
+
+`--min-query-coverage` enables a conservative abstention policy based on the
+fraction of query terms present in the top hit. It is **off by default**; the
+threshold was calibrated on a dev split and is experimental.
+
+```bash
+memfw notes search "火星殖民地水循环政策"   --db notes.sqlite --min-query-coverage 0.25
+```
+
+When the top result falls below the threshold, the response has
+`abstained=true`, `abstain_reason`, and no result hits.

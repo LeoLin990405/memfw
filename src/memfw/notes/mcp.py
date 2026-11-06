@@ -45,6 +45,7 @@ TOOLS: list[dict[str, Any]] = [
                 "rrf_k": {"type": "integer", "default": 60},
                 "task_id": {"type": "string"},
                 "tenant": {"type": "string"},
+                "min_query_coverage": {"type": "number"},
                 "source": {"type": "string"},
                 "rerank_candidates": {"type": "integer", "default": 0},
                 "rerank_endpoint": {"type": "string"},
@@ -208,6 +209,8 @@ class NotesGateway:
                 "candidates": result.candidates,
                 "trace_id": result.trace_id,
                 "task_id": result.task_id,
+                "abstained": result.abstained,
+                "abstain_reason": result.abstain_reason,
                 "results": [hit.as_dict() for hit in result.hits],
             }
         raise KeyError(name)
