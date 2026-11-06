@@ -172,7 +172,7 @@ mypy src
 ruff check src/memfw tests
 ```
 
-On the reference host, `pytest -q --ignore=tests/test_mlx_transport.py` reports **526 passed and
+On the reference host, `pytest -q --ignore=tests/test_mlx_transport.py` reports **528 passed and
 2 skipped**. The MLX transport tests are host-load gated: they fail by design when the one-minute
 load average is at least 9. Run the full suite only when the host is quiet.
 
