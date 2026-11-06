@@ -72,3 +72,17 @@ lexical overlap. `memory_related` is exposed over MCP; `notes_related` is availa
 notes MCP when configured. Semantic edges are opt-in through `build_semantic`
 using sqlite-vec KNN and one shared embedding fingerprint. QMD notes remain
 outside semantic edges until a local vector index is available.
+
+
+## Section-level edges and relatedness annotation
+
+- `RelatedIndex.rebuild_sections` builds bounded section-level edges
+  (`source=notes_sections`); the QMD 2,000-section subset produced 39,980 edges.
+- `RelatedIndex` items/edges carry tenant/scope columns; `related()` accepts
+  tenant/scope filters. Memory build uses each document's tenant/source.
+- `related_annotation.generate_pairs` creates a 100-pair positive/negative batch;
+  `calibrate` computes precision/recall by threshold after human labels.
+  The current QMD batch is at
+  `~/Documents/Codex/memfw-related-annotation-20261106/related-pairs.csv`.
+- This is still a generated candidate set; human labels are required before
+  changing a production threshold.

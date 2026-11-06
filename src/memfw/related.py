@@ -44,6 +44,8 @@ class RelatedItem:
     path: str
     hash: str
     text: str = ""
+    tenant: str = ""
+    scope: str = ""
 
 
 def _tokens(text: str) -> set[str]:
@@ -66,6 +68,7 @@ class RelatedIndex:
             CREATE TABLE IF NOT EXISTS related_items (
                 source TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL,
                 path TEXT NOT NULL, hash TEXT NOT NULL, text TEXT NOT NULL DEFAULT '',
+                tenant TEXT NOT NULL DEFAULT '', scope TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY (source, id)
             );
             CREATE TABLE IF NOT EXISTS related_edges (
@@ -149,7 +152,12 @@ class RelatedIndex:
             text = " ".join([title, tags, course, heading_text])
             tokens[path] = _tokens(text)
             entities[path] = extract_entities(text, self.dictionary)
-            metadata[path] = {"title": title, "tags": tags.split(), "course": course}
+            metadata[path] = {
+                "title": title,
+                "tags": tags.split(),
+                "course": course,
+                "headings": heading_text,
+            }
         # explicit wikilinks resolve to exact note paths when possible
         explicit: dict[str, set[str]] = defaultdict(set)
         for note_id, targets in links.items():
@@ -207,13 +215,101 @@ class RelatedIndex:
                 str(meta["title"]),
                 path,
                 "",
-                " ".join([str(meta["title"]), str(meta["course"])]),
+                " ".join([str(meta["title"]), str(meta["course"]), str(meta.get("headings", ""))]),
+                "",
+                str(meta["course"]),
             )
             for path, meta in metadata.items()
         ]
         connection = self._connect()
         try:
             return self._write(connection, "notes", items, candidates)
+        finally:
+            connection.close()
+
+    def rebuild_sections(
+        self,
+        notes_db: Path | str,
+        *,
+        max_sections: int = 2000,
+        tenant: str = "",
+        scope: str | None = None,
+    ) -> int:
+        """Build section-level edges for a bounded notes subset.
+
+        Section edges are intentionally bounded: a full 169k-section all-pairs
+        graph is not a useful default. Operators can raise ``max_sections`` or
+        build per collection.
+        """
+        database = Path(notes_db)
+        with sqlite3.connect(database) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                "SELECT s.id AS section_id, s.heading, s.content, n.path, n.title, "
+                "n.tags, n.course FROM sections s JOIN notes n ON n.id=s.note_id "
+                "ORDER BY s.id LIMIT ?",
+                (max(1, max_sections),),
+            ).fetchall()
+        items: list[RelatedItem] = []
+        tokens: dict[str, set[str]] = {}
+        entities: dict[str, set[str]] = {}
+        metadata: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            path = str(row["path"])
+            identifier = f"{path}#s{int(row['section_id'])}"
+            text = " ".join([str(row["title"]), str(row["heading"]), str(row["content"])])
+            if tenant:
+                continue
+            if scope is not None and str(row["course"] or "") != scope:
+                continue
+            tokens[identifier] = _tokens(text)
+            entities[identifier] = extract_entities(text, self.dictionary)
+            metadata[identifier] = {
+                "title": str(row["title"]),
+                "path": path,
+                "scope": str(row["course"] or ""),
+            }
+            items.append(
+                RelatedItem(
+                    "notes_sections",
+                    identifier,
+                    str(row["title"]),
+                    path,
+                    "",
+                    text[:4000],
+                    tenant,
+                    str(row["course"] or ""),
+                )
+            )
+        inverted: dict[str, set[str]] = defaultdict(set)
+        for identifier, values in entities.items():
+            for value in values:
+                inverted["e:" + value.lower()].add(identifier)
+        for identifier, values in tokens.items():
+            for value in values:
+                inverted["t:" + value].add(identifier)
+        candidates: dict[str, dict[tuple[str, str], tuple[float, dict[str, Any]]]] = {}
+        for identifier in metadata:
+            neighbors: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+            for entity in entities.get(identifier, set()):
+                for other in inverted.get("e:" + entity.lower(), set()):
+                    if other != identifier:
+                        neighbors[("notes_sections", other)] = (
+                            max(neighbors.get(("notes_sections", other), (0.0, {}))[0], 2.0),
+                            {"method": "entity", "entity": entity},
+                        )
+            for token in tokens.get(identifier, set()):
+                for other in inverted.get("t:" + token, set()):
+                    if other != identifier:
+                        old, evidence = neighbors.get(("notes_sections", other), (0.0, {}))
+                        neighbors[("notes_sections", other)] = (
+                            old + 0.05,
+                            {**evidence, "method": "lexical"},
+                        )
+            candidates[identifier] = neighbors
+        connection = self._connect()
+        try:
+            return self._write(connection, "notes_sections", items, candidates)
         finally:
             connection.close()
 
@@ -242,6 +338,8 @@ class RelatedIndex:
                     f"memories/{doc.id}.md",
                     str(doc.updated_at),
                     " ".join([doc.title, doc.body, " ".join(doc.tags)]),
+                    doc.tenant,
+                    doc.source,
                 )
             )
             for entity in entities[doc.id]:
@@ -328,7 +426,7 @@ class RelatedIndex:
             connection.execute(
                 f"CREATE VIRTUAL TABLE related_vectors USING vec0(embedding float[{dimension}])"
             )
-            texts = [str(row["title"]) + " " + str(row["text"]) for row in rows]
+            texts = [(str(row["title"]) + " " + str(row["text"]))[:4000] for row in rows]
             vectors = embedder.embed(texts, role="document")
             for row, vector in zip(rows, vectors, strict=False):
                 connection.execute(
@@ -382,24 +480,45 @@ class RelatedIndex:
         *,
         limit: int = 10,
         include_history: bool = False,
+        tenant: str | None = None,
+        scope: str | None = None,
     ) -> list[dict[str, Any]]:
         del include_history
         if not self.path.exists():
             return []
-        with sqlite3.connect(self.path) as connection:
-            connection.row_factory = sqlite3.Row
-            outgoing = connection.execute(
-                "SELECT e.*, i.title, i.path FROM related_edges e "
-                "LEFT JOIN related_items i ON i.source=e.dst_source AND i.id=e.dst_id "
-                "WHERE e.src_source=? AND e.src_id=?",
-                (source, identifier),
-            ).fetchall()
-            incoming = connection.execute(
-                "SELECT e.*, i.title, i.path FROM related_edges e "
-                "LEFT JOIN related_items i ON i.source=e.src_source AND i.id=e.src_id "
-                "WHERE e.dst_source=? AND e.dst_id=?",
-                (source, identifier),
-            ).fetchall()
+        connection = sqlite3.connect(self.path)
+        connection.row_factory = sqlite3.Row
+        columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(related_items)")}
+        if "tenant" not in columns:
+            connection.execute(
+                "ALTER TABLE related_items ADD COLUMN tenant TEXT NOT NULL DEFAULT ''"
+            )
+        if "scope" not in columns:
+            connection.execute(
+                "ALTER TABLE related_items ADD COLUMN scope TEXT NOT NULL DEFAULT ''"
+            )
+        filters = []
+        params: list[Any] = []
+        if tenant is not None:
+            filters.append("i.tenant=?")
+            params.append(tenant)
+        if scope is not None:
+            filters.append("i.scope=?")
+            params.append(scope)
+        where = (" AND " + " AND ".join(filters)) if filters else ""
+        outgoing = connection.execute(
+            "SELECT e.*, i.title, i.path FROM related_edges e "
+            "LEFT JOIN related_items i ON i.source=e.dst_source AND i.id=e.dst_id "
+            "WHERE e.src_source=? AND e.src_id=?" + where,
+            [source, identifier, *params],
+        ).fetchall()
+        incoming = connection.execute(
+            "SELECT e.*, i.title, i.path FROM related_edges e "
+            "LEFT JOIN related_items i ON i.source=e.src_source AND i.id=e.src_id "
+            "WHERE e.dst_source=? AND e.dst_id=?" + where,
+            [source, identifier, *params],
+        ).fetchall()
+        connection.close()
         merged: dict[tuple[str, str], dict[str, Any]] = {}
         for row, direction in [(row, "outgoing") for row in outgoing] + [
             (row, "incoming") for row in incoming

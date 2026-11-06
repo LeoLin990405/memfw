@@ -28,3 +28,17 @@ def test_readonly_service_excludes_superseded(tmp_path: Path) -> None:
     assert {item["id"] for item in current["results"]} == {"new"}
     history = search_vault(repository.root, "unique phrase", include_history=True, limit=10)
     assert {item["id"] for item in history["results"]} == {"new", "old"}
+
+
+def test_readonly_service_related(tmp_path: Path) -> None:
+    from scripts.memfw_readonly_service import related_vault
+
+    repository = Repository(tmp_path / "vault")
+    repository.init()
+    repository.add("Corpus", "corpus KWIC collocations", memory_id="a")
+    repository.add("Corpus methods", "corpus KWIC", memory_id="b")
+    repository.add("NAS", "synology backup", memory_id="c")
+    MemoryIndex(repository.index_path).rebuild(repository)
+    result = related_vault(repository.root, "a", limit=5)
+    assert any(item["id"] == "b" for item in result["results"])
+    assert all(item["id"] != "a" for item in result["results"])

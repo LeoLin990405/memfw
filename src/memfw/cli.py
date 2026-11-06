@@ -504,6 +504,17 @@ def notes_related_build(
     )
 
 
+@notes_app.command("related-sections-build")
+def notes_related_sections_build(
+    notes_db: Annotated[Path, typer.Option("--notes-db")],
+    related_db: Annotated[Path, typer.Option("--related-db")] = Path(".memfw-related.sqlite"),
+    max_sections: Annotated[int, typer.Option("--max-sections")] = 2000,
+) -> None:
+    """Build bounded section-level relatedness edges."""
+    count = RelatedIndex(related_db).rebuild_sections(notes_db, max_sections=max(1, max_sections))
+    typer.echo(json.dumps({"related_db": str(related_db), "edges": count}, ensure_ascii=False))
+
+
 @notes_app.command("related")
 def notes_related(
     path: Annotated[str, typer.Argument()],

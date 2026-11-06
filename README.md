@@ -273,7 +273,14 @@ memfw notes related-build --notes-db /tmp/notes.sqlite --related-db /tmp/related
 memfw notes related "Week 02/...md" --related-db /tmp/related.sqlite
 memfw memory-related-build --root ./vault --related-db /tmp/related.sqlite
 memfw memory-related memory-id --related-db /tmp/related.sqlite
+
+memfw notes related-sections-build --notes-db /tmp/notes.sqlite \
+  --related-db /tmp/related.sqlite --max-sections 2000
 ```
+
+Section/item edges carry tenant/scope filters. A 100-pair human annotation CSV
+can be generated with `memfw.related_annotation.generate_pairs` and calibrated
+with `calibrate` after labels are filled.
 
 The MCP tool `memory_related` exposes memory edges; `notes_related` is available
 through the notes MCP when a related DB is configured. Edges are derived, never

@@ -74,3 +74,26 @@ def test_semantic_edges_are_opt_in_and_cross_source(tmp_path: Path) -> None:
     rows = related.related("memory", "m-alpha", limit=10)
     assert any(row["source"] == "notes" for row in rows)
     assert any("semantic" in row["methods"] for row in rows)
+
+
+def test_section_edges_and_tenant_filter(tmp_path: Path) -> None:
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    (notes / "a.md").write_text("# Corpus\n\nKWIC collocations", encoding="utf-8")
+    (notes / "b.md").write_text("# Corpus methods\n\nKWIC collocations", encoding="utf-8")
+    index = NotesIndex(tmp_path / "notes.sqlite")
+    index.index(notes)
+    related = RelatedIndex(tmp_path / "related.sqlite")
+    assert related.rebuild_sections(index.db_path, max_sections=10) > 0
+    section_rows = related.related("notes_sections", "a.md#s1", limit=5)
+    assert section_rows
+
+    repo = Repository(tmp_path / "vault")
+    repo.init()
+    repo.add("A", "alpha corpus", memory_id="a", tenant="t1", tags=["corpus"])
+    repo.add("B", "alpha corpus", memory_id="b", tenant="t2", tags=["corpus"])
+    related.rebuild_memory(repo)
+    rows_t1 = related.related("memory", "a", tenant="t1", limit=5)
+    rows_t2 = related.related("memory", "a", tenant="t2", limit=5)
+    assert all(row["source"] == "memory" for row in rows_t1)
+    assert rows_t2 == []

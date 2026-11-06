@@ -64,6 +64,36 @@ def _fts_query(query: str) -> str:
     return '"' + query.replace('"', '""') + '"'
 
 
+def related_vault(
+    root: Path | str,
+    memory_id: str,
+    *,
+    limit: int = 10,
+    tenant: str = "",
+) -> dict[str, Any]:
+    base = Path(root).expanduser().resolve()
+    if not memory_id or "/" in memory_id or ".." in memory_id:
+        raise ServiceError("invalid memory id")
+    path = base / "memories" / f"{memory_id}.md"
+    if not path.is_file():
+        raise ServiceError("memory not found")
+    metadata = _metadata(path)
+    if tenant and str(metadata.get("tenant") or "") != tenant:
+        raise ServiceError("memory not visible in tenant")
+    title = str(metadata.get("title") or "")
+    body = ""
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    if raw.startswith("---\n"):
+        try:
+            _, _, body = raw.split("---\n", 2)
+        except ValueError:
+            body = raw
+    query = (title or " ".join(body.split()[:8]))[:512]
+    result = search_vault(base, query, limit=max(2, min(limit + 1, 50)), tenant=tenant)
+    results = [item for item in result["results"] if item["id"] != memory_id][:limit]
+    return {"mode": "fts", "degraded": True, "memory_id": memory_id, "results": results}
+
+
 def search_vault(
     root: Path | str,
     query: str,
@@ -181,7 +211,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json(404, {"error": "not found"})
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path != "/search":
+        if self.path not in {"/search", "/related"}:
             self._json(404, {"error": "not found"})
             return
         if not self._authorized():
@@ -195,15 +225,23 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(payload, dict):
                 raise ServiceError("request must be an object")
             root = os.environ.get("MEMFW_READONLY_ROOT", "")
-            result = search_vault(
-                root,
-                str(payload.get("query") or ""),
-                limit=int(payload.get("limit") or 10),
-                source=str(payload.get("source") or ""),
-                tenant=str(payload.get("tenant") or ""),
-                include_history=bool(payload.get("include_history", False)),
-                as_of=(str(payload["as_of"]) if payload.get("as_of") else None),
-            )
+            if self.path == "/related":
+                result = related_vault(
+                    root,
+                    str(payload.get("memory_id") or ""),
+                    limit=int(payload.get("limit") or 10),
+                    tenant=str(payload.get("tenant") or ""),
+                )
+            else:
+                result = search_vault(
+                    root,
+                    str(payload.get("query") or ""),
+                    limit=int(payload.get("limit") or 10),
+                    source=str(payload.get("source") or ""),
+                    tenant=str(payload.get("tenant") or ""),
+                    include_history=bool(payload.get("include_history", False)),
+                    as_of=(str(payload["as_of"]) if payload.get("as_of") else None),
+                )
             self._json(200, result)
         except ServiceError as exc:
             self._json(400, {"error": str(exc)})
