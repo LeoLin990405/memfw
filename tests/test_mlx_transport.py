@@ -19,6 +19,24 @@ MLXLocalTransport = mlx_local_transport.MLXLocalTransport
 _network_disabled = mlx_local_transport._network_disabled
 
 
+#: What the autouse fixture below reports to the transport instead of the host's real
+#: 1-minute load. Kept low so a busy machine (CI, a laptop building something, another
+#: agent) cannot turn a generation case into a RuntimeError.
+_STUB_OS_LOAD = (0.25, 0.25, 0.25)
+
+
+@pytest.fixture(autouse=True)
+def _stubbed_os_load(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the host's load average out of every case that is not testing the guard.
+
+    ``MLXLocalTransport._require_load_below_limit`` refuses to run at load >= 9 and is
+    called before loading and again before generation, so on a busy host the generation
+    cases fail for a reason unrelated to what they test. The two guard tests override
+    this stub with their own values.
+    """
+    monkeypatch.setattr(mlx_local_transport.os, "getloadavg", lambda: _STUB_OS_LOAD)
+
+
 class FakePart:
     text = '{"score":0.7}'
     prompt_tokens = 17
@@ -351,3 +369,34 @@ def test_os_load_is_checked_again_after_model_load_before_generation(
 
     assert len(calls["load"]) == 1
     assert calls["stream"] == []
+
+
+def test_the_stubbed_load_keeps_generation_deterministic_on_a_host_at_load_50(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A host reporting load 50 must not decide the generation cases.
+
+    Without the isolation the guard refuses such a host; with the stub the same call
+    succeeds, so the answer of the four generation cases depends on the fake runtime,
+    not on what the machine is doing.
+    """
+    calls = fake_runtime(monkeypatch)
+
+    monkeypatch.setattr(mlx_local_transport.os, "getloadavg", lambda: (50.0, 50.0, 50.0))
+    with pytest.raises(RuntimeError, match="load average"):
+        MLXLocalTransport._require_load_below_limit()
+
+    # The autouse fixture's stub is what the transport sees in every non-guard case.
+    monkeypatch.setattr(mlx_local_transport.os, "getloadavg", lambda: _STUB_OS_LOAD)
+    transport = MLXLocalTransport(local_model(tmp_path))
+    result = transport.infer(
+        model_name="local-test",
+        quantization="4bit",
+        prompt_version="v1",
+        prompt="Return JSON.",
+        input_json='{"id":"one"}',
+        temperature=0.0,
+        seed=23,
+    )
+    assert result.text == FakePart.text
+    assert calls["stream"], "the fake runtime must have produced the answer"
