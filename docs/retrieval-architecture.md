@@ -420,3 +420,28 @@ index.
 Trace candidates include the section content hash and the full candidate set
 (before the final top-k truncation), so feedback can be tied to an exact
 content version without storing the body by default.
+
+
+## Abstention experiment (actual, opt-in)
+
+Added `RetrievalConfig.min_query_coverage` and `RetrievalResult.abstained`.
+The signal is lexical query-term coverage in the top hit; it is opt-in and not
+enabled by default.
+
+Calibrated on the dev split (28 queries: 19 answerable, 9 no-answer):
+
+| Setting | Answerable recall@5 | No-answer with results |
+|---|---:|---:|
+| Hybrid, no abstention | 1.000 | 9/9 |
+| Hybrid + coverage < 0.25 | 0.947 | 0/9 |
+
+Frozen test split (12 queries: 6 answerable, 6 no-answer):
+
+| Setting | Answerable recall@5 | No-answer with results |
+|---|---:|---:|
+| Hybrid, no abstention | 1.000 | 6/6 |
+| Hybrid + coverage < 0.25 | 1.000 | 1/6 |
+
+The threshold is a small-sample experiment, not a production default. The dev
+set has one false abstention (a human-labelled answerable query with low
+lexical overlap); more no-answer data is required before enabling by default.
