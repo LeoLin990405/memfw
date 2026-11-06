@@ -120,7 +120,9 @@ def test_retriever_records_trace_and_mcp_feedback_roundtrip(tmp_path: Path) -> N
     assert result.trace_id
     trace = store.trace(result.trace_id)
     assert trace and trace["task_id"] == "task-1"
+    assert trace["candidates"]
     assert "content" not in trace["candidates"][0]
+    assert trace["candidates"][0]["content_hash"]
 
     gateway = NotesGateway(root, tmp_path / "index.sqlite", feedback_store=store)
     searched = gateway.call(

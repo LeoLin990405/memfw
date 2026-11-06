@@ -174,6 +174,7 @@ class NoteHit:
     source: str
     tags: list[str] = field(default_factory=list)
     section_id: int | None = None
+    content_hash: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         payload = {
@@ -188,6 +189,8 @@ class NoteHit:
         }
         if self.section_id is not None:
             payload["section_id"] = self.section_id
+        if self.content_hash:
+            payload["content_hash"] = self.content_hash
         return payload
 
 
@@ -785,7 +788,7 @@ class NotesIndex:
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT s.id AS section_id, s.heading, s.content, s.ordinal, "
-                "n.path, n.title, n.tags, n.course "
+                "s.hash AS section_hash, n.path, n.title, n.tags, n.course "
                 "FROM sections s JOIN notes n ON n.id=s.note_id "
                 "WHERE " + " AND ".join(clauses),
                 tuple(parameters),
@@ -822,6 +825,7 @@ class NotesIndex:
                     ),
                     tags=note_tags,
                     section_id=int(row["section_id"]),
+                    content_hash=str(row["section_hash"] or ""),
                 )
             )
             if len(hits) >= limit:

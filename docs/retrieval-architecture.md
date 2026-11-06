@@ -415,3 +415,8 @@ Added CLI entry points:
 The shadow command evaluates both indexes on identical cases and reports
 metric deltas and per-query rank changes. It does not switch or delete either
 index.
+
+
+Trace candidates include the section content hash and the full candidate set
+(before the final top-k truncation), so feedback can be tied to an exact
+content version without storing the body by default.
