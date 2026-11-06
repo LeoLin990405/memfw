@@ -109,6 +109,7 @@ class Gateway:
         embedder: HttpEmbeddingProvider | None = None,
         tenant: str | None = None,
         entity_enabled: bool | None = None,
+        allowed_sources: tuple[str, ...] | None = None,
     ) -> None:
         self.root = Path(root).expanduser()
         self.tenant = tenant if tenant is not None else os.environ.get("MEMFW_TENANT", "")
@@ -116,6 +117,12 @@ class Gateway:
             entity_enabled
             if entity_enabled is not None
             else os.environ.get("MEMFW_ENTITY_ENABLED", "").lower() in {"1", "true", "yes"}
+        )
+        configured_sources = os.environ.get("MEMFW_ALLOWED_SOURCES", "")
+        self.allowed_sources = (
+            allowed_sources
+            if allowed_sources is not None
+            else tuple(item.strip() for item in configured_sources.split(",") if item.strip())
         )
         if embedder is None:
             endpoint = os.environ.get("MEMFW_EMBEDDING_URL")
@@ -138,6 +145,7 @@ class Gateway:
             embedder=self.embedder,
             tenant=self.tenant,
             entity_enabled=self.entity_enabled,
+            allowed_sources=self.allowed_sources,
         )
 
     def search(
@@ -152,6 +160,8 @@ class Gateway:
     ) -> dict[str, Any]:
         if not query.strip():
             raise ValueError("query required")
+        if source and self.allowed_sources and source not in self.allowed_sources:
+            raise ValueError("source is not allowed for this account")
         repository = self._repo()
         retriever = self._retriever(repository)
         result = retriever.search(

@@ -167,3 +167,16 @@ def test_candidates_list_and_related_apply(tmp_path: Path) -> None:
     assert document.tags == ["new"]
     assert document.related == ["m-corpus"]
     assert document.tenant == ""
+
+
+def test_account_source_allowlist(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    gateway = Gateway(repository.root, allowed_sources=("nas",))
+    payload = gateway.search("corpus", limit=5, mode="fts")
+    assert all(item["source"] == "nas" for item in payload["results"])
+    try:
+        gateway.search("corpus", limit=5, mode="fts", source="manual")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("disallowed source must be rejected")

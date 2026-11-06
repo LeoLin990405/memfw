@@ -45,6 +45,7 @@ class MemoryHybridRetriever:
         entity_enabled: bool = False,
         entity_dictionary: Path | str | None = None,
         tenant: str = "",
+        allowed_sources: tuple[str, ...] = (),
     ) -> None:
         self.repository = repository
         self.embedder = embedder
@@ -59,6 +60,7 @@ class MemoryHybridRetriever:
         self.rrf_k = max(1, rrf_k)
         self.entity_enabled = entity_enabled
         self.tenant = tenant
+        self.allowed_sources = tuple(allowed_sources)
         self.entity_index = EntityIndex(
             repository.root / ".memory-entities.sqlite",
             dictionary=load_dictionary(entity_dictionary),
@@ -108,6 +110,11 @@ class MemoryHybridRetriever:
             end = document.valid_to
             return start <= as_of and (end is None or end > as_of)
         return document.valid_to is None
+
+    def _source_allowed(self, source: str, requested: str) -> bool:
+        if requested and source != requested:
+            return False
+        return not self.allowed_sources or source in self.allowed_sources
 
     @staticmethod
     def _parse_as_of(value: str | datetime | None) -> datetime | None:
@@ -159,7 +166,7 @@ class MemoryHybridRetriever:
                     continue
                 if not self._visible(document, include_history=include_history, as_of=as_of):
                     continue
-                if source and document.source != source:
+                if not self._source_allowed(document.source, source):
                     continue
                 if document.is_stub or document.tier == Tier.COLD:
                     self.repository.autowarm(document.id, actor="mechanism")
@@ -187,7 +194,7 @@ class MemoryHybridRetriever:
                 continue
             if not self._visible(document, include_history=include_history, as_of=as_of):
                 continue
-            if source and document.source != source:
+            if not self._source_allowed(document.source, source):
                 continue
             results.append(
                 {
@@ -251,7 +258,7 @@ class MemoryHybridRetriever:
                         document = self.repository.get(memory_id)
                     if document.tenant != tenant_value:
                         continue
-                    if source and document.source != source:
+                    if not self._source_allowed(document.source, source):
                         continue
                     if not self._visible(document, include_history=include_history, as_of=as_of_dt):
                         continue
@@ -310,7 +317,7 @@ class MemoryHybridRetriever:
                         continue
                     if not self._visible(document, include_history=include_history, as_of=as_of_dt):
                         continue
-                    if source and document.source != source:
+                    if not self._source_allowed(document.source, source):
                         continue
                     by_id[memory_id] = {
                         "id": document.id,

@@ -607,3 +607,12 @@ Using MiniMax-M3.1-Flash and Doubao-Seed-2.1-Lite on the existing 28-query /
 The accepted set overlaps the human evaluation set, so it is a pipeline
 demonstration, not independent validation and not training data. No human
 golden was overwritten and no model was trained.
+
+
+## Account-bound source ACL
+
+In addition to the exact tenant gate, a Gateway can be bound to an allowed-source
+set via `MEMFW_ALLOWED_SOURCES` (comma-separated) or the constructor. Search
+rejects a requested source outside the allowlist, and post-filters documents
+whose source is not allowed. This is still a local single-vault policy, not a
+central account database.

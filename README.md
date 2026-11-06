@@ -109,7 +109,7 @@ Example client configuration (stdio):
 |---|---|
 | `memory_search` | Search the vault: FTS5 by default, optional NotesRetriever hybrid when an embedding endpoint is configured; supports `mode`, `source`, `include_history`, `as_of` |
 | `memory_get` | Read one memory by id (read-only) |
-| `memory_remember` | Stage a candidate under `_candidates/remember/`; never writes the vault |
+| `memory_remember` | Stage a candidate under `_candidates/remember/` with tags/related/suggestions; never writes the vault |
 | `memory_context` | Token-budgeted resident context: anchors and procedural memories first |
 | `memory_status` | Vault size, layer/tier counts, and log summary |
 
@@ -172,7 +172,7 @@ mypy src
 ruff check src/memfw tests
 ```
 
-On the reference host, `pytest -q --ignore=tests/test_mlx_transport.py` reports **525 passed and
+On the reference host, `pytest -q --ignore=tests/test_mlx_transport.py` reports **526 passed and
 2 skipped**. The MLX transport tests are host-load gated: they fail by design when the one-minute
 load average is at least 9. Run the full suite only when the host is quiet.
 
