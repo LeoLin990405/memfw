@@ -584,50 +584,161 @@ def candidate_apply(
     dry_run: Annotated[bool, typer.Option("--dry-run/--apply")] = True,
 ) -> None:
     """Human-confirm a staged candidate and write it to the authoritative vault."""
-    import yaml as _yaml
+    from .capture.lifecycle import (
+        candidate_dict,
+        candidate_provenance,
+        find_applied_memory_id,
+        mark_candidate_applied,
+        read_candidate,
+        validate_candidate_hash,
+    )
 
-    repository = _repo(root)
-    text = candidate.read_text(encoding="utf-8")
-    if not text.startswith("---\n"):
-        raise typer.BadParameter("candidate has no YAML frontmatter")
-    _, header, body = text.split("---\n", 2)
-    parsed = _yaml.safe_load(header) or {}
-    metadata = parsed.get("metadata") if isinstance(parsed, dict) else {}
-    if not isinstance(metadata, dict):
-        metadata = {}
-    title = str(parsed.get("name") or "memory")[:120]
-    tags = [str(item) for item in (metadata.get("tags") or [])]
-    related = [str(item) for item in (metadata.get("related") or [])]
-    for related_id in related:
-        repository.get(related_id)
-    tenant = str(metadata.get("tenant") or "")
+    repository = _repo(root, allow_pending=not dry_run)
     if dry_run:
+        staged = read_candidate(candidate)
+        details = candidate_dict(staged)
+        if staged.content_hash:
+            try:
+                validate_candidate_hash(staged)
+            except IntegrityError as exc:
+                typer.echo(
+                    json.dumps(
+                        {
+                            **details,
+                            "error": "hash_mismatch",
+                            "status": "hash_mismatch",
+                            "message": str(exc),
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+                raise typer.Exit(code=1) from exc
+        for related_id in staged.related:
+            repository.get(related_id)
         typer.echo(
             json.dumps(
-                {
-                    "dry_run": True,
-                    "title": title,
-                    "tags": tags,
-                    "related": related,
-                    "tenant": tenant,
-                    "authority": False,
-                },
+                {**details, "dry_run": True, "writes": False, "authority": False},
                 ensure_ascii=False,
                 indent=2,
             )
         )
         return
-    document = repository.add(
-        title,
-        body.strip(),
-        tags=tags,
-        tenant=tenant,
-        related=related,
-        source="candidate",
-        provenance=f"candidate:{candidate.name}",
-        actor="human",
-    )
-    typer.echo(json.dumps({"memory_id": document.id, "tags": document.tags}, ensure_ascii=False))
+
+    with repository._locked():
+        if repository.pending_path.exists():
+            raise typer.BadParameter("Vault has a pending transaction; run `memfw recover` first")
+        staged = read_candidate(candidate)
+        details = candidate_dict(staged)
+        if staged.status == "applied" or staged.applied_memory_id is not None:
+            memory_id = staged.applied_memory_id
+            typer.echo(
+                json.dumps(
+                    {
+                        **details,
+                        "error": "already_applied",
+                        "status": "already_applied",
+                        "memory_id": memory_id,
+                        "applied_memory_id": memory_id,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            raise typer.Exit(code=1)
+
+        if staged.content_hash:
+            try:
+                validate_candidate_hash(staged)
+            except IntegrityError as exc:
+                typer.echo(
+                    json.dumps(
+                        {
+                            **details,
+                            "error": "hash_mismatch",
+                            "status": "hash_mismatch",
+                            "message": str(exc),
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+                raise typer.Exit(code=1) from exc
+
+        recovered_id = find_applied_memory_id(repository, staged)
+        if recovered_id is not None:
+            try:
+                mark_candidate_applied(staged, recovered_id)
+            except Exception as exc:
+                typer.echo(
+                    json.dumps(
+                        {
+                            **details,
+                            "error": "mark_failed",
+                            "status": "error",
+                            "message": str(exc),
+                            "memory_id": recovered_id,
+                            "applied_memory_id": recovered_id,
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+                raise typer.Exit(code=1) from exc
+            typer.echo(
+                json.dumps(
+                    {
+                        **details,
+                        "error": "already_applied",
+                        "status": "already_applied",
+                        "memory_id": recovered_id,
+                        "applied_memory_id": recovered_id,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            raise typer.Exit(code=1)
+
+        for related_id in staged.related:
+            repository.get(related_id)
+
+        document = repository.add(
+            staged.title,
+            staged.body,
+            tags=staged.tags,
+            tenant=staged.tenant,
+            related=staged.related,
+            source=staged.source,
+            provenance=candidate_provenance(staged),
+            actor="human",
+        )
+        try:
+            mark_candidate_applied(staged, document.id)
+        except Exception as exc:
+            typer.echo(
+                json.dumps(
+                    {
+                        **details,
+                        "error": "mark_failed",
+                        "status": "error",
+                        "message": str(exc),
+                        "memory_id": document.id,
+                        "applied_memory_id": document.id,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            raise typer.Exit(code=1) from exc
+        typer.echo(
+            json.dumps(
+                {
+                    "memory_id": document.id,
+                    "tags": document.tags,
+                    "proposal_id": staged.proposal_id,
+                    "source": staged.source,
+                    "candidate_id": staged.candidate_id,
+                    "status": "applied",
+                    "applied_memory_id": document.id,
+                },
+                ensure_ascii=False,
+            )
+        )
 
 
 @app.command("candidates")
