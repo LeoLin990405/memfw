@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pathlib
 from pathlib import Path
 
 from memfw.core.repository import Repository
@@ -42,3 +43,23 @@ def test_readonly_service_related(tmp_path: Path) -> None:
     result = related_vault(repository.root, "a", limit=5)
     assert any(item["id"] == "b" for item in result["results"])
     assert all(item["id"] != "a" for item in result["results"])
+
+
+def test_stage_candidate_never_writes_authority(tmp_path: Path) -> None:
+    from scripts.memfw_readonly_service import stage_candidate
+
+    root = tmp_path / "vault"
+    root.mkdir()
+    (root / "vault.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+    result = stage_candidate(
+        root,
+        {
+            "proposal_id": "p-1",
+            "title": "Proposal memory",
+            "content": "candidate body",
+            "tags": ["x"],
+        },
+    )
+    assert result["authority"] is False
+    assert "candidate body" in pathlib.Path(result["path"]).read_text(encoding="utf-8")
+    assert not list(root.rglob("*.md"))

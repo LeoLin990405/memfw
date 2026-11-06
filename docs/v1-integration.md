@@ -86,3 +86,22 @@ outside semantic edges until a local vector index is available.
   `~/Documents/Codex/memfw-related-annotation-20261106/related-pairs.csv`.
 - This is still a generated candidate set; human labels are required before
   changing a production threshold.
+
+
+## Candidate staging / write bridge
+
+The read-only HTTP service now has a deliberately non-authoritative `/stage`
+endpoint. It writes only `_candidates/memfw/remember/*.md` and never the vault.
+Conductor's optional `MEMFW_WRITE_BRIDGE=1` path stages a human-approved proposal
+there after its own approval; a human still has to confirm the candidate with
+MemFW (`memfw candidate-apply --apply`). The approval result includes
+`memfw_staging`; a staging failure does not roll back Conductor's approval.
+
+The HA500 service is now a systemd user unit:
+
+```text
+~/.config/systemd/user/memfw-readonly.service
+```
+
+with `EnvironmentFile=/home/leo/memfw-remote/memfw-readonly.env`; it is enabled
+and active. The token file is mode 0600.

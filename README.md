@@ -294,6 +294,10 @@ The MCP tool `memory_related` exposes memory edges; `notes_related` is available
 through the notes MCP when a related DB is configured. Edges are derived, never
 write Markdown, and only current memories are indexed.
 
+The optional Conductor write bridge stages a human-approved proposal at the
+remote service's non-authoritative `/stage` endpoint; it writes only
+`_candidates/` and still requires MemFW human confirmation.
+
 Semantic edges are opt-in: add `--embedding-url`/`--embedding-model` to the
 rebuild command and `sqlite-vec` is used for KNN. All indexed sources in one
 build share the same embedder/fingerprint. The current QMD coverage uses the

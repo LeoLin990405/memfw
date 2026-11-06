@@ -13,8 +13,10 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import sqlite3
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -188,6 +190,55 @@ def search_vault(
     }
 
 
+def _slug(value: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-")
+    return (slug or "candidate")[:60]
+
+
+def stage_candidate(root: Path | str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Write a *candidate* only; never the authoritative vault."""
+    base = Path(root).expanduser().resolve().parent / "_candidates" / "memfw" / "remember"
+    title = str(payload.get("title") or "memory").strip()[:120]
+    content = str(payload.get("content") or "").strip()
+    if not title or not content:
+        raise ServiceError("title and content are required")
+    proposal_id = str(payload.get("proposal_id") or "").strip()
+    if not proposal_id or "/" in proposal_id or ".." in proposal_id:
+        raise ServiceError("invalid proposal_id")
+    tags = [str(item)[:80] for item in (payload.get("tags") or []) if str(item).strip()][:20]
+    related = [str(item)[:120] for item in (payload.get("related") or []) if str(item).strip()][:20]
+    tenant = str(payload.get("tenant") or "")[:120]
+    source = str(payload.get("source") or "conductor")[:120]
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    base.mkdir(parents=True, exist_ok=True)
+    path = base / f"{stamp}-{_slug(title)}-{_slug(proposal_id)}.md"
+    if path.exists():
+        return {"staged": True, "path": str(path), "authority": False}
+    metadata = {
+        "type": "candidate",
+        "lifecycle": "active",
+        "created_at": stamp,
+        "tenant": tenant,
+        "tags": tags,
+        "related": related,
+        "proposal_id": proposal_id,
+        "source": source,
+    }
+    body = (
+        "---\n"
+        f"name: {json.dumps(title, ensure_ascii=False)}\n"
+        "metadata:\n"
+        + "".join(
+            f"  {key}: {json.dumps(value, ensure_ascii=False)}\n" for key, value in metadata.items()
+        )
+        + "---\n\n"
+        + content
+        + "\n"
+    )
+    path.write_text(body, encoding="utf-8")
+    return {"staged": True, "path": str(path), "authority": False}
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "memfw-readonly/1"
 
@@ -211,7 +262,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json(404, {"error": "not found"})
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path not in {"/search", "/related"}:
+        if self.path not in {"/search", "/related", "/stage"}:
             self._json(404, {"error": "not found"})
             return
         if not self._authorized():
@@ -225,7 +276,9 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(payload, dict):
                 raise ServiceError("request must be an object")
             root = os.environ.get("MEMFW_READONLY_ROOT", "")
-            if self.path == "/related":
+            if self.path == "/stage":
+                result = stage_candidate(root, payload)
+            elif self.path == "/related":
                 result = related_vault(
                     root,
                     str(payload.get("memory_id") or ""),
