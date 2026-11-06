@@ -516,6 +516,51 @@ def code_map(
     typer.echo(json.dumps(CodeIndex(db).repo_map(), ensure_ascii=False, indent=2))
 
 
+@app.command("candidate-apply")
+def candidate_apply(
+    candidate: Annotated[Path, typer.Argument(help="staged candidate Markdown")],
+    root: Annotated[Path, typer.Option("--root", "-r")] = Path("."),
+    dry_run: Annotated[bool, typer.Option("--dry-run/--apply")] = True,
+) -> None:
+    """Human-confirm a staged candidate and write it to the authoritative vault."""
+    import yaml as _yaml
+
+    repository = _repo(root)
+    text = candidate.read_text(encoding="utf-8")
+    if not text.startswith("---\n"):
+        raise typer.BadParameter("candidate has no YAML frontmatter")
+    _, header, body = text.split("---\n", 2)
+    parsed = _yaml.safe_load(header) or {}
+    metadata = parsed.get("metadata") if isinstance(parsed, dict) else {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    title = str(parsed.get("name") or "memory")[:120]
+    tags = [str(item) for item in (metadata.get("tags") or [])]
+    if dry_run:
+        typer.echo(
+            json.dumps(
+                {
+                    "dry_run": True,
+                    "title": title,
+                    "tags": tags,
+                    "authority": False,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+    document = repository.add(
+        title,
+        body.strip(),
+        tags=tags,
+        source="candidate",
+        provenance=f"candidate:{candidate.name}",
+        actor="human",
+    )
+    typer.echo(json.dumps({"memory_id": document.id, "tags": document.tags}, ensure_ascii=False))
+
+
 @app.command("review")
 def review(
     root: Annotated[Path, typer.Option("--root", "-r")] = Path("."),

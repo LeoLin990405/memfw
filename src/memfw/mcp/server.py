@@ -69,7 +69,12 @@ TOOLS: list[dict[str, Any]] = [
         "description": "Stage a new memory candidate for human review; never writes the vault.",
         "inputSchema": {
             "type": "object",
-            "properties": {"content": {"type": "string"}, "title": {"type": "string"}},
+            "properties": {
+                "content": {"type": "string"},
+                "title": {"type": "string"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "related": {"type": "array", "items": {"type": "string"}},
+            },
             "required": ["content"],
         },
     },
@@ -188,7 +193,14 @@ class Gateway:
             "tags": list(document.tags),
         }
 
-    def remember(self, content: str, title: str = "memory") -> dict[str, Any]:
+    def remember(
+        self,
+        content: str,
+        title: str = "memory",
+        *,
+        tags: list[str] | None = None,
+        related: list[str] | None = None,
+    ) -> dict[str, Any]:
         text = content.strip()
         if not text:
             raise ValueError("content required")
@@ -202,8 +214,9 @@ class Gateway:
             "type": "candidate",
             "lifecycle": "active",
             "created_at": stamp,
+            "tags": tags or [],
+            "related": related or [item.memory_id for item in suggestions],
             "suggestions": [item.as_dict() for item in suggestions],
-            "related": [item.memory_id for item in suggestions],
         }
         body = (
             "---\n"
@@ -300,7 +313,10 @@ class Gateway:
             ),
             "memory_get": lambda args: self.get(str(args.get("memory_id") or "")),
             "memory_remember": lambda args: self.remember(
-                str(args.get("content") or ""), str(args.get("title") or "memory")
+                str(args.get("content") or ""),
+                str(args.get("title") or "memory"),
+                tags=[str(item) for item in (args.get("tags") or [])],
+                related=[str(item) for item in (args.get("related") or [])],
             ),
             "memory_context": lambda args: self.context(int(args.get("limit_tokens") or 2000)),
             "memory_status": lambda _args: self.status(),

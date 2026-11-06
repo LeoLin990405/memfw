@@ -172,7 +172,7 @@ mypy src
 ruff check src/memfw tests
 ```
 
-On the reference host the suite reports **533 passed and 2 skipped**. The MLX transport tests are
+On the reference host the suite reports **534 passed and 2 skipped**. The MLX transport tests are
 environment-gated (they skip when the host cannot satisfy their MLX load guard), so results can vary
 by host.
 

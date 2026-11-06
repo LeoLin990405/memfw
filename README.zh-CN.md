@@ -165,7 +165,7 @@ mypy src
 ruff check src/memfw tests
 ```
 
-在参考机器上测试结果为 **533 passed、2 skipped**。MLX transport 测试受环境守卫控制
+在参考机器上测试结果为 **534 passed、2 skipped**。MLX transport 测试受环境守卫控制
 （不满足 MLX 负载条件的机器会跳过），不同机器结果可能不同。
 
 ## 🧭 设计原则与边界

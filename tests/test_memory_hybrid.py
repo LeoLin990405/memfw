@@ -101,3 +101,25 @@ def test_memory_remember_adds_duplicate_suggestions_without_writing(tmp_path: Pa
     candidate = Path(payload["staged_candidate"]).read_text(encoding="utf-8")
     assert "suggestions:" in candidate
     assert len(repository.list()) == 2
+
+
+def test_candidate_apply_requires_explicit_human_apply(tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    from memfw.cli import app
+
+    repository = _vault(tmp_path)
+    gateway = Gateway(repository.root)
+    payload = gateway.remember("new body", title="New memory", tags=["new"])
+    candidate = payload["staged_candidate"]
+    runner = CliRunner()
+    preview = runner.invoke(app, ["candidate-apply", candidate, "--root", str(repository.root)])
+    assert preview.exit_code == 0, preview.output
+    assert len(repository.list()) == 2
+    applied = runner.invoke(
+        app,
+        ["candidate-apply", candidate, "--root", str(repository.root), "--apply"],
+    )
+    assert applied.exit_code == 0, applied.output
+    assert len(repository.list()) == 3
+    assert any("new" in doc.tags for doc in repository.list())
