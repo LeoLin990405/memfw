@@ -52,6 +52,7 @@ write. Re-stage it through `/stage` to obtain the required identity. Commit
 - `/stage` is non-authoritative and writes candidates only under
   `<vault>/_candidates/remember/`.
 
-The authoritative contract is
-[`contract-memfw-http-v2.md`](/Users/leo/conductor-wt/r2-prds/docs/plans/wave2/contract-memfw-http-v2.md).
-This section is only a summary; the linked contract defines the interface.
+The authoritative contract is `memfw-http/2` (the Conductor planning document
+`contract-memfw-http-v2.md`, not published in this repository); the canonical
+request/response pairs are under [`tests/fixtures/contract_v2/`](../tests/fixtures/contract_v2/).
+This section is only a summary; the contract defines the interface.
