@@ -343,6 +343,10 @@ retry with the same content is `duplicate: true` rather than 409.
 
 A human still has to apply the candidate with
 `memfw candidate-apply --apply` before it becomes an authoritative memory.
+Legacy candidates with a missing or empty `proposal_id` are refused in both
+dry-run and apply modes with `missing_proposal_id`, before any authoritative
+write. Re-stage them through `/stage` to obtain the required identity; this
+fail-closed rule was added in commit `025ee6c`.
 
 Conductor's optional `MEMFW_WRITE_BRIDGE=1` path stages a human-approved
 proposal after its own approval. The approval result includes `memfw_staging`,

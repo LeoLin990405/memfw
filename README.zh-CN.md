@@ -104,7 +104,7 @@ memfw-mcp --root localdata/demo-vault
 |---|---|
 | `memory_search` | 检索 vault：默认 FTS5；配置本地 embedding 端点时使用 NotesRetriever hybrid；支持 mode/source/include_history/as_of |
 | `memory_get` | 按 id 读取单条记忆（只读） |
-| `memory_remember` | 暂存候选到 `_candidates/remember/`，绝不写入 vault |
+| `memory_remember` | 将带有 tags/related/suggestions 的候选暂存到 `_candidates/remember/`，绝不写入 vault |
 | `memory_related` | 读取派生的记忆关联边（只读） |
 | `memory_context` | 按 token 预算返回常驻上下文：anchor 与 procedural 优先 |
 | `memory_status` | vault 规模、layer/tier 统计与日志摘要 |
@@ -156,7 +156,7 @@ OKF bundle 是可重建的派生投影；Markdown 仍是权威。字段映射与
 
 ## 🛠️ 开发
 
-一条命令安装运行时、测试工具和 `sqlite-vec`：
+一条命令安装运行时、测试工具和 `sqlite-vec`。开发依赖使用 `dev` extra；项目没有 `test` extra：
 
 ```sh
 uv sync --frozen --extra dev
@@ -165,14 +165,12 @@ uv sync --frozen --extra dev
 然后在这个环境里运行：
 
 ```sh
-.venv/bin/python -m pytest -q --ignore=tests/test_mlx_transport.py
+.venv/bin/python -m pytest -q
 .venv/bin/python -m mypy src
 .venv/bin/python -m ruff check src/memfw tests
 ```
 
-在参考机器上，`.venv/bin/python -m pytest -q --ignore=tests/test_mlx_transport.py` 为 **577 passed、2 skipped**。
-MLX transport 测试受主机负载守卫控制
-（不满足 MLX 负载条件的机器会跳过），不同机器结果可能不同。
+默认完整测试套件命令为 `.venv/bin/python -m pytest -q`，不使用 ignore。MLX transport 测试不再依赖主机负载：提交 `054174c` 为非守卫测试 stub 了 `os.getloadavg`，因此不要求主机处于低负载状态；两个显式负载守卫测试仍会验证守卫的负载拒绝行为。当前实测计数与已知限制见 [`docs/RELEASE-READINESS.md`](docs/RELEASE-READINESS.md)。
 
 ## 🧭 设计原则与边界
 
@@ -180,8 +178,8 @@ MLX transport 测试受主机负载守卫控制
    内容与 anchor 决策仍由人负责。
 2. **推断不是用户原话。** 模型推断内容必须与用户直接陈述可区分，并保留来源与不确定性。
 3. **用户数据默认留在本地。** 核心与演示流程不上传用户数据。
-4. **核心是词法且不依赖模型；hybrid/relatedness 是可选项。** 默认 FTS5；配置本地
-   OpenAI 兼容 embedding 端点后才走共享 notes hybrid。rerank/query rewrite 默认关闭，
+4. **核心是词法且不依赖模型；混合检索是可选项。** `memory_search` 默认使用可重建的 FTS5 投影；
+   配置本地 OpenAI 兼容 embedding 端点后，才委托共享的 notes 混合检索器。rerank/query rewrite 默认关闭，
    所有 SQLite 投影可从 Markdown 重建。
 5. **小样本。** 保留评估只针对一个数据集和这些设置，是有边界的证据，不声明生产质量或用户级泛化。
 
@@ -198,15 +196,22 @@ MLX transport 测试受主机负载守卫控制
 使用 [Apache License 2.0](LICENSE)。本发行版不包含吸收的第三方源码；见 [`NOTICE`](NOTICE)。
 
 
+## Notes MCP 工具
+
+- `notes_search` — FTS/向量/混合 section 检索；
+- `notes_related` — 派生的笔记间关联边；
+- `notes_get`、`notes_status`；
+- `retrieval_feedback`、`retrieval_trace`。
+
 ## 笔记索引
 
-`memfw.notes` 是一个可重建的 Markdown 笔记 section 级索引，不写入笔记源文件：
+`memfw.notes` 是 Markdown 笔记树的派生 section 级索引。它独立于记忆 vault，且绝不写入笔记：
 
-- SQLite FTS5 全文检索（trigram，必要时 jieba + unicode61 回退）；
-- 可选 sqlite-vec 向量检索；
-- 支持 OpenAI-compatible embedding endpoint；
-- frontmatter / heading 分块、wikilink、hash 增量；
-- RRF 混合排序；embedding 不可用时自动降级为全文检索。
+- SQLite FTS5 词法召回（trigram，或 jieba + unicode61 回退）；
+- 可选 sqlite-vec 向量召回；
+- OpenAI 兼容 embedding 提供方（`HttpEmbeddingProvider`）；
+- heading/frontmatter 分块、wikilink、基于 hash 的增量更新；
+- RRF 混合检索，可降级为仅 FTS 检索。
 
 ```bash
 memfw notes index --root ~/notes --db /tmp/notes.sqlite \
@@ -221,25 +226,52 @@ memfw notes serve --root ~/notes --db /tmp/notes.sqlite \
   --model qwen3-embedding --dimension 1024
 ```
 
-安装可选扩展：`pip install 'memfw[notes]'`。
+索引布局、MCP 服务以及检查点/恢复行为见[笔记索引](docs/notes-index.md)。
+
+通过 `pip install 'memfw[notes]'` 安装可选向量扩展。未安装时，同一 API 仍可使用全文检索，并将向量存入回退 BLOB 表。
+
+
+## 代码检索
+
+`memfw code` 提供面向 Agent 的本地代码检索路径，无需新增服务：
+
+- 按 Python 文件、顶层函数/类分块（标准库 AST，无需 tree-sitter）；
+- 词法 FTS + 可选本地 Qwen3-Embedding + 结构化定义/调用方查找；
+- RRF 融合；embedding 不可用时回退到词法 + 结构检索；rerank 关闭；
+- 轻量级仓库地图：入口文件、目录摘要、最近文件。
+
+```bash
+memfw code index --root . --db /tmp/memfw-code.sqlite
+memfw code search "where is VaultRetriever defined" --db /tmp/memfw-code.sqlite
+memfw code map --db /tmp/memfw-code.sqlite
+```
+
+要进行语义代码检索，请在 `index` 和 `search` 命令中添加 `--embedding-url`、`--embedding-model` 和 `--dimension`。代码块、符号和向量都是可丢弃的投影；源文件仍是权威。
+
+
+## V1 集成状态
+
+只读 MemFW V1 接口与 Conductor 联邦适配器见 [`docs/v1-integration.md`](docs/v1-integration.md)。V1 不替代 Conductor 的提议/批准生命周期，也不会自动写入 MemFW。
 
 
 ## 关联性投影
 
-`memfw.related` 从显式 wikilink/`related`、共享 tag/课程、共享实体和词法重叠构建可重建边：
+`memfw.related` 从显式 wikilink/`related`、共享 tag/课程、共享实体和词法重叠构建可丢弃的边表：
 
 ```bash
 memfw notes related-build --notes-db /tmp/notes.sqlite --related-db /tmp/related.sqlite
 memfw notes related "Week 02/...md" --related-db /tmp/related.sqlite
-memfw notes related-sections-build --notes-db /tmp/notes.sqlite \
-  --related-db /tmp/related.sqlite --max-sections 2000
 memfw memory-related-build --root ./vault --related-db /tmp/related.sqlite
 memfw memory-related memory-id --related-db /tmp/related.sqlite
+
+memfw notes related-sections-build --notes-db /tmp/notes.sqlite \
+  --related-db /tmp/related.sqlite --max-sections 2000
 ```
 
-可用 `--embedding-url`/`--embedding-model` 构建语义边；同一次构建共享 embedder
-fingerprint，语义分不会覆盖显式链接。MCP 工具为 `notes_related` / `memory_related`。
+section/条目边带有 tenant/scope 过滤器。可用 `memfw.related_annotation.generate_pairs` 生成 100 对人工标注 CSV，并在填写标签后用 `calibrate` 校准。
 
-当前 QMD 语义关联基于本地 4,979-note memfw notes index；纯远程 QMD 结果在本地向量投影
-建立前不参与语义边。100 对人工标注包与校准工具见
-`~/Documents/Codex/memfw-related-annotation-20261106/`。
+MCP 工具 `memory_related` 暴露记忆关联边；配置 related DB 后，可通过 notes MCP 使用 `notes_related`。关联边是派生数据，绝不写入 Markdown，且只为当前记忆建立索引。
+
+可选的 Conductor 写入桥接会把人工批准的提议暂存到远程服务的非权威 `/stage` 端点；它只写入 `_candidates/`，并且仍需 MemFW 人工确认。
+
+语义边是可选能力：在重建命令中添加 `--embedding-url`/`--embedding-model` 即可使用 `sqlite-vec` 进行 KNN。同一次构建中的所有索引源共享同一个 embedder/fingerprint。当前 QMD 覆盖使用本地 4,979 篇笔记的 memfw notes 索引；纯远程 QMD 命中在建立本地向量投影前不会纳入。语义分始终是独立方法，绝不替代显式链接。

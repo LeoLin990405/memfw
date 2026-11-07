@@ -163,7 +163,7 @@ logical retention projection rather than a physical-vault capacity test.
 
 ## 🛠️ Development
 
-One command installs the runtime, the test tools, and `sqlite-vec`:
+MemFW has no `test` extra; `dev` installs the runtime, the test tools, and `sqlite-vec`:
 
 ```sh
 uv sync --frozen --extra dev
@@ -172,14 +172,17 @@ uv sync --frozen --extra dev
 Then, from this environment:
 
 ```sh
-.venv/bin/python -m pytest -q --ignore=tests/test_mlx_transport.py
+.venv/bin/python -m pytest -q
 .venv/bin/python -m mypy src
 .venv/bin/python -m ruff check src/memfw tests
 ```
 
-On the reference host, `.venv/bin/python -m pytest -q --ignore=tests/test_mlx_transport.py` reports **577 passed and
-2 skipped**. The MLX transport tests are host-load gated: they fail by design when the one-minute
-load average is at least 9. Run the full suite only when the host is quiet.
+The default full suite is `.venv/bin/python -m pytest -q`, with no ignore. MLX transport tests no
+longer depend on host load: 054174c stubs `os.getloadavg` for non-guard tests, while the two
+explicit load-guard tests still exercise the guard.
+
+For current measured counts and known limitations, see
+[`docs/RELEASE-READINESS.md`](docs/RELEASE-READINESS.md).
 
 ## 🧭 Design principles and limits
 
