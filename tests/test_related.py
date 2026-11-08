@@ -106,3 +106,38 @@ def test_section_edges_and_tenant_filter(tmp_path: Path) -> None:
     assert "tag" in same["methods"]
     assert same["score"] == 0.8
     assert rows_t2 == []
+
+
+def test_same_tenant_neighbour_survives_foreign_top_rank(tmp_path: Path) -> None:
+    """Twenty-one earlier foreign ids must not erase the caller's neighbour."""
+    repo = Repository(tmp_path / "vault")
+    repo.init()
+    repo.add(
+        "Z subject",
+        "shared corpus token",
+        memory_id="z-subject",
+        tenant="tenant-a",
+        tags=["shared"],
+    )
+    repo.add(
+        "Z target",
+        "shared corpus token",
+        memory_id="z-target",
+        tenant="tenant-a",
+        tags=["shared"],
+    )
+    for index in range(21):
+        repo.add(
+            f"Foreign {index:02d}",
+            "shared corpus token",
+            memory_id=f"b-foreign-{index:02d}",
+            tenant="tenant-b",
+            tags=["shared"],
+        )
+    related = RelatedIndex(tmp_path / "related.sqlite")
+    related.rebuild_memory(repo)
+    rows = related.related("memory", "z-subject", tenant="tenant-a", limit=10)
+    assert [row["id"] for row in rows] == ["z-target"]
+    foreign = related.related("memory", "b-foreign-00", tenant="tenant-b", limit=30)
+    assert foreign
+    assert all(row["id"] != "z-target" for row in foreign)

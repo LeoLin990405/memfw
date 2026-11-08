@@ -124,15 +124,25 @@ class RelatedIndex:
                     item.scope,
                 ),
             )
+        # Cap inside each destination tenant. A global top-20 lets another
+        # tenant's earlier ids crowd out the caller's own neighbour.
+        tenant_of = {(item.source, item.id): item.tenant for item in items}
         count = 0
         for src_id, neighbors in candidates.items():
-            ranked = sorted(
-                neighbors.items(),
-                key=lambda row: (
-                    -max((score for score, _evidence in row[1].values()), default=0.0),
-                    row[0],
-                ),
-            )[:20]
+            grouped: dict[str, list[tuple[_Pair, _MethodMap]]] = defaultdict(list)
+            for pair, methods in neighbors.items():
+                grouped[tenant_of.get(pair, "")].append((pair, methods))
+            ranked: list[tuple[_Pair, _MethodMap]] = []
+            for group in grouped.values():
+                ranked.extend(
+                    sorted(
+                        group,
+                        key=lambda row: (
+                            -max((score for score, _evidence in row[1].values()), default=0.0),
+                            row[0],
+                        ),
+                    )[:20]
+                )
             for (dst_source, dst_id), methods in ranked:
                 if src_id == dst_id and source == dst_source:
                     continue

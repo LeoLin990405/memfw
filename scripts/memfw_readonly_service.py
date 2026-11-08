@@ -574,18 +574,27 @@ def _reason_name(method: str) -> str:
     return _REASON_NAMES.get(method, "lexical")
 
 
-def _projection_target_is_current(root: Path, source: str, identifier: str) -> bool:
-    """Drop superseded memories that a stale edge projection still names.
+def _projection_target_is_current(
+    root: Path, source: str, identifier: str, *, tenant: str = ""
+) -> bool:
+    """Drop superseded memories and memories whose live tenant has moved.
 
-    Non-memory targets have no vault temporal fields. Search results keep
-    emitting ``valid_to`` and ``superseded_by``; this only decides membership.
+    The edge table still carries the tenant from the last rebuild. Markdown is
+    authoritative, so a target that now belongs to another tenant must not
+    contribute its id or title. Non-memory targets have no vault temporal
+    fields. Search results keep emitting ``valid_to`` and ``superseded_by``;
+    this only decides membership.
     """
     if source != "memory":
         return True
     payload = _document_payload(root, identifier)
     if payload is None:
         return False
-    return not payload["valid_to"] and not payload["superseded_by"]
+    if payload["valid_to"] or payload["superseded_by"]:
+        return False
+    if tenant and str(payload["tenant"] or "") != tenant:
+        return False
+    return True
 
 
 def _related_from_edges(
@@ -641,7 +650,7 @@ def _related_from_edges(
     current = [
         item
         for item in merged.values()
-        if _projection_target_is_current(root, str(item["source"]), str(item["id"]))
+        if _projection_target_is_current(root, str(item["source"]), str(item["id"]), tenant=tenant)
     ]
     ordered = sorted(current, key=lambda item: (-float(item["score"]), item["id"]))[:limit]
     return [

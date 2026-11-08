@@ -1251,6 +1251,68 @@ def test_related_forwards_tenant_and_drops_stale_edges(
     _assert_error(missing, "not_found")
 
 
+def _pressure_documents() -> list[MemoryDocument]:
+    documents = [
+        _memory(
+            "z-subject",
+            "Z subject",
+            "shared corpus token",
+            tenant="tenant-a",
+            tags=("shared",),
+        ),
+        _memory(
+            "z-target",
+            "Secret Title",
+            "shared corpus token",
+            tenant="tenant-a",
+            tags=("shared",),
+        ),
+    ]
+    documents.extend(
+        _memory(
+            f"b-foreign-{index:02d}",
+            f"Foreign {index:02d}",
+            "shared corpus token",
+            tenant="tenant-b",
+            tags=("shared",),
+        )
+        for index in range(21)
+    )
+    return documents
+
+
+def test_related_http_drops_target_after_live_tenant_move(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = seed_vault(tmp_path / "vault", _pressure_documents()[:2])
+    build_related(root)
+    target = root / "memories" / "z-target.md"
+    text = target.read_text(encoding="utf-8")
+    assert "tenant: tenant-a" in text
+    target.write_text(text.replace("tenant: tenant-a", "tenant: tenant-b", 1), encoding="utf-8")
+    _use_vault(monkeypatch, root, related=True)
+    status, payload = _post(
+        httpd, "/related", {"memory_id": "z-subject", "tenant": "tenant-a", "limit": 10}
+    )
+    assert status == 200, payload
+    assert payload["mode"] == "edges"
+    assert payload["degraded"] is False
+    blob = json.dumps(payload)
+    assert "z-target" not in blob
+    assert "Secret Title" not in blob
+
+
+def test_related_http_keeps_same_tenant_under_foreign_pressure(tmp_path: Path) -> None:
+    root = seed_vault(tmp_path / "vault", _pressure_documents())
+    related_db = build_related(root)
+    result = related_vault(root, "z-subject", limit=10, tenant="tenant-a", related_db=related_db)
+    assert result["mode"] == "edges"
+    assert result["degraded"] is False
+    ids = [item["id"] for item in result["results"]]
+    assert ids == ["z-target"]
+    assert "Secret Title" in {item["title"] for item in result["results"]}
+
+
 def test_protocol_errors_map_414_431_and_505(
     httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

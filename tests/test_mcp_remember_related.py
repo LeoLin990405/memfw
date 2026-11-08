@@ -249,6 +249,66 @@ def test_related_real_index_does_not_leak_other_tenants(tmp_path: Path) -> None:
     assert all(item["id"] != "beta" for item in payload["related"])
 
 
+def test_related_mcp_hides_target_after_live_tenant_move(tmp_path: Path) -> None:
+    root = tmp_path / "vault"
+    repository = Repository(root)
+    repository.init()
+    repository.add(
+        "Subject",
+        "shared corpus token",
+        memory_id="z-subject",
+        tenant="tenant-a",
+        tags=["shared"],
+    )
+    repository.add(
+        "Secret Title",
+        "shared corpus token",
+        memory_id="z-target",
+        tenant="tenant-a",
+        tags=["shared"],
+    )
+    RelatedIndex(root / ".memfw-related.sqlite").rebuild_memory(repository)
+    path = root / "memories" / "z-target.md"
+    text = path.read_text(encoding="utf-8")
+    assert "tenant: tenant-a" in text
+    path.write_text(text.replace("tenant: tenant-a", "tenant: tenant-b", 1), encoding="utf-8")
+    payload = Gateway(root, tenant="tenant-a").related("z-subject")
+    blob = json.dumps(payload)
+    assert "z-target" not in blob
+    assert "Secret Title" not in blob
+
+
+def test_related_mcp_keeps_same_tenant_under_foreign_pressure(tmp_path: Path) -> None:
+    root = tmp_path / "vault"
+    repository = Repository(root)
+    repository.init()
+    repository.add(
+        "Z subject",
+        "shared corpus token",
+        memory_id="z-subject",
+        tenant="tenant-a",
+        tags=["shared"],
+    )
+    repository.add(
+        "Z target",
+        "shared corpus token",
+        memory_id="z-target",
+        tenant="tenant-a",
+        tags=["shared"],
+    )
+    for index in range(21):
+        repository.add(
+            f"Foreign {index:02d}",
+            "shared corpus token",
+            memory_id=f"b-foreign-{index:02d}",
+            tenant="tenant-b",
+            tags=["shared"],
+        )
+    RelatedIndex(root / ".memfw-related.sqlite").rebuild_memory(repository)
+    payload = Gateway(root, tenant="tenant-a").related("z-subject")
+    assert [item["id"] for item in payload["related"]] == ["z-target"]
+
+
 def test_protocol_array_list_params_and_invalid_json(tmp_path: Path, monkeypatch, capsys) -> None:
     root = _vault(tmp_path)
     lines = "\n".join(
