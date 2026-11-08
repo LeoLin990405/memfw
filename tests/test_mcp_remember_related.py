@@ -141,9 +141,7 @@ def test_status_search_and_related_hide_the_vault_root(tmp_path: Path) -> None:
     memory_id = found["results"][0]["id"]
     related = gateway.related(memory_id)
     context = gateway.context()
-    blob = json.dumps(
-        {"status": status, "found": found, "related": related, "context": context}
-    )
+    blob = json.dumps({"status": status, "found": found, "related": related, "context": context})
     assert "root" not in status
     assert "root" not in found
     assert "root" not in related
