@@ -253,6 +253,8 @@ memfw code map --db /tmp/memfw-code.sqlite
 
 只读 MemFW V1 接口与 Conductor 联邦适配器见 [`docs/v1-integration.md`](docs/v1-integration.md)。V1 不替代 Conductor 的提议/批准生命周期，也不会自动写入 MemFW。
 
+Conductor v1（2026-11-07 发布）通过 `memfw-http/2` 契约访问 MemFW。这个契约包括：score、读写分离的 token、`/stage`、只接受根地址、拒绝重定向，以及在不支持 `forget` 时明确说明。
+
 
 ## 关联性投影
 

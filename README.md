@@ -277,6 +277,10 @@ See [`docs/v1-integration.md`](docs/v1-integration.md) for the read-only MemFW V
 surface and the Conductor federation adapter. V1 does not replace Conductor's
 proposal/approval lifecycle or write into MemFW automatically.
 
+Conductor v1 (released 2026-11-07) talks to MemFW through the `memfw-http/2`
+contract: score, separate read and write tokens, `/stage`, root-only endpoints,
+redirect refusal, and a `forget` that says when it is not supported.
+
 
 ## Relatedness projection
 
