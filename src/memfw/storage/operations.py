@@ -11,7 +11,7 @@ from typing import Any
 from ..core.common import sha256_text
 from ..core.context import RepositoryHost
 from ..core.errors import DeletedContentUnavailable, IntegrityError, NotFoundError
-from ..core.models import EventKind, Layer, MemoryDocument, Tier
+from ..core.models import EventKind, Layer, MemoryDocument, Tier, fold_temporal_aliases
 from ..storage.transactions import _serialized
 
 
@@ -188,7 +188,9 @@ class MemoryOperationsMixin:
             "group_key",
             "valid_from",
             "valid_to",
+            "valid_until",
             "superseded_by",
+            "superseded",
         }
         if (
             actor != "human"
@@ -205,8 +207,11 @@ class MemoryOperationsMixin:
         )
         if anchor_change and actor != "human":
             raise IntegrityError("Only a human actor may set or remove anchor protection")
+        # Fold aliases before they meet the stored document. A conflict is only
+        # two names in this request, and it raises before any write.
+        folded_changes = fold_temporal_aliases(dict(changes))
         values = old.model_dump()
-        values.update(changes)
+        values.update(folded_changes)
         config = self.read_config()
         is_anchored = values.get("layer") == Layer.ANCHOR or bool(values.get("anchor"))
         if config.get("anchor_always_hot", True) and old.is_stub and is_anchored and anchor_change:

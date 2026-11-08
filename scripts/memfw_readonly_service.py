@@ -288,6 +288,51 @@ def _collapsed(text: str, limit: int) -> str:
     return " ".join(text.split())[:limit]
 
 
+def _same_instant(left: Any, right: Any) -> bool:
+    """Reader-side instant compare. Supersession ids are not parsed as times."""
+    if left == right:
+        return True
+    if left in (None, "") or right in (None, ""):
+        return False
+    try:
+        left_stamp = (
+            left
+            if isinstance(left, datetime)
+            else datetime.fromisoformat(str(left).replace("Z", "+00:00"))
+        )
+        right_stamp = (
+            right
+            if isinstance(right, datetime)
+            else datetime.fromisoformat(str(right).replace("Z", "+00:00"))
+        )
+    except (TypeError, ValueError):
+        return False
+    return left_stamp == right_stamp
+
+
+def fold_temporal_aliases(data: dict[str, Any], *, strict: bool = True) -> dict[str, Any]:
+    """Stdlib copy of the alias fold. This script does not import memfw."""
+    folded = dict(data)
+    specs = (
+        ("valid_until", "valid_to", "instant"),
+        ("superseded", "superseded_by", "exact"),
+    )
+    for alias, canonical, kind in specs:
+        if alias not in folded:
+            continue
+        alias_value = folded.pop(alias)
+        if canonical not in folded:
+            folded[canonical] = alias_value
+            continue
+        current = folded[canonical]
+        same = _same_instant(current, alias_value) if kind == "instant" else current == alias_value
+        if same:
+            continue
+        if strict:
+            raise ValueError(f"{alias} conflicts with {canonical}")
+    return folded
+
+
 def _document_payload(root: Path, identifier: str) -> dict[str, Any] | None:
     """Read one memory document's authoritative Markdown for the result payload."""
     if not identifier or "/" in identifier or ".." in identifier or "\\" in identifier:
@@ -298,7 +343,7 @@ def _document_payload(root: Path, identifier: str) -> dict[str, Any] | None:
     except OSError:
         return None
     text = raw.decode("utf-8", errors="replace")
-    metadata = _metadata_from_text(text)
+    metadata = fold_temporal_aliases(_metadata_from_text(text), strict=False)
     return {
         "tenant": str(metadata.get("tenant") or ""),
         "related": _string_list(metadata.get("related")),

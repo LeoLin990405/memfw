@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
 
 class Layer(StrEnum):
@@ -65,6 +65,59 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
+def _same_instant(left: Any, right: Any) -> bool:
+    """True when both values are the same moment. Empty values are not moments."""
+    if left == right:
+        return True
+    if left in (None, "") or right in (None, ""):
+        return False
+    try:
+        left_stamp = (
+            left
+            if isinstance(left, datetime)
+            else datetime.fromisoformat(str(left).replace("Z", "+00:00"))
+        )
+        right_stamp = (
+            right
+            if isinstance(right, datetime)
+            else datetime.fromisoformat(str(right).replace("Z", "+00:00"))
+        )
+    except (TypeError, ValueError):
+        return False
+    return left_stamp == right_stamp
+
+
+def fold_temporal_aliases(data: dict[str, Any], *, strict: bool = True) -> dict[str, Any]:
+    """Accept Conductor aliases and keep the stored canonical names.
+
+    ``valid_until`` is an input alias of ``valid_to``. ``superseded`` is an
+    input alias of ``superseded_by``. The stored document and every response
+    use only the canonical names. Instants compare as moments. Supersession
+    ids compare as exact strings, so ``2026-11-06`` and ``20261106`` conflict.
+    A conflict is two names in this same mapping. A reader may pass
+    ``strict=False`` and keep the canonical value.
+    """
+    folded = dict(data)
+    specs = (
+        ("valid_until", "valid_to", "instant"),
+        ("superseded", "superseded_by", "exact"),
+    )
+    for alias, canonical, kind in specs:
+        if alias not in folded:
+            continue
+        alias_value = folded.pop(alias)
+        if canonical not in folded:
+            folded[canonical] = alias_value
+            continue
+        current = folded[canonical]
+        same = _same_instant(current, alias_value) if kind == "instant" else current == alias_value
+        if same:
+            continue
+        if strict:
+            raise ValueError(f"{alias} conflicts with {canonical}")
+    return folded
+
+
 class MemoryDocument(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -95,6 +148,13 @@ class MemoryDocument(BaseModel):
     created_at: datetime
     updated_at: datetime
     body: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_temporal_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            return fold_temporal_aliases(data)
+        return data
 
     @field_validator("created_at", "updated_at", "valid_from", "valid_to")
     @classmethod
