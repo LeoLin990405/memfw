@@ -25,12 +25,15 @@ import hashlib
 import json
 import multiprocessing
 import os
+import socket
+import sqlite3
 import threading
+import time
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime
 from http.client import HTTPConnection
-from http.server import ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -174,9 +177,7 @@ def _http(
     headers = {"Content-Type": "application/json"}
     if token:
         headers[service.TOKEN_HEADER] = token
-    request = urllib.request.Request(
-        base_url + path, data=raw_body, method=method, headers=headers
-    )
+    request = urllib.request.Request(base_url + path, data=raw_body, method=method, headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
@@ -189,9 +190,7 @@ def _post(base_url: str, path: str, payload: dict, token: str | None = READ_TOKE
 
 
 def _canonical(value: object) -> bytes:
-    return (json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
-        "utf-8"
-    )
+    return (json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
 def _use_vault(monkeypatch: pytest.MonkeyPatch, root: Path, *, related: bool = False) -> None:
@@ -281,8 +280,10 @@ def test_tokens_can_come_from_files(
     _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
     read_file = tmp_path / "read.token"
     read_file.write_text(f"  {READ_TOKEN}\n", encoding="utf-8")
+    read_file.chmod(0o600)
     write_file = tmp_path / "write.token"
     write_file.write_text(f"{WRITE_TOKEN}\n", encoding="utf-8")
+    write_file.chmod(0o600)
     monkeypatch.delenv("MEMFW_READONLY_TOKEN", raising=False)
     monkeypatch.delenv("MEMFW_WRITE_TOKEN", raising=False)
     monkeypatch.setenv("MEMFW_READONLY_TOKEN_FILE", str(read_file))
@@ -472,6 +473,11 @@ def test_score_is_normalised_and_monotonic(tmp_path: Path) -> None:
     assert all(item["raw_score"] is None for item in short["results"])
     assert all(0.0 <= score <= 1.0 for score in short_scores)
     assert len(set(short_scores)) == len(short_scores)
+    upper = search_vault(root, "AL", limit=5)
+    assert [item["id"] for item in upper["results"]] == [item["id"] for item in short["results"]]
+    single = search_vault(root, "a", limit=5)
+    assert single["results"]
+    assert all(item["raw_score"] is None for item in single["results"])
 
 
 def test_as_of_keeps_a_document_superseded_after_the_instant(tmp_path: Path) -> None:
@@ -507,9 +513,7 @@ def test_as_of_keeps_a_document_superseded_after_the_instant(tmp_path: Path) -> 
     root = seed_vault(tmp_path / "vault", documents)
     current = search_vault(root, "alpha phrase", limit=10)
     assert {item["id"] for item in current["results"]} == {"mem-b", "mem-d"}
-    at_instant = search_vault(
-        root, "alpha phrase", limit=10, as_of="2026-11-06T00:15:00+00:00"
-    )
+    at_instant = search_vault(root, "alpha phrase", limit=10, as_of="2026-11-06T00:15:00+00:00")
     assert {item["id"] for item in at_instant["results"]} == {"mem-a"}
     history = search_vault(root, "alpha phrase", limit=10, include_history=True)
     assert {item["id"] for item in history["results"]} == {
@@ -527,9 +531,9 @@ def test_result_payload_carries_temporal_and_hash_fields(tmp_path: Path) -> None
     alpha = by_id["mem-alpha"]
     assert alpha["related"] == ["mem-beta"]
     assert alpha["valid_from"] is None
-    expected = "sha256:" + hashlib.sha256(
-        (root / "memories" / "mem-alpha.md").read_bytes()
-    ).hexdigest()
+    expected = (
+        "sha256:" + hashlib.sha256((root / "memories" / "mem-alpha.md").read_bytes()).hexdigest()
+    )
     assert alpha["content_hash"] == expected
     assert alpha["summary"] == "alpha corpus keyword"
     assert alpha["title"] == "Alpha corpus note"
@@ -627,9 +631,7 @@ def test_stage_writes_the_canonical_candidate(tmp_path: Path) -> None:
     assert required <= set(parsed)
     assert parsed["authority"] is False
     assert parsed["source"] == "conductor"
-    assert parsed["content_hash"] == (
-        "sha256:" + hashlib.sha256(b"candidate body").hexdigest()
-    )
+    assert parsed["content_hash"] == ("sha256:" + hashlib.sha256(b"candidate body").hexdigest())
     assert parsed["metadata"]["proposal_id"] == "p-1"
     staged = list_staged_candidates(root)
     assert [item["title"] for item in staged] == ["Proposal memory"]
@@ -670,6 +672,8 @@ def test_stage_validation(tmp_path: Path) -> None:
         {"proposal_id": "p", "content": "body"},
         {"proposal_id": "p", "title": "x" * 201, "content": "body"},
         {"proposal_id": "p", "title": "T", "content": ""},
+        {"proposal_id": "p", "title": "T", "content": "   "},
+        {"proposal_id": "p", "title": "T", "content": "\n\t"},
         {"proposal_id": "p", "title": "T", "content": "body", "tags": "x"},
         {"proposal_id": "p", "title": "T", "content": "body", "related": [1]},
     ):
@@ -720,9 +724,7 @@ def test_related_body_limit_returns_413(
     _assert_error(payload, "too_large")
 
 
-def test_write_token_can_read(
-    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_write_token_can_read(httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
     status, payload = _post(httpd, "/search", {"query": "corpus"}, WRITE_TOKEN)
     assert status == 200
@@ -764,8 +766,13 @@ def test_main_binds_loopback_and_requires_a_credential(
             pass
 
     monkeypatch.setattr(service, "ThreadingHTTPServer", FakeServer)
+    for name in (
+        "MEMFW_READONLY_TOKEN_FILE",
+        "MEMFW_WRITE_TOKEN",
+        "MEMFW_WRITE_TOKEN_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("MEMFW_READONLY_TOKEN", READ_TOKEN)
-    monkeypatch.delenv("MEMFW_WRITE_TOKEN", raising=False)
     assert service.main(["--root", str(tmp_path / "vault")]) == 0
     assert captured["address"] == ("127.0.0.1", 18080)
     monkeypatch.delenv("MEMFW_READONLY_TOKEN", raising=False)
@@ -775,7 +782,7 @@ def test_main_binds_loopback_and_requires_a_credential(
 
 
 def test_unit_file_binds_loopback_and_names_the_tailnet_override() -> None:
-    unit = (Path(__file__).resolve().parents[1] / "scripts" / "memfw-readonly.service")
+    unit = Path(__file__).resolve().parents[1] / "scripts" / "memfw-readonly.service"
     text = unit.read_text(encoding="utf-8")
     assert "--host 127.0.0.1" in text
     assert "--related-db" in text
@@ -912,9 +919,7 @@ def test_stage_serialises_multiline_values_safely(tmp_path: Path) -> None:
     assert header["title"] == "A---\nB"
     assert header["tenant"] == "t\n---\nu"
     assert header["tags"] == ["x---\ny", "z"]
-    assert header["content_hash"] == (
-        "sha256:" + hashlib.sha256(b"multiline body").hexdigest()
-    )
+    assert header["content_hash"] == ("sha256:" + hashlib.sha256(b"multiline body").hexdigest())
     staged = list_staged_candidates(root)
     assert [item["title"] for item in staged] == ["A---\nB"]
     assert staged[0]["tags"] == ["x---\ny", "z"]
@@ -959,9 +964,7 @@ def test_related_reasons_stay_in_the_contract_vocabulary(tmp_path: Path) -> None
     assert service._reason_name("something-new") == "lexical"
     assert service._reason_name("mixed") == "lexical"
     fallback = related_vault(root, "mem-alpha", limit=5)
-    fallback_reasons = {
-        reason for item in fallback["results"] for reason in item["reasons"]
-    }
+    fallback_reasons = {reason for item in fallback["results"] for reason in item["reasons"]}
     assert fallback_reasons == {"lexical"}
 
 
@@ -1001,8 +1004,7 @@ def test_stage_is_atomic_across_processes_for_the_same_content(tmp_path: Path) -
     context = multiprocessing.get_context("spawn")
     results = context.Queue()
     processes = [
-        context.Process(target=_stage_in_child, args=(str(root), "same", results))
-        for _ in range(3)
+        context.Process(target=_stage_in_child, args=(str(root), "same", results)) for _ in range(3)
     ]
     for process in processes:
         process.start()
@@ -1020,9 +1022,7 @@ def test_candidate_directory_walk_refuses_a_symlink_after_the_precheck(
     """The fd walk, not the pre-check, is what stops a swapped-in symlink."""
     root = seed_vault(tmp_path / "vault")
     (root / "_candidates").symlink_to(root / "memories")
-    monkeypatch.setattr(
-        service, "_assert_safe_candidate_directory", lambda *_args, **_kwargs: None
-    )
+    monkeypatch.setattr(service, "_assert_safe_candidate_directory", lambda *_args, **_kwargs: None)
     with pytest.raises(ServiceError) as refused:
         stage_candidate(root, {"proposal_id": "race", "title": "T", "content": "x"})
     assert refused.value.status == 500
@@ -1068,6 +1068,404 @@ def test_stage_control_characters_are_400_over_http(
         assert status == 400, payload
         _assert_error(body, "bad_request")
     assert not list((root / "_candidates").rglob("*.md") if (root / "_candidates").exists() else [])
+
+
+def _clear_credential_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        "MEMFW_READONLY_TOKEN",
+        "MEMFW_READONLY_TOKEN_FILE",
+        "MEMFW_WRITE_TOKEN",
+        "MEMFW_WRITE_TOKEN_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+def _socket_exchange(port: int, payload: bytes) -> bytes:
+    with socket.create_connection(("127.0.0.1", port), timeout=3) as sock:
+        sock.settimeout(3)
+        try:
+            sock.sendall(payload)
+        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+            pass
+        chunks: list[bytes] = []
+        while True:
+            try:
+                piece = sock.recv(65536)
+            except TimeoutError:
+                break
+            if not piece:
+                break
+            chunks.append(piece)
+        return b"".join(chunks)
+
+
+def _status_and_body(raw: bytes) -> tuple[int, bytes]:
+    head, separator, rest = raw.partition(b"\r\n\r\n")
+    assert separator, raw[:120]
+    status_line = head.split(b"\r\n", 1)[0]
+    assert status_line.startswith(b"HTTP/"), status_line
+    return int(status_line.split()[1]), rest
+
+
+class _QuietHandler(BaseHTTPRequestHandler):
+    def log_message(self, message_format: str, *args: object) -> None:
+        del message_format, args
+
+
+def test_surrogate_or_nul_query_is_400(tmp_path: Path) -> None:
+    root = seed_vault(tmp_path / "vault")
+    for query in ("\ud800", "a\x00b", "corpus\udfff"):
+        with pytest.raises(ServiceError) as rejected:
+            search_vault(root, query)
+        assert rejected.value.status == 400, query
+
+
+def test_surrogate_or_nul_query_is_400_over_http(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
+    for raw in (b'{"query": "\\uD800"}', b'{"query": "a\\u0000b"}'):
+        status, payload = _http(httpd, "POST", "/search", raw, READ_TOKEN)
+        assert status == 400, raw
+        _assert_error(payload, "bad_request")
+    status, payload = _post(httpd, "/search", {"query": "corpus"})
+    assert status == 200
+    assert payload["results"]
+
+
+def test_head_patch_and_options_are_404(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
+    port = int(urlsplit(httpd).port or 0)
+    raw = _socket_exchange(
+        port, b"HEAD /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+    )
+    status, body = _status_and_body(raw)
+    assert status == 404
+    assert body == b""
+    for method, path in (("PATCH", "/search"), ("OPTIONS", "/related")):
+        status, payload = _http(httpd, method, path, b"{}", READ_TOKEN)
+        assert status == 404, (method, path)
+        _assert_error(payload, "not_found")
+
+
+def test_query_strings_and_trailing_slashes_are_404(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
+    cases = (
+        ("GET", "/health?x=1", None),
+        ("GET", "/health/", None),
+        ("POST", "/search/", b"{}"),
+        ("POST", "/search?q=1", b"{}"),
+        ("POST", "/related/", b"{}"),
+        ("POST", "/stage/", b"{}"),
+    )
+    for method, path, body in cases:
+        status, payload = _http(httpd, method, path, body, READ_TOKEN)
+        assert status == 404, (method, path)
+        _assert_error(payload, "not_found")
+
+
+def test_include_history_overrides_as_of(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = seed_vault(tmp_path / "vault")
+    _use_vault(monkeypatch, root)
+    as_of = "2026-11-06T00:00:00+00:00"
+    status, before = _post(
+        httpd, "/search", {"query": "corpus keyword", "limit": 10, "as_of": as_of}
+    )
+    assert status == 200
+    assert "mem-old" not in {item["id"] for item in before["results"]}
+    status, history = _post(
+        httpd,
+        "/search",
+        {
+            "query": "corpus keyword",
+            "limit": 10,
+            "as_of": as_of,
+            "include_history": True,
+        },
+    )
+    assert status == 200
+    old = next(item for item in history["results"] if item["id"] == "mem-old")
+    assert old["valid_to"]
+    assert old["superseded_by"] == "mem-alpha"
+
+
+def test_related_forwards_tenant_and_drops_stale_edges(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = seed_vault(tmp_path / "vault")
+    database = root / "related.sqlite3"
+    connection = sqlite3.connect(database)
+    connection.executescript(
+        """
+        CREATE TABLE related_items (
+            source TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL,
+            path TEXT NOT NULL, hash TEXT NOT NULL, text TEXT NOT NULL DEFAULT '',
+            tenant TEXT NOT NULL DEFAULT '', scope TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (source, id)
+        );
+        CREATE TABLE related_edges (
+            src_source TEXT NOT NULL, src_id TEXT NOT NULL,
+            dst_source TEXT NOT NULL, dst_id TEXT NOT NULL,
+            method TEXT NOT NULL, score REAL NOT NULL, evidence TEXT NOT NULL,
+            PRIMARY KEY (src_source, src_id, dst_source, dst_id, method)
+        );
+        """
+    )
+    for identifier, title, tenant in (
+        ("mem-alpha", "Alpha", "tenant-a"),
+        ("mem-beta", "Beta", "tenant-a"),
+        ("mem-gamma", "Gamma", "tenant-b"),
+        ("mem-old", "Old", "tenant-a"),
+    ):
+        connection.execute(
+            "INSERT INTO related_items"
+            "(source,id,title,path,hash,text,tenant,scope) VALUES (?,?,?,?,?,?,?,?)",
+            ("memory", identifier, title, f"memories/{identifier}.md", "", "", tenant, ""),
+        )
+    for destination, score in (("mem-beta", 1.5), ("mem-gamma", 4.0), ("mem-old", 9.0)):
+        connection.execute(
+            "INSERT INTO related_edges"
+            "(src_source,src_id,dst_source,dst_id,method,score,evidence)"
+            " VALUES (?,?,?,?,?,?,?)",
+            ("memory", "mem-alpha", "memory", destination, "lexical", score, "{}"),
+        )
+    connection.commit()
+    connection.close()
+    _use_vault(monkeypatch, root, related=True)
+    status, payload = _post(
+        httpd, "/related", {"memory_id": "mem-alpha", "tenant": "tenant-a", "limit": 10}
+    )
+    assert status == 200, payload
+    assert payload["mode"] == "edges"
+    assert [item["id"] for item in payload["results"]] == ["mem-beta"]
+    assert payload["results"][0]["score"] == 0.6
+    assert "mem-old" not in {item["id"] for item in payload["results"]}
+    status, missing = _post(httpd, "/related", {"memory_id": "mem-alpha", "tenant": "tenant-b"})
+    assert status == 404
+    _assert_error(missing, "not_found")
+
+
+def test_protocol_errors_map_414_431_and_505(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
+    port = int(urlsplit(httpd).port or 0)
+    exchanges = (
+        b"GET /" + (b"a" * 70000) + b" HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        b"GET /health HTTP/1.1\r\nX-Big: " + (b"b" * 70000) + b"\r\n\r\n",
+        b"GET /health HTTP/2.0\r\nHost: localhost\r\n\r\n",
+    )
+    for payload in exchanges:
+        raw = _socket_exchange(port, payload)
+        status, body = _status_and_body(raw)
+        assert status in (400, 413), raw[:80]
+        parsed = json.loads(body.decode("utf-8"))
+        assert parsed["error"]["code"] in {"bad_request", "too_large"}
+        assert raw.startswith(b"HTTP/")
+
+
+def test_handler_timeout_cuts_off_a_slow_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert Handler.timeout == 5
+
+    class FastTimeout(Handler):
+        timeout = 0.25
+
+    _clear_credential_env(monkeypatch)
+    monkeypatch.setenv("MEMFW_READONLY_TOKEN", READ_TOKEN)
+    monkeypatch.setenv("MEMFW_WRITE_TOKEN", WRITE_TOKEN)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), FastTimeout)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = int(server.server_address[1])
+        started = time.monotonic()
+        with socket.create_connection(("127.0.0.1", port), timeout=2) as sock:
+            sock.settimeout(2)
+            try:
+                sock.recv(16)
+            except TimeoutError:
+                pass
+        assert time.monotonic() - started < 1.5
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_equal_tokens_refuse_startup_and_requests(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _clear_credential_env(monkeypatch)
+    monkeypatch.setenv("MEMFW_READONLY_TOKEN", "same-token")
+    monkeypatch.setenv("MEMFW_WRITE_TOKEN", "same-token")
+
+    def explode(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("server must not start")
+
+    monkeypatch.setattr(service, "ThreadingHTTPServer", explode)
+    with pytest.raises(SystemExit) as refused:
+        service.main(["--root", str(tmp_path / "vault"), "--port", "0"])
+    assert refused.value.code not in (0, None)
+    monkeypatch.setattr(service, "ThreadingHTTPServer", ThreadingHTTPServer)
+    _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
+    status, payload = _post(httpd, "/search", {"query": "corpus"}, "same-token")
+    assert status == 403
+    _assert_error(payload, "forbidden")
+
+
+def test_all_interfaces_host_is_refused(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _clear_credential_env(monkeypatch)
+    monkeypatch.setenv("MEMFW_READONLY_TOKEN", READ_TOKEN)
+
+    def explode(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("server must not start")
+
+    monkeypatch.setattr(service, "ThreadingHTTPServer", explode)
+    with pytest.raises(SystemExit) as refused:
+        service.main(["--root", str(tmp_path), "--host", "0.0.0.0", "--port", "0"])
+    assert refused.value.code not in (0, None)
+
+
+def test_root_falls_back_to_the_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeServer:
+        def __init__(self, address: tuple[str, int], handler: object) -> None:
+            captured["address"] = address
+
+        def serve_forever(self) -> None:
+            raise KeyboardInterrupt
+
+        def server_close(self) -> None:
+            pass
+
+    monkeypatch.setattr(service, "ThreadingHTTPServer", FakeServer)
+    _clear_credential_env(monkeypatch)
+    monkeypatch.setenv("MEMFW_READONLY_TOKEN", READ_TOKEN)
+    root = tmp_path / "from-env"
+    monkeypatch.setenv(service.ROOT_ENV, str(root))
+    assert service.main(["--port", "0"]) == 0
+    assert captured["address"] == ("127.0.0.1", 0)
+    assert os.environ[service.ROOT_ENV] == str(root.resolve())
+
+
+def test_credential_file_must_be_mode_0600(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _clear_credential_env(monkeypatch)
+    secret = tmp_path / "read.token"
+    secret.write_text("secret\n", encoding="utf-8")
+    secret.chmod(0o644)
+    monkeypatch.setenv("MEMFW_READONLY_TOKEN_FILE", str(secret))
+    monkeypatch.setenv("MEMFW_WRITE_TOKEN", WRITE_TOKEN)
+    with pytest.raises(ServiceError) as loose:
+        service.read_token()
+    assert loose.value.status == 500
+    secret.chmod(0o600)
+    assert service.read_token() == "secret"
+    missing = tmp_path / "missing-token"
+    monkeypatch.setenv("MEMFW_READONLY_TOKEN_FILE", str(missing))
+    with pytest.raises(ServiceError) as absent:
+        service.read_token()
+    assert absent.value.status == 500
+    directory = tmp_path / "token-dir"
+    directory.mkdir()
+    directory.chmod(0o600)
+    monkeypatch.setenv("MEMFW_READONLY_TOKEN_FILE", str(directory))
+    with pytest.raises(ServiceError):
+        service.read_token()
+    secret.chmod(0o644)
+    monkeypatch.setenv("MEMFW_READONLY_TOKEN_FILE", str(secret))
+    _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
+    status, payload = _post(httpd, "/search", {"query": "corpus"}, "secret")
+    assert status == 500
+    _assert_error(payload, "internal")
+
+
+def test_stage_disk_full_removes_the_temp_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = seed_vault(tmp_path / "vault")
+    kept = stage_candidate(root, {"proposal_id": "pad", "title": "T", "content": " x "})
+    assert kept["staged"] is True
+
+    def no_space(_descriptor: int) -> None:
+        raise OSError(28, "No space left on device")
+
+    real_fsync = os.fsync
+    monkeypatch.setattr(os, "fsync", no_space)
+    with pytest.raises(OSError):
+        stage_candidate(root, {"proposal_id": "full", "title": "T", "content": "body"})
+    directory = root / "_candidates" / "remember"
+    assert directory.is_dir()
+    assert [path.name for path in directory.iterdir()] == ["conductor-pad.md"]
+    monkeypatch.setattr(os, "fsync", real_fsync)
+
+
+def test_health_contract_check_uses_a_local_server(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_vault(monkeypatch, seed_vault(tmp_path / "vault"), related=True)
+    checked = service.check_readonly_contract(httpd + "/health", timeout=2)
+    assert urlsplit(httpd).hostname == "127.0.0.1"
+    assert checked["ok"] is True
+    assert checked["contract"] == CONTRACT
+    assert service.main(["--check-url", httpd + "/health", "--port", "0"]) == 0
+
+    class PreV2(_QuietHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            body = b'{"ok": true, "service": "memfw-readonly"}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    class Redirect(_QuietHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            self.send_response(302)
+            self.send_header("Location", "http://127.0.0.1:9/secret")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+    def serve(handler: type[BaseHTTPRequestHandler]) -> tuple[ThreadingHTTPServer, int]:
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        server.daemon_threads = True
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        return server, int(server.server_address[1])
+
+    pre_v2, pre_port = serve(PreV2)
+    try:
+        stale = service.check_readonly_contract(f"http://127.0.0.1:{pre_port}/health", timeout=2)
+    finally:
+        pre_v2.shutdown()
+        pre_v2.server_close()
+    assert stale["reachable"] is True
+    assert stale["ok"] is False
+    assert stale["contract"] is None
+
+    redirect, redirect_port = serve(Redirect)
+    try:
+        followed = service.check_readonly_contract(
+            f"http://127.0.0.1:{redirect_port}/health", timeout=2
+        )
+    finally:
+        redirect.shutdown()
+        redirect.server_close()
+    assert followed["reachable"] is True
+    assert followed["status"] == 302
+    assert followed["ok"] is False
+    assert service.check_readonly_contract("https://127.0.0.1/health")["reachable"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -1241,9 +1639,7 @@ def _scenario_response(
     if scenario["method"] == "GET":
         status, payload = _http(base_url, "GET", scenario["path"], None, scenario["token"])
     else:
-        status, payload = _http(
-            base_url, "POST", scenario["path"], raw, scenario["token"]
-        )
+        status, payload = _http(base_url, "POST", scenario["path"], raw, scenario["token"])
     return {"status": status, "payload": payload}
 
 
@@ -1276,15 +1672,10 @@ def _assert_close(actual: object, expected: object, path: str = "") -> None:
 
 
 def _fixture_names() -> list[str]:
-    return sorted(
-        path.name[: -len(".request.json")]
-        for path in FIXTURES.glob("*.request.json")
-    )
+    return sorted(path.name[: -len(".request.json")] for path in FIXTURES.glob("*.request.json"))
 
 
-def test_contract_fixtures(
-    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_contract_fixtures(httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     if os.environ.get("MEMFW_UPDATE_CONTRACT_FIXTURES") == "1":
         _write_fixtures(httpd, tmp_path, monkeypatch)
     names = _fixture_names()
@@ -1316,9 +1707,7 @@ def test_contract_fixtures(
     assert covered == {"/health", "/search", "/related", "/stage"}
     assert any("as_of" in SCENARIOS[name]["body"] for name in names)
     as_of_response = json.loads(
-        (FIXTURES / "search.as_of_superseded_after_t.response.json").read_text(
-            encoding="utf-8"
-        )
+        (FIXTURES / "search.as_of_superseded_after_t.response.json").read_text(encoding="utf-8")
     )
     assert "mem-old" in {item["id"] for item in as_of_response["results"]}
 

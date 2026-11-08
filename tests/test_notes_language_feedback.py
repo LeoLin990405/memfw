@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import io
 import json
-import urllib.request
 from pathlib import Path
 
 import pytest
@@ -43,7 +42,7 @@ def test_http_language_model_structured_candidates(monkeypatch) -> None:
         calls.append(json.loads(request.data.decode("utf-8")))
         return _Response(_completion(responses[len(calls) - 1]))
 
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr("memfw.notes.http.open_http", fake_urlopen)
     provider = HttpLanguageModelProvider("http://example.invalid/v1/chat/completions", model="test")
     rewritten = provider.rewrite_query("corpus", limit=3)
     assert rewritten.queries[0] == "corpus"

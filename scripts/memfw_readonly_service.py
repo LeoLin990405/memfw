@@ -14,10 +14,12 @@ Contract summary:
   ``/stage`` always answers 403;
 * ``score`` is normalised to ``[0, 1]`` and grows with relevance. With a bm25
   raw score, ``raw_score`` keeps the SQLite FTS5 value (smaller is better) and
-  ``score = x / (1 + x)`` with ``x = max(0, -raw_score)``; with no bm25 (the
-  two-character substring branch) ``raw_score`` is ``null`` and
-  ``score = 1 / (1 + rank)`` for the returned rank starting at 0. Both formulas
-  are monotonic;
+  ``score = x / (1 + x)`` with ``x = max(0, -raw_score)``; with no bm25 (a
+  query of one or two characters uses a case-insensitive substring branch)
+  ``raw_score`` is ``null`` and
+  ``score = 1 / (1 + rank)`` for the returned rank starting at 0. ``/related``
+  edge scores use the same ``x / (1 + x)`` shape with ``x`` the positive raw
+  edge value. Both formulas are monotonic;
 * ``degraded`` is true only when a request did not take its preferred path:
   ``/search`` always runs FTS (the only implemented mode) and reports false,
   ``/related`` reports false on the edges projection and true when it falls back
@@ -27,10 +29,13 @@ Contract summary:
   ``limit`` matches are collected or the matches are exhausted - the deviation
   from "tenant filtered in SQL" that ``docs/v1-integration.md`` records.
 
-Configuration: ``MEMFW_READONLY_ROOT`` (or ``--root``), ``MEMFW_RELATED_DB``
-(or ``--related-db``), ``MEMFW_READONLY_TOKEN`` / ``MEMFW_READONLY_TOKEN_FILE``
-and ``MEMFW_WRITE_TOKEN`` / ``MEMFW_WRITE_TOKEN_FILE`` (environment first, then
-file; file content is stripped).
+Configuration: ``MEMFW_READONLY_ROOT`` (or ``--root``; ``--root`` falls back
+to the environment variable), ``MEMFW_RELATED_DB`` (or ``--related-db``),
+``MEMFW_READONLY_TOKEN`` / ``MEMFW_READONLY_TOKEN_FILE`` and
+``MEMFW_WRITE_TOKEN`` / ``MEMFW_WRITE_TOKEN_FILE`` (environment first, then
+file; file content is stripped). A token file must be mode ``0600``. The read
+and write tokens must differ. ``--host 0.0.0.0`` is refused. Each request
+socket times out after 5 seconds.
 """
 
 from __future__ import annotations
@@ -47,10 +52,11 @@ import sys
 import traceback
 import uuid
 from datetime import UTC, datetime
+from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import yaml
 
@@ -86,6 +92,18 @@ WRITE_TOKEN_ENV = "MEMFW_WRITE_TOKEN"
 WRITE_TOKEN_FILE_ENV = "MEMFW_WRITE_TOKEN_FILE"
 ROOT_ENV = "MEMFW_READONLY_ROOT"
 RELATED_DB_ENV = "MEMFW_RELATED_DB"
+TOKEN_FILE_MODE = 0o600
+# Codes BaseHTTPRequestHandler raises before the route runs. 414/431 are size
+# failures; 505 is an unsupported version and must still carry a status line.
+PROTOCOL_ERROR_STATUS = {
+    400: 400,
+    404: 404,
+    405: 404,
+    414: 413,
+    431: 413,
+    501: 404,
+    505: 400,
+}
 
 
 class ServiceError(Exception):
@@ -112,17 +130,45 @@ def _internal() -> ServiceError:
 
 
 def _env_secret(name: str, file_name: str) -> str:
-    """Read a secret from the environment, then from a file (stripped)."""
+    """Read a secret from the environment, then from a mode-0600 file.
+
+    An unreadable file or a mode other than ``0600`` is refused. It must not
+    look like "no token configured".
+    """
     value = os.environ.get(name, "").strip()
     if value:
         return value
-    path = os.environ.get(file_name, "").strip()
-    if not path:
+    path_text = os.environ.get(file_name, "").strip()
+    if not path_text:
         return ""
+    path = Path(path_text).expanduser()
     try:
-        return Path(path).expanduser().read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
+        mode = path.stat().st_mode & 0o777
+        if mode != TOKEN_FILE_MODE:
+            raise _internal()
+        return path.read_text(encoding="utf-8").strip()
+    except ServiceError:
+        raise
+    except OSError as exc:
+        raise _internal() from exc
+
+
+def _same_secret(left: str, right: str) -> bool:
+    if not left or not right or len(left) != len(right):
+        return False
+    return hmac.compare_digest(
+        left.encode("utf-8", "surrogateescape"),
+        right.encode("utf-8", "surrogateescape"),
+    )
+
+
+def _configured_tokens() -> tuple[str, str]:
+    """Return ``(read, write)`` or refuse when the two configured tokens match."""
+    read_value = read_token()
+    write_value = write_token()
+    if read_value and write_value and _same_secret(read_value, write_value):
+        raise ServiceError(403, "read and write credentials must differ")
+    return read_value, write_value
 
 
 def read_token() -> str:
@@ -272,6 +318,19 @@ def _fts_query(query: str) -> str:
     return '"' + query.replace('"', '""') + '"'
 
 
+def _unsupported_query(text: str) -> bool:
+    """True for NUL or a lone surrogate, both of which used to become 500."""
+    if "\x00" in text:
+        return True
+    return any(0xD800 <= ord(character) <= 0xDFFF for character in text)
+
+
+def _unit_interval(raw: float) -> float:
+    """Map a non-negative relevance sum into ``[0, 1]`` via ``x / (1 + x)``."""
+    magnitude = max(0.0, raw)
+    return magnitude / (1.0 + magnitude)
+
+
 def _normalise_as_of(value: Any) -> str:
     if not isinstance(value, str):
         raise _bad_request("as_of must be an ISO-8601 timestamp")
@@ -317,17 +376,20 @@ def _search_batch(
     limit: int,
     offset: int,
 ) -> list[sqlite3.Row]:
-    if len(needle) == 2:
+    if len(needle) <= 2:
+        # FTS drops tokens this short. Match every field, and fold ASCII case
+        # so "AL" hits the same rows as "al". SQLite lower() covers that range.
+        folded = needle.lower()
         select = (
             "SELECT r.id AS id, r.title AS title, r.summary AS summary, "
             "r.search_body AS search_body, r.source AS source, r.tier AS tier, "
             "r.layer AS layer, NULL AS raw_score FROM memory_rows r"
         )
         where = [
-            "(instr(r.title, ?) > 0 OR instr(r.search_body, ?) > 0 "
-            "OR instr(r.summary, ?) > 0 OR instr(r.tags, ?) > 0)"
+            "(instr(lower(r.title), ?) > 0 OR instr(lower(r.search_body), ?) > 0 "
+            "OR instr(lower(r.summary), ?) > 0 OR instr(lower(r.tags), ?) > 0)"
         ]
-        params: list[Any] = [needle, needle, needle, needle]
+        params: list[Any] = [folded, folded, folded, folded]
         order = " ORDER BY r.id"
     else:
         select = (
@@ -377,6 +439,8 @@ def search_vault(
     needle = query.strip()
     if not needle or len(needle) > MAX_QUERY_CHARS:
         raise _bad_request("query must be 1..512 characters")
+    if _unsupported_query(needle):
+        raise _bad_request("query contains an unsupported character")
     if isinstance(limit, bool) or not isinstance(limit, int):
         raise _bad_request("limit must be an integer")
     limit = max(1, min(limit, MAX_LIMIT))
@@ -510,8 +574,27 @@ def _reason_name(method: str) -> str:
     return _REASON_NAMES.get(method, "lexical")
 
 
+def _projection_target_is_current(root: Path, source: str, identifier: str) -> bool:
+    """Drop superseded memories that a stale edge projection still names.
+
+    Non-memory targets have no vault temporal fields. Search results keep
+    emitting ``valid_to`` and ``superseded_by``; this only decides membership.
+    """
+    if source != "memory":
+        return True
+    payload = _document_payload(root, identifier)
+    if payload is None:
+        return False
+    return not payload["valid_to"] and not payload["superseded_by"]
+
+
 def _related_from_edges(
-    related_db: Path, memory_id: str, *, limit: int, tenant: str
+    related_db: Path,
+    memory_id: str,
+    *,
+    root: Path,
+    limit: int,
+    tenant: str,
 ) -> list[dict[str, Any]]:
     connection = _connect_related(related_db)
     try:
@@ -546,6 +629,7 @@ def _related_from_edges(
         item = merged.get(key)
         if item is None:
             item = {
+                "source": str(other_source),
                 "id": str(other_id),
                 "title": str(row["title"] or ""),
                 "score": 0.0,
@@ -554,12 +638,17 @@ def _related_from_edges(
             merged[key] = item
         item["score"] = max(float(item["score"]), float(row["score"]))
         item["reasons"].add(_reason_name(str(row["method"])))
-    ordered = sorted(merged.values(), key=lambda item: (-item["score"], item["id"]))[:limit]
+    current = [
+        item
+        for item in merged.values()
+        if _projection_target_is_current(root, str(item["source"]), str(item["id"]))
+    ]
+    ordered = sorted(current, key=lambda item: (-float(item["score"]), item["id"]))[:limit]
     return [
         {
             "id": item["id"],
             "title": item["title"],
-            "score": float(item["score"]),
+            "score": _unit_interval(float(item["score"])),
             "reasons": sorted(item["reasons"]),
         }
         for item in ordered
@@ -628,7 +717,9 @@ def related_vault(
     _path, metadata = _memory_metadata(base, memory_id, tenant)
     if candidate is not None and candidate.is_file() and _has_related_edges(candidate):
         try:
-            results = _related_from_edges(candidate, identifier, limit=limit, tenant=tenant)
+            results = _related_from_edges(
+                candidate, identifier, root=base, limit=limit, tenant=tenant
+            )
         except sqlite3.Error:
             results = _related_from_search(base, identifier, metadata, limit=limit, tenant=tenant)
             return {
@@ -693,7 +784,7 @@ def _validate_stage_payload(payload: dict[str, Any]) -> dict[str, Any]:
         raise _bad_request("proposal_id must match [A-Za-z0-9_-]{1,128}")
     title = _header_text(payload.get("title"), "title", required=True, max_length=MAX_TITLE_CHARS)
     content = payload.get("content")
-    if not isinstance(content, str) or not content:
+    if not isinstance(content, str) or not content.strip():
         raise _bad_request("content is required")
     if len(content.encode("utf-8")) > MAX_CONTENT_BYTES:
         raise ServiceError(413, "content too large")
@@ -887,21 +978,23 @@ def _publish_candidate(directory_fd: int, candidate_id: str, markdown_text: str)
         0o600,
         dir_fd=directory_fd,
     )
-    with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
-        handle.write(markdown_text)
-        handle.flush()
-        os.fsync(handle.fileno())
     try:
-        os.link(
-            temporary_name,
-            final_name,
-            src_dir_fd=directory_fd,
-            dst_dir_fd=directory_fd,
-        )
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(markdown_text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(
+                temporary_name,
+                final_name,
+                src_dir_fd=directory_fd,
+                dst_dir_fd=directory_fd,
+            )
+        except FileExistsError:
+            return False
         return True
-    except FileExistsError:
-        return False
     finally:
+        # Covers write/fsync failures (a full disk) as well as a lost link race.
         try:
             os.unlink(temporary_name, dir_fd=directory_fd)
         except FileNotFoundError:
@@ -996,18 +1089,29 @@ def _matches(provided: str, expected: str) -> bool:
 class Handler(BaseHTTPRequestHandler):
     server_version = "memfw"
     sys_version = ""
+    # A slow client must not hold a worker thread past this many seconds.
+    timeout = 5
 
     # -- plumbing ----------------------------------------------------------
+    def _ensure_status_line(self) -> None:
+        """HTTP/0.9 omits the status line; protocol errors still need one."""
+        version = getattr(self, "request_version", "") or ""
+        if version in ("", "HTTP/0.9"):
+            self.request_version = "HTTP/1.0"
+
     def _send(self, status: int, payload: dict[str, Any]) -> None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        include_body = self.command != "HEAD"
+        self._ensure_status_line()
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Length", str(len(data) if include_body else 0))
         if status != 200:
             self.send_header("Connection", "close")
             self.close_connection = True
         self.end_headers()
-        self.wfile.write(data)
+        if include_body:
+            self.wfile.write(data)
 
     def _fail(self, error: ServiceError) -> None:
         self._send(
@@ -1017,12 +1121,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def send_error(self, code: int, message: str | None = None, explain: str | None = None) -> None:
         del message, explain
-        status = 400 if int(code) == 400 else 404 if int(code) in (404, 405, 501) else 500
-        error = (
-            _bad_request("bad request")
-            if status == 400
-            else (ServiceError(404, "not found") if status == 404 else _internal())
-        )
+        status = PROTOCOL_ERROR_STATUS.get(int(code), 500)
+        if status == 400:
+            error = _bad_request("bad request")
+        elif status == 413:
+            error = ServiceError(413, "request too large")
+        elif status == 404:
+            error = ServiceError(404, "not found")
+        else:
+            error = _internal()
         self.close_connection = True
         try:
             self._fail(error)
@@ -1038,6 +1145,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _authorise(self) -> None:
         provided = self.headers.get(TOKEN_HEADER, "")
+        _configured_tokens()
         if self.path == "/stage":
             expected = write_token()
             if not expected:
@@ -1144,24 +1252,98 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
 
+def check_readonly_contract(url: str, *, timeout: float = 1.0) -> dict[str, Any]:
+    """GET ``/health`` for ``url`` and report whether it advertises memfw-http/2.
+
+    ``url`` is a service base or an explicit ``/health`` URL. Redirects are not
+    followed. There is no default host; the caller chooses the URL.
+    """
+    parsed = urlsplit(url)
+    result: dict[str, Any] = {
+        "ok": False,
+        "reachable": False,
+        "contract": None,
+        "status": None,
+        "detail": "not checked",
+    }
+    if parsed.scheme != "http" or not parsed.hostname:
+        result["detail"] = "only absolute http URLs can be checked"
+        return result
+    path = parsed.path or "/"
+    if not path.rstrip("/").endswith("/health"):
+        path = path.rstrip("/") + "/health"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    connection = HTTPConnection(parsed.hostname, parsed.port or 80, timeout=timeout)
+    try:
+        connection.request("GET", path)
+        response = connection.getresponse()
+        raw = response.read(65537)
+        status = int(response.status)
+    except OSError:
+        result["detail"] = "unreachable"
+        return result
+    finally:
+        connection.close()
+    result["reachable"] = True
+    result["status"] = status
+    if len(raw) > 65536:
+        result["detail"] = "health body too large"
+        return result
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        result["detail"] = "health body is not JSON"
+        return result
+    contract = payload.get("contract") if isinstance(payload, dict) else None
+    if not isinstance(contract, str):
+        contract = None
+    result["contract"] = contract
+    result["ok"] = status == 200 and contract == CONTRACT
+    result["detail"] = CONTRACT if result["ok"] else "contract missing or not memfw-http/2"
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="MemFW read-only HTTP service (memfw-http/2)")
-    parser.add_argument("--root", required=True)
+    parser.add_argument("--root", default=os.environ.get(ROOT_ENV))
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=18080)
     parser.add_argument("--related-db", default=None)
+    parser.add_argument(
+        "--check-url",
+        default=None,
+        help="GET /health at this URL, print the contract check as JSON, and exit",
+    )
     args = parser.parse_args(argv)
-    if not read_token() and not write_token():
+    if args.check_url:
+        checked = check_readonly_contract(args.check_url)
+        sys.stdout.write(json.dumps(checked, sort_keys=True) + "\n")
+        return 0 if checked["ok"] else 1
+    host = str(args.host).strip()
+    if host == "0.0.0.0":
+        raise SystemExit("binding 0.0.0.0 is not supported")
+    root_value = str(args.root).strip() if args.root else ""
+    if not root_value:
+        raise SystemExit(f"--root or {ROOT_ENV} is required")
+    try:
+        read_value = read_token()
+        write_value = write_token()
+    except ServiceError as exc:
+        raise SystemExit("credential file is unusable") from exc
+    if read_value and write_value and _same_secret(read_value, write_value):
+        raise SystemExit("read and write tokens must differ")
+    if not read_value and not write_value:
         raise SystemExit(
             f"{READ_TOKEN_ENV}, {READ_TOKEN_FILE_ENV}, {WRITE_TOKEN_ENV} or "
             f"{WRITE_TOKEN_FILE_ENV} is required"
         )
-    os.environ[ROOT_ENV] = str(Path(args.root).expanduser().resolve())
+    os.environ[ROOT_ENV] = str(Path(root_value).expanduser().resolve())
     if args.related_db:
         os.environ[RELATED_DB_ENV] = str(Path(args.related_db).expanduser().resolve())
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    server = ThreadingHTTPServer((host, args.port), Handler)
     server.daemon_threads = True
-    sys.stderr.write(f"memfw read-only service on {args.host}:{args.port} (contract {CONTRACT})\n")
+    sys.stderr.write(f"memfw read-only service on {host}:{args.port} (contract {CONTRACT})\n")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

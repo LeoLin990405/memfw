@@ -17,6 +17,7 @@ from typing import Literal, Protocol
 
 import jieba  # type: ignore[import-untyped]
 
+from . import http as notes_http
 from .feedback import CandidateTrace, FeedbackStore, RetrievalTrace
 from .index import NoteHit, NotesIndex
 
@@ -80,7 +81,7 @@ class HttpRerankerProvider:
                     data=payload,
                     headers={"Content-Type": "application/json"},
                 )
-                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                with notes_http.open_http(request, timeout=self.timeout) as response:
                     body = json.loads(response.read().decode("utf-8"))
                 if isinstance(body, dict):
                     rows = body.get("results")

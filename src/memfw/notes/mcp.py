@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
@@ -49,7 +50,6 @@ TOOLS: list[dict[str, Any]] = [
                 "min_query_coverage": {"type": "number"},
                 "source": {"type": "string"},
                 "rerank_candidates": {"type": "integer", "default": 0},
-                "rerank_endpoint": {"type": "string"},
                 "rerank_model": {"type": "string", "default": "reranker"},
                 "metadata": {
                     "type": "object",
@@ -192,12 +192,6 @@ class NotesGateway:
             query = str(args.get("query") or "")
             limit = max(1, min(int(args.get("limit", 10)), 50))
             tags = args.get("tags") or []
-            reranker = self.reranker
-            if args.get("rerank_endpoint"):
-                reranker = HttpRerankerProvider(
-                    str(args["rerank_endpoint"]),
-                    model=str(args.get("rerank_model") or "reranker"),
-                )
             retriever = NotesRetriever(
                 self.index,
                 config=RetrievalConfig(
@@ -207,7 +201,7 @@ class NotesGateway:
                     rrf_k=max(1, min(int(args.get("rrf_k", 60)), 1000)),
                     rerank_candidates=max(0, min(int(args.get("rerank_candidates", 0)), 500)),
                 ),
-                reranker=reranker,
+                reranker=self.reranker,
                 trace_store=self.feedback_store,
             )
             result = retriever.search(
@@ -241,6 +235,33 @@ class NotesGateway:
         raise KeyError(name)
 
 
+_CONFIG_ERRORS = frozenset(
+    {
+        "feedback store is not configured",
+        "related index is not configured",
+    }
+)
+
+
+def _client_error_text(exc: Exception) -> str:
+    """Safe MCP error text. SQLite and other internal messages stay server-side."""
+
+    text = str(exc).splitlines()[0].strip() if str(exc) else ""
+    lowered = text.lower()
+    internal = "like or glob" in lowered or "pattern too complex" in lowered
+    if internal or isinstance(exc, sqlite3.Error):
+        return "internal error"
+    if isinstance(exc, FileNotFoundError):
+        return text[:300] or "not found"
+    if isinstance(exc, ValueError):
+        return text[:300] or "invalid request"
+    if isinstance(exc, KeyError):
+        return "unknown tool"
+    if isinstance(exc, RuntimeError) and text in _CONFIG_ERRORS:
+        return text
+    return "internal error"
+
+
 def handle_request(gateway: NotesGateway, request: dict[str, Any]) -> dict[str, Any] | None:
     method = request.get("method")
     request_id = request.get("id")
@@ -269,7 +290,9 @@ def handle_request(gateway: NotesGateway, request: dict[str, Any]) -> dict[str, 
                 "jsonrpc": "2.0",
                 "id": request_id,
                 "result": {
-                    "content": [{"type": "text", "text": json.dumps({"error": str(exc)})}],
+                    "content": [
+                        {"type": "text", "text": json.dumps({"error": _client_error_text(exc)})}
+                    ],
                     "isError": True,
                 },
             }
@@ -312,6 +335,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--dimension", type=int, default=1024)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--feedback-db", type=Path)
+    parser.add_argument("--related-db", type=Path)
+    parser.add_argument("--rerank-endpoint")
+    parser.add_argument("--rerank-model", default="reranker")
     args = parser.parse_args(argv)
     embedder = None
     if args.endpoint:
@@ -321,13 +347,18 @@ def main(argv: list[str] | None = None) -> None:
             dimension=args.dimension,
             batch_size=args.batch_size,
         )
+    reranker = None
+    if args.rerank_endpoint:
+        reranker = HttpRerankerProvider(args.rerank_endpoint, model=args.rerank_model)
     feedback_store = FeedbackStore(args.feedback_db) if args.feedback_db else None
     serve(
         NotesGateway(
             args.root,
             args.db,
             embedder=embedder,
+            reranker=reranker,
             feedback_store=feedback_store,
+            related_db=args.related_db,
         )
     )
 

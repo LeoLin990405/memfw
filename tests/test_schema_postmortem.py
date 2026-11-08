@@ -28,6 +28,22 @@ def items(value: object) -> list[object]:
     return cast(list[object], value)
 
 
+def _stderr_without_jieba_syntax_warnings(stderr: str) -> str:
+    """Ignore jieba's cold-cache SyntaxWarning; any other stderr is an error."""
+    kept: list[str] = []
+    skip_source_line = False
+    for line in stderr.splitlines(keepends=True):
+        if skip_source_line and line.startswith(" "):
+            skip_source_line = False
+            continue
+        skip_source_line = False
+        if "SyntaxWarning" in line and "jieba" in line:
+            skip_source_line = True
+            continue
+        kept.append(line)
+    return "".join(kept)
+
+
 def test_inspects_only_target_and_never_emits_source_strings(tmp_path: Path) -> None:
     target_raw = json.dumps(
         {
@@ -84,7 +100,7 @@ def test_cli_output_keeps_matched_source_strings_redacted(tmp_path: Path) -> Non
     assert "CANARY_CLI_PRIVATE_VALUE" not in result.stdout
     assert TARGET_ID not in result.stdout
     assert "<redacted len=" in result.stdout
-    assert result.stderr == ""
+    assert _stderr_without_jieba_syntax_warnings(result.stderr) == ""
 
 
 def test_fenced_valid_json_shows_legacy_current_difference(tmp_path: Path) -> None:
@@ -197,7 +213,7 @@ def test_no_match_and_multiple_matches_have_explicit_safe_status(tmp_path: Path)
     )
     assert result.returncode == 1
     assert '"status": "no_match"' in result.stdout
-    assert result.stderr == ""
+    assert _stderr_without_jieba_syntax_warnings(result.stderr) == ""
 
     write_records(path, [{"target_id": TARGET_ID, "raw_output": "{}"}] * 2)
     report = inspect_file(path)

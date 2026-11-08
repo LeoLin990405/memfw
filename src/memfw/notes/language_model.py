@@ -11,6 +11,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Literal
 
+from . import http as notes_http
 from .retrieval import LanguageModelProvider, QueryRewrite
 
 RelationshipKind = Literal["duplicate", "update", "conflict", "distinct"]
@@ -125,7 +126,7 @@ class HttpLanguageModelProvider:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         request = urllib.request.Request(self.endpoint, data=payload, headers=headers)
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+        with notes_http.open_http(request, timeout=self.timeout) as response:
             body = json.loads(response.read().decode("utf-8"))
         choices = body.get("choices") if isinstance(body, dict) else None
         if not isinstance(choices, list) or not choices:

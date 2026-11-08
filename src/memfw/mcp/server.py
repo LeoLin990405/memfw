@@ -12,16 +12,24 @@ The server is deliberately local-only: it has no remote host or external search 
 from __future__ import annotations
 
 import argparse
+import copy
+import hashlib
 import json
 import os
 import re
 import sys
 import time
+import uuid
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import yaml
+from yaml.nodes import Node
+
 from memfw.capture.suggestions import suggest_related
+from memfw.core.errors import NotFoundError
 from memfw.core.models import Layer, Tier
 from memfw.core.repository import Repository
 from memfw.memory_hybrid import MemoryHybridRetriever
@@ -30,6 +38,8 @@ from memfw.related import RelatedIndex
 
 SERVER_INFO = {"name": "memfw", "version": "0.1.0"}
 PROTOCOL = "2024-11-05"
+_MAX_CONTENT_BYTES = 64 * 1024
+_CANDIDATE_DIR = Path("_candidates") / "remember"
 INSTRUCTIONS = (
     "memfw exposes a local Markdown memory vault. Use memory_search before answering "
     "questions that depend on stored memories, and memory_get to read one memory by id. "
@@ -112,6 +122,145 @@ def _slug(text: str) -> str:
     return value[:48] or "memory"
 
 
+def _rpc_error(msg_id: Any, code: int, message: str) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": msg_id, "error": {"code": code, "message": message}}
+
+
+class _SingleLine(str):
+    """A string rendered as one double-quoted YAML scalar."""
+
+
+class _CandidateDumper(yaml.SafeDumper):
+    """Dumper that keeps every string on one escaped line."""
+
+
+def _represent_single_line(dumper: yaml.SafeDumper, data: _SingleLine) -> Node:
+    return dumper.represent_scalar("tag:yaml.org,2002:str", str(data), style='"')
+
+
+_CandidateDumper.add_representer(_SingleLine, _represent_single_line)
+
+
+def _single_line(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _single_line(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_single_line(item) for item in value]
+    if isinstance(value, str):
+        return _SingleLine(value)
+    return value
+
+
+def _candidate_document(
+    *,
+    title: str,
+    text: str,
+    proposal_id: str,
+    tenant: str,
+    tags: list[str],
+    related: list[str],
+    suggestions: list[dict[str, Any]],
+) -> str:
+    """Frontmatter `candidate-apply` can read: hash is sha256 of the body."""
+    content_hash = "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+    created_at = datetime.now(UTC).isoformat()
+    metadata = {
+        "type": "candidate",
+        "lifecycle": "active",
+        "proposal_id": proposal_id,
+        "source": "candidate",
+        "tenant": tenant,
+        "tags": list(tags),
+        "related": list(related),
+        "created_at": created_at,
+        "content_hash": content_hash,
+        "suggestions": copy.deepcopy(suggestions),
+        "authority": False,
+    }
+    header = {
+        "name": title,
+        "title": title,
+        "type": "candidate",
+        "lifecycle": "active",
+        "proposal_id": proposal_id,
+        "source": "candidate",
+        "tenant": tenant,
+        "tags": list(tags),
+        "related": list(related),
+        "created_at": created_at,
+        "content_hash": content_hash,
+        "suggestions": copy.deepcopy(suggestions),
+        "authority": False,
+        "metadata": metadata,
+    }
+    rendered = yaml.dump(
+        _single_line(header),
+        Dumper=_CandidateDumper,
+        allow_unicode=True,
+        sort_keys=False,
+        width=10**9,
+    )
+    if "---\n" in rendered:
+        raise ValueError("candidate frontmatter is not safe to publish")
+    return f"---\n{rendered}---\n\n{text}\n"
+
+
+def _open_candidate_directory(root: Path) -> int:
+    """Open `<root>/_candidates/remember` without following a swapped symlink."""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    root_fd = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    current = root_fd
+    try:
+        for part in _CANDIDATE_DIR.parts:
+            try:
+                os.mkdir(part, 0o777, dir_fd=current)
+            except FileExistsError:
+                pass
+            next_fd = os.open(part, flags, dir_fd=current)
+            if current != root_fd:
+                os.close(current)
+            current = next_fd
+        return current
+    except BaseException:
+        if current != root_fd:
+            os.close(current)
+        raise
+    finally:
+        os.close(root_fd)
+
+
+def _publish_candidate(root: Path, filename: str, text: str) -> None:
+    """Write `filename` with O_EXCL plus an atomic link. Never overwrites.
+
+    The same pattern as `/stage`: a unique temporary file is published with
+    `os.link`, which fails if the destination already exists.
+    """
+    directory_fd = _open_candidate_directory(root)
+    temporary_name = f".{filename}.{uuid.uuid4().hex}.tmp"
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            temporary_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=directory_fd,
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            descriptor = None
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.link(temporary_name, filename, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary_name, dir_fd=directory_fd)
+        except FileNotFoundError:
+            pass
+        os.close(directory_fd)
+
+
 class Gateway:
     """MCP tool implementations bound to one local vault root."""
 
@@ -148,9 +297,11 @@ class Gateway:
         self.embedder = embedder
 
     def _repo(self) -> Repository:
-        repository = Repository(self.root)
-        repository.init()
-        return repository
+        """Open an existing vault. A missing root is an error; never init one."""
+        root = self.root
+        if not root.is_dir() or not (root / "vault.yaml").is_file():
+            raise ValueError("vault root does not exist")
+        return Repository(root)
 
     def _retriever(self, repository: Repository) -> MemoryHybridRetriever:
         return MemoryHybridRetriever(
@@ -205,7 +356,6 @@ class Gateway:
                 }
             )
         return {
-            "root": str(self.root),
             "mode": result["mode"],
             "degraded": result["degraded"],
             "errors": result["errors"],
@@ -237,47 +387,66 @@ class Gateway:
         tags: list[str] | None = None,
         related: list[str] | None = None,
     ) -> dict[str, Any]:
+        if len(content.encode("utf-8")) > _MAX_CONTENT_BYTES:
+            raise ValueError("content exceeds 64 KiB")
         text = content.strip()
         if not text:
             raise ValueError("content required")
-        directory = self.root / "_candidates" / "remember"
-        directory.mkdir(parents=True, exist_ok=True)
-        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-        path = directory / f"{stamp}-{_slug(title)}.md"
         repository = self._repo()
         suggestions = suggest_related(repository, title, text, embedder=self.embedder)
-        metadata = {
-            "type": "candidate",
-            "lifecycle": "active",
-            "created_at": stamp,
-            "tenant": self.tenant,
-            "tags": tags or [],
-            "related": related or [item.memory_id for item in suggestions],
-            "suggestions": [item.as_dict() for item in suggestions],
-        }
-        body = (
-            "---\n"
-            f"name: {json.dumps(title, ensure_ascii=False)}\n"
-            "metadata:\n"
-            + "".join(
-                f"  {key}: {json.dumps(value, ensure_ascii=False)}\n"
-                for key, value in metadata.items()
+        suggestion_rows = [item.as_dict() for item in suggestions]
+        related_ids = list(related) if related else [item.memory_id for item in suggestions]
+        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        published: str | None = None
+        for _ in range(5):
+            proposal_id = f"mcp-{uuid.uuid4().hex}"
+            filename = f"{stamp}-{_slug(title)}-{proposal_id}.md"
+            document = _candidate_document(
+                title=title,
+                text=text,
+                proposal_id=proposal_id,
+                tenant=self.tenant,
+                tags=list(tags or []),
+                related=list(related_ids),
+                suggestions=suggestion_rows,
             )
-            + "---\n\n"
-            f"{text}\n"
-        )
-        path.write_text(body, encoding="utf-8")
+            try:
+                _publish_candidate(self.root, filename, document)
+            except FileExistsError:
+                continue
+            published = filename
+            break
+        if published is None:
+            raise RuntimeError("could not publish candidate")
         return {
-            "staged_candidate": str(path),
+            "staged_candidate": (_CANDIDATE_DIR / published).as_posix(),
             "authority": False,
-            "suggestions": [item.as_dict() for item in suggestions],
+            "suggestions": suggestion_rows,
         }
 
+    def _same_tenant_neighbour(self, repository: Repository, row: dict[str, Any]) -> bool:
+        if str(row.get("source") or "") != "memory":
+            return False
+        try:
+            neighbour = repository.get(str(row.get("id") or ""))
+        except NotFoundError:
+            return False
+        return neighbour.tenant == self.tenant
+
     def related(self, memory_id: str, limit: int = 10) -> dict[str, Any]:
-        related = RelatedIndex(self.root / ".memfw-related.sqlite").related(
-            "memory", memory_id, limit=max(1, min(limit, 50))
+        repository = self._repo()
+        document = repository.get(memory_id)
+        if document.tenant != self.tenant:
+            raise ValueError("memory is not visible in this tenant")
+        bounded = max(1, min(limit, 50))
+        rows = RelatedIndex(self.root / ".memfw-related.sqlite").related(
+            "memory",
+            memory_id,
+            limit=50,
+            tenant=self.tenant,
         )
-        return {"root": str(self.root), "memory_id": memory_id, "related": related}
+        visible = [row for row in rows if self._same_tenant_neighbour(repository, row)]
+        return {"memory_id": memory_id, "related": visible[:bounded]}
 
     def context(self, limit_tokens: int = 2000) -> dict[str, Any]:
         repository = self._repo()
@@ -318,7 +487,6 @@ class Gateway:
             if used >= limit_chars:
                 break
         return {
-            "root": str(self.root),
             "limit_tokens": limit_tokens,
             "used_chars": used,
             "entries": entries,
@@ -334,7 +502,6 @@ class Gateway:
             tiers[document.tier.value] += 1
         events = repository.events()
         return {
-            "root": str(repository.root),
             "memories": len(documents),
             "layers": layers,
             "tiers": tiers,
@@ -373,9 +540,29 @@ class Gateway:
         sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
         sys.stdout.flush()
 
-    def handle(self, message: dict[str, Any]) -> None:
+    def handle(self, message: Any) -> None:
+        if isinstance(message, list):
+            if not message:
+                self.respond(_rpc_error(None, -32600, "invalid request"))
+                return
+            for item in message:
+                if isinstance(item, dict):
+                    self.handle(item)
+                else:
+                    self.respond(_rpc_error(None, -32600, "invalid request"))
+            return
+        if not isinstance(message, dict):
+            self.respond(_rpc_error(None, -32600, "invalid request"))
+            return
         method = message.get("method")
         msg_id = message.get("id")
+        params = message.get("params", None)
+        if params is None:
+            params = {}
+        if not isinstance(params, dict):
+            if msg_id is not None:
+                self.respond(_rpc_error(msg_id, -32602, "invalid params"))
+            return
         if method == "initialize":
             self.respond(
                 {
@@ -399,20 +586,20 @@ class Gateway:
             self.respond({"jsonrpc": "2.0", "id": msg_id, "result": {"tools": TOOLS}})
             return
         if method == "tools/call":
-            params = message.get("params") or {}
             name = str(params.get("name") or "")
             handler = self.handlers().get(name)
             if handler is None:
-                self.respond(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": msg_id,
-                        "error": {"code": -32601, "message": f"unknown tool: {name}"},
-                    }
-                )
+                self.respond(_rpc_error(msg_id, -32601, f"unknown tool: {name}"))
+                return
+            if "arguments" not in params or params["arguments"] is None:
+                arguments: Any = {}
+            else:
+                arguments = params["arguments"]
+            if not isinstance(arguments, dict):
+                self.respond(_rpc_error(msg_id, -32602, "invalid params"))
                 return
             try:
-                result = handler(params.get("arguments") or {})
+                result = handler(arguments)
                 self.respond(
                     {
                         "jsonrpc": "2.0",
@@ -441,13 +628,7 @@ class Gateway:
                 )
             return
         if msg_id is not None:
-            self.respond(
-                {
-                    "jsonrpc": "2.0",
-                    "id": msg_id,
-                    "error": {"code": -32601, "message": f"unknown method: {method}"},
-                }
-            )
+            self.respond(_rpc_error(msg_id, -32601, f"unknown method: {method}"))
 
 
 def serve(root: Path | str) -> int:
@@ -459,9 +640,14 @@ def serve(root: Path | str) -> int:
         if not text:
             continue
         try:
-            gateway.handle(json.loads(text))
+            message = json.loads(text)
         except json.JSONDecodeError:
+            gateway.respond(_rpc_error(None, -32700, "parse error"))
             continue
+        try:
+            gateway.handle(message)
+        except Exception:
+            gateway.respond(_rpc_error(None, -32603, "internal error"))
     return 0
 
 
@@ -469,11 +655,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="memfw-mcp", description="Local memfw MCP server")
     parser.add_argument(
         "--root",
-        default=os.environ.get("MEMFW_ROOT", "."),
-        help="memfw vault root",
+        default=None,
+        help="memfw vault root (or set MEMFW_ROOT). Required; cwd is not a default.",
     )
     args = parser.parse_args(argv)
-    return serve(Path(args.root))
+    root = args.root if args.root is not None else os.environ.get("MEMFW_ROOT")
+    if root is None or not str(root).strip():
+        parser.error("memfw vault root is required: pass --root or set MEMFW_ROOT")
+    return serve(Path(str(root)))
 
 
 if __name__ == "__main__":
