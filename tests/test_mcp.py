@@ -45,7 +45,9 @@ def test_mcp_remember_is_staging_only(tmp_path: Path) -> None:
     before = len(Repository(root).list())
     staged = gateway.remember("A new candidate", title="candidate note")
     assert staged["authority"] is False
-    assert Path(staged["staged_candidate"]).exists()
+    relative = Path(staged["staged_candidate"])
+    assert not relative.is_absolute()
+    assert (root / relative).is_file()
     assert len(Repository(root).list()) == before
 
 

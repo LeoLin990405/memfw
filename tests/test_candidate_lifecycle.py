@@ -198,9 +198,7 @@ def test_candidate_apply_rejects_missing_content_hash(
         repository.root,
         "hash is mandatory",
         include_content_hash=content_hash is not None,
-        extra_frontmatter={"content_hash": content_hash}
-        if content_hash is not None
-        else None,
+        extra_frontmatter={"content_hash": content_hash} if content_hash is not None else None,
     )
     runner = CliRunner()
 
@@ -418,18 +416,12 @@ def test_identity_recovery_requires_all_fields_to_match(
             f"content_hash={_content_hash(existing_content)}"
         ),
     )
-    candidate_content = (
-        existing_content if matching_field == "content_hash" else "new legal body"
-    )
+    candidate_content = existing_content if matching_field == "content_hash" else "new legal body"
     candidate = _stage_new_candidate(
         repository.root,
         candidate_content,
-        candidate_id="candidate-existing"
-        if matching_field == "candidate_id"
-        else "candidate-new",
-        proposal_id="proposal-existing"
-        if matching_field == "proposal_id"
-        else "proposal-new",
+        candidate_id="candidate-existing" if matching_field == "candidate_id" else "candidate-new",
+        proposal_id="proposal-existing" if matching_field == "proposal_id" else "proposal-new",
         title="New legal apply",
     )
 
@@ -671,9 +663,7 @@ def test_a_legacy_candidate_without_proposal_id_is_refused_before_any_write(
     # B3: a candidate with no proposal_id has no identity a retry could match
     # on, so the first write is refused rather than risking a duplicate.
     repository = _repository(tmp_path)
-    candidate = _legacy_candidate_with_hash(
-        repository.root, "legacy body", proposal_id=None
-    )
+    candidate = _legacy_candidate_with_hash(repository.root, "legacy body", proposal_id=None)
     runner = CliRunner()
 
     result = runner.invoke(
@@ -692,9 +682,7 @@ def test_a_legacy_candidate_without_proposal_id_is_refused_before_any_write(
 
 def test_the_refusal_tells_the_operator_to_restage(tmp_path: Path) -> None:
     repository = _repository(tmp_path)
-    candidate = _legacy_candidate_with_hash(
-        repository.root, "legacy body", proposal_id=None
-    )
+    candidate = _legacy_candidate_with_hash(repository.root, "legacy body", proposal_id=None)
 
     result = CliRunner().invoke(app, _apply(candidate, repository))
 

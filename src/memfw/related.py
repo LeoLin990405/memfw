@@ -52,6 +52,24 @@ def _tokens(text: str) -> set[str]:
     return {token.lower() for token in _TOKEN_RE.findall(text) if token.lower() not in _STOP}
 
 
+_Pair = tuple[str, str]
+_MethodMap = dict[str, tuple[float, dict[str, Any]]]
+
+
+def _bucket(neighbors: dict[_Pair, _MethodMap], key: _Pair) -> _MethodMap:
+    return neighbors.setdefault(key, {})
+
+
+def _set_max(bucket: _MethodMap, method: str, score: float, evidence: dict[str, Any]) -> None:
+    previous = bucket.get(method, (0.0, {}))[0]
+    bucket[method] = (max(previous, score), evidence)
+
+
+def _add_score(bucket: _MethodMap, method: str, delta: float, evidence: dict[str, Any]) -> None:
+    previous = bucket.get(method, (0.0, {}))[0]
+    bucket[method] = (previous + delta, evidence)
+
+
 class RelatedIndex:
     """SQLite edge projection; rebuild is explicit and source-scoped."""
 
@@ -87,36 +105,66 @@ class RelatedIndex:
         connection: sqlite3.Connection,
         source: str,
         items: list[RelatedItem],
-        candidates: dict[str, dict[tuple[str, str], tuple[float, dict[str, Any]]]],
+        candidates: dict[str, dict[_Pair, _MethodMap]],
     ) -> int:
         connection.execute("DELETE FROM related_edges WHERE src_source=?", (source,))
         connection.execute("DELETE FROM related_items WHERE source=?", (source,))
         for item in items:
             connection.execute(
-                "INSERT INTO related_items(source,id,title,path,hash,text) VALUES (?,?,?,?,?,?)",
-                (item.source, item.id, item.title, item.path, item.hash, item.text),
+                "INSERT INTO related_items(source,id,title,path,hash,text,tenant,scope) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    item.source,
+                    item.id,
+                    item.title,
+                    item.path,
+                    item.hash,
+                    item.text,
+                    item.tenant,
+                    item.scope,
+                ),
             )
+        # Cap inside each destination tenant. A global top-20 lets another
+        # tenant's earlier ids crowd out the caller's own neighbour.
+        tenant_of = {(item.source, item.id): item.tenant for item in items}
         count = 0
         for src_id, neighbors in candidates.items():
-            ranked = sorted(neighbors.items(), key=lambda row: (-row[1][0], row[0]))[:20]
-            for (dst_source, dst_id), (score, evidence) in ranked:
+            grouped: dict[str, list[tuple[_Pair, _MethodMap]]] = defaultdict(list)
+            for pair, methods in neighbors.items():
+                grouped[tenant_of.get(pair, "")].append((pair, methods))
+            ranked: list[tuple[_Pair, _MethodMap]] = []
+            for group in grouped.values():
+                ranked.extend(
+                    sorted(
+                        group,
+                        key=lambda row: (
+                            -max((score for score, _evidence in row[1].values()), default=0.0),
+                            row[0],
+                        ),
+                    )[:20]
+                )
+            for (dst_source, dst_id), methods in ranked:
                 if src_id == dst_id and source == dst_source:
                     continue
-                connection.execute(
-                    "INSERT OR REPLACE INTO related_edges"
-                    "(src_source,src_id,dst_source,dst_id,method,score,evidence) "
-                    "VALUES (?,?,?,?,?,?,?)",
-                    (
-                        source,
-                        src_id,
-                        dst_source,
-                        dst_id,
-                        str(evidence.get("method", "mixed")),
-                        score,
-                        json.dumps(evidence, ensure_ascii=False, sort_keys=True),
-                    ),
-                )
-                count += 1
+                # One row per method. Scores stay raw; HTTP /related applies x/(1+x).
+                for method in sorted(methods):
+                    score, evidence = methods[method]
+                    payload = {**evidence, "method": method}
+                    connection.execute(
+                        "INSERT OR REPLACE INTO related_edges"
+                        "(src_source,src_id,dst_source,dst_id,method,score,evidence) "
+                        "VALUES (?,?,?,?,?,?,?)",
+                        (
+                            source,
+                            src_id,
+                            dst_source,
+                            dst_id,
+                            method,
+                            score,
+                            json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                        ),
+                    )
+                    count += 1
         connection.commit()
         return count
 
@@ -169,7 +217,7 @@ class RelatedIndex:
                     explicit[source_path].add(target)
                 elif target + ".md" in by_path:
                     explicit[source_path].add(target + ".md")
-        candidates: dict[str, dict[tuple[str, str], tuple[float, dict[str, Any]]]] = {}
+        candidates: dict[str, dict[_Pair, _MethodMap]] = {}
         inverted: dict[str, set[str]] = defaultdict(set)
         for path, values in entities.items():
             for value in values:
@@ -181,31 +229,40 @@ class RelatedIndex:
             for tag in meta["tags"]:
                 inverted["tag:" + str(tag).lower()].add(path)
         for path in metadata:
-            neighbors: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+            neighbors: dict[_Pair, _MethodMap] = {}
             for target in explicit.get(path, set()):
-                neighbors[("notes", target)] = (3.0, {"method": "explicit", "link": target})
+                _set_max(
+                    _bucket(neighbors, ("notes", target)),
+                    "explicit",
+                    3.0,
+                    {"method": "explicit", "link": target},
+                )
             for value in entities.get(path, set()):
                 for other in inverted.get("e:" + value.lower(), set()):
                     if other != path:
-                        neighbors[("notes", other)] = (
-                            max(neighbors.get(("notes", other), (0.0, {}))[0], 2.0),
+                        _set_max(
+                            _bucket(neighbors, ("notes", other)),
+                            "entity",
+                            2.0,
                             {"method": "entity", "entity": value},
                         )
             for tag in metadata[path]["tags"]:
                 for other in inverted.get("tag:" + str(tag).lower(), set()):
                     if other != path:
-                        old = neighbors.get(("notes", other), (0.0, {}))[0]
-                        neighbors[("notes", other)] = (
-                            max(old, 0.8),
+                        _set_max(
+                            _bucket(neighbors, ("notes", other)),
+                            "tag",
+                            0.8,
                             {"method": "tag", "tag": tag},
                         )
             for token in tokens.get(path, set()):
                 for other in inverted.get("t:" + token, set()):
                     if other != path:
-                        old, evidence = neighbors.get(("notes", other), (0.0, {}))
-                        neighbors[("notes", other)] = (
-                            old + 0.05,
-                            {**evidence, "method": "lexical"},
+                        _add_score(
+                            _bucket(neighbors, ("notes", other)),
+                            "lexical",
+                            0.05,
+                            {"method": "lexical"},
                         )
             candidates[path] = neighbors
         items = [
@@ -288,23 +345,26 @@ class RelatedIndex:
         for identifier, values in tokens.items():
             for value in values:
                 inverted["t:" + value].add(identifier)
-        candidates: dict[str, dict[tuple[str, str], tuple[float, dict[str, Any]]]] = {}
+        candidates: dict[str, dict[_Pair, _MethodMap]] = {}
         for identifier in metadata:
-            neighbors: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+            neighbors: dict[_Pair, _MethodMap] = {}
             for entity in entities.get(identifier, set()):
                 for other in inverted.get("e:" + entity.lower(), set()):
                     if other != identifier:
-                        neighbors[("notes_sections", other)] = (
-                            max(neighbors.get(("notes_sections", other), (0.0, {}))[0], 2.0),
+                        _set_max(
+                            _bucket(neighbors, ("notes_sections", other)),
+                            "entity",
+                            2.0,
                             {"method": "entity", "entity": entity},
                         )
             for token in tokens.get(identifier, set()):
                 for other in inverted.get("t:" + token, set()):
                     if other != identifier:
-                        old, evidence = neighbors.get(("notes_sections", other), (0.0, {}))
-                        neighbors[("notes_sections", other)] = (
-                            old + 0.05,
-                            {**evidence, "method": "lexical"},
+                        _add_score(
+                            _bucket(neighbors, ("notes_sections", other)),
+                            "lexical",
+                            0.05,
+                            {"method": "lexical"},
                         )
             candidates[identifier] = neighbors
         connection = self._connect()
@@ -321,7 +381,7 @@ class RelatedIndex:
     ) -> int:
         dictionary = load_dictionary(entity_dictionary) or self.dictionary
         items: list[RelatedItem] = []
-        candidates: dict[str, dict[tuple[str, str], tuple[float, dict[str, Any]]]] = {}
+        candidates: dict[str, dict[_Pair, _MethodMap]] = {}
         inverted: dict[str, set[str]] = defaultdict(set)
         tokens: dict[str, set[str]] = {}
         entities: dict[str, set[str]] = {}
@@ -350,34 +410,43 @@ class RelatedIndex:
                 inverted["tag:" + str(tag).lower()].add(doc.id)
             for related in doc.related:
                 inverted["r:" + related].add(doc.id)
+        known_ids = {item.id for item in items}
         for doc in docs:
-            neighbors: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+            neighbors: dict[_Pair, _MethodMap] = {}
             for related in doc.related:
-                if related in {item.id for item in items}:
-                    neighbors[("memory", related)] = (3.0, {"method": "explicit"})
+                if related in known_ids:
+                    _set_max(
+                        _bucket(neighbors, ("memory", related)),
+                        "explicit",
+                        3.0,
+                        {"method": "explicit"},
+                    )
             for tag in doc.tags:
                 for other in inverted.get("tag:" + str(tag).lower(), set()):
                     if other != doc.id:
-                        old, evidence = neighbors.get(("memory", other), (0.0, {}))
-                        neighbors[("memory", other)] = (
-                            max(old, 0.8),
-                            {"method": "tag", "tag": tag, **evidence},
+                        _set_max(
+                            _bucket(neighbors, ("memory", other)),
+                            "tag",
+                            0.8,
+                            {"method": "tag", "tag": tag},
                         )
             for entity in entities[doc.id]:
                 for other in inverted.get("e:" + entity.lower(), set()):
                     if other != doc.id:
-                        old, evidence = neighbors.get(("memory", other), (0.0, {}))
-                        neighbors[("memory", other)] = (
-                            max(old, 2.0),
-                            {"method": "entity", "entity": entity, **evidence},
+                        _set_max(
+                            _bucket(neighbors, ("memory", other)),
+                            "entity",
+                            2.0,
+                            {"method": "entity", "entity": entity},
                         )
             for token in tokens[doc.id]:
                 for other in inverted.get("t:" + token, set()):
                     if other != doc.id:
-                        old, evidence = neighbors.get(("memory", other), (0.0, {}))
-                        neighbors[("memory", other)] = (
-                            old + 0.05,
-                            {**evidence, "method": "lexical"},
+                        _add_score(
+                            _bucket(neighbors, ("memory", other)),
+                            "lexical",
+                            0.05,
+                            {"method": "lexical"},
                         )
             candidates[doc.id] = neighbors
         connection = self._connect()
@@ -497,6 +566,14 @@ class RelatedIndex:
             connection.execute(
                 "ALTER TABLE related_items ADD COLUMN scope TEXT NOT NULL DEFAULT ''"
             )
+        if tenant is not None:
+            subject = connection.execute(
+                "SELECT tenant FROM related_items WHERE source=? AND id=?",
+                (source, identifier),
+            ).fetchone()
+            if subject is None or str(subject["tenant"]) != tenant:
+                connection.close()
+                return []
         filters = []
         params: list[Any] = []
         if tenant is not None:
@@ -539,7 +616,9 @@ class RelatedIndex:
                 }
                 merged[key] = item
             item["score"] = max(float(item["score"]), float(row["score"]))
-            item["methods"].append(str(row["method"]))
+            method_name = str(row["method"])
+            if method_name not in item["methods"]:
+                item["methods"].append(method_name)
             item["evidence"].append(
                 {"direction": direction, "method": row["method"], **json.loads(row["evidence"])}
             )

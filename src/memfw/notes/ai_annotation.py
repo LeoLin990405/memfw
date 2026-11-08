@@ -17,6 +17,8 @@ from typing import Any, Protocol
 
 import yaml
 
+from . import http as notes_http
+
 
 @dataclass(frozen=True)
 class JudgeVerdict:
@@ -78,7 +80,7 @@ class OpenAIJudge:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         request = urllib.request.Request(self.endpoint, data=body, headers=headers)
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+        with notes_http.open_http(request, timeout=self.timeout) as response:
             payload = json.loads(response.read().decode("utf-8"))
         text = payload["choices"][0]["message"].get("content") or ""
         if text.strip().startswith("```"):

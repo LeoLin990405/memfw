@@ -23,7 +23,6 @@ import math
 import re
 import sqlite3
 import time
-import urllib.error
 import urllib.request
 from array import array
 from collections.abc import Sequence
@@ -32,6 +31,8 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import yaml
+
+from . import http as notes_http
 
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]")
@@ -118,7 +119,7 @@ class HttpEmbeddingProvider:
             for attempt in range(self.retries + 1):
                 try:
                     request = urllib.request.Request(self.endpoint, data=payload, headers=headers)
-                    with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                    with notes_http.open_http(request, timeout=self.timeout) as response:
                         body = json.loads(response.read().decode("utf-8"))
                     rows = body.get("data") if isinstance(body, dict) else None
                     if not isinstance(rows, list) or len(rows) != len(batch):
@@ -330,6 +331,52 @@ def parse_markdown(path: Path, root: Path) -> ParsedNote:
     )
 
 
+def _note_file_inside_root(path: Path, root: Path) -> bool:
+    """False for symlinks and for files that resolve outside ``root``."""
+
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        return False
+    cursor = root
+    for part in relative.parts:
+        cursor = cursor / part
+        try:
+            if cursor.is_symlink():
+                return False
+        except OSError:
+            return False
+    try:
+        resolved = path.resolve()
+        resolved_root = root.resolve()
+    except OSError:
+        return False
+    if not resolved.is_file():
+        return False
+    try:
+        resolved.relative_to(resolved_root)
+    except ValueError:
+        return False
+    return True
+
+
+def _substring_rows(connection: sqlite3.Connection, needle: str, limit: int) -> list[sqlite3.Row]:
+    """Bounded LIKE probe. A too-complex pattern yields no rows, not a sqlite message."""
+
+    pattern = f"%{needle}%"
+    try:
+        return list(
+            connection.execute(
+                "SELECT s.id, 0.0 AS score FROM sections s "
+                "JOIN notes n ON n.id=s.note_id "
+                "WHERE s.content LIKE ? OR s.heading LIKE ? OR n.title LIKE ? LIMIT ?",
+                (pattern, pattern, pattern, limit),
+            ).fetchall()
+        )
+    except sqlite3.OperationalError:
+        return []
+
+
 class NotesIndex:
     """SQLite-backed section index. All writes are explicit; search is read-only."""
 
@@ -521,7 +568,7 @@ class NotesIndex:
             "sections": 0,
             "embedded": 0,
         }
-        paths = sorted(root.rglob("*.md"))
+        paths = [path for path in sorted(root.rglob("*.md")) if _note_file_inside_root(path, root)]
         if max_files is not None:
             paths = paths[: max(0, max_files)]
         seen: set[str] = set()
@@ -676,21 +723,11 @@ class NotesIndex:
             except sqlite3.OperationalError:
                 rows = []
         if not rows and len(needle) < 3:
-            rows = connection.execute(
-                "SELECT s.id, 0.0 AS score FROM sections s "
-                "JOIN notes n ON n.id=s.note_id "
-                "WHERE s.content LIKE ? OR s.heading LIKE ? OR n.title LIKE ? LIMIT ?",
-                (f"%{needle}%", f"%{needle}%", f"%{needle}%", limit),
-            ).fetchall()
+            rows = _substring_rows(connection, needle, limit)
         if not rows and terms:
             # A short final CJK fragment (e.g. "工具") has no trigram; fall back
             # to a bounded substring probe rather than dropping the query.
-            rows = connection.execute(
-                "SELECT s.id, 0.0 AS score FROM sections s "
-                "JOIN notes n ON n.id=s.note_id "
-                "WHERE s.content LIKE ? OR s.heading LIKE ? OR n.title LIKE ? LIMIT ?",
-                (f"%{needle}%", f"%{needle}%", f"%{needle}%", limit),
-            ).fetchall()
+            rows = _substring_rows(connection, needle, limit)
         return [(int(row["id"]), float(row["score"])) for row in rows]
 
     def _vector_search(

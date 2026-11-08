@@ -48,11 +48,13 @@ def test_related_returns_backlinks_and_memory_explicit(tmp_path: Path) -> None:
 
     repo = Repository(tmp_path / "vault")
     repo.init()
-    repo.add("A", "alpha", memory_id="a")
-    repo.add("B", "beta", memory_id="b", related=["a"])
+    repo.add("A", "alpha shared token", memory_id="a")
+    repo.add("B", "beta shared token", memory_id="b", related=["a"])
     related.rebuild_memory(repo)
     rows = related.related("memory", "a", limit=5)
-    assert any(row["id"] == "b" for row in rows)
+    match = next(row for row in rows if row["id"] == "b")
+    assert "explicit" in match["methods"]
+    assert match["score"] == 3.0
 
 
 def test_semantic_edges_are_opt_in_and_cross_source(tmp_path: Path) -> None:
@@ -92,8 +94,50 @@ def test_section_edges_and_tenant_filter(tmp_path: Path) -> None:
     repo.init()
     repo.add("A", "alpha corpus", memory_id="a", tenant="t1", tags=["corpus"])
     repo.add("B", "alpha corpus", memory_id="b", tenant="t2", tags=["corpus"])
+    repo.add("C", "alpha corpus", memory_id="c", tenant="t1", tags=["corpus"])
     related.rebuild_memory(repo)
     rows_t1 = related.related("memory", "a", tenant="t1", limit=5)
     rows_t2 = related.related("memory", "a", tenant="t2", limit=5)
+    assert rows_t1
+    assert any(row["id"] == "c" and row["source"] == "memory" for row in rows_t1)
     assert all(row["source"] == "memory" for row in rows_t1)
+    assert all(row["id"] != "b" for row in rows_t1)
+    same = next(row for row in rows_t1 if row["id"] == "c")
+    assert "tag" in same["methods"]
+    assert same["score"] == 0.8
     assert rows_t2 == []
+
+
+def test_same_tenant_neighbour_survives_foreign_top_rank(tmp_path: Path) -> None:
+    """Twenty-one earlier foreign ids must not erase the caller's neighbour."""
+    repo = Repository(tmp_path / "vault")
+    repo.init()
+    repo.add(
+        "Z subject",
+        "shared corpus token",
+        memory_id="z-subject",
+        tenant="tenant-a",
+        tags=["shared"],
+    )
+    repo.add(
+        "Z target",
+        "shared corpus token",
+        memory_id="z-target",
+        tenant="tenant-a",
+        tags=["shared"],
+    )
+    for index in range(21):
+        repo.add(
+            f"Foreign {index:02d}",
+            "shared corpus token",
+            memory_id=f"b-foreign-{index:02d}",
+            tenant="tenant-b",
+            tags=["shared"],
+        )
+    related = RelatedIndex(tmp_path / "related.sqlite")
+    related.rebuild_memory(repo)
+    rows = related.related("memory", "z-subject", tenant="tenant-a", limit=10)
+    assert [row["id"] for row in rows] == ["z-target"]
+    foreign = related.related("memory", "b-foreign-00", tenant="tenant-b", limit=30)
+    assert foreign
+    assert all(row["id"] != "z-target" for row in foreign)

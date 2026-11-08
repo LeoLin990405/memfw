@@ -183,7 +183,6 @@ def test_fts_chinese_mixed_and_exact_phrase(tmp_path: Path) -> None:
 
 def test_http_reranker_provider_maps_results(monkeypatch) -> None:
     import io
-    import urllib.request
 
     from memfw.notes import HttpRerankerProvider
 
@@ -200,7 +199,7 @@ def test_http_reranker_provider_maps_results(monkeypatch) -> None:
             b'{"results":[{"index":1,"relevance_score":2.0},{"index":0,"relevance_score":1.0}]}'
         )
 
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr("memfw.notes.http.open_http", fake_urlopen)
     provider = HttpRerankerProvider(
         "http://example.invalid/v1/rerank", model="test-reranker", max_doc_chars=4
     )

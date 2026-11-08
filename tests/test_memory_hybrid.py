@@ -98,7 +98,7 @@ def test_memory_remember_adds_duplicate_suggestions_without_writing(tmp_path: Pa
     assert payload["suggestions"]
     assert payload["suggestions"][0]["memory_id"] == "m-corpus"
     assert payload["suggestions"][0]["kind"] in {"duplicate", "extends"}
-    candidate = Path(payload["staged_candidate"]).read_text(encoding="utf-8")
+    candidate = (repository.root / payload["staged_candidate"]).read_text(encoding="utf-8")
     assert "suggestions:" in candidate
     assert len(repository.list()) == 2
 
@@ -111,7 +111,7 @@ def test_candidate_apply_requires_explicit_human_apply(tmp_path: Path) -> None:
     repository = _vault(tmp_path)
     gateway = Gateway(repository.root)
     payload = gateway.remember("new body", title="New memory", tags=["new"])
-    candidate = payload["staged_candidate"]
+    candidate = str(repository.root / payload["staged_candidate"])
     # The staged candidate carries a content hash, so it is applyable; the
     # explicit human flag is what this test is about.
     _stamp_content_hash(candidate)
@@ -162,11 +162,12 @@ def test_candidates_list_and_related_apply(tmp_path: Path) -> None:
     listed = CliRunner().invoke(app, ["candidates", "--root", str(repository.root)])
     assert listed.exit_code == 0, listed.output
     assert "m-corpus" in listed.output
-    _stamp_content_hash(payload["staged_candidate"])
-    _stamp_proposal_id(payload["staged_candidate"])
+    candidate = repository.root / payload["staged_candidate"]
+    _stamp_content_hash(candidate)
+    _stamp_proposal_id(candidate)
     applied = CliRunner().invoke(
         app,
-        ["candidate-apply", payload["staged_candidate"], "--root", str(repository.root), "--apply"],
+        ["candidate-apply", str(candidate), "--root", str(repository.root), "--apply"],
     )
     assert applied.exit_code == 0, applied.output
     document = next(doc for doc in repository.list() if doc.title == "New memory")

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import urllib.request
 
 from memfw.notes import HttpEmbeddingProvider
 
@@ -31,7 +30,7 @@ def test_http_embedding_role_instructions(monkeypatch) -> None:
             {"data": [{"index": index, "embedding": [0.1] * 4} for index in range(len(inputs))]}
         )
 
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr("memfw.notes.http.open_http", fake_urlopen)
     provider = HttpEmbeddingProvider(
         "http://example.invalid/v1/embeddings",
         model="test-model",

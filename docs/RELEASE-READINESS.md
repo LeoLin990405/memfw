@@ -17,8 +17,8 @@ worktree's own environment:
 
 | Check | Command | Measured result |
 |---|---|---|
-| Default full test suite, including MLX | `.venv/bin/python -m pytest -q` | **622 passed, 0 failed, 2 skipped**, 3 warnings in 353.16 s |
-| Type checking | `.venv/bin/python -m mypy src` | **Passed**: no issues found in 65 source files |
+| Readonly service and schema postmortem. The old full-suite headline (622 passed, 0 failed) was not re-run and is withdrawn. | `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q tests/test_readonly_service.py tests/test_schema_postmortem.py` | **69 passed, 0 failed**, 3 warnings in 18.32 s |
+| Type checking | `.venv/bin/python -m mypy src` | **Passed**: no issues found in 66 source files |
 | Linting | `.venv/bin/python -m ruff check src/memfw tests` | **Passed**: all checks passed |
 
 The default test command has no ignore or deselection. Commit `054174c` stubs
@@ -27,11 +27,10 @@ cases, so the suite no longer depends on a quiet host.
 
 ## Known limitations
 
-- With `PYTHONDONTWRITEBYTECODE=1` and a cold bytecode cache, jieba emits a
-  `SyntaxWarning` that makes two `tests/test_schema_postmortem.py` assertions
-  fail because they require empty stderr. A separate cold-cache run of that
-  file measured **2 failed, 7 passed**; the default full environment reported
-  zero failures as shown above.
+- With `PYTHONDONTWRITEBYTECODE=1` and a cold bytecode cache, jieba still emits
+  a `SyntaxWarning` on import. `tests/test_schema_postmortem.py` ignores that
+  warning and fails on any other stderr. The owned run above includes those
+  two tests and measured **69 passed, 0 failed**.
 - Two tests skip when `reports/day4_baseline_snapshot.zip` is absent. The file
   is a release asset rather than a tracked source file; download and checksum
   instructions are in [`reports/LARGE_FILES.md`](../reports/LARGE_FILES.md).
