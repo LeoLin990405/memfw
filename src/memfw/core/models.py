@@ -65,12 +65,12 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-_TEMPORAL_ALIASES = (("valid_until", "valid_to"), ("superseded", "superseded_by"))
-
-
-def _same_temporal_value(left: Any, right: Any) -> bool:
+def _same_instant(left: Any, right: Any) -> bool:
+    """True when both values are the same moment. Empty values are not moments."""
     if left == right:
         return True
+    if left in (None, "") or right in (None, ""):
+        return False
     try:
         left_stamp = (
             left
@@ -92,19 +92,26 @@ def fold_temporal_aliases(data: dict[str, Any], *, strict: bool = True) -> dict[
 
     ``valid_until`` is an input alias of ``valid_to``. ``superseded`` is an
     input alias of ``superseded_by``. The stored document and every response
-    use only the canonical names. A conflicting pair is rejected on input.
-    A reader may pass ``strict=False`` and keep the canonical value.
+    use only the canonical names. Instants compare as moments. Supersession
+    ids compare as exact strings, so ``2026-11-06`` and ``20261106`` conflict.
+    A conflict is two names in this same mapping. A reader may pass
+    ``strict=False`` and keep the canonical value.
     """
     folded = dict(data)
-    for alias, canonical in _TEMPORAL_ALIASES:
+    specs = (
+        ("valid_until", "valid_to", "instant"),
+        ("superseded", "superseded_by", "exact"),
+    )
+    for alias, canonical, kind in specs:
         if alias not in folded:
             continue
         alias_value = folded.pop(alias)
-        current = folded.get(canonical)
-        if current in (None, ""):
+        if canonical not in folded:
             folded[canonical] = alias_value
             continue
-        if alias_value in (None, "") or _same_temporal_value(current, alias_value):
+        current = folded[canonical]
+        same = _same_instant(current, alias_value) if kind == "instant" else current == alias_value
+        if same:
             continue
         if strict:
             raise ValueError(f"{alias} conflicts with {canonical}")
