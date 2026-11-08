@@ -120,6 +120,40 @@ def _bad_request(message: str) -> ServiceError:
     return ServiceError(400, message)
 
 
+_ENDPOINT_KEYS = frozenset(
+    {
+        "endpoint",
+        "base_url",
+        "embedding_endpoint",
+        "embedding_url",
+        "rerank_endpoint",
+        "rerank_url",
+        "judge_endpoint",
+        "judge_url",
+        "rewrite_endpoint",
+        "rewrite_url",
+        "model_endpoint",
+        "openai_base_url",
+    }
+)
+
+
+def reject_client_endpoints(payload: dict[str, Any]) -> None:
+    """A request body cannot name a judge, rerank, embedding, or rewrite endpoint."""
+
+    found: list[str] = []
+    for key in payload:
+        normalized = str(key).strip().lower().replace("-", "_")
+        if (
+            normalized in _ENDPOINT_KEYS
+            or normalized.endswith("_endpoint")
+            or normalized.endswith("_url")
+        ):
+            found.append(str(key))
+    if found:
+        raise _bad_request("endpoint fields are not accepted")
+
+
 def _internal() -> ServiceError:
     return ServiceError(500, INTERNAL_MESSAGE)
 
@@ -1257,6 +1291,7 @@ class Handler(BaseHTTPRequestHandler):
             self._authorise()
             body_limit = STAGE_BODY_BYTES if self.path == "/stage" else SEARCH_BODY_BYTES
             payload = self._read_json(body_limit)
+            reject_client_endpoints(payload)
             root = _root()
             if self.path == "/search":
                 result = search_vault(

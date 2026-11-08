@@ -126,6 +126,39 @@ def _rpc_error(msg_id: Any, code: int, message: str) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": msg_id, "error": {"code": code, "message": message}}
 
 
+_ENDPOINT_KEYS = frozenset(
+    {
+        "endpoint",
+        "base_url",
+        "embedding_endpoint",
+        "embedding_url",
+        "rerank_endpoint",
+        "rerank_url",
+        "judge_endpoint",
+        "judge_url",
+        "rewrite_endpoint",
+        "rewrite_url",
+        "model_endpoint",
+        "openai_base_url",
+    }
+)
+
+
+def client_endpoint_fields(arguments: dict[str, Any]) -> list[str]:
+    """Return request keys that try to name a model endpoint."""
+
+    found: list[str] = []
+    for key in arguments:
+        normalized = str(key).strip().lower().replace("-", "_")
+        if (
+            normalized in _ENDPOINT_KEYS
+            or normalized.endswith("_endpoint")
+            or normalized.endswith("_url")
+        ):
+            found.append(str(key))
+    return found
+
+
 class _SingleLine(str):
     """A string rendered as one double-quoted YAML scalar."""
 
@@ -597,6 +630,11 @@ class Gateway:
                 arguments = params["arguments"]
             if not isinstance(arguments, dict):
                 self.respond(_rpc_error(msg_id, -32602, "invalid params"))
+                return
+            if client_endpoint_fields(arguments):
+                self.respond(
+                    _rpc_error(msg_id, -32602, "endpoint fields are not accepted")
+                )
                 return
             try:
                 result = handler(arguments)
