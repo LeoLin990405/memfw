@@ -188,7 +188,9 @@ class MemoryOperationsMixin:
             "group_key",
             "valid_from",
             "valid_to",
+            "valid_until",
             "superseded_by",
+            "superseded",
         }
         if (
             actor != "human"

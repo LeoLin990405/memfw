@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
 
 class Layer(StrEnum):
@@ -65,6 +65,52 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
+_TEMPORAL_ALIASES = (("valid_until", "valid_to"), ("superseded", "superseded_by"))
+
+
+def _same_temporal_value(left: Any, right: Any) -> bool:
+    if left == right:
+        return True
+    try:
+        left_stamp = (
+            left
+            if isinstance(left, datetime)
+            else datetime.fromisoformat(str(left).replace("Z", "+00:00"))
+        )
+        right_stamp = (
+            right
+            if isinstance(right, datetime)
+            else datetime.fromisoformat(str(right).replace("Z", "+00:00"))
+        )
+    except (TypeError, ValueError):
+        return False
+    return left_stamp == right_stamp
+
+
+def fold_temporal_aliases(data: dict[str, Any], *, strict: bool = True) -> dict[str, Any]:
+    """Accept Conductor aliases and keep the stored canonical names.
+
+    ``valid_until`` is an input alias of ``valid_to``. ``superseded`` is an
+    input alias of ``superseded_by``. The stored document and every response
+    use only the canonical names. A conflicting pair is rejected on input.
+    A reader may pass ``strict=False`` and keep the canonical value.
+    """
+    folded = dict(data)
+    for alias, canonical in _TEMPORAL_ALIASES:
+        if alias not in folded:
+            continue
+        alias_value = folded.pop(alias)
+        current = folded.get(canonical)
+        if current in (None, ""):
+            folded[canonical] = alias_value
+            continue
+        if alias_value in (None, "") or _same_temporal_value(current, alias_value):
+            continue
+        if strict:
+            raise ValueError(f"{alias} conflicts with {canonical}")
+    return folded
+
+
 class MemoryDocument(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -95,6 +141,13 @@ class MemoryDocument(BaseModel):
     created_at: datetime
     updated_at: datetime
     body: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_temporal_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            return fold_temporal_aliases(data)
+        return data
 
     @field_validator("created_at", "updated_at", "valid_from", "valid_to")
     @classmethod

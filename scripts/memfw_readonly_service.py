@@ -60,6 +60,8 @@ from urllib.parse import quote, urlsplit
 
 import yaml
 
+from memfw.core.models import fold_temporal_aliases
+
 CONTRACT = "memfw-http/2"
 TOKEN_HEADER = "X-Memfw-Token"
 MAX_QUERY_CHARS = 512
@@ -298,7 +300,7 @@ def _document_payload(root: Path, identifier: str) -> dict[str, Any] | None:
     except OSError:
         return None
     text = raw.decode("utf-8", errors="replace")
-    metadata = _metadata_from_text(text)
+    metadata = fold_temporal_aliases(_metadata_from_text(text), strict=False)
     return {
         "tenant": str(metadata.get("tenant") or ""),
         "related": _string_list(metadata.get("related")),
