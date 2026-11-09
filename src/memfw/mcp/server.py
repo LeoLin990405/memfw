@@ -18,6 +18,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -32,9 +33,11 @@ from memfw.capture.suggestions import suggest_related
 from memfw.core.errors import NotFoundError
 from memfw.core.models import Layer, Tier
 from memfw.core.repository import Repository
-from memfw.memory_hybrid import MemoryHybridRetriever
+from memfw.index import MemoryIndex
+from memfw.memory_hybrid import MemoryHybridRetriever, shared_readonly
 from memfw.notes import HttpEmbeddingProvider
 from memfw.related import RelatedIndex
+from memfw.retrieval.multihop import search_multihop
 
 SERVER_INFO = {"name": "memfw", "version": "0.1.0"}
 PROTOCOL = "2024-11-05"
@@ -58,9 +61,10 @@ TOOLS: list[dict[str, Any]] = [
                 "limit": {"type": "integer", "default": 10},
                 "mode": {
                     "type": "string",
-                    "enum": ["fts", "hybrid", "vector"],
+                    "enum": ["fts", "hybrid", "vector", "multihop"],
                     "default": "hybrid",
                 },
+                "rounds": {"type": "integer", "minimum": 1, "maximum": 2},
                 "source": {"type": "string"},
             },
             "required": ["query"],
@@ -124,6 +128,39 @@ def _slug(text: str) -> str:
 
 def _rpc_error(msg_id: Any, code: int, message: str) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": msg_id, "error": {"code": code, "message": message}}
+
+
+_ENDPOINT_KEYS = frozenset(
+    {
+        "endpoint",
+        "base_url",
+        "embedding_endpoint",
+        "embedding_url",
+        "rerank_endpoint",
+        "rerank_url",
+        "judge_endpoint",
+        "judge_url",
+        "rewrite_endpoint",
+        "rewrite_url",
+        "model_endpoint",
+        "openai_base_url",
+    }
+)
+
+
+def client_endpoint_fields(arguments: dict[str, Any]) -> list[str]:
+    """Return request keys that try to name a model endpoint."""
+
+    found: list[str] = []
+    for key in arguments:
+        normalized = str(key).strip().lower().replace("-", "_")
+        if (
+            normalized in _ENDPOINT_KEYS
+            or normalized.endswith("_endpoint")
+            or normalized.endswith("_url")
+        ):
+            found.append(str(key))
+    return found
 
 
 class _SingleLine(str):
@@ -261,6 +298,157 @@ def _publish_candidate(root: Path, filename: str, text: str) -> None:
         os.close(directory_fd)
 
 
+def _ensure_search_index(repository: Repository) -> None:
+    """Rebuild the disposable memory index when Markdown is newer than it."""
+
+    path = repository.index_path
+    stale = not path.is_file()
+    if not stale and repository.memories_dir.is_dir():
+        indexed_at = path.stat().st_mtime
+        stale = False
+        with os.scandir(repository.memories_dir) as entries:
+            for item in entries:
+                if not item.name.endswith(".md"):
+                    continue
+                if item.stat(follow_symlinks=False).st_mtime > indexed_at:
+                    stale = True
+                    break
+    if stale:
+        repository.init()
+        MemoryIndex(path).rebuild(repository)
+
+
+def _content_hash(path: Path) -> str:
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+_FRESHNESS_LIMIT = 10
+_FRESHNESS_CACHE_CAP = 2048
+_FRESHNESS_READ_ATTEMPTS = 3
+_StatKey = tuple[str, int, int, int, int]
+
+
+def _frontmatter_version(raw: bytes) -> str:
+    """Top-level ``version:`` line from bytes already read for the hash.
+
+    This is a prefix scan of the frontmatter block. It does not call the YAML
+    parser. A missing or unreadable version is empty and must not be replaced
+    with the index version. ``yaml.safe_dump`` writes ``version: 2``.
+    """
+
+    if not raw.startswith(b"---\n"):
+        return ""
+    end = raw.find(b"\n---\n", 4)
+    if end < 0:
+        return ""
+    for line in raw[4:end].splitlines():
+        if not line.startswith(b"version:"):
+            continue
+        value = line.split(b":", 1)[1].strip()
+        if len(value) >= 2 and value[0] in b"'\"" and value[-1:] == value[:1]:
+            value = value[1:-1].strip()
+        if not value or value in {b"null", b"Null", b"NULL", b"~"}:
+            return ""
+        return value.decode("utf-8", "replace")
+    return ""
+
+
+def _stat_key(path: Path, stat: os.stat_result) -> _StatKey:
+    return (str(path), stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+
+class _RawHashCache:
+    """LRU of raw-byte hashes keyed by path, inode, size, mtime, and ctime.
+
+    A user edit cannot preserve ctime, so a file whose mtime was restored
+    still misses. The cached value is the hash plus the version line from
+    those same bytes. The stat key is taken before and after the read, and
+    the pair is stored only when those keys match.
+    """
+
+    def __init__(self, cap: int) -> None:
+        self._cap = cap
+        self._items: dict[_StatKey, tuple[str, str]] = {}
+        self._lock = threading.Lock()
+
+    def lookup(self, path: Path) -> tuple[str, str, bool]:
+        """Return ``(sha256-hash, version, consistent)``.
+
+        A missing file is ``("", "", True)``. When the stat key still
+        differs after every attempt, nothing is stored and the third value
+        is false so the caller can fail closed.
+        """
+
+        for _attempt in range(_FRESHNESS_READ_ATTEMPTS):
+            try:
+                before = path.stat()
+            except OSError:
+                return "", "", True
+            key = _stat_key(path, before)
+            with self._lock:
+                found = self._items.get(key)
+                if found is not None:
+                    self._items.pop(key)
+                    self._items[key] = found
+                    return (*found, True)
+            try:
+                raw = path.read_bytes()
+                after = path.stat()
+            except OSError:
+                return "", "", True
+            # The key has to name the bytes just read. A mid-read replace
+            # must not publish the old digest under the new stat key.
+            if _stat_key(path, after) != key:
+                continue
+            stored = (
+                "sha256:" + hashlib.sha256(raw).hexdigest(),
+                _frontmatter_version(raw),
+            )
+            with self._lock:
+                self._items.pop(key, None)
+                self._items[key] = stored
+                while len(self._items) > self._cap:
+                    self._items.pop(next(iter(self._items)))
+            return (*stored, True)
+        return "", "", False
+
+
+_RAW_HASH_CACHE = _RawHashCache(_FRESHNESS_CACHE_CAP)
+
+
+def _hash_matches(live: str, indexed: str) -> bool:
+    if not live or not indexed:
+        return True
+    return live.removeprefix("sha256:") == indexed.removeprefix("sha256:")
+
+
+def _annotate_hit(row: dict[str, Any], document: Any, item: dict[str, Any], *, why: str) -> None:
+    """Stamp the shared read-path fields.
+
+    The projection version is whatever the index stored. A missing projection
+    version stays empty, so an unknown index cannot look like the live file.
+    """
+
+    if "index_version" in item and item["index_version"] is not None:
+        index_version = item["index_version"]
+    else:
+        index_version = ""
+    shared_readonly().read_path.annotate(
+        row,
+        provenance=str(document.provenance or ""),
+        source=str(document.source or ""),
+        index_version=index_version,
+        sot_version=document.version,
+        why=why,
+    )
+    projection_hash = str(item.get("projection_hash") or "")
+    if projection_hash:
+        row["projection_hash"] = projection_hash
+        live = str(row.get("content_hash") or "").removeprefix("sha256:")
+        if live != projection_hash:
+            row["stale"] = True
+
+
 class Gateway:
     """MCP tool implementations bound to one local vault root."""
 
@@ -321,47 +509,150 @@ class Gateway:
         source: str = "",
         include_history: bool = False,
         as_of: str | None = None,
+        rounds: int | None = None,
+        judge: object | None = None,
     ) -> dict[str, Any]:
+        # This delivery does not score hits. An injected judge is ignored.
+        del judge
         if not query.strip():
             raise ValueError("query required")
         if source and self.allowed_sources and source not in self.allowed_sources:
             raise ValueError("source is not allowed for this account")
         repository = self._repo()
-        retriever = self._retriever(repository)
-        result = retriever.search(
-            query,
-            limit=max(0, min(limit, 50)),
-            mode=mode,
-            source=source,
-            include_history=include_history,
-            as_of=as_of,
-            tenant=self.tenant,
-        )
-        rows = []
-        for item in result["results"]:
-            document = repository.get(item["id"])
-            rows.append(
-                {
-                    "id": document.id,
-                    "title": document.title,
-                    "layer": document.layer.value,
-                    "tier": document.tier.value,
-                    "updated_at": document.updated_at.isoformat(),
-                    "valid_from": document.valid_from.isoformat() if document.valid_from else None,
-                    "valid_to": document.valid_to.isoformat() if document.valid_to else None,
-                    "superseded_by": document.superseded_by,
-                    "type": document.type,
-                    "score": item["score"],
-                    "source": document.source,
-                }
+        if mode == "multihop":
+            _ensure_search_index(repository)
+            parsed_as_of = None
+            if as_of:
+                parsed_as_of = datetime.fromisoformat(as_of)
+                if parsed_as_of.tzinfo is None or parsed_as_of.utcoffset() is None:
+                    raise ValueError("as_of must include a timezone")
+            result = search_multihop(
+                repository,
+                query,
+                limit=max(1, min(limit, 50)),
+                tenant=self.tenant,
+                source=source,
+                allowed_sources=self.allowed_sources,
+                include_history=include_history,
+                as_of=parsed_as_of,
+                rounds=rounds,
             )
-        return {
+        elif mode == "fts":
+            _ensure_search_index(repository)
+            payload = shared_readonly().search_vault(
+                repository.root,
+                query,
+                limit=max(1, min(int(limit), 50)),
+                source=source,
+                tenant=self.tenant,
+                include_history=include_history,
+                as_of=as_of,
+            )
+            visible = [
+                item
+                for item in payload["results"]
+                if not self.allowed_sources or item["source"] in self.allowed_sources
+            ]
+            result = {
+                "mode": "fts",
+                "degraded": False,
+                "errors": [],
+                "model_versions": {},
+                "results": visible,
+            }
+        else:
+            retriever = self._retriever(repository)
+            result = retriever.search(
+                query,
+                limit=max(0, min(limit, 50)),
+                mode=mode,
+                source=source,
+                include_history=include_history,
+                as_of=as_of,
+                tenant=self.tenant,
+            )
+        why = "lexical" if result["mode"] == "fts" else "semantic"
+        rows = []
+        for offset, item in enumerate(result["results"]):
+            if "memory_type" in item:
+                memory_path = repository.root / "memories" / f"{item['id']}.md"
+                checked = offset < _FRESHNESS_LIMIT
+                if checked:
+                    live_hash, live_version, consistent = _RAW_HASH_CACHE.lookup(memory_path)
+                else:
+                    live_hash, live_version, consistent = "", "", True
+                index_version = (
+                    item["index_version"] if item.get("index_version") is not None else ""
+                )
+                indexed_hash = str(item.get("content_hash") or "")
+                row = {
+                    "id": item["id"],
+                    "title": item["title"],
+                    "layer": item["layer"],
+                    "tier": item["tier"],
+                    "updated_at": item["updated_at"],
+                    "valid_from": item["valid_from"],
+                    "valid_to": item["valid_to"],
+                    "superseded_by": item["superseded_by"],
+                    "type": item["memory_type"],
+                    "score": item["score"],
+                    "source": item["source"],
+                    # An inconsistent read has no digest. Do not fill in the
+                    # indexed hash, which would look like a verified live one.
+                    "content_hash": (
+                        "" if checked and not consistent else (live_hash or indexed_hash)
+                    ),
+                }
+                shared_readonly().read_path.annotate(
+                    row,
+                    provenance=str(item.get("provenance") or ""),
+                    source=str(item.get("source") or ""),
+                    index_version=index_version,
+                    # Past the first 10, the file is not read. Keep the index
+                    # version so a skipped check is not reported as stale.
+                    sot_version=live_version if checked else index_version,
+                    why=str(item.get("why") or why),
+                )
+                if checked:
+                    if not consistent:
+                        row["stale"] = True
+                    if indexed_hash and not _hash_matches(live_hash, indexed_hash):
+                        row["stale"] = True
+                    projection_hash = str(item.get("projection_hash") or "")
+                    if projection_hash:
+                        row["projection_hash"] = projection_hash
+                        if live_hash.removeprefix("sha256:") != projection_hash:
+                            row["stale"] = True
+                rows.append(row)
+                continue
+            document = repository.get(item["id"])
+            row = {
+                "id": document.id,
+                "title": document.title,
+                "layer": document.layer.value,
+                "tier": document.tier.value,
+                "updated_at": document.updated_at.isoformat(),
+                "valid_from": document.valid_from.isoformat() if document.valid_from else None,
+                "valid_to": document.valid_to.isoformat() if document.valid_to else None,
+                "superseded_by": document.superseded_by,
+                "type": document.type,
+                "score": item["score"],
+                "source": document.source,
+                "content_hash": item.get("content_hash")
+                or _content_hash(repository.root / "memories" / f"{document.id}.md"),
+            }
+            _annotate_hit(row, document, item, why=str(item.get("why") or why))
+            rows.append(row)
+        payload = {
             "mode": result["mode"],
             "degraded": result["degraded"],
             "errors": result["errors"],
             "model_versions": result["model_versions"],
             "results": rows,
         }
+        if "route" in result:
+            payload["route"] = result["route"]
+        return payload
 
     def get(self, memory_id: str) -> dict[str, Any]:
         document = self._repo().get(memory_id)
@@ -521,6 +812,7 @@ class Gateway:
                 source=str(args.get("source") or ""),
                 include_history=bool(args.get("include_history", False)),
                 as_of=(str(args["as_of"]) if args.get("as_of") else None),
+                rounds=(int(args["rounds"]) if args.get("rounds") is not None else None),
             ),
             "memory_get": lambda args: self.get(str(args.get("memory_id") or "")),
             "memory_remember": lambda args: self.remember(
@@ -597,6 +889,9 @@ class Gateway:
                 arguments = params["arguments"]
             if not isinstance(arguments, dict):
                 self.respond(_rpc_error(msg_id, -32602, "invalid params"))
+                return
+            if client_endpoint_fields(arguments):
+                self.respond(_rpc_error(msg_id, -32602, "endpoint fields are not accepted"))
                 return
             try:
                 result = handler(arguments)

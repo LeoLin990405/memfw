@@ -24,10 +24,9 @@ Contract summary:
   ``/search`` always runs FTS (the only implemented mode) and reports false,
   ``/related`` reports false on the edges projection and true when it falls back
   to lexical search;
-* temporal filtering happens in SQL. tenant has no column in the index, so it is
-  applied by reading frontmatter in batches (``LIMIT``/``OFFSET``) until
-  ``limit`` matches are collected or the matches are exhausted - the deviation
-  from "tenant filtered in SQL" that ``docs/v1-integration.md`` records.
+* temporal filtering and tenant filtering both happen in SQL, before ranking
+  and the limit cut. Tenant is exact equality on ``memory_access.tenant``.
+  An empty tenant matches only memories whose tenant is empty.
 
 Configuration: ``MEMFW_READONLY_ROOT`` (or ``--root``; ``--root`` falls back
 to the environment variable), ``MEMFW_RELATED_DB`` (or ``--related-db``),
@@ -59,6 +58,23 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 
 import yaml
+
+
+def _load_read_path():
+    """Load the stdlib read-path helper beside this file. It does not import memfw."""
+
+    import importlib.util
+
+    path = Path(__file__).with_name("read_path.py")
+    spec = importlib.util.spec_from_file_location("memfw_read_path", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("read_path.py is missing")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+read_path = _load_read_path()
 
 CONTRACT = "memfw-http/2"
 TOKEN_HEADER = "X-Memfw-Token"
@@ -92,6 +108,7 @@ WRITE_TOKEN_ENV = "MEMFW_WRITE_TOKEN"
 WRITE_TOKEN_FILE_ENV = "MEMFW_WRITE_TOKEN_FILE"
 ROOT_ENV = "MEMFW_READONLY_ROOT"
 RELATED_DB_ENV = "MEMFW_RELATED_DB"
+TENANT_ENV = "MEMFW_TENANT"
 TOKEN_FILE_MODE = 0o600
 # Codes BaseHTTPRequestHandler raises before the route runs. 414/431 are size
 # failures; 505 is an unsupported version and must still carry a status line.
@@ -118,6 +135,49 @@ class ServiceError(Exception):
 
 def _bad_request(message: str) -> ServiceError:
     return ServiceError(400, message)
+
+
+_ENDPOINT_KEYS = frozenset(
+    {
+        "endpoint",
+        "base_url",
+        "embedding_endpoint",
+        "embedding_url",
+        "rerank_endpoint",
+        "rerank_url",
+        "judge_endpoint",
+        "judge_url",
+        "rewrite_endpoint",
+        "rewrite_url",
+        "model_endpoint",
+        "openai_base_url",
+    }
+)
+
+
+def reject_unavailable_search_mode(payload: dict[str, Any]) -> None:
+    """HTTP search stays on FTS. Other modes are refused until the v3 contract."""
+
+    if "mode" not in payload:
+        return
+    if payload.get("mode") != "fts":
+        raise _bad_request("mode is not available")
+
+
+def reject_client_endpoints(payload: dict[str, Any]) -> None:
+    """A request body cannot name a judge, rerank, embedding, or rewrite endpoint."""
+
+    found: list[str] = []
+    for key in payload:
+        normalized = str(key).strip().lower().replace("-", "_")
+        if (
+            normalized in _ENDPOINT_KEYS
+            or normalized.endswith("_endpoint")
+            or normalized.endswith("_url")
+        ):
+            found.append(str(key))
+    if found:
+        raise _bad_request("endpoint fields are not accepted")
 
 
 def _internal() -> ServiceError:
@@ -184,6 +244,28 @@ def _root() -> Path:
     if not value:
         raise _internal()
     return Path(value).expanduser()
+
+
+def scope_tenant(requested: Any) -> str:
+    """Bind a read to the service tenant. A payload may only repeat that tenant.
+
+    ``MEMFW_TENANT`` is the tenant bound to this process's token. An omitted
+    tenant uses that binding. A different tenant is refused. With no binding,
+    the payload tenant is the scope, including an empty one.
+    """
+
+    bound = os.environ.get(TENANT_ENV, "")
+    if not isinstance(bound, str):
+        bound = ""
+    if requested is None:
+        requested = ""
+    if not isinstance(requested, str):
+        raise _bad_request("tenant must be a string")
+    if not bound:
+        return requested
+    if requested in ("", bound):
+        return bound
+    raise ServiceError(403, "tenant is outside the bound tenant")
 
 
 def _related_db() -> Path | None:
@@ -351,6 +433,8 @@ def _document_payload(root: Path, identifier: str) -> dict[str, Any] | None:
         "valid_to": _iso_string(metadata.get("valid_to")),
         "superseded_by": _iso_string(metadata.get("superseded_by")),
         "content_hash": "sha256:" + hashlib.sha256(raw).hexdigest(),
+        "provenance": str(metadata.get("provenance") or ""),
+        "version": metadata.get("version"),
     }
 
 
@@ -400,7 +484,7 @@ def _temporal_clause(
     if as_of is not None:
         return (
             "EXISTS (SELECT 1 FROM memory_temporal t WHERE t.id = r.id "
-            "AND (t.valid_from = '' OR t.valid_from <= ?) "
+            "AND (CASE WHEN t.valid_from != '' THEN t.valid_from ELSE r.created_at END) <= ? "
             "AND (t.valid_to = '' OR t.valid_to > ?))",
             [as_of, as_of],
         )
@@ -416,6 +500,7 @@ def _search_batch(
     *,
     needle: str,
     source: str,
+    tenant: str,
     temporal_sql: str,
     temporal_params: list[Any],
     limit: int,
@@ -428,7 +513,9 @@ def _search_batch(
         select = (
             "SELECT r.id AS id, r.title AS title, r.summary AS summary, "
             "r.search_body AS search_body, r.source AS source, r.tier AS tier, "
-            "r.layer AS layer, NULL AS raw_score FROM memory_rows r"
+            "r.layer AS layer, r.provenance AS provenance, r.version AS version, "
+            "NULL AS raw_score FROM memory_rows r "
+            "JOIN memory_access a ON a.id = r.id"
         )
         where = [
             "(instr(lower(r.title), ?) > 0 OR instr(lower(r.search_body), ?) > 0 "
@@ -440,12 +527,16 @@ def _search_batch(
         select = (
             "SELECT r.id AS id, r.title AS title, r.summary AS summary, "
             "r.search_body AS search_body, r.source AS source, r.tier AS tier, "
-            "r.layer AS layer, bm25(memory_fts) AS raw_score "
-            "FROM memory_fts JOIN memory_rows r ON r.id = memory_fts.id"
+            "r.layer AS layer, r.provenance AS provenance, r.version AS version, "
+            "bm25(memory_fts) AS raw_score "
+            "FROM memory_fts JOIN memory_rows r ON r.id = memory_fts.id "
+            "JOIN memory_access a ON a.id = r.id"
         )
         where = ["memory_fts MATCH ?"]
         params = [_fts_query(needle)]
         order = " ORDER BY raw_score, r.id"
+    where.append("a.tenant = ?")
+    params.append(tenant)
     if source:
         where.append("r.source = ?")
         params.append(source)
@@ -499,10 +590,18 @@ def search_vault(
 
     connection = _connect_index(base)
     try:
+        if not _has_table(connection, "memory_access"):
+            return {
+                "contract": CONTRACT,
+                "mode": "fts",
+                "degraded": False,
+                "errors": [],
+                "results": [],
+            }
         temporal_sql, temporal_params = _temporal_clause(
             connection, include_history, as_of_normalised
         )
-        batch = limit if not tenant else max(limit * 4, 100)
+        batch = limit
         offset = 0
         matched: list[sqlite3.Row] = []
         payloads: list[dict[str, Any]] = []
@@ -511,6 +610,7 @@ def search_vault(
                 connection,
                 needle=needle,
                 source=source,
+                tenant=tenant,
                 temporal_sql=temporal_sql,
                 temporal_params=temporal_params,
                 limit=batch,
@@ -523,15 +623,13 @@ def search_vault(
                 payload = _document_payload(base, str(row["id"]))
                 if payload is None:
                     continue
-                if tenant and payload["tenant"] != tenant:
+                if payload["tenant"] != tenant:
                     continue
                 matched.append(row)
                 payloads.append(payload)
                 if len(matched) >= limit:
                     break
             if len(matched) >= limit or len(rows) < batch:
-                break
-            if not tenant:
                 break
     finally:
         connection.close()
@@ -542,24 +640,31 @@ def search_vault(
         summary = _collapsed(
             str(row["summary"] or "") or str(row["search_body"] or ""), MAX_SUMMARY_CHARS
         )
-        results.append(
-            {
-                "id": str(row["id"]),
-                "title": str(row["title"]),
-                "summary": summary,
-                "source": str(row["source"]),
-                "tier": str(row["tier"]),
-                "layer": str(row["layer"]),
-                "tenant": payload["tenant"],
-                "related": payload["related"],
-                "valid_from": _optional(payload["valid_from"]),
-                "valid_to": _optional(payload["valid_to"]),
-                "superseded_by": _optional(payload["superseded_by"]),
-                "score": score,
-                "raw_score": raw_score,
-                "content_hash": payload["content_hash"],
-            }
+        item = {
+            "id": str(row["id"]),
+            "title": str(row["title"]),
+            "summary": summary,
+            "source": str(row["source"]),
+            "tier": str(row["tier"]),
+            "layer": str(row["layer"]),
+            "tenant": payload["tenant"],
+            "related": payload["related"],
+            "valid_from": _optional(payload["valid_from"]),
+            "valid_to": _optional(payload["valid_to"]),
+            "superseded_by": _optional(payload["superseded_by"]),
+            "score": score,
+            "raw_score": raw_score,
+            "content_hash": payload["content_hash"],
+        }
+        read_path.annotate(
+            item,
+            provenance=str(payload.get("provenance") or row["provenance"] or ""),
+            source=str(row["source"]),
+            index_version=row["version"],
+            sot_version=payload.get("version"),
+            why="lexical",
         )
+        results.append(item)
     return {
         "contract": CONTRACT,
         "mode": "fts",
@@ -1257,14 +1362,16 @@ class Handler(BaseHTTPRequestHandler):
             self._authorise()
             body_limit = STAGE_BODY_BYTES if self.path == "/stage" else SEARCH_BODY_BYTES
             payload = self._read_json(body_limit)
+            reject_client_endpoints(payload)
             root = _root()
             if self.path == "/search":
+                reject_unavailable_search_mode(payload)
                 result = search_vault(
                     root,
                     payload.get("query", ""),
                     limit=payload.get("limit", 10),
                     source=payload.get("source", ""),
-                    tenant=payload.get("tenant", ""),
+                    tenant=scope_tenant(payload.get("tenant", "")),
                     include_history=payload.get("include_history", False),
                     as_of=payload.get("as_of"),
                 )
@@ -1273,7 +1380,7 @@ class Handler(BaseHTTPRequestHandler):
                     root,
                     payload.get("memory_id", ""),
                     limit=payload.get("limit", 10),
-                    tenant=payload.get("tenant", ""),
+                    tenant=scope_tenant(payload.get("tenant", "")),
                 )
             else:
                 result = stage_candidate(root, payload)

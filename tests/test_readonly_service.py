@@ -417,6 +417,35 @@ def test_internal_error_message_is_fixed(
 # ---------------------------------------------------------------------------
 
 
+def test_bound_token_tenant_rejects_a_switch_and_defaults_when_omitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, httpd: str
+) -> None:
+    root = seed_vault(
+        tmp_path / "vault",
+        [
+            _memory("mem-alpha", "Tenant alpha", "corpus keyword", tenant="tenant-a"),
+            _memory("mem-beta", "Tenant beta", "corpus keyword", tenant="tenant-b"),
+        ],
+    )
+    _use_vault(monkeypatch, root)
+    monkeypatch.setenv("MEMFW_TENANT", "tenant-a")
+
+    status, same = _post(httpd, "/search", {"query": "corpus keyword", "tenant": "tenant-a"})
+    assert status == 200
+    assert [item["id"] for item in same["results"]] == ["mem-alpha"]
+
+    status, other = _post(httpd, "/search", {"query": "corpus keyword", "tenant": "tenant-b"})
+    assert status == 403
+    assert other["error"]["code"] == "forbidden"
+
+    status, omitted = _post(httpd, "/search", {"query": "corpus keyword"})
+    assert status == 200
+    assert [item["id"] for item in omitted["results"]] == ["mem-alpha"]
+
+    status, switched = _post(httpd, "/related", {"memory_id": "mem-beta", "tenant": "tenant-b"})
+    assert status == 403
+
+
 def test_tenant_filter_returns_a_full_limit(tmp_path: Path) -> None:
     documents = []
     for index in range(6):
@@ -459,23 +488,23 @@ def test_source_filter_runs_before_the_limit(tmp_path: Path) -> None:
 
 def test_score_is_normalised_and_monotonic(tmp_path: Path) -> None:
     root = seed_vault(tmp_path / "vault")
-    result = search_vault(root, "corpus keyword", limit=10)
+    result = search_vault(root, "corpus keyword", limit=10, tenant="tenant-a")
     assert len(result["results"]) >= 2
     scores = [item["score"] for item in result["results"]]
     raw_scores = [item["raw_score"] for item in result["results"]]
     assert all(0.0 <= score <= 1.0 for score in scores)
     assert scores == sorted(scores, reverse=True)
     assert raw_scores == sorted(raw_scores)
-    short = search_vault(root, "al", limit=5)
+    short = search_vault(root, "al", limit=5, tenant="tenant-a")
     assert short["results"]
     short_scores = [item["score"] for item in short["results"]]
     assert short_scores == sorted(short_scores, reverse=True)
     assert all(item["raw_score"] is None for item in short["results"])
     assert all(0.0 <= score <= 1.0 for score in short_scores)
     assert len(set(short_scores)) == len(short_scores)
-    upper = search_vault(root, "AL", limit=5)
+    upper = search_vault(root, "AL", limit=5, tenant="tenant-a")
     assert [item["id"] for item in upper["results"]] == [item["id"] for item in short["results"]]
-    single = search_vault(root, "a", limit=5)
+    single = search_vault(root, "a", limit=5, tenant="tenant-a")
     assert single["results"]
     assert all(item["raw_score"] is None for item in single["results"])
 
@@ -526,7 +555,7 @@ def test_as_of_keeps_a_document_superseded_after_the_instant(tmp_path: Path) -> 
 
 def test_result_payload_carries_temporal_and_hash_fields(tmp_path: Path) -> None:
     root = seed_vault(tmp_path / "vault")
-    result = search_vault(root, "corpus keyword", limit=10)
+    result = search_vault(root, "corpus keyword", limit=10, tenant="tenant-a")
     by_id = {item["id"]: item for item in result["results"]}
     alpha = by_id["mem-alpha"]
     assert alpha["related"] == ["mem-beta"]
@@ -541,9 +570,11 @@ def test_result_payload_carries_temporal_and_hash_fields(tmp_path: Path) -> None
 
 def test_include_history_and_superseded_documents(tmp_path: Path) -> None:
     root = seed_vault(tmp_path / "vault")
-    current = search_vault(root, "corpus keyword", limit=10)
+    current = search_vault(root, "corpus keyword", limit=10, tenant="tenant-a")
     assert "mem-old" not in {item["id"] for item in current["results"]}
-    history = search_vault(root, "corpus keyword", limit=10, include_history=True)
+    history = search_vault(
+        root, "corpus keyword", limit=10, include_history=True, tenant="tenant-a"
+    )
     assert "mem-old" in {item["id"] for item in history["results"]}
 
 
@@ -571,7 +602,7 @@ def test_related_edges_mode_and_no_write(tmp_path: Path) -> None:
 
 def test_related_falls_back_to_fts(tmp_path: Path) -> None:
     root = seed_vault(tmp_path / "vault")
-    result = related_vault(root, "mem-alpha", limit=5)
+    result = related_vault(root, "mem-alpha", limit=5, tenant="tenant-a")
     assert result["mode"] == "fts"
     assert result["degraded"] is True
     assert [item["reasons"] for item in result["results"]] == [["lexical"]]
@@ -692,6 +723,27 @@ def test_stage_never_touches_the_vault(tmp_path: Path) -> None:
     assert not (root / "_candidates").joinpath("memfw").exists()
 
 
+def test_search_rejects_a_non_fts_mode(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
+    status, payload = _post(
+        httpd, "/search", {"query": "corpus keyword", "mode": "hybrid"}, READ_TOKEN
+    )
+    assert status == 400
+    _assert_error(payload, "bad_request")
+    assert payload["error"]["message"] == "mode is not available"
+    status, payload = _post(
+        httpd,
+        "/search",
+        {"query": "corpus keyword", "mode": "fts", "tenant": "tenant-a"},
+        READ_TOKEN,
+    )
+    assert status == 200
+    assert payload["mode"] == "fts"
+    assert payload["results"]
+
+
 def test_envelope_fields_and_summary_truncation(tmp_path: Path) -> None:
     documents = [_memory("mem-long", "Long note", "corpus " + "detail " * 200)]
     root = seed_vault(tmp_path / "vault", documents)
@@ -706,9 +758,9 @@ def test_envelope_fields_and_summary_truncation(tmp_path: Path) -> None:
 
 def test_limit_is_clamped_and_not_an_error(tmp_path: Path) -> None:
     root = seed_vault(tmp_path / "vault")
-    low = search_vault(root, "corpus keyword", limit=0)
+    low = search_vault(root, "corpus keyword", limit=0, tenant="tenant-a")
     assert len(low["results"]) == 1
-    high = search_vault(root, "corpus keyword", limit=999)
+    high = search_vault(root, "corpus keyword", limit=999, tenant="tenant-a")
     assert 1 <= len(high["results"]) <= 50
     over = related_vault(root, "mem-alpha", limit=0)
     assert isinstance(over["results"], list)
@@ -963,7 +1015,7 @@ def test_related_reasons_stay_in_the_contract_vocabulary(tmp_path: Path) -> None
         assert service._reason_name(method) == expected
     assert service._reason_name("something-new") == "lexical"
     assert service._reason_name("mixed") == "lexical"
-    fallback = related_vault(root, "mem-alpha", limit=5)
+    fallback = related_vault(root, "mem-alpha", limit=5, tenant="tenant-a")
     fallback_reasons = {reason for item in fallback["results"] for reason in item["reasons"]}
     assert fallback_reasons == {"lexical"}
 
@@ -1039,9 +1091,12 @@ def test_stage_proposal_id_boundaries(tmp_path: Path) -> None:
         with pytest.raises(ServiceError) as rejected:
             stage_candidate(root, {"proposal_id": bad, "title": "T", "content": "x"})
         assert rejected.value.status == 400, bad
-    assert [path.name for path in (root / "_candidates" / "remember").iterdir()] == [
-        f"conductor-{longest}.md"
+    published = [
+        path.name
+        for path in (root / "_candidates" / "remember").iterdir()
+        if not path.name.startswith(".")
     ]
+    assert published == [f"conductor-{longest}.md"]
 
 
 def test_non_ascii_credential_is_401_not_500(
@@ -1128,7 +1183,7 @@ def test_surrogate_or_nul_query_is_400_over_http(
         status, payload = _http(httpd, "POST", "/search", raw, READ_TOKEN)
         assert status == 400, raw
         _assert_error(payload, "bad_request")
-    status, payload = _post(httpd, "/search", {"query": "corpus"})
+    status, payload = _post(httpd, "/search", {"query": "corpus", "tenant": "tenant-a"})
     assert status == 200
     assert payload["results"]
 
@@ -1175,7 +1230,9 @@ def test_include_history_overrides_as_of(
     _use_vault(monkeypatch, root)
     as_of = "2026-11-06T00:00:00+00:00"
     status, before = _post(
-        httpd, "/search", {"query": "corpus keyword", "limit": 10, "as_of": as_of}
+        httpd,
+        "/search",
+        {"query": "corpus keyword", "limit": 10, "as_of": as_of, "tenant": "tenant-a"},
     )
     assert status == 200
     assert "mem-old" not in {item["id"] for item in before["results"]}
@@ -1187,6 +1244,7 @@ def test_include_history_overrides_as_of(
             "limit": 10,
             "as_of": as_of,
             "include_history": True,
+            "tenant": "tenant-a",
         },
     )
     assert status == 200
@@ -1469,7 +1527,8 @@ def test_stage_disk_full_removes_the_temp_file(
         stage_candidate(root, {"proposal_id": "full", "title": "T", "content": "body"})
     directory = root / "_candidates" / "remember"
     assert directory.is_dir()
-    assert [path.name for path in directory.iterdir()] == ["conductor-pad.md"]
+    published = sorted(path.name for path in directory.iterdir() if not path.name.startswith("."))
+    assert published == ["conductor-pad.md"]
     monkeypatch.setattr(os, "fsync", real_fsync)
 
 
@@ -1557,7 +1616,7 @@ SCENARIOS: dict[str, dict] = {
         "status": 200,
         "method": "POST",
         "path": "/search",
-        "body": {"query": "corpus keyword", "limit": 3},
+        "body": {"query": "corpus keyword", "limit": 3, "tenant": "tenant-a"},
         "token": READ_TOKEN,
         "related": True,
     },
@@ -1569,6 +1628,7 @@ SCENARIOS: dict[str, dict] = {
             "query": "corpus keyword",
             "limit": 5,
             "as_of": "2026-11-06T00:15:00+00:00",
+            "tenant": "tenant-a",
         },
         "token": READ_TOKEN,
         "related": True,
@@ -1601,7 +1661,7 @@ SCENARIOS: dict[str, dict] = {
         "status": 200,
         "method": "POST",
         "path": "/related",
-        "body": {"memory_id": "mem-alpha", "limit": 3},
+        "body": {"memory_id": "mem-alpha", "limit": 3, "tenant": "tenant-a"},
         "token": READ_TOKEN,
         "related": False,
     },

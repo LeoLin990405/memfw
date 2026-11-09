@@ -1,0 +1,102 @@
+{
+  "assumptions": [
+    "paired gains are treated as monotonic",
+    "the interval does not add misses beyond the measured paired differences"
+  ],
+  "by_class": {
+    "conflict": {
+      "alpha": 0.05,
+      "lower": 0.0,
+      "mean": 0.0,
+      "n": 160,
+      "n_bootstrap": 2000,
+      "repeats": 1,
+      "seed": 20261108,
+      "upper": 0.0
+    },
+    "delete": {
+      "alpha": 0.05,
+      "lower": 0.0,
+      "mean": 0.0,
+      "n": 160,
+      "n_bootstrap": 2000,
+      "repeats": 1,
+      "seed": 20261108,
+      "upper": 0.0
+    },
+    "multi_tenant": {
+      "alpha": 0.05,
+      "lower": 0.0,
+      "mean": 0.0,
+      "n": 160,
+      "n_bootstrap": 2000,
+      "repeats": 1,
+      "seed": 20261108,
+      "upper": 0.0
+    },
+    "multihop": {
+      "alpha": 0.05,
+      "lower": 0.5,
+      "mean": 0.5,
+      "n": 160,
+      "n_bootstrap": 2000,
+      "repeats": 1,
+      "seed": 20261108,
+      "upper": 0.5
+    },
+    "poisoning": {
+      "alpha": 0.05,
+      "lower": 0.0,
+      "mean": 0.0,
+      "n": 160,
+      "n_bootstrap": 2000,
+      "repeats": 1,
+      "seed": 20261108,
+      "upper": 0.0
+    },
+    "time_update": {
+      "alpha": 0.05,
+      "lower": 0.0,
+      "mean": 0.0,
+      "n": 160,
+      "n_bootstrap": 2000,
+      "repeats": 1,
+      "seed": 20261108,
+      "upper": 0.0
+    }
+  },
+  "gate": "continue",
+  "interface_change": false,
+  "judge": false,
+  "multihop": {
+    "alpha": 0.05,
+    "lower": 0.5,
+    "mean": 0.5,
+    "n": 160,
+    "n_bootstrap": 2000,
+    "repeats": 1,
+    "seed": 20261108,
+    "upper": 0.5
+  },
+  "passage_k": 5,
+  "path": "memory_bm25",
+  "per_class": 160,
+  "phase": "R0.5",
+  "prd": "memfw-retrieval-roadmap.md",
+  "primary_k": 10,
+  "ranking_repeats": 1,
+  "rrf_k": 60,
+  "seed": 20261108,
+  "single_hop": {
+    "alpha": 0.05,
+    "lower": 0.0,
+    "mean": 0.0,
+    "n": 800,
+    "n_bootstrap": 2000,
+    "repeats": 1,
+    "seed": 20261108,
+    "upper": 0.0
+  },
+  "synthetic": true,
+  "templates_per_class": 3
+}

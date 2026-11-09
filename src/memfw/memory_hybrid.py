@@ -6,7 +6,10 @@ a disposable projection, rebuilt from that directory and never written back.
 
 from __future__ import annotations
 
+import json
+import sqlite3
 import time
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -24,6 +27,44 @@ from .notes.versioning import (
     write_manifest,
 )
 from .retrieval import VaultRetriever
+
+_READONLY: Any = None
+
+
+def shared_readonly():
+    """Load the readonly service module that owns ``search_vault``.
+
+    The file sits beside this repository, not inside the ``memfw`` package, so
+    the HTTP script can use it without importing ``memfw``.
+    """
+
+    global _READONLY
+    if _READONLY is not None:
+        return _READONLY
+    import importlib.util
+    import sys
+
+    path = _readonly_service_file()
+    spec = importlib.util.spec_from_file_location("memfw_readonly_service_shared", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"readonly service is not available at {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    _READONLY = module
+    return module
+
+
+def _readonly_service_file() -> Path:
+    """The shared service lives in the wheel, and in ``scripts/`` in a checkout."""
+
+    packaged = Path(__file__).resolve().parent / "memfw_readonly_service.py"
+    if packaged.is_file():
+        return packaged
+    checkout = Path(__file__).resolve().parents[2] / "scripts" / "memfw_readonly_service.py"
+    if checkout.is_file():
+        return checkout
+    raise ImportError("readonly service is not installed")
 
 
 class MemoryHybridRetriever:
@@ -128,6 +169,36 @@ class MemoryHybridRetriever:
             raise ValueError("as_of must include a timezone")
         return parsed.astimezone(UTC)
 
+    def _projection_stamp(self, memory_id: str) -> tuple[str, str]:
+        """Version and file hash stored in the notes projection.
+
+        An unknown version is empty. Callers must not replace it with the
+        live document version.
+        """
+
+        path = self.notes_index.db_path
+        if not path.is_file():
+            return "", ""
+        try:
+            with closing(sqlite3.connect(path)) as connection:
+                row = connection.execute(
+                    "SELECT content_hash, frontmatter FROM notes WHERE path = ?",
+                    (f"{memory_id}.md",),
+                ).fetchone()
+        except sqlite3.Error:
+            return "", ""
+        if row is None:
+            return "", ""
+        digest = str(row[0] or "")
+        version = ""
+        try:
+            frontmatter = json.loads(row[1] or "{}")
+        except json.JSONDecodeError:
+            frontmatter = {}
+        if isinstance(frontmatter, dict) and frontmatter.get("version") not in (None, ""):
+            version = str(frontmatter["version"])
+        return version, digest
+
     def _fts_search(
         self,
         query: str,
@@ -176,6 +247,7 @@ class MemoryHybridRetriever:
                     actor="mechanism",
                     details={"memory_id": document.id, "operation": "fts_retrieve"},
                 )
+                index_version, projection_hash = self._projection_stamp(document.id)
                 results.append(
                     {
                         "id": document.id,
@@ -183,6 +255,8 @@ class MemoryHybridRetriever:
                         "score": hit.score,
                         "source": document.source,
                         "path": f"memories/{document.id}.md",
+                        "index_version": index_version,
+                        "projection_hash": projection_hash,
                     }
                 )
             return results, errors
@@ -196,6 +270,7 @@ class MemoryHybridRetriever:
                 continue
             if not self._source_allowed(document.source, source):
                 continue
+            index_version, projection_hash = self._projection_stamp(document.id)
             results.append(
                 {
                     "id": document.id,
@@ -203,6 +278,8 @@ class MemoryHybridRetriever:
                     "score": 0.0,
                     "source": document.source,
                     "path": f"memories/{document.id}.md",
+                    "index_version": index_version,
+                    "projection_hash": projection_hash,
                 }
             )
         return results, errors
@@ -267,6 +344,7 @@ class MemoryHybridRetriever:
                         actor="mechanism",
                         details={"memory_id": memory_id, "operation": "hybrid_retrieve"},
                     )
+                    index_version, projection_hash = self._projection_stamp(document.id)
                     results.append(
                         {
                             "id": document.id,
@@ -274,6 +352,8 @@ class MemoryHybridRetriever:
                             "score": hit.score,
                             "source": document.source,
                             "path": f"memories/{document.id}.md",
+                            "index_version": index_version,
+                            "projection_hash": projection_hash,
                         }
                     )
                 mode_used = notes_result.mode_used
@@ -325,6 +405,7 @@ class MemoryHybridRetriever:
                         "score": 0.0,
                         "source": document.source,
                         "path": f"memories/{document.id}.md",
+                        "why": "related",
                     }
                 results = sorted(
                     by_id.values(), key=lambda item: (-scores.get(item["id"], 0.0), item["id"])
