@@ -28,6 +28,7 @@ Markdown 即真相 · 哈希链 JSONL 事件 · 可重建 FTS5 索引 · 确定�
 - **Markdown 即真相。** 每条记忆都是可读、可 diff 的 Markdown 文件，没有不可迁移的封闭数据库。
 - **哈希链审计日志。** 每次状态变化都追加到 JSONL 事件链，`memfw log verify` 可验证本地历史完整。
 - **可重建的 FTS5 投影。** 搜索索引是消耗品；即使丢失，`memfw index rebuild` 也能从 Markdown 恢复。
+- **按词匹配。** 查询里的每个词各自加引号，再用 OR 连起来，按 bm25 排序，所以一句自然语言只要和记忆有共同的词就能找到。查询中的 FTS 语法一律当普通文本处理；没有可用词的查询返回空结果。库、MCP 和 HTTP 三条路径共用同一个函数（`memfw.index.fts_terms`）。
 - **确定性保留/遗忘。** 五种策略（`fifo`、`lru`、`decay`、`salience`、`consolidate_then_forget`）、
   显式预算与可审核计划，绝不静默交给模型决定。
 - **写入默认需人工确认。** 模型写入默认要确认；anchor 决策始终由人做出。
@@ -141,6 +142,7 @@ OKF bundle 是可重建的派生投影；Markdown 仍是权威。字段映射与
 - **Day 7 报告（LoCoMo）：** [`reports/day7_report.md`](reports/day7_report.md)
 - **Day 10 零结果分析：** [`reports/day10_null_result_analysis.md`](reports/day10_null_result_analysis.md)
 - **Day 11 Mem0 基线：** [`reports/day11_baseline_comparison.md`](reports/day11_baseline_comparison.md)
+- **“做梦”评测数据：** 合成的重复、冲突、过期用例，以及合并准确率、冲突检出率、误合并率等指标（[`eval/dreams/`](eval/dreams)）。`memfw dream` 本身尚未实现。
 - **Step G 实验：** [`results/stepG/REPORT.md`](results/stepG/REPORT.md)
 
 ## 📁 仓库结构
