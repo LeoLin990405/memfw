@@ -1,0 +1,16 @@
+{
+  "alias_count": 5,
+  "alias_recall": 1.0,
+  "ambiguity_calls": 20,
+  "ambiguity_rate": 1.0,
+  "class": "alias_query",
+  "distractor_excluded": true,
+  "fts_recall": 0.0,
+  "in_case_types": false,
+  "mcp_fts_recall": 1.0,
+  "mcp_hybrid_recall": 1.0,
+  "merged_redirect": true,
+  "primary_k": 10,
+  "recall_gain": 1.0,
+  "synthetic": true
+}
