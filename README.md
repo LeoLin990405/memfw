@@ -292,6 +292,22 @@ redirect refusal, and a `forget` that says when it is not supported.
 - **Field aliases:** `valid_until` and `superseded` are accepted as input aliases of `valid_to` and `superseded_by`. Output always uses the canonical names. A conflicting pair is rejected, and supersession IDs are compared exactly.
 - **Test suite:** the full suite on `main` after #16 is 652 passed, 2 skipped (offline; live and network tests excluded).
 
+**Retrieval: read path and multi-hop pilot** (PR #18, 2026-11-09):
+
+- **Evaluation harness** (`eval/retrieval_r0/`): synthetic cases in six classes (time updates, conflicts, deletion, multi-tenant, poisoning, multi-hop), a power analysis, full-chain multi-hop gold labels, and coverage of every existing path (HTTP `/search`, MCP default hybrid).
+- **Unified read path:**
+  - HTTP `/search` and MCP share one implementation, and results carry provenance and `why`.
+  - The tenant is bound to the token and filtered in SQL before ranking.
+  - Freshness is checked against the Markdown source of truth. Only the top 10 returned hits are checked, using a stat-keyed cache that compares before and after the read, and the check fails closed.
+- **MCP multi-hop pilot:** one round of SAG2-style query-time term expansion, with ID/keyword disambiguation and a degraded fallback. No judge model is reachable from any entry point.
+- **Measured on the synthetic set** (160 questions per class, 3 standalone runs):
+  - multi-hop recall gain +0.5;
+  - single-hop drop 0;
+  - p95 latency ratio 1.78 (gate: ≤ 2).
+
+  These are synthetic results, not field results.
+- **Full suite:** 709 passed, 2 skipped.
+
 
 ## Relatedness projection
 
