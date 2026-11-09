@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from memfw.core.models import fold_temporal_aliases
+
 from .model import AliasIndex, Concept, _frontmatter, _resolve, load_concepts, project_aliases
 from .normalise import normalise
 
@@ -47,7 +49,7 @@ def matching_memories(
     for path in sorted(memories.glob("*.md")):
         if path.is_symlink() or not path.is_file():
             continue
-        meta = _frontmatter(path)
+        meta = fold_temporal_aliases(_frontmatter(path), strict=False)
         if str(meta.get("tenant") or "") != tenant:
             continue
         if source and str(meta.get("source") or "") != source:
@@ -67,9 +69,14 @@ def temporally_visible(
     include_history: bool,
     as_of: str | None,
 ) -> bool:
-    """Shared time gate for an alias candidate. History keeps every row."""
+    """Shared time gate for an alias candidate. History keeps every row.
+
+    The legacy names ``valid_until`` and ``superseded`` are folded onto
+    ``valid_to`` and ``superseded_by``.
+    """
     if include_history:
         return True
+    meta = fold_temporal_aliases(meta, strict=False)
     start = _parse_instant(meta.get("valid_from")) or _parse_instant(meta.get("created_at"))
     end = _parse_instant(meta.get("valid_to"))
     superseded = str(meta.get("superseded_by") or "").strip()

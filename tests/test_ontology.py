@@ -612,3 +612,103 @@ def test_merge_keeps_relations_and_lint_reports_bad_ones(tmp_path: Path) -> None
     assert any(
         item["kind"] == "dangling_oid" and item["detail"] == "concept:missing" for item in review
     )
+
+
+def _mutate_about(root: Path, field: str, value: str) -> None:
+    path = root / "memories/mem-about.md"
+    text = path.read_text(encoding="utf-8")
+    _, header, body = text.split("---", 2)
+    metadata = yaml.safe_load(header) or {}
+    metadata.pop("valid_to", None)
+    metadata.pop("superseded_by", None)
+    metadata[field] = value
+    dumped = yaml.safe_dump(metadata, sort_keys=False)
+    path.write_text("---\n" + dumped + "---" + body, encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("valid_until", "2021-01-01T00:00:00Z"),
+        ("superseded", "mem-applies"),
+    ],
+)
+@pytest.mark.parametrize("channel", ["http", "fts", "hybrid", "multihop"])
+def test_legacy_temporal_alias_hides_mem_about_on_each_channel(
+    tmp_path: Path,
+    field: str,
+    value: str,
+    channel: str,
+) -> None:
+    from eval.retrieval_r0.alias_eval import _recall_vault
+
+    root = _recall_vault(tmp_path / f"{field}-{channel}")
+    _mutate_about(root, field, value)
+    found = _channels(root, "hammer")
+    assert "mem-about" not in found[channel]["ids"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("valid_until", "2021-01-01T00:00:00Z"),
+        ("superseded", "mem-applies"),
+    ],
+)
+def test_matching_memories_history_returns_legacy_temporal_alias(
+    tmp_path: Path,
+    field: str,
+    value: str,
+) -> None:
+    from eval.retrieval_r0.alias_eval import _recall_vault
+    from memfw.ontology.expand import matching_memories
+
+    root = _recall_vault(tmp_path / field)
+    _mutate_about(root, field, value)
+    hits = matching_memories(
+        root,
+        "hammer",
+        tenant="alpha",
+        include_history=True,
+    )[0]
+    assert "mem-about" in {row[0] for row in hits}
+
+
+def test_matching_memories_as_of_follows_legacy_valid_until(tmp_path: Path) -> None:
+    from eval.retrieval_r0.alias_eval import _recall_vault
+    from memfw.ontology.expand import matching_memories
+
+    root = _recall_vault(tmp_path / "as-of")
+    _mutate_about(root, "valid_until", "2021-01-01T00:00:00Z")
+    _mutate_about(root, "valid_from", "2020-01-01T00:00:00Z")
+    inside = matching_memories(
+        root,
+        "hammer",
+        tenant="alpha",
+        as_of="2020-06-01T00:00:00Z",
+    )[0]
+    outside = matching_memories(
+        root,
+        "hammer",
+        tenant="alpha",
+        as_of="2021-06-01T00:00:00Z",
+    )[0]
+    assert "mem-about" in {row[0] for row in inside}
+    assert "mem-about" not in {row[0] for row in outside}
+
+
+def test_http_as_of_hides_legacy_valid_until(tmp_path: Path) -> None:
+    from eval.retrieval_r0.alias_eval import _recall_vault
+    from memfw.index import MemoryIndex
+
+    root = _recall_vault(tmp_path / "http-as-of")
+    _mutate_about(root, "valid_until", "2021-01-01T00:00:00Z")
+    MemoryIndex(root / "index.sqlite3").rebuild(Repository(root))
+    found = search_vault(
+        root,
+        "hammer",
+        tenant="alpha",
+        limit=10,
+        as_of="2021-06-01T00:00:00Z",
+    )
+    assert "mem-about" not in [item["id"] for item in found["results"]]
