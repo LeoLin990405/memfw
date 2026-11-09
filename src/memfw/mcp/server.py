@@ -484,42 +484,43 @@ class Gateway:
                 )
         self.embedder = embedder
 
-    def _append_alias_hits(
+    def _alias_candidates(
         self,
         repository: Repository,
-        rows: list[dict[str, Any]],
         query: str,
         *,
         source: str,
-        limit: int,
-    ) -> tuple[list[dict[str, Any]], str | None]:
-        """Add alias hits for modes that do not go through ``search_vault``."""
+        include_history: bool,
+        as_of: str | None,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str | None]:
+        """Alias rows for modes that do not go through ``search_vault``.
+
+        The caller fuses these with the lexical page. A missing ``concepts/``
+        directory costs one stat and adds nothing.
+        """
 
         directory = repository.root / "concepts"
         if directory.is_symlink() or not directory.is_dir():
-            return [], None
+            return [], [], None
         try:
             from memfw.ontology.expand import matching_memories
             from memfw.ontology.model import OntologyError
         except ImportError:
-            return [], "alias expansion unavailable"
+            return [], [], "alias expansion unavailable"
         try:
             hits, ambiguities = matching_memories(
-                repository.root, query, tenant=self.tenant, source=source
+                repository.root,
+                query,
+                tenant=self.tenant,
+                source=source,
+                include_history=include_history,
+                as_of=as_of,
             )
         except OntologyError as exc:
-            return [], str(exc)
-        seen = {str(row["id"]) for row in rows}
+            return [], [], str(exc)
         service = shared_readonly()
+        rows: list[dict[str, Any]] = []
         for memory_id, why in hits:
-            if memory_id in seen:
-                for row in rows:
-                    if row["id"] == memory_id:
-                        row["why"] = why
-                        break
-                continue
-            if len(rows) >= limit:
-                continue
             path = repository.root / "memories" / f"{memory_id}.md"
             meta = service._metadata(path)
             if not meta:
@@ -544,6 +545,7 @@ class Gateway:
                 "score": 1.0,
                 "source": str(meta.get("source") or ""),
                 "content_hash": _content_hash(path),
+                "why": why,
             }
             service.read_path.annotate(
                 row,
@@ -554,8 +556,7 @@ class Gateway:
                 why=why,
             )
             rows.append(row)
-            seen.add(memory_id)
-        return ambiguities, None
+        return rows, ambiguities, None
 
     def _repo(self) -> Repository:
         """Open an existing vault. A missing root is an error; never init one."""
@@ -592,7 +593,10 @@ class Gateway:
         if source and self.allowed_sources and source not in self.allowed_sources:
             raise ValueError("source is not allowed for this account")
         repository = self._repo()
+        concepts = repository.root / "concepts"
+        expand = concepts.is_dir() and not concepts.is_symlink()
         if mode == "multihop":
+            page = max(1, min(limit, 50))
             _ensure_search_index(repository)
             parsed_as_of = None
             if as_of:
@@ -602,7 +606,7 @@ class Gateway:
             result = search_multihop(
                 repository,
                 query,
-                limit=max(1, min(limit, 50)),
+                limit=50 if expand else page,
                 tenant=self.tenant,
                 source=source,
                 allowed_sources=self.allowed_sources,
@@ -611,11 +615,12 @@ class Gateway:
                 rounds=rounds,
             )
         elif mode == "fts":
+            page = max(1, min(int(limit), 50))
             _ensure_search_index(repository)
             payload = shared_readonly().search_vault(
                 repository.root,
                 query,
-                limit=max(1, min(int(limit), 50)),
+                limit=page,
                 source=source,
                 tenant=self.tenant,
                 include_history=include_history,
@@ -629,17 +634,18 @@ class Gateway:
             result = {
                 "mode": "fts",
                 "degraded": False,
-                "errors": [],
+                "errors": [str(item) for item in (payload.get("errors") or [])],
                 "model_versions": {},
                 "results": visible,
             }
             if payload.get("ambiguity"):
                 result["ambiguity"] = payload["ambiguity"]
         else:
+            page = max(0, min(limit, 50))
             retriever = self._retriever(repository)
             result = retriever.search(
                 query,
-                limit=max(0, min(limit, 50)),
+                limit=50 if expand and page else page,
                 mode=mode,
                 source=source,
                 include_history=include_history,
@@ -722,13 +728,23 @@ class Gateway:
             ambiguities = list(result.get("ambiguity") or [])
             alias_note = None
         else:
-            ambiguities, alias_note = self._append_alias_hits(
-                repository,
-                rows,
-                query,
-                source=source,
-                limit=max(1, min(int(limit), 50)),
-            )
+            alias_rows: list[dict[str, Any]] = []
+            ambiguities = []
+            alias_note = None
+            if expand and page:
+                alias_rows, ambiguities, alias_note = self._alias_candidates(
+                    repository,
+                    query,
+                    source=source,
+                    include_history=include_history,
+                    as_of=as_of,
+                )
+            if alias_rows:
+                from memfw.ontology.expand import fuse_rows
+
+                rows = fuse_rows(rows, alias_rows, limit=page)
+            elif len(rows) > page:
+                rows = rows[:page]
         errors = list(result["errors"])
         if alias_note:
             errors.append(alias_note)

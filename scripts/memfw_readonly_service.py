@@ -24,8 +24,10 @@ Contract summary:
   ``/search`` always runs FTS (the only implemented mode) and reports false,
   ``/related`` reports false on the edges projection and true when it falls back
   to lexical search;
-* temporal filtering and tenant filtering both happen in SQL, before ranking
-  and the limit cut. Tenant is exact equality on ``memory_access.tenant``.
+* temporal filtering and tenant filtering both happen before a hit is ranked
+  into the returned page. Alias hits use that same temporal rule, then
+  reciprocal-rank fusion with the lexical candidates, then the limit cut.
+  Tenant is exact equality on ``memory_access.tenant``.
   An empty tenant matches only memories whose tenant is empty.
 
 Configuration: ``MEMFW_READONLY_ROOT`` (or ``--root``; ``--root`` falls back
@@ -564,31 +566,35 @@ def _alias_expansion(
     source: str,
     results: list[dict[str, Any]],
     limit: int,
+    *,
+    include_history: bool,
+    as_of: str | None,
 ) -> tuple[list[dict[str, Any]], str | None]:
-    """Append alias hits. A vault with no ``concepts/`` directory costs one stat."""
+    """Fuse alias hits into ``results``. No ``concepts/`` directory costs one stat."""
 
     directory = base / "concepts"
     if directory.is_symlink() or not directory.is_dir():
         return [], None
     try:
-        from memfw.ontology.expand import matching_memories
+        from memfw.ontology.expand import fuse_rows, matching_memories
         from memfw.ontology.model import OntologyError
     except ImportError:
+        del results[limit:]
         return [], "alias expansion unavailable"
     try:
-        hits, ambiguities = matching_memories(base, query, tenant=tenant, source=source)
+        hits, ambiguities = matching_memories(
+            base,
+            query,
+            tenant=tenant,
+            source=source,
+            include_history=include_history,
+            as_of=as_of,
+        )
     except OntologyError as exc:
+        del results[limit:]
         return [], str(exc)
-    seen = {str(item["id"]) for item in results}
+    alias_rows: list[dict[str, Any]] = []
     for memory_id, why in hits:
-        if memory_id in seen:
-            for item in results:
-                if item["id"] == memory_id:
-                    item["why"] = why
-                    break
-            continue
-        if len(results) >= limit:
-            continue
         payload = _document_payload(base, memory_id)
         if payload is None or payload["tenant"] != tenant:
             continue
@@ -615,6 +621,7 @@ def _alias_expansion(
             "updated_at": _iso_string(meta.get("updated_at")),
             "memory_type": meta.get("type"),
             "provenance": str(meta.get("provenance") or ""),
+            "why": why,
         }
         read_path.annotate(
             item,
@@ -624,8 +631,9 @@ def _alias_expansion(
             sot_version=payload.get("version"),
             why=why,
         )
-        results.append(item)
-        seen.add(memory_id)
+        alias_rows.append(item)
+    fused = fuse_rows(results, alias_rows, limit=limit)
+    results[:] = fused
     return ambiguities, None
 
 
@@ -673,7 +681,9 @@ def search_vault(
         temporal_sql, temporal_params = _temporal_clause(
             connection, include_history, as_of_normalised
         )
-        batch = limit
+        concepts = base / "concepts"
+        pool = MAX_LIMIT if concepts.is_dir() and not concepts.is_symlink() else limit
+        batch = pool
         offset = 0
         matched: list[sqlite3.Row] = []
         payloads: list[dict[str, Any]] = []
@@ -699,9 +709,9 @@ def search_vault(
                     continue
                 matched.append(row)
                 payloads.append(payload)
-                if len(matched) >= limit:
+                if len(matched) >= pool:
                     break
-            if len(matched) >= limit or len(rows) < batch:
+            if len(matched) >= pool or len(rows) < batch:
                 break
     finally:
         connection.close()
@@ -737,7 +747,16 @@ def search_vault(
             why="lexical",
         )
         results.append(item)
-    ambiguities, alias_error = _alias_expansion(base, needle, tenant, source, results, limit)
+    ambiguities, alias_error = _alias_expansion(
+        base,
+        needle,
+        tenant,
+        source,
+        results,
+        limit,
+        include_history=include_history,
+        as_of=as_of_normalised,
+    )
     errors: list[str] = []
     if alias_error:
         errors.append(alias_error)
