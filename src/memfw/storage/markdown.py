@@ -213,6 +213,10 @@ class MarkdownStorageMixin:
                 "superseded_by",
             )
         }
+        # Empty alias targets stay off the file so existing bytes do not change.
+        for key in ("about", "applies_to"):
+            if metadata.get(key):
+                ordered[key] = metadata[key]
         frontmatter = yaml.safe_dump(ordered, allow_unicode=True, sort_keys=False).rstrip()
         body = document.body.rstrip("\n")
         return f"---\n{frontmatter}\n---\n\n{body}\n"

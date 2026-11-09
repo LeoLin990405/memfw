@@ -484,6 +484,79 @@ class Gateway:
                 )
         self.embedder = embedder
 
+    def _append_alias_hits(
+        self,
+        repository: Repository,
+        rows: list[dict[str, Any]],
+        query: str,
+        *,
+        source: str,
+        limit: int,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """Add alias hits for modes that do not go through ``search_vault``."""
+
+        directory = repository.root / "concepts"
+        if directory.is_symlink() or not directory.is_dir():
+            return [], None
+        try:
+            from memfw.ontology.expand import matching_memories
+            from memfw.ontology.model import OntologyError
+        except ImportError:
+            return [], "alias expansion unavailable"
+        try:
+            hits, ambiguities = matching_memories(
+                repository.root, query, tenant=self.tenant, source=source
+            )
+        except OntologyError as exc:
+            return [], str(exc)
+        seen = {str(row["id"]) for row in rows}
+        service = shared_readonly()
+        for memory_id, why in hits:
+            if memory_id in seen:
+                for row in rows:
+                    if row["id"] == memory_id:
+                        row["why"] = why
+                        break
+                continue
+            if len(rows) >= limit:
+                continue
+            path = repository.root / "memories" / f"{memory_id}.md"
+            meta = service._metadata(path)
+            if not meta:
+                continue
+            if str(meta.get("tenant") or "") != self.tenant:
+                continue
+            if source and str(meta.get("source") or "") != source:
+                continue
+            if self.allowed_sources and str(meta.get("source") or "") not in self.allowed_sources:
+                continue
+            version = meta.get("version")
+            row = {
+                "id": memory_id,
+                "title": str(meta.get("title") or ""),
+                "layer": str(meta.get("layer") or ""),
+                "tier": str(meta.get("tier") or ""),
+                "updated_at": service._iso_string(meta.get("updated_at")),
+                "valid_from": service._optional(service._iso_string(meta.get("valid_from"))),
+                "valid_to": service._optional(service._iso_string(meta.get("valid_to"))),
+                "superseded_by": service._optional(service._iso_string(meta.get("superseded_by"))),
+                "type": meta.get("type"),
+                "score": 1.0,
+                "source": str(meta.get("source") or ""),
+                "content_hash": _content_hash(path),
+            }
+            service.read_path.annotate(
+                row,
+                provenance=str(meta.get("provenance") or ""),
+                source=str(meta.get("source") or ""),
+                index_version=version,
+                sot_version=version,
+                why=why,
+            )
+            rows.append(row)
+            seen.add(memory_id)
+        return ambiguities, None
+
     def _repo(self) -> Repository:
         """Open an existing vault. A missing root is an error; never init one."""
         root = self.root
@@ -560,6 +633,8 @@ class Gateway:
                 "model_versions": {},
                 "results": visible,
             }
+            if payload.get("ambiguity"):
+                result["ambiguity"] = payload["ambiguity"]
         else:
             retriever = self._retriever(repository)
             result = retriever.search(
@@ -643,13 +718,29 @@ class Gateway:
             }
             _annotate_hit(row, document, item, why=str(item.get("why") or why))
             rows.append(row)
+        if mode == "fts":
+            ambiguities = list(result.get("ambiguity") or [])
+            alias_note = None
+        else:
+            ambiguities, alias_note = self._append_alias_hits(
+                repository,
+                rows,
+                query,
+                source=source,
+                limit=max(1, min(int(limit), 50)),
+            )
+        errors = list(result["errors"])
+        if alias_note:
+            errors.append(alias_note)
         payload = {
             "mode": result["mode"],
             "degraded": result["degraded"],
-            "errors": result["errors"],
+            "errors": errors,
             "model_versions": result["model_versions"],
             "results": rows,
         }
+        if ambiguities:
+            payload["ambiguity"] = ambiguities
         if "route" in result:
             payload["route"] = result["route"]
         return payload

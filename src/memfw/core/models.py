@@ -128,6 +128,8 @@ class MemoryDocument(BaseModel):
     type: str | None = None
     tenant: str = ""
     related: list[str] = Field(default_factory=list)
+    about: list[str] = Field(default_factory=list)
+    applies_to: list[str] = Field(default_factory=list)
     source: str = "manual"
     provenance: str = "human-authored"
     anchor: str | None = None
@@ -155,6 +157,15 @@ class MemoryDocument(BaseModel):
         if isinstance(data, dict):
             return fold_temporal_aliases(data)
         return data
+
+    @field_validator("about", "applies_to", mode="before")
+    @classmethod
+    def alias_targets_are_lists(cls, value: Any) -> Any:
+        if value is None or value == "":
+            return []
+        if isinstance(value, str):
+            return [value]
+        return value
 
     @field_validator("created_at", "updated_at", "valid_from", "valid_to")
     @classmethod

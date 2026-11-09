@@ -557,6 +557,78 @@ def _score_from_raw(raw_score: Any, rank: int) -> tuple[float, float | None, boo
     return x / (1.0 + x), raw, True
 
 
+def _alias_expansion(
+    base: Path,
+    query: str,
+    tenant: str,
+    source: str,
+    results: list[dict[str, Any]],
+    limit: int,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Append alias hits. A vault with no ``concepts/`` directory costs one stat."""
+
+    directory = base / "concepts"
+    if directory.is_symlink() or not directory.is_dir():
+        return [], None
+    try:
+        from memfw.ontology.expand import matching_memories
+        from memfw.ontology.model import OntologyError
+    except ImportError:
+        return [], "alias expansion unavailable"
+    try:
+        hits, ambiguities = matching_memories(base, query, tenant=tenant, source=source)
+    except OntologyError as exc:
+        return [], str(exc)
+    seen = {str(item["id"]) for item in results}
+    for memory_id, why in hits:
+        if memory_id in seen:
+            for item in results:
+                if item["id"] == memory_id:
+                    item["why"] = why
+                    break
+            continue
+        if len(results) >= limit:
+            continue
+        payload = _document_payload(base, memory_id)
+        if payload is None or payload["tenant"] != tenant:
+            continue
+        meta = _metadata(base / "memories" / f"{memory_id}.md")
+        if source and str(meta.get("source") or "") != source:
+            continue
+        item = {
+            "id": memory_id,
+            "title": str(meta.get("title") or ""),
+            "summary": _collapsed(str(meta.get("summary") or ""), MAX_SUMMARY_CHARS),
+            "source": str(meta.get("source") or ""),
+            "tier": str(meta.get("tier") or ""),
+            "layer": str(meta.get("layer") or ""),
+            "tenant": payload["tenant"],
+            "related": payload["related"],
+            "valid_from": _optional(payload["valid_from"]),
+            "valid_to": _optional(payload["valid_to"]),
+            "superseded_by": _optional(payload["superseded_by"]),
+            "score": 1.0,
+            "raw_score": None,
+            "content_hash": payload["content_hash"],
+            # Present so MCP fts keeps this hit without parsing extra frontmatter
+            # through MemoryDocument, which forbids unknown keys.
+            "updated_at": _iso_string(meta.get("updated_at")),
+            "memory_type": meta.get("type"),
+            "provenance": str(meta.get("provenance") or ""),
+        }
+        read_path.annotate(
+            item,
+            provenance=str(payload.get("provenance") or ""),
+            source=str(meta.get("source") or ""),
+            index_version=payload.get("version"),
+            sot_version=payload.get("version"),
+            why=why,
+        )
+        results.append(item)
+        seen.add(memory_id)
+    return ambiguities, None
+
+
 def search_vault(
     root: Path | str,
     query: str,
@@ -665,13 +737,20 @@ def search_vault(
             why="lexical",
         )
         results.append(item)
-    return {
+    ambiguities, alias_error = _alias_expansion(base, needle, tenant, source, results, limit)
+    errors: list[str] = []
+    if alias_error:
+        errors.append(alias_error)
+    response: dict[str, Any] = {
         "contract": CONTRACT,
         "mode": "fts",
         "degraded": False,
-        "errors": [],
+        "errors": errors,
         "results": results,
     }
+    if ambiguities:
+        response["ambiguity"] = ambiguities
+    return response
 
 
 # ---------------------------------------------------------------------------
