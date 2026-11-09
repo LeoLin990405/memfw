@@ -321,6 +321,34 @@ def _content_hash(path: Path) -> str:
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _live_markdown_version(path: Path) -> str:
+    """Version in the Markdown file. This does not parse the document.
+
+    An unreadable file or a missing version is empty. Callers must not copy
+    the index version into that gap.
+    """
+
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    if not text.startswith("---\n"):
+        return ""
+    end = text.find("\n---\n", 3)
+    if end < 0:
+        return ""
+    try:
+        loaded = yaml.safe_load(text[4:end])
+    except yaml.YAMLError:
+        return ""
+    if not isinstance(loaded, dict):
+        return ""
+    version = loaded.get("version")
+    if version is None or version == "":
+        return ""
+    return str(version)
+
+
 def _annotate_hit(row: dict[str, Any], document: Any, item: dict[str, Any], *, why: str) -> None:
     """Stamp the shared read-path fields.
 
@@ -474,6 +502,7 @@ class Gateway:
         rows = []
         for item in result["results"]:
             if "memory_type" in item:
+                memory_path = repository.root / "memories" / f"{item['id']}.md"
                 row = {
                     "id": item["id"],
                     "title": item["title"],
@@ -486,17 +515,24 @@ class Gateway:
                     "type": item["memory_type"],
                     "score": item["score"],
                     "source": item["source"],
-                    "content_hash": item.get("content_hash")
-                    or _content_hash(repository.root / "memories" / f"{item['id']}.md"),
+                    "content_hash": item.get("content_hash") or _content_hash(memory_path),
                 }
                 shared_readonly().read_path.annotate(
                     row,
                     provenance=str(item.get("provenance") or ""),
                     source=str(item.get("source") or ""),
-                    index_version=item.get("index_version"),
-                    sot_version=item.get("sot_version"),
+                    index_version=item["index_version"]
+                    if item.get("index_version") is not None
+                    else "",
+                    sot_version=_live_markdown_version(memory_path),
                     why=str(item.get("why") or why),
                 )
+                projection_hash = str(item.get("projection_hash") or "")
+                if projection_hash:
+                    row["projection_hash"] = projection_hash
+                    live = str(row.get("content_hash") or "").removeprefix("sha256:")
+                    if live != projection_hash:
+                        row["stale"] = True
                 rows.append(row)
                 continue
             document = repository.get(item["id"])

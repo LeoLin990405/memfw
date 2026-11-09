@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -105,6 +106,37 @@ def test_a_changed_file_does_not_inherit_the_live_version(tmp_path: Path) -> Non
     assert hit["index_version"] != hit["sot_version"]
     assert hit["stale"] is True
     assert hit["projection_hash"]
+
+
+def test_preserved_mtime_update_marks_multihop_stale(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "vault")
+    repository.init()
+    repository.add(
+        "alpha original",
+        "alpha keyword marker",
+        memory_id="record",
+        tenant="alpha",
+    )
+    MemoryIndex(repository.index_path).rebuild(repository)
+    gateway = Gateway(repository.root, tenant="alpha", entity_enabled=False)
+    path = repository.memories_dir / "record.md"
+    before_stat = path.stat()
+    repository.update("record", title="bravo current", body="bravo replaced marker")
+    os.utime(path, ns=(before_stat.st_atime_ns, before_stat.st_mtime_ns))
+    assert path.stat().st_mtime_ns == before_stat.st_mtime_ns
+    live = repository.get("record")
+    found = gateway.search("alpha keyword", mode="multihop")
+    hit = found["results"][0]
+    file_hash = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    assert hit["content_hash"] == file_hash
+    assert hit["index_version"] == "1"
+    assert hit["sot_version"] == str(live.version)
+    assert hit["sot_version"] == "2"
+    assert hit["stale"] is True
+    fts = gateway.search("alpha keyword", mode="fts")["results"][0]
+    assert fts["index_version"] == "1"
+    assert fts["sot_version"] == "2"
+    assert fts["stale"] is True
 
 
 def test_as_of_hides_a_memory_created_later(tmp_path: Path) -> None:

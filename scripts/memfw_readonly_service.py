@@ -108,6 +108,7 @@ WRITE_TOKEN_ENV = "MEMFW_WRITE_TOKEN"
 WRITE_TOKEN_FILE_ENV = "MEMFW_WRITE_TOKEN_FILE"
 ROOT_ENV = "MEMFW_READONLY_ROOT"
 RELATED_DB_ENV = "MEMFW_RELATED_DB"
+TENANT_ENV = "MEMFW_TENANT"
 TOKEN_FILE_MODE = 0o600
 # Codes BaseHTTPRequestHandler raises before the route runs. 414/431 are size
 # failures; 505 is an unsupported version and must still carry a status line.
@@ -243,6 +244,28 @@ def _root() -> Path:
     if not value:
         raise _internal()
     return Path(value).expanduser()
+
+
+def scope_tenant(requested: Any) -> str:
+    """Bind a read to the service tenant. A payload may only repeat that tenant.
+
+    ``MEMFW_TENANT`` is the tenant bound to this process's token. An omitted
+    tenant uses that binding. A different tenant is refused. With no binding,
+    the payload tenant is the scope, including an empty one.
+    """
+
+    bound = os.environ.get(TENANT_ENV, "")
+    if not isinstance(bound, str):
+        bound = ""
+    if requested is None:
+        requested = ""
+    if not isinstance(requested, str):
+        raise _bad_request("tenant must be a string")
+    if not bound:
+        return requested
+    if requested in ("", bound):
+        return bound
+    raise ServiceError(403, "tenant is outside the bound tenant")
 
 
 def _related_db() -> Path | None:
@@ -1348,7 +1371,7 @@ class Handler(BaseHTTPRequestHandler):
                     payload.get("query", ""),
                     limit=payload.get("limit", 10),
                     source=payload.get("source", ""),
-                    tenant=payload.get("tenant", ""),
+                    tenant=scope_tenant(payload.get("tenant", "")),
                     include_history=payload.get("include_history", False),
                     as_of=payload.get("as_of"),
                 )
@@ -1357,7 +1380,7 @@ class Handler(BaseHTTPRequestHandler):
                     root,
                     payload.get("memory_id", ""),
                     limit=payload.get("limit", 10),
-                    tenant=payload.get("tenant", ""),
+                    tenant=scope_tenant(payload.get("tenant", "")),
                 )
             else:
                 result = stage_candidate(root, payload)

@@ -417,6 +417,35 @@ def test_internal_error_message_is_fixed(
 # ---------------------------------------------------------------------------
 
 
+def test_bound_token_tenant_rejects_a_switch_and_defaults_when_omitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, httpd: str
+) -> None:
+    root = seed_vault(
+        tmp_path / "vault",
+        [
+            _memory("mem-alpha", "Tenant alpha", "corpus keyword", tenant="tenant-a"),
+            _memory("mem-beta", "Tenant beta", "corpus keyword", tenant="tenant-b"),
+        ],
+    )
+    _use_vault(monkeypatch, root)
+    monkeypatch.setenv("MEMFW_TENANT", "tenant-a")
+
+    status, same = _post(httpd, "/search", {"query": "corpus keyword", "tenant": "tenant-a"})
+    assert status == 200
+    assert [item["id"] for item in same["results"]] == ["mem-alpha"]
+
+    status, other = _post(httpd, "/search", {"query": "corpus keyword", "tenant": "tenant-b"})
+    assert status == 403
+    assert other["error"]["code"] == "forbidden"
+
+    status, omitted = _post(httpd, "/search", {"query": "corpus keyword"})
+    assert status == 200
+    assert [item["id"] for item in omitted["results"]] == ["mem-alpha"]
+
+    status, switched = _post(httpd, "/related", {"memory_id": "mem-beta", "tenant": "tenant-b"})
+    assert status == 403
+
+
 def test_tenant_filter_returns_a_full_limit(tmp_path: Path) -> None:
     documents = []
     for index in range(6):
