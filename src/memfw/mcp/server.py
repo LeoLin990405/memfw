@@ -36,6 +36,7 @@ from memfw.index import MemoryIndex
 from memfw.memory_hybrid import MemoryHybridRetriever, shared_readonly
 from memfw.notes import HttpEmbeddingProvider
 from memfw.related import RelatedIndex
+from memfw.retrieval.judge import Judge, apply_judge, judge_cap, judge_from_environment
 from memfw.retrieval.multihop import search_multihop
 
 SERVER_INFO = {"name": "memfw", "version": "0.1.0"}
@@ -395,6 +396,7 @@ class Gateway:
         include_history: bool = False,
         as_of: str | None = None,
         rounds: int | None = None,
+        judge: Judge | None = None,
     ) -> dict[str, Any]:
         if not query.strip():
             raise ValueError("query required")
@@ -500,6 +502,13 @@ class Gateway:
             }
             _annotate_hit(row, document, item, why=str(item.get("why") or why))
             rows.append(row)
+        active_judge = judge if judge is not None else judge_from_environment()
+        if active_judge is not None and result["mode"] == "multihop":
+            passages: dict[str, str] = {}
+            for row in rows:
+                document = repository.get(row["id"])
+                passages[row["id"]] = f"{document.title}\n{document.body}"
+            rows, _calls = apply_judge(rows, passages, query, active_judge, cap=judge_cap())
         payload = {
             "mode": result["mode"],
             "degraded": result["degraded"],
