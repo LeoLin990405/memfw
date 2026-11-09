@@ -477,19 +477,19 @@ def test_term_or_search_is_200_for_punctuation_and_operators(
     httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     documents = [
-        _memory("both", "Both", "HA500 rack in the homelab", tenant="alpha"),
-        _memory("only-ha", "Only HA", "HA500 manual", tenant="alpha"),
+        _memory("both", "Both", "HAL9000 rack in the homelab", tenant="alpha"),
+        _memory("only-ha", "Only HA", "HAL9000 manual", tenant="alpha"),
         _memory("only-lab", "Only lab", "homelab notes", tenant="alpha"),
         _memory("weather", "Weather", "weather bulletin", tenant="alpha"),
     ]
     _use_vault(monkeypatch, seed_vault(tmp_path / "vault", documents))
-    status, combined = _post(httpd, "/search", {"query": "HA500 homelab", "tenant": "alpha"})
+    status, combined = _post(httpd, "/search", {"query": "HAL9000 homelab", "tenant": "alpha"})
     assert status == 200
     ids = [item["id"] for item in combined["results"]]
     assert ids[0] == "both"
     assert {"both", "only-ha", "only-lab"} <= set(ids)
     status, sentence = _post(
-        httpd, "/search", {"query": "帮我看一下 HA500 的部署", "tenant": "alpha"}
+        httpd, "/search", {"query": "帮我看一下 HAL9000 的部署", "tenant": "alpha"}
     )
     assert status == 200
     assert {item["id"] for item in sentence["results"]} == {"both", "only-ha"}

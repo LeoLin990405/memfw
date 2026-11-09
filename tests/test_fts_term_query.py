@@ -11,8 +11,8 @@ from memfw.mcp.server import Gateway
 from scripts.memfw_readonly_service import _fts_query, search_vault
 
 _SAMPLES = (
-    "HA500 homelab",
-    "HA500 homelab HA500",
+    "HAL9000 homelab",
+    "HAL9000 homelab HAL9000",
     "HomeLab homelab",
     "a AND b",
     "foo*",
@@ -20,7 +20,7 @@ _SAMPLES = (
     "(z)",
     "NEAR(a b)",
     "...",
-    "帮我看一下 HA500 的部署",
+    "帮我看一下 HAL9000 的部署",
     " ".join(f"term{index:02d}" for index in range(20)),
 )
 
@@ -28,7 +28,7 @@ _SAMPLES = (
 def test_library_and_http_build_the_same_match() -> None:
     for query in _SAMPLES:
         assert _fts_query(query) == fts_query(query)
-    assert fts_query("HA500 homelab") == '"HA500" OR "homelab"'
+    assert fts_query("HAL9000 homelab") == '"HAL9000" OR "homelab"'
     assert fts_query("a AND b") == '"AND"'
     assert fts_query("foo*") == '"foo"'
     assert fts_query('x"y') is None
@@ -43,11 +43,11 @@ def _vault(tmp_path: Path) -> Repository:
     repository.init()
     repository.add(
         "Both",
-        "HA500 rack in the homelab",
+        "HAL9000 rack in the homelab",
         memory_id="both",
         tenant="alpha",
     )
-    repository.add("Only HA", "HA500 manual", memory_id="only-ha", tenant="alpha")
+    repository.add("Only HA", "HAL9000 manual", memory_id="only-ha", tenant="alpha")
     repository.add("Only lab", "homelab notes", memory_id="only-lab", tenant="alpha")
     repository.add("Weather", "weather bulletin", memory_id="weather", tenant="alpha")
     MemoryIndex(repository.index_path).rebuild(repository)
@@ -56,8 +56,8 @@ def _vault(tmp_path: Path) -> Repository:
 
 def test_or_query_covers_each_term_and_ranks_the_overlap_first(tmp_path: Path) -> None:
     repository = _vault(tmp_path)
-    combined = search_vault(repository.root, "HA500 homelab", limit=10, tenant="alpha")
-    ha_only = search_vault(repository.root, "HA500", limit=10, tenant="alpha")
+    combined = search_vault(repository.root, "HAL9000 homelab", limit=10, tenant="alpha")
+    ha_only = search_vault(repository.root, "HAL9000", limit=10, tenant="alpha")
     lab_only = search_vault(repository.root, "homelab", limit=10, tenant="alpha")
     combined_ids = [item["id"] for item in combined["results"]]
     assert combined_ids[0] == "both"
@@ -67,19 +67,19 @@ def test_or_query_covers_each_term_and_ranks_the_overlap_first(tmp_path: Path) -
     assert len(combined_ids) >= len(lab_only["results"])
     assert all(0.0 <= item["score"] <= 1.0 for item in combined["results"])
 
-    library = [item[0] for item in MemoryIndex(repository.index_path).search("HA500 homelab")]
+    library = [item[0] for item in MemoryIndex(repository.index_path).search("HAL9000 homelab")]
     assert library[0] == "both"
     assert set(library) == set(combined_ids)
 
     gateway = Gateway(repository.root, tenant="alpha", entity_enabled=False)
-    mcp_ids = [item["id"] for item in gateway.search("HA500 homelab", mode="fts")["results"]]
+    mcp_ids = [item["id"] for item in gateway.search("HAL9000 homelab", mode="fts")["results"]]
     assert mcp_ids == combined_ids
 
 
 def test_natural_language_keeps_the_embedded_term(tmp_path: Path) -> None:
     repository = _vault(tmp_path)
     result = search_vault(
-        repository.root, "帮我看一下 HA500 的部署", limit=10, tenant="alpha"
+        repository.root, "帮我看一下 HAL9000 的部署", limit=10, tenant="alpha"
     )
     assert {item["id"] for item in result["results"]} == {"both", "only-ha"}
 
