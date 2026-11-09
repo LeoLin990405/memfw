@@ -9,15 +9,15 @@ Type=simple
 # Both MEMFW_READONLY_TOKEN(_FILE) and MEMFW_WRITE_TOKEN(_FILE) are honoured:
 # the service reads the environment first, then the *_FILE contents.
 # No token value belongs in this unit; keep it only in the 0600 env file.
-EnvironmentFile=/home/leo/memfw-remote/memfw-readonly.env
+EnvironmentFile=%h/memfw-remote/memfw-readonly.env
 # The default bind is loopback. Deployment sets --host explicitly to the
 # tailnet address, e.g. --host <tailnet address>, so only the private tailnet
 # can reach the service. The service speaks plain HTTP plus a shared token.
 # Optional: point at the related projection (same as MEMFW_RELATED_DB) so
 # /related uses the edges path; without it /related falls back to lexical FTS
 # and reports degraded:true. Example (commented):
-#   --related-db /vol1/fleet-memory/memfw-related.sqlite3
-ExecStart=/usr/bin/python3 /home/leo/memfw-remote/memfw_readonly_service.py --root /vol1/fleet-memory/memfw-vault --host 127.0.0.1 --port 18080
+#   --related-db %h/memfw-related.sqlite3
+ExecStart=/usr/bin/python3 %h/memfw-remote/memfw_readonly_service.py --root %h/memfw-vault --host 127.0.0.1 --port 18080
 Restart=on-failure
 RestartSec=3
 
