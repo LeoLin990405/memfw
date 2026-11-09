@@ -32,9 +32,11 @@ from memfw.capture.suggestions import suggest_related
 from memfw.core.errors import NotFoundError
 from memfw.core.models import Layer, Tier
 from memfw.core.repository import Repository
+from memfw.index import MemoryIndex
 from memfw.memory_hybrid import MemoryHybridRetriever, shared_readonly
 from memfw.notes import HttpEmbeddingProvider
 from memfw.related import RelatedIndex
+from memfw.retrieval.multihop import search_multihop
 
 SERVER_INFO = {"name": "memfw", "version": "0.1.0"}
 PROTOCOL = "2024-11-05"
@@ -58,9 +60,10 @@ TOOLS: list[dict[str, Any]] = [
                 "limit": {"type": "integer", "default": 10},
                 "mode": {
                     "type": "string",
-                    "enum": ["fts", "hybrid", "vector"],
+                    "enum": ["fts", "hybrid", "vector", "multihop"],
                     "default": "hybrid",
                 },
+                "rounds": {"type": "integer", "minimum": 1, "maximum": 2},
                 "source": {"type": "string"},
             },
             "required": ["query"],
@@ -294,6 +297,21 @@ def _publish_candidate(root: Path, filename: str, text: str) -> None:
         os.close(directory_fd)
 
 
+def _ensure_search_index(repository: Repository) -> None:
+    """Rebuild the disposable memory index when Markdown is newer than it."""
+
+    path = repository.index_path
+    stale = not path.is_file()
+    if not stale and repository.memories_dir.is_dir():
+        indexed_at = path.stat().st_mtime
+        stale = any(
+            item.stat().st_mtime > indexed_at for item in repository.memories_dir.glob("*.md")
+        )
+    if stale:
+        repository.init()
+        MemoryIndex(path).rebuild(repository)
+
+
 def _content_hash(path: Path) -> str:
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -371,22 +389,64 @@ class Gateway:
         source: str = "",
         include_history: bool = False,
         as_of: str | None = None,
+        rounds: int | None = None,
     ) -> dict[str, Any]:
         if not query.strip():
             raise ValueError("query required")
         if source and self.allowed_sources and source not in self.allowed_sources:
             raise ValueError("source is not allowed for this account")
         repository = self._repo()
-        retriever = self._retriever(repository)
-        result = retriever.search(
-            query,
-            limit=max(0, min(limit, 50)),
-            mode=mode,
-            source=source,
-            include_history=include_history,
-            as_of=as_of,
-            tenant=self.tenant,
-        )
+        if mode == "multihop":
+            parsed_as_of = None
+            if as_of:
+                parsed_as_of = datetime.fromisoformat(as_of)
+                if parsed_as_of.tzinfo is None or parsed_as_of.utcoffset() is None:
+                    raise ValueError("as_of must include a timezone")
+            result = search_multihop(
+                repository,
+                query,
+                limit=max(1, min(limit, 50)),
+                tenant=self.tenant,
+                source=source,
+                allowed_sources=self.allowed_sources,
+                include_history=include_history,
+                as_of=parsed_as_of,
+                rounds=rounds,
+            )
+        elif mode == "fts":
+            _ensure_search_index(repository)
+            payload = shared_readonly().search_vault(
+                repository.root,
+                query,
+                limit=max(1, min(int(limit), 50)),
+                source=source,
+                tenant=self.tenant,
+                include_history=include_history,
+                as_of=as_of,
+            )
+            visible = [
+                item
+                for item in payload["results"]
+                if not self.allowed_sources or item["source"] in self.allowed_sources
+            ]
+            result = {
+                "mode": "fts",
+                "degraded": False,
+                "errors": [],
+                "model_versions": {},
+                "results": visible,
+            }
+        else:
+            retriever = self._retriever(repository)
+            result = retriever.search(
+                query,
+                limit=max(0, min(limit, 50)),
+                mode=mode,
+                source=source,
+                include_history=include_history,
+                as_of=as_of,
+                tenant=self.tenant,
+            )
         why = "lexical" if result["mode"] == "fts" else "semantic"
         rows = []
         for item in result["results"]:
@@ -408,13 +468,16 @@ class Gateway:
             }
             _annotate_hit(row, document, item, why=str(item.get("why") or why))
             rows.append(row)
-        return {
+        payload = {
             "mode": result["mode"],
             "degraded": result["degraded"],
             "errors": result["errors"],
             "model_versions": result["model_versions"],
             "results": rows,
         }
+        if "route" in result:
+            payload["route"] = result["route"]
+        return payload
 
     def get(self, memory_id: str) -> dict[str, Any]:
         document = self._repo().get(memory_id)
@@ -574,6 +637,7 @@ class Gateway:
                 source=str(args.get("source") or ""),
                 include_history=bool(args.get("include_history", False)),
                 as_of=(str(args["as_of"]) if args.get("as_of") else None),
+                rounds=(int(args["rounds"]) if args.get("rounds") is not None else None),
             ),
             "memory_get": lambda args: self.get(str(args.get("memory_id") or "")),
             "memory_remember": lambda args: self.remember(
@@ -652,9 +716,7 @@ class Gateway:
                 self.respond(_rpc_error(msg_id, -32602, "invalid params"))
                 return
             if client_endpoint_fields(arguments):
-                self.respond(
-                    _rpc_error(msg_id, -32602, "endpoint fields are not accepted")
-                )
+                self.respond(_rpc_error(msg_id, -32602, "endpoint fields are not accepted"))
                 return
             try:
                 result = handler(arguments)
