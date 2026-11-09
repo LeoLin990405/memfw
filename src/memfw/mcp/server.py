@@ -18,6 +18,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -321,32 +322,92 @@ def _content_hash(path: Path) -> str:
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _live_markdown_version(path: Path) -> str:
-    """Version in the Markdown file. This does not parse the document.
+_FRESHNESS_LIMIT = 10
+_FRESHNESS_CACHE_CAP = 2048
+_StatKey = tuple[str, int, int, int, int]
 
-    An unreadable file or a missing version is empty. Callers must not copy
-    the index version into that gap.
+
+def _frontmatter_version(raw: bytes) -> str:
+    """Top-level ``version:`` line from bytes already read for the hash.
+
+    This is a prefix scan of the frontmatter block. It does not call the YAML
+    parser. A missing or unreadable version is empty and must not be replaced
+    with the index version. ``yaml.safe_dump`` writes ``version: 2``.
     """
 
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
+    if not raw.startswith(b"---\n"):
         return ""
-    if not text.startswith("---\n"):
-        return ""
-    end = text.find("\n---\n", 3)
+    end = raw.find(b"\n---\n", 4)
     if end < 0:
         return ""
-    try:
-        loaded = yaml.safe_load(text[4:end])
-    except yaml.YAMLError:
-        return ""
-    if not isinstance(loaded, dict):
-        return ""
-    version = loaded.get("version")
-    if version is None or version == "":
-        return ""
-    return str(version)
+    for line in raw[4:end].splitlines():
+        if not line.startswith(b"version:"):
+            continue
+        value = line.split(b":", 1)[1].strip()
+        if len(value) >= 2 and value[0] in b"'\"" and value[-1:] == value[:1]:
+            value = value[1:-1].strip()
+        if not value or value in {b"null", b"Null", b"NULL", b"~"}:
+            return ""
+        return value.decode("utf-8", "replace")
+    return ""
+
+
+def _stat_key(path: Path, stat: os.stat_result) -> _StatKey:
+    return (str(path), stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+
+class _RawHashCache:
+    """LRU of raw-byte hashes keyed by path, inode, size, mtime, and ctime.
+
+    A user edit cannot preserve ctime, so a file whose mtime was restored
+    still misses. The cached value is the hash plus the version line from
+    those same bytes.
+    """
+
+    def __init__(self, cap: int) -> None:
+        self._cap = cap
+        self._items: dict[_StatKey, tuple[str, str]] = {}
+        self._lock = threading.Lock()
+
+    def lookup(self, path: Path) -> tuple[str, str]:
+        """Return ``(sha256-hash, version)``. A missing file is ``("", "")``."""
+
+        try:
+            stat = path.stat()
+        except OSError:
+            return "", ""
+        key = _stat_key(path, stat)
+        with self._lock:
+            found = self._items.get(key)
+            if found is not None:
+                self._items.pop(key)
+                self._items[key] = found
+                return found
+        try:
+            raw = path.read_bytes()
+            after = path.stat()
+        except OSError:
+            return "", ""
+        stored = (
+            "sha256:" + hashlib.sha256(raw).hexdigest(),
+            _frontmatter_version(raw),
+        )
+        key = _stat_key(path, after)
+        with self._lock:
+            self._items.pop(key, None)
+            self._items[key] = stored
+            while len(self._items) > self._cap:
+                self._items.pop(next(iter(self._items)))
+        return stored
+
+
+_RAW_HASH_CACHE = _RawHashCache(_FRESHNESS_CACHE_CAP)
+
+
+def _hash_matches(live: str, indexed: str) -> bool:
+    if not live or not indexed:
+        return True
+    return live.removeprefix("sha256:") == indexed.removeprefix("sha256:")
 
 
 def _annotate_hit(row: dict[str, Any], document: Any, item: dict[str, Any], *, why: str) -> None:
@@ -500,9 +561,17 @@ class Gateway:
             )
         why = "lexical" if result["mode"] == "fts" else "semantic"
         rows = []
-        for item in result["results"]:
+        for offset, item in enumerate(result["results"]):
             if "memory_type" in item:
                 memory_path = repository.root / "memories" / f"{item['id']}.md"
+                checked = offset < _FRESHNESS_LIMIT
+                if checked:
+                    live_hash, live_version = _RAW_HASH_CACHE.lookup(memory_path)
+                else:
+                    live_hash, live_version = "", ""
+                index_version = (
+                    item["index_version"] if item.get("index_version") is not None else ""
+                )
                 row = {
                     "id": item["id"],
                     "title": item["title"],
@@ -515,24 +584,27 @@ class Gateway:
                     "type": item["memory_type"],
                     "score": item["score"],
                     "source": item["source"],
-                    "content_hash": item.get("content_hash") or _content_hash(memory_path),
+                    "content_hash": live_hash or str(item.get("content_hash") or ""),
                 }
                 shared_readonly().read_path.annotate(
                     row,
                     provenance=str(item.get("provenance") or ""),
                     source=str(item.get("source") or ""),
-                    index_version=item["index_version"]
-                    if item.get("index_version") is not None
-                    else "",
-                    sot_version=_live_markdown_version(memory_path),
+                    index_version=index_version,
+                    # Past the first 10, the file is not read. Keep the index
+                    # version so a skipped check is not reported as stale.
+                    sot_version=live_version if checked else index_version,
                     why=str(item.get("why") or why),
                 )
-                projection_hash = str(item.get("projection_hash") or "")
-                if projection_hash:
-                    row["projection_hash"] = projection_hash
-                    live = str(row.get("content_hash") or "").removeprefix("sha256:")
-                    if live != projection_hash:
+                if checked:
+                    indexed_hash = str(item.get("content_hash") or "")
+                    if indexed_hash and not _hash_matches(live_hash, indexed_hash):
                         row["stale"] = True
+                    projection_hash = str(item.get("projection_hash") or "")
+                    if projection_hash:
+                        row["projection_hash"] = projection_hash
+                        if live_hash.removeprefix("sha256:") != projection_hash:
+                            row["stale"] = True
                 rows.append(row)
                 continue
             document = repository.get(item["id"])

@@ -139,6 +139,161 @@ def test_preserved_mtime_update_marks_multihop_stale(tmp_path: Path) -> None:
     assert fts["stale"] is True
 
 
+def test_raw_hash_cache_misses_when_ctime_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from memfw.mcp import server
+
+    path = tmp_path / "record.md"
+    path.write_bytes(b"---\nversion: 1\n---\n\nbody\n")
+    cache = server._RawHashCache(1)
+    first_hash, first_version = cache.lookup(path)
+    assert first_version == "1"
+    assert first_hash == "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    assert server._frontmatter_version(b"---\nid: a\n---\n\nversion: 9\n") == ""
+    reads = {"n": 0}
+    real_read = Path.read_bytes
+
+    def counting(self: Path) -> bytes:
+        reads["n"] += 1
+        return real_read(self)
+
+    monkeypatch.setattr(Path, "read_bytes", counting)
+    assert cache.lookup(path) == (first_hash, first_version)
+    assert reads["n"] == 0
+    before = path.stat()
+    path.write_bytes(b"---\nversion: 2\n---\n\nbody changed\n")
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert path.stat().st_mtime_ns == before.st_mtime_ns
+    second_hash, second_version = cache.lookup(path)
+    assert second_version == "2"
+    assert second_hash != first_hash
+    other = tmp_path / "other.md"
+    other.write_bytes(b"---\nversion: 3\n---\n\nother\n")
+    assert cache.lookup(other)[1] == "3"
+    assert cache.lookup(path)[1] == "2"
+    assert reads["n"] == 3
+
+
+def test_multihop_freshness_does_not_parse_yaml(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = Repository(tmp_path / "vault")
+    repository.init()
+    repository.add(
+        "alpha original",
+        "alpha keyword marker",
+        memory_id="record",
+        tenant="alpha",
+    )
+    MemoryIndex(repository.index_path).rebuild(repository)
+
+    def boom(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("yaml.safe_load")
+
+    monkeypatch.setattr("memfw.mcp.server.yaml.safe_load", boom)
+    found = Gateway(repository.root, tenant="alpha", entity_enabled=False).search(
+        "alpha keyword",
+        mode="multihop",
+    )
+    hit = found["results"][0]
+    assert hit["id"] == "record"
+    assert hit["sot_version"] == "1"
+    assert hit["stale"] is False
+
+
+def test_freshness_checks_only_the_first_ten_returned_hits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from memfw.mcp import server
+
+    repository = Repository(tmp_path / "vault")
+    repository.init()
+    for index in range(12):
+        repository.add(
+            f"Bulletin {index}",
+            f"shared marker bulletin {index}",
+            memory_id=f"m{index:02d}",
+            tenant="alpha",
+        )
+    MemoryIndex(repository.index_path).rebuild(repository)
+    seen: list[str] = []
+    real_lookup = server._RAW_HASH_CACHE.lookup
+
+    def counting(path: Path) -> tuple[str, str]:
+        seen.append(path.name)
+        return real_lookup(path)
+
+    monkeypatch.setattr(server._RAW_HASH_CACHE, "lookup", counting)
+    found = Gateway(repository.root, tenant="alpha", entity_enabled=False).search(
+        "shared marker",
+        mode="multihop",
+        limit=12,
+    )
+    assert len(found["results"]) > 10
+    assert [name.removesuffix(".md") for name in seen] == [
+        item["id"] for item in found["results"][:10]
+    ]
+    tail = found["results"][10]
+    assert tail["content_hash"] == ""
+    assert tail["stale"] is False
+    assert tail["sot_version"] == tail["index_version"]
+
+
+def test_returned_hit_compares_live_bytes_to_the_indexed_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = Repository(tmp_path / "vault")
+    repository.init()
+    repository.add(
+        "alpha original",
+        "alpha keyword marker",
+        memory_id="record",
+        tenant="alpha",
+    )
+    MemoryIndex(repository.index_path).rebuild(repository)
+    path = repository.root / "memories" / "record.md"
+    live = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def indexed(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return {
+            "mode": "multihop",
+            "degraded": False,
+            "errors": [],
+            "model_versions": {},
+            "route": "direct",
+            "results": [
+                {
+                    "id": "record",
+                    "title": "alpha original",
+                    "score": 1.0,
+                    "source": "manual",
+                    "why": "lexical",
+                    "index_version": "1",
+                    "layer": "project",
+                    "tier": "warm",
+                    "updated_at": "2026-11-08T00:00:00+00:00",
+                    "valid_from": None,
+                    "valid_to": None,
+                    "superseded_by": None,
+                    "provenance": "user_said",
+                    "memory_type": "semantic",
+                    "content_hash": "sha256:" + ("ab" * 32),
+                }
+            ],
+        }
+
+    monkeypatch.setattr("memfw.mcp.server.search_multihop", indexed)
+    hit = Gateway(repository.root, tenant="alpha", entity_enabled=False).search(
+        "alpha keyword",
+        mode="multihop",
+    )["results"][0]
+    assert hit["content_hash"] == live
+    assert hit["index_version"] == "1"
+    assert hit["sot_version"] == "1"
+    assert hit["stale"] is True
+
+
 def test_as_of_hides_a_memory_created_later(tmp_path: Path) -> None:
     repository = Repository(tmp_path / "vault", clock=lambda: datetime(2026, 11, 8, tzinfo=UTC))
     repository.init()
