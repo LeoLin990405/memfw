@@ -8,7 +8,10 @@ each query has a hard call cap. The default search path does not call a judge.
 from __future__ import annotations
 
 import hashlib
+import json
+import math
 import os
+import urllib.request
 from collections.abc import Callable
 from typing import Any, Protocol
 
@@ -45,9 +48,38 @@ class LocalJudge:
         if self.transport is None:
             raise RuntimeError("local judge has no transport")
         value = float(self.transport(self.endpoint, question, passage, context))
-        if value < 0.0 or value > 1.0:
+        if not math.isfinite(value) or value < 0.0 or value > 1.0:
             raise ValueError("judge score must be in [0, 1]")
         return value
+
+
+def local_judge_transport(endpoint: str, question: str, passage: str, context: str) -> float:
+    """POST one score request to the server-configured local endpoint.
+
+    The endpoint comes from the caller. Nothing in this module names a host.
+    A transport failure becomes a timeout so the search can fall back.
+    """
+
+    body = json.dumps({"question": question, "passage": passage, "context": context}).encode(
+        "utf-8"
+    )
+    request = urllib.request.Request(
+        endpoint,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=2) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (TimeoutError, OSError, json.JSONDecodeError, RuntimeError, AssertionError) as exc:
+        raise TimeoutError("local judge timed out") from exc
+    if not isinstance(payload, dict) or "score" not in payload:
+        raise RuntimeError("local judge returned no score")
+    score = payload["score"]
+    if isinstance(score, bool) or not isinstance(score, (int, float)):
+        raise RuntimeError("local judge returned no score")
+    return float(score)
 
 
 def judge_cap(environ: Any | None = None) -> int:
@@ -73,7 +105,7 @@ def judge_from_environment(environ: Any | None = None) -> LocalJudge | None:
         return None
     raw_allowlist = str(env.get("MEMFW_JUDGE_ALLOWLIST", ""))
     allowlist = tuple(item.strip() for item in raw_allowlist.split(",") if item.strip())
-    return LocalJudge(endpoint, allowlist)
+    return LocalJudge(endpoint, allowlist, local_judge_transport)
 
 
 def apply_judge(

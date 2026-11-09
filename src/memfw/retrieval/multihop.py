@@ -95,14 +95,20 @@ def search_multihop(
 ) -> dict[str, Any]:
     """Run one routed search. ``degraded`` is true when expansion adds no hit.
 
-    Ranking reads the disposable index once. Tenant is applied while walking
-    that rank, before the limit cut. Markdown is opened only for a tenant check.
+    Ranking reads the disposable index once. Tenant equality is in that read,
+    before candidates, ranking, and the limit cut. An empty tenant matches
+    only an empty tenant.
     """
 
     budget = expansion_rounds(rounds)
     bounded = max(1, min(int(limit), 50))
-    rows = _index_rows(repository)
+    rows = _index_rows(repository, tenant=tenant)
     by_id = {row["id"]: row for row in rows}
+    route = classify_query(query)
+    if route == "direct" and not _explicit_locator(query):
+        identifier = _identifier(query.strip())
+        if identifier not in by_id:
+            route = "lexical"
     visible = [
         row
         for row in rows
@@ -116,7 +122,6 @@ def search_multihop(
     scorer = BM25Scorer(corpus) if corpus else None
     frequencies = _document_frequencies(rows, scorer)
     tenants: dict[str, str] = {}
-    route = classify_query(query)
     first = _first_hop(
         route,
         query,
@@ -195,8 +200,12 @@ def search_multihop(
     }
 
 
-def _index_rows(repository: Repository) -> list[dict[str, Any]]:
-    """One read of the disposable index. Missing index means there is nothing to rank."""
+def _index_rows(repository: Repository, *, tenant: str) -> list[dict[str, Any]]:
+    """One read of the disposable index. Missing index means there is nothing to rank.
+
+    Rows are limited to ``tenant`` in SQL. Without the access table the read
+    fails closed instead of treating an empty tenant as every tenant.
+    """
 
     path = repository.index_path
     if not path.is_file():
@@ -209,22 +218,20 @@ def _index_rows(repository: Repository) -> list[dict[str, Any]]:
             ).fetchone()
             is not None
         )
-        tenant_sql = (
-            "a.tenant AS tenant, a.memory_type AS memory_type"
-            if has_access
-            else "NULL AS tenant, NULL AS memory_type"
-        )
-        join = "LEFT JOIN memory_access a ON a.id = r.id" if has_access else ""
+        if not has_access:
+            return []
         fetched = connection.execute(
             "SELECT r.id, r.title, r.body, r.search_body, r.summary, r.tags, "
             "r.source, r.provenance, r.version, r.layer, r.tier, r.updated_at, "
+            "r.created_at AS created_at, "
             "COALESCE(t.valid_from, '') AS valid_from, "
             "COALESCE(t.valid_to, '') AS valid_to, "
             "COALESCE(t.superseded_by, '') AS superseded_by, "
-            f"{tenant_sql} "
+            "a.tenant AS tenant, a.memory_type AS memory_type "
             "FROM memory_rows r LEFT JOIN memory_temporal t ON t.id = r.id "
-            f"{join} "
-            "ORDER BY r.id"
+            "JOIN memory_access a ON a.id = r.id AND a.tenant = ? "
+            "ORDER BY r.id",
+            (tenant,),
         ).fetchall()
     rows = []
     for item in fetched:
@@ -245,11 +252,11 @@ def _index_rows(repository: Repository) -> list[dict[str, Any]]:
             "valid_from": str(item["valid_from"]),
             "valid_to": str(item["valid_to"]),
             "superseded_by": str(item["superseded_by"]),
+            "created_at": str(item["created_at"]),
             "memory_type": item["memory_type"],
+            "tenant_known": True,
+            "tenant": str(tenant),
         }
-        if has_access and tenant is not None:
-            row["tenant_known"] = True
-            row["tenant"] = str(tenant)
         rows.append(row)
     return rows
 
@@ -274,6 +281,15 @@ def _document_frequencies(rows: list[dict[str, Any]], scorer: BM25Scorer | None)
     return frequencies
 
 
+def _explicit_locator(text: str) -> bool:
+    """A path or a quoted phrase is an id lookup. A bare word is not."""
+
+    stripped = text.strip()
+    if _QUOTED.search(stripped):
+        return True
+    return stripped.startswith("memories/") or stripped.endswith(".md") or "/" in stripped
+
+
 def _looks_like_id_or_path(text: str) -> bool:
     if text.startswith("memories/") or text.endswith(".md"):
         return True
@@ -286,9 +302,9 @@ def _row_visible(row: dict[str, Any], *, include_history: bool, as_of: datetime 
     if include_history:
         return True
     if as_of is not None:
-        start = _parse_instant(row["valid_from"])
+        start = _parse_instant(row["valid_from"]) or _parse_instant(row.get("created_at") or "")
         end = _parse_instant(row["valid_to"])
-        if start is not None and start > as_of:
+        if start is None or start > as_of:
             return False
         return end is None or end > as_of
     return row["valid_to"] == ""
@@ -354,7 +370,7 @@ def _rank(
     for identifier in scorer.rank(query):
         if identifier not in allowed:
             continue
-        if tenant and _row_tenant(by_id[identifier], repository, tenants) != tenant:
+        if _row_tenant(by_id[identifier], repository, tenants) != tenant:
             continue
         chosen.append(identifier)
         if len(chosen) >= limit:
@@ -392,7 +408,7 @@ def _first_hop(
         row = by_id.get(identifier)
         if row is None or row["id"] not in {item["id"] for item in visible}:
             return []
-        if tenant and _row_tenant(row, repository, tenants) != tenant:
+        if _row_tenant(row, repository, tenants) != tenant:
             return []
         return [row["id"]]
     if scorer is None:

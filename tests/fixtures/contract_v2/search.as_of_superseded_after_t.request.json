@@ -1,5 +1,6 @@
 {
   "as_of": "2026-11-06T00:15:00+00:00",
   "limit": 5,
-  "query": "corpus keyword"
+  "query": "corpus keyword",
+  "tenant": "tenant-a"
 }

@@ -5,27 +5,6 @@
   "mode": "fts",
   "results": [
     {
-      "content_hash": "sha256:3382f7c4e2471d8dfd1a5b6d8e17950758b1aaa1ea0def163d97c3bedce38270",
-      "id": "mem-gamma",
-      "index_version": "1",
-      "layer": "current",
-      "provenance_type": "user_said",
-      "raw_score": -1.0464800217450393e-06,
-      "related": [],
-      "score": 1.0464789266257495e-06,
-      "sot_version": "1",
-      "source": "manual",
-      "stale": false,
-      "summary": "gamma corpus keyword other",
-      "superseded_by": null,
-      "tenant": "tenant-b",
-      "tier": "hot",
-      "title": "Gamma corpus note",
-      "valid_from": null,
-      "valid_to": null,
-      "why": "lexical"
-    },
-    {
       "content_hash": "sha256:fec0665739c7ea765151b2726a2fea34b5a5ff646afaa0f6c83fb2c74398ddf0",
       "id": "mem-alpha",
       "index_version": "1",

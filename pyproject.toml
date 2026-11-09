@@ -29,6 +29,10 @@ memfw-mcp = "memfw.mcp.server:main"
 packages = ["src/memfw"]
 artifacts = ["src/memfw/agents/prompts/*.txt"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"scripts/memfw_readonly_service.py" = "memfw/memfw_readonly_service.py"
+"scripts/read_path.py" = "memfw/read_path.py"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

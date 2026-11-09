@@ -24,10 +24,9 @@ Contract summary:
   ``/search`` always runs FTS (the only implemented mode) and reports false,
   ``/related`` reports false on the edges projection and true when it falls back
   to lexical search;
-* temporal filtering happens in SQL. tenant has no column in the index, so it is
-  applied by reading frontmatter in batches (``LIMIT``/``OFFSET``) until
-  ``limit`` matches are collected or the matches are exhausted - the deviation
-  from "tenant filtered in SQL" that ``docs/v1-integration.md`` records.
+* temporal filtering and tenant filtering both happen in SQL, before ranking
+  and the limit cut. Tenant is exact equality on ``memory_access.tenant``.
+  An empty tenant matches only memories whose tenant is empty.
 
 Configuration: ``MEMFW_READONLY_ROOT`` (or ``--root``; ``--root`` falls back
 to the environment variable), ``MEMFW_RELATED_DB`` (or ``--related-db``),
@@ -59,6 +58,7 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 
 import yaml
+from filelock import FileLock, Timeout
 
 
 def _load_read_path():
@@ -464,7 +464,7 @@ def _temporal_clause(
     if as_of is not None:
         return (
             "EXISTS (SELECT 1 FROM memory_temporal t WHERE t.id = r.id "
-            "AND (t.valid_from = '' OR t.valid_from <= ?) "
+            "AND (CASE WHEN t.valid_from != '' THEN t.valid_from ELSE r.created_at END) <= ? "
             "AND (t.valid_to = '' OR t.valid_to > ?))",
             [as_of, as_of],
         )
@@ -480,6 +480,7 @@ def _search_batch(
     *,
     needle: str,
     source: str,
+    tenant: str,
     temporal_sql: str,
     temporal_params: list[Any],
     limit: int,
@@ -493,7 +494,8 @@ def _search_batch(
             "SELECT r.id AS id, r.title AS title, r.summary AS summary, "
             "r.search_body AS search_body, r.source AS source, r.tier AS tier, "
             "r.layer AS layer, r.provenance AS provenance, r.version AS version, "
-            "NULL AS raw_score FROM memory_rows r"
+            "NULL AS raw_score FROM memory_rows r "
+            "JOIN memory_access a ON a.id = r.id"
         )
         where = [
             "(instr(lower(r.title), ?) > 0 OR instr(lower(r.search_body), ?) > 0 "
@@ -507,11 +509,14 @@ def _search_batch(
             "r.search_body AS search_body, r.source AS source, r.tier AS tier, "
             "r.layer AS layer, r.provenance AS provenance, r.version AS version, "
             "bm25(memory_fts) AS raw_score "
-            "FROM memory_fts JOIN memory_rows r ON r.id = memory_fts.id"
+            "FROM memory_fts JOIN memory_rows r ON r.id = memory_fts.id "
+            "JOIN memory_access a ON a.id = r.id"
         )
         where = ["memory_fts MATCH ?"]
         params = [_fts_query(needle)]
         order = " ORDER BY raw_score, r.id"
+    where.append("a.tenant = ?")
+    params.append(tenant)
     if source:
         where.append("r.source = ?")
         params.append(source)
@@ -565,10 +570,18 @@ def search_vault(
 
     connection = _connect_index(base)
     try:
+        if not _has_table(connection, "memory_access"):
+            return {
+                "contract": CONTRACT,
+                "mode": "fts",
+                "degraded": False,
+                "errors": [],
+                "results": [],
+            }
         temporal_sql, temporal_params = _temporal_clause(
             connection, include_history, as_of_normalised
         )
-        batch = limit if not tenant else max(limit * 4, 100)
+        batch = limit
         offset = 0
         matched: list[sqlite3.Row] = []
         payloads: list[dict[str, Any]] = []
@@ -577,6 +590,7 @@ def search_vault(
                 connection,
                 needle=needle,
                 source=source,
+                tenant=tenant,
                 temporal_sql=temporal_sql,
                 temporal_params=temporal_params,
                 limit=batch,
@@ -589,15 +603,13 @@ def search_vault(
                 payload = _document_payload(base, str(row["id"]))
                 if payload is None:
                     continue
-                if tenant and payload["tenant"] != tenant:
+                if payload["tenant"] != tenant:
                     continue
                 matched.append(row)
                 payloads.append(payload)
                 if len(matched) >= limit:
                     break
             if len(matched) >= limit or len(rows) < batch:
-                break
-            if not tenant:
                 break
     finally:
         connection.close()
@@ -1214,6 +1226,10 @@ def mark_expired_candidates(root: Path | str, *, now: datetime) -> dict[str, int
         raise ValueError("now must include a timezone")
     base = Path(root).expanduser().resolve()
     directory = base.joinpath(*CANDIDATE_DIRECTORY)
+    try:
+        _assert_safe_candidate_directory(base, directory)
+    except ServiceError:
+        return {"expired": 0, "deleted": 0}
     expired = 0
     if directory.is_dir() and not directory.is_symlink():
         cutoff = now - timedelta(days=CANDIDATE_TTL_DAYS)
@@ -1248,6 +1264,97 @@ def mark_expired_candidates(root: Path | str, *, now: datetime) -> dict[str, int
     return {"expired": expired, "deleted": 0}
 
 
+_LEDGER_NAME = ".proposal-ledger.json"
+
+
+def _read_ledger(directory_fd: int) -> dict[str, dict[str, str]]:
+    """Read proposal bindings. A missing ledger is empty. A symlink is refused."""
+
+    try:
+        descriptor = os.open(_LEDGER_NAME, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+    except FileNotFoundError:
+        return {}
+    except OSError as exc:
+        raise _internal() from exc
+    try:
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            raw = handle.read()
+    except OSError as exc:
+        raise _internal() from exc
+    if not raw.strip():
+        return {}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise _internal() from exc
+    proposals = payload.get("proposals") if isinstance(payload, dict) else None
+    if not isinstance(proposals, dict):
+        return {}
+    clean: dict[str, dict[str, str]] = {}
+    for key, value in proposals.items():
+        if isinstance(key, str) and isinstance(value, dict):
+            clean[key] = {str(item_key): str(item) for item_key, item in value.items()}
+    return clean
+
+
+def _write_ledger(directory_fd: int, proposals: dict[str, dict[str, str]]) -> None:
+    """Replace the ledger through the no-follow directory descriptor."""
+
+    text = json.dumps({"proposals": proposals}, ensure_ascii=False, sort_keys=True)
+    temporary = f".proposal-ledger.{uuid.uuid4().hex}.tmp"
+    descriptor = os.open(
+        temporary,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o600,
+        dir_fd=directory_fd,
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.unlink(_LEDGER_NAME, dir_fd=directory_fd)
+        except FileNotFoundError:
+            pass
+        os.link(temporary, _LEDGER_NAME, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+    finally:
+        try:
+            os.unlink(temporary, dir_fd=directory_fd)
+        except FileNotFoundError:
+            pass
+
+
+def _binding(
+    *,
+    content_hash: str,
+    canonical_proposal_id: str,
+    candidate_id: str,
+    path: str,
+) -> dict[str, str]:
+    return {
+        "content_hash": content_hash,
+        "canonical_proposal_id": canonical_proposal_id,
+        "candidate_id": candidate_id,
+        "path": path,
+    }
+
+
+def _duplicate_of_binding(bound: dict[str, str], proposal_id: str) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "contract": CONTRACT,
+        "staged": True,
+        "duplicate": True,
+        "candidate_id": bound.get("candidate_id") or f"conductor-{proposal_id}",
+        "path": bound.get("path") or _relative_candidate_path(proposal_id),
+        "authority": False,
+    }
+    canonical = bound.get("canonical_proposal_id") or proposal_id
+    if canonical != proposal_id:
+        payload["duplicate_of"] = canonical
+    return payload
+
+
 def stage_candidate(root: Path | str, payload: dict[str, Any]) -> dict[str, Any]:
     """Stage one candidate under ``<vault>/_candidates/remember/`` (never the vault)."""
     base = Path(root).expanduser().resolve()
@@ -1259,6 +1366,27 @@ def stage_candidate(root: Path | str, payload: dict[str, Any]) -> dict[str, Any]
     _assert_safe_candidate_directory(base, directory)
     candidate_id = f"conductor-{values['proposal_id']}"
     content_hash = "sha256:" + hashlib.sha256(values["content"].encode("utf-8")).hexdigest()
+    lock = FileLock(str(base / ".memfw-stage.lock"), timeout=30)
+    try:
+        lock.acquire()
+    except Timeout as exc:
+        raise _internal() from exc
+    try:
+        return _stage_locked(base, values, relative, candidate_id, content_hash)
+    finally:
+        lock.release()
+
+
+def _stage_locked(
+    base: Path,
+    values: dict[str, Any],
+    relative: str,
+    candidate_id: str,
+    content_hash: str,
+) -> dict[str, Any]:
+    """Check, bind, and publish one proposal while the vault stage lock is held."""
+
+    proposal_id = values["proposal_id"]
     duplicate_response = {
         "contract": CONTRACT,
         "staged": True,
@@ -1267,54 +1395,89 @@ def stage_candidate(root: Path | str, payload: dict[str, Any]) -> dict[str, Any]
         "path": relative,
         "authority": False,
     }
-    if (base / relative).exists() or (base / relative).is_symlink():
-        if _published_candidate_hash(base, relative) == content_hash:
-            return duplicate_response
-        raise ServiceError(409, "candidate exists with different content")
-    conflicts: list[dict[str, str]] = []
-    merges: list[dict[str, str]] = []
-    for other in _stored_candidates(base):
-        if other["tenant"] != values["tenant"] or other["proposal_id"] == values["proposal_id"]:
-            continue
-        relation = _candidate_relation(
-            values["content"], content_hash, other["body"], other["content_hash"]
-        )
-        if relation == "duplicate":
-            return {
-                "contract": CONTRACT,
-                "staged": True,
-                "duplicate": True,
-                "candidate_id": other["candidate_id"],
-                "path": other["path"],
-                "authority": False,
-                "duplicate_of": other["proposal_id"],
-            }
-        pointer = {"proposal_id": other["proposal_id"], "content_hash": other["content_hash"]}
-        if relation == "conflict":
-            conflicts.append(pointer)
-        elif relation == "merge":
-            merges.append(pointer)
-    recorded_at = datetime.now(UTC).isoformat()
-    created_at = values["occurred_at"] or recorded_at
-    header = {
-        "proposal_id": values["proposal_id"],
-        "source": values["source"],
-        "tenant": values["tenant"],
-        "tags": values["tags"],
-        "related": values["related"],
-        "title": values["title"],
-        "created_at": created_at,
-        "recorded_at": recorded_at,
-        "content_hash": content_hash,
-        "authority": False,
-    }
-    markdown_text = _candidate_markdown(header, values["content"])
     with _open_candidate_directory(base) as directory_handle:
-        published = _publish_candidate(directory_handle.descriptor, candidate_id, markdown_text)
-    if not published:
-        if _published_candidate_hash(base, relative) == content_hash:
+        descriptor = directory_handle.descriptor
+        proposals = _read_ledger(descriptor)
+        bound = proposals.get(proposal_id)
+        if bound and bound.get("content_hash"):
+            if bound["content_hash"] != content_hash:
+                raise ServiceError(409, "candidate exists with different content")
+            return _duplicate_of_binding(bound, proposal_id)
+        if (base / relative).exists() or (base / relative).is_symlink():
+            if _published_candidate_hash(base, relative) != content_hash:
+                raise ServiceError(409, "candidate exists with different content")
+            proposals[proposal_id] = _binding(
+                content_hash=content_hash,
+                canonical_proposal_id=proposal_id,
+                candidate_id=candidate_id,
+                path=relative,
+            )
+            _write_ledger(descriptor, proposals)
             return duplicate_response
-        raise ServiceError(409, "candidate exists with different content")
+        conflicts: list[dict[str, str]] = []
+        merges: list[dict[str, str]] = []
+        for other in _stored_candidates(base):
+            if other["tenant"] != values["tenant"] or other["proposal_id"] == proposal_id:
+                continue
+            relation = _candidate_relation(
+                values["content"], content_hash, other["body"], other["content_hash"]
+            )
+            if relation == "duplicate":
+                proposals[proposal_id] = _binding(
+                    content_hash=content_hash,
+                    canonical_proposal_id=other["proposal_id"],
+                    candidate_id=other["candidate_id"],
+                    path=other["path"],
+                )
+                _write_ledger(descriptor, proposals)
+                return {
+                    "contract": CONTRACT,
+                    "staged": True,
+                    "duplicate": True,
+                    "candidate_id": other["candidate_id"],
+                    "path": other["path"],
+                    "authority": False,
+                    "duplicate_of": other["proposal_id"],
+                }
+            pointer = {"proposal_id": other["proposal_id"], "content_hash": other["content_hash"]}
+            if relation == "conflict":
+                conflicts.append(pointer)
+            elif relation == "merge":
+                merges.append(pointer)
+        recorded_at = datetime.now(UTC).isoformat()
+        created_at = values["occurred_at"] or recorded_at
+        header = {
+            "proposal_id": proposal_id,
+            "source": values["source"],
+            "tenant": values["tenant"],
+            "tags": values["tags"],
+            "related": values["related"],
+            "title": values["title"],
+            "created_at": created_at,
+            "recorded_at": recorded_at,
+            "content_hash": content_hash,
+            "authority": False,
+        }
+        markdown_text = _candidate_markdown(header, values["content"])
+        published = _publish_candidate(descriptor, candidate_id, markdown_text)
+        if not published:
+            if _published_candidate_hash(base, relative) != content_hash:
+                raise ServiceError(409, "candidate exists with different content")
+            proposals[proposal_id] = _binding(
+                content_hash=content_hash,
+                canonical_proposal_id=proposal_id,
+                candidate_id=candidate_id,
+                path=relative,
+            )
+            _write_ledger(descriptor, proposals)
+            return duplicate_response
+        proposals[proposal_id] = _binding(
+            content_hash=content_hash,
+            canonical_proposal_id=proposal_id,
+            candidate_id=candidate_id,
+            path=relative,
+        )
+        _write_ledger(descriptor, proposals)
     response = {
         "contract": CONTRACT,
         "staged": True,

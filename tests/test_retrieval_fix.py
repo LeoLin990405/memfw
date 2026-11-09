@@ -1,0 +1,311 @@
+"""Regressions for the retrieval blockers that stayed open through R4."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import zipfile
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+
+from memfw.core.repository import Repository
+from memfw.index import MemoryIndex
+from memfw.mcp.server import Gateway
+from memfw.retrieval.judge import LocalJudge, judge_from_environment
+from scripts.memfw_readonly_service import ServiceError, mark_expired_candidates, stage_candidate
+
+ROOT = Path(__file__).resolve().parents[1]
+ENDPOINT = "http://127.0.0.1:9/judge"
+
+
+def _pair(tmp_path: Path) -> Repository:
+    repository = Repository(tmp_path / "vault")
+    repository.init()
+    repository.add(
+        "Public weather",
+        "weather forecast bulletin",
+        memory_id="public",
+        tenant="",
+    )
+    repository.add(
+        "Private weather",
+        "weather forecast alpha-private",
+        memory_id="secret",
+        tenant="alpha",
+    )
+    MemoryIndex(repository.index_path).rebuild(repository)
+    return repository
+
+
+def _ids(result: dict) -> list[str]:
+    return [item["id"] for item in result["results"]]
+
+
+def test_empty_tenant_is_not_every_tenant(tmp_path: Path) -> None:
+    repository = _pair(tmp_path)
+    gateway = Gateway(repository.root, tenant="", entity_enabled=False)
+    for mode in ("fts", "hybrid", "multihop"):
+        found = gateway.search("weather forecast", mode=mode)
+        assert "secret" not in _ids(found), mode
+        assert "public" in _ids(found), mode
+    with pytest.raises(ValueError, match="not visible"):
+        gateway.get("secret")
+    direct = gateway.search("secret", mode="multihop")
+    assert "secret" not in _ids(direct)
+    expanded = gateway.search("Where is the weather forecast bulletin", mode="multihop")
+    assert "secret" not in _ids(expanded)
+
+
+def test_named_tenant_sees_only_itself(tmp_path: Path) -> None:
+    repository = _pair(tmp_path)
+    gateway = Gateway(repository.root, tenant="alpha", entity_enabled=False)
+    for mode in ("fts", "hybrid", "multihop"):
+        found = gateway.search("weather", mode=mode)
+        assert _ids(found) == ["secret"], mode
+    assert "public" not in _ids(gateway.search("public", mode="multihop"))
+
+
+def test_plain_word_is_lexical_and_a_path_is_an_id(tmp_path: Path) -> None:
+    repository = _pair(tmp_path)
+    gateway = Gateway(repository.root, tenant="alpha", entity_enabled=False)
+    word = gateway.search("weather", mode="multihop")
+    assert word["route"] == "lexical"
+    assert _ids(word) == ["secret"]
+    assert word["degraded"] is False
+    existing = gateway.search("secret", mode="multihop")
+    assert existing["route"] == "direct"
+    assert _ids(existing) == ["secret"]
+    missing = gateway.search("memories/missing-id.md", mode="multihop")
+    assert missing["route"] == "direct"
+    assert missing["results"] == []
+    path = gateway.search("memories/secret.md", mode="multihop")
+    assert path["route"] == "direct"
+    assert _ids(path) == ["secret"]
+    quoted = gateway.search('"weather forecast"', mode="multihop")
+    assert quoted["route"] == "direct"
+    assert _ids(quoted) == ["secret"]
+
+
+def test_a_changed_file_does_not_inherit_the_live_version(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "vault")
+    repository.init()
+    repository.add("alpha original", "alpha keyword", memory_id="record", tenant="alpha")
+    gateway = Gateway(repository.root, tenant="alpha", entity_enabled=False)
+    before = gateway.search("alpha")
+    assert before["results"][0]["stale"] is False
+    assert before["results"][0]["index_version"] == before["results"][0]["sot_version"]
+    repository.update("record", title="bravo current", body="bravo replaced")
+    after = gateway.search("alpha")
+    hit = after["results"][0]
+    assert hit["title"] == "bravo current"
+    assert hit["sot_version"] == str(repository.get("record").version)
+    assert hit["index_version"] != hit["sot_version"]
+    assert hit["stale"] is True
+    assert hit["projection_hash"]
+
+
+def test_as_of_hides_a_memory_created_later(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "vault", clock=lambda: datetime(2026, 11, 8, tzinfo=UTC))
+    repository.init()
+    document = repository.add(
+        "future beacon",
+        "future beacon emitted today",
+        memory_id="future",
+        tenant="alpha",
+    )
+    assert document.valid_from is None
+    gateway = Gateway(repository.root, tenant="alpha", entity_enabled=False)
+    found = gateway.search("future beacon", mode="multihop", as_of="2025-01-01T00:00:00+00:00")
+    assert _ids(found) == []
+
+
+def test_configured_judge_has_a_transport_and_failures_degrade(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MEMFW_JUDGE_URL", ENDPOINT)
+    monkeypatch.setenv("MEMFW_JUDGE_ALLOWLIST", ENDPOINT)
+    configured = judge_from_environment()
+    assert configured is not None
+    assert configured.transport is not None
+    repository = _pair(tmp_path)
+    gateway = Gateway(repository.root, tenant="alpha", entity_enabled=False)
+
+    def explode(endpoint: str, question: str, passage: str, context: str) -> float:
+        del endpoint, question, passage, context
+        raise TimeoutError("synthetic local judge timeout")
+
+    monkeypatch.setattr(configured, "transport", explode)
+    monkeypatch.setattr("memfw.retrieval.judge.local_judge_transport", explode)
+    found = gateway.search("weather", mode="multihop")
+    assert found["mode"] == "fts"
+    assert found["degraded"] is True
+    assert _ids(found) == ["secret"]
+    assert all("judge_score" not in item for item in found["results"])
+
+
+def test_a_bad_judge_config_does_not_break_fts_or_hybrid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MEMFW_JUDGE_URL", ENDPOINT)
+    monkeypatch.setenv("MEMFW_JUDGE_ALLOWLIST", "")
+    repository = _pair(tmp_path)
+    gateway = Gateway(repository.root, tenant="alpha", entity_enabled=False)
+    for mode in ("fts", "hybrid"):
+        found = gateway.search("weather", mode=mode)
+        assert _ids(found) == ["secret"], mode
+
+
+def test_nan_judge_score_is_rejected() -> None:
+    judge = LocalJudge(ENDPOINT, (ENDPOINT,), lambda *_args: float("nan"))
+    with pytest.raises(ValueError, match="0, 1"):
+        judge.score("q", "p", "")
+
+
+def test_deduped_proposal_keeps_its_original_hash(tmp_path: Path) -> None:
+    root = tmp_path / "vault"
+    root.mkdir()
+    stage_candidate(root, {"proposal_id": "a", "title": "T", "content": "original body"})
+    duplicate = stage_candidate(
+        root, {"proposal_id": "b", "title": "T", "content": "original body"}
+    )
+    assert duplicate["duplicate"] is True
+    assert duplicate["duplicate_of"] == "a"
+    again = stage_candidate(root, {"proposal_id": "b", "title": "T", "content": "original body"})
+    assert again["duplicate"] is True
+    assert again["duplicate_of"] == "a"
+    with pytest.raises(ServiceError) as caught:
+        stage_candidate(root, {"proposal_id": "b", "title": "T", "content": "changed body"})
+    assert caught.value.status == 409
+    names = sorted(path.name for path in (root / "_candidates" / "remember").glob("*.md"))
+    assert names == ["conductor-a.md"]
+
+
+def test_deduped_proposal_survives_a_new_process(tmp_path: Path) -> None:
+    root = tmp_path / "vault"
+    root.mkdir()
+    stage_candidate(root, {"proposal_id": "a", "title": "T", "content": "original body"})
+    stage_candidate(root, {"proposal_id": "b", "title": "T", "content": "original body"})
+    script = tmp_path / "retry.py"
+    script.write_text(
+        "import json, sys\n"
+        "from pathlib import Path\n"
+        "from scripts.memfw_readonly_service import ServiceError, stage_candidate\n"
+        "root = Path(sys.argv[1])\n"
+        "try:\n"
+        "    print(json.dumps(stage_candidate(root, "
+        "{'proposal_id': 'b', 'title': 'T', 'content': 'changed body'})))\n"
+        "except ServiceError as exc:\n"
+        "    print(json.dumps({'status': exc.status}))\n",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ROOT)
+    completed = subprocess.run(
+        [sys.executable, str(script), str(root)],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert json.loads(completed.stdout) == {"status": 409}
+
+
+def test_concurrent_same_body_publishes_one_file(tmp_path: Path) -> None:
+    root = tmp_path / "vault"
+    root.mkdir()
+
+    def publish(proposal_id: str) -> dict:
+        return stage_candidate(
+            root, {"proposal_id": proposal_id, "title": "T", "content": "same body"}
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(publish, ("a", "b")))
+    files = list((root / "_candidates" / "remember").glob("*.md"))
+    assert len(files) == 1
+    assert sum(1 for item in results if item["duplicate"]) == 1
+    assert sum(1 for item in results if not item["duplicate"]) == 1
+
+
+def test_ttl_does_not_follow_a_candidate_symlink(tmp_path: Path) -> None:
+    external = tmp_path / "external"
+    external.mkdir()
+    staged = stage_candidate(
+        external, {"proposal_id": "outside", "title": "T", "content": "outside body"}
+    )
+    path = external / staged["path"]
+    text = path.read_text(encoding="utf-8")
+    recorded = text.split('recorded_at: "', 1)[1].split('"', 1)[0]
+    old = datetime.now(UTC).replace(year=datetime.now(UTC).year - 1).isoformat()
+    path.write_text(text.replace(recorded, old), encoding="utf-8")
+    before = hashlib.sha256(path.read_bytes()).hexdigest()
+    guard = tmp_path / "guard"
+    guard.mkdir()
+    (guard / "_candidates").symlink_to(external / "_candidates", target_is_directory=True)
+    result = mark_expired_candidates(guard, now=datetime.now(UTC))
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == before
+    assert result == {"expired": 0, "deleted": 0}
+
+
+def test_wheel_search_runs_outside_the_checkout(tmp_path: Path) -> None:
+    dist = tmp_path / "dist"
+    build = subprocess.run(
+        ["uv", "build", "--wheel", "--out-dir", str(dist)],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert build.returncode == 0
+    wheel = next(dist.glob("*.whl"))
+    site = tmp_path / "site"
+    site.mkdir()
+    with zipfile.ZipFile(wheel) as archive:
+        names = archive.namelist()
+        archive.extractall(site)
+    assert any(name.endswith("memfw/memfw_readonly_service.py") for name in names)
+    assert any(name.endswith("memfw/read_path.py") for name in names)
+    vault = tmp_path / "vault"
+    script = tmp_path / "smoke.py"
+    script.write_text(
+        "import json, os\n"
+        "from pathlib import Path\n"
+        "import memfw\n"
+        "from memfw.core.repository import Repository\n"
+        "from memfw.mcp.server import Gateway\n"
+        "root = Path(os.environ['VAULT'])\n"
+        "repo = Repository(root)\n"
+        "repo.init()\n"
+        "repo.add('Weather bulletin', 'weather forecast report', "
+        "memory_id='weather-record', tenant='alpha')\n"
+        "gate = Gateway(root, tenant='alpha', entity_enabled=False)\n"
+        "out = {'module': memfw.__file__}\n"
+        "for mode in ('fts', 'hybrid', 'multihop'):\n"
+        "    found = gate.search('weather forecast', mode=mode)\n"
+        "    out[mode] = [item['id'] for item in found['results']]\n"
+        "print(json.dumps(out))\n",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(site)
+    env["VAULT"] = str(vault)
+    env.pop("MEMFW_JUDGE_URL", None)
+    completed = subprocess.run(
+        [sys.executable, str(script)],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+    assert payload["module"].startswith(str(site))
+    for mode in ("fts", "hybrid", "multihop"):
+        assert payload[mode] == ["weather-record"], mode

@@ -323,16 +323,30 @@ def _content_hash(path: Path) -> str:
 
 
 def _annotate_hit(row: dict[str, Any], document: Any, item: dict[str, Any], *, why: str) -> None:
-    """Stamp the shared read-path fields. Versions already on ``item`` win."""
+    """Stamp the shared read-path fields.
 
+    The projection version is whatever the index stored. A missing projection
+    version stays empty, so an unknown index cannot look like the live file.
+    """
+
+    if "index_version" in item and item["index_version"] is not None:
+        index_version = item["index_version"]
+    else:
+        index_version = ""
     shared_readonly().read_path.annotate(
         row,
         provenance=str(document.provenance or ""),
         source=str(document.source or ""),
-        index_version=item.get("index_version", document.version),
-        sot_version=item.get("sot_version", document.version),
+        index_version=index_version,
+        sot_version=document.version,
         why=why,
     )
+    projection_hash = str(item.get("projection_hash") or "")
+    if projection_hash:
+        row["projection_hash"] = projection_hash
+        live = str(row.get("content_hash") or "").removeprefix("sha256:")
+        if live != projection_hash:
+            row["stale"] = True
 
 
 class Gateway:
@@ -385,6 +399,37 @@ class Gateway:
             entity_enabled=self.entity_enabled,
             allowed_sources=self.allowed_sources,
         )
+
+    def _degraded_fts(
+        self,
+        query: str,
+        limit: int,
+        *,
+        source: str,
+        include_history: bool,
+        as_of: str | None,
+    ) -> dict[str, Any]:
+        """Lexical results after the judge cannot score this multihop query."""
+
+        repository = self._repo()
+        _ensure_search_index(repository)
+        payload = shared_readonly().search_vault(
+            repository.root,
+            query,
+            limit=max(1, min(int(limit), 50)),
+            source=source,
+            tenant=self.tenant,
+            include_history=include_history,
+            as_of=as_of,
+        )
+        return {
+            "mode": "fts",
+            "degraded": True,
+            "errors": ["judge unavailable"],
+            "model_versions": {},
+            "results": payload["results"],
+            "route": "fts",
+        }
 
     def search(
         self,
@@ -502,13 +547,23 @@ class Gateway:
             }
             _annotate_hit(row, document, item, why=str(item.get("why") or why))
             rows.append(row)
-        active_judge = judge if judge is not None else judge_from_environment()
-        if active_judge is not None and result["mode"] == "multihop":
-            passages: dict[str, str] = {}
-            for row in rows:
-                document = repository.get(row["id"])
-                passages[row["id"]] = f"{document.title}\n{document.body}"
-            rows, _calls = apply_judge(rows, passages, query, active_judge, cap=judge_cap())
+        if result["mode"] == "multihop":
+            try:
+                active_judge = judge if judge is not None else judge_from_environment()
+                if active_judge is not None:
+                    passages: dict[str, str] = {}
+                    for row in rows:
+                        document = repository.get(row["id"])
+                        passages[row["id"]] = f"{document.title}\n{document.body}"
+                    rows, _calls = apply_judge(rows, passages, query, active_judge, cap=judge_cap())
+            except (TimeoutError, ValueError, RuntimeError, OSError):
+                return self._degraded_fts(
+                    query,
+                    limit,
+                    source=source,
+                    include_history=include_history,
+                    as_of=as_of,
+                )
         payload = {
             "mode": result["mode"],
             "degraded": result["degraded"],
