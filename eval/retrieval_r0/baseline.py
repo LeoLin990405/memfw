@@ -123,20 +123,32 @@ def evaluate(
         for path in paths:
             first_ids: list[str] | None = None
             for question in corpus.questions:
-                retrieved, elapsed = timed_search(path, built, question, limit=PRIMARY_K)
+                retrieved, elapsed, meta = timed_search(path, built, question, limit=PRIMARY_K)
                 if first_ids is None:
                     first_ids = list(retrieved)
-                class_rows[path].append(_score_question(question, retrieved, elapsed, built.by_id))
-            repeated, _elapsed = timed_search(path, built, corpus.questions[0], limit=PRIMARY_K)
+                row = _score_question(question, retrieved, elapsed, built.by_id)
+                row["mode"] = meta["mode"]
+                row["degraded"] = meta["degraded"]
+                row["entry"] = meta["entry"]
+                class_rows[path].append(row)
+            repeated, _elapsed, _meta = timed_search(
+                path, built, corpus.questions[0], limit=PRIMARY_K
+            )
             determinism[path][case_type] = repeated == first_ids
             per_path_rows[path].extend(class_rows[path])
         by_class[case_type] = {path: _aggregate(class_rows[path]) for path in paths}
     paths_report = {}
     for path in paths:
+        modes = {row["mode"] for row in per_path_rows[path] if row.get("mode") is not None}
+        degraded = {
+            row["degraded"] for row in per_path_rows[path] if row.get("degraded") is not None
+        }
         paths_report[path] = {
             "by_class": {case_type: by_class[case_type][path] for case_type in CASE_TYPES},
             "overall": _aggregate(per_path_rows[path]),
             "ranking_repeat_matched": all(determinism[path].values()),
+            "observed_mode": next(iter(modes)) if len(modes) == 1 else None,
+            "observed_degraded": next(iter(degraded)) if len(degraded) == 1 else None,
         }
     return {"split": split, "paths": paths_report}
 

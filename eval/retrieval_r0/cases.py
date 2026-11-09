@@ -52,6 +52,47 @@ class Question:
     poison_channels: tuple[str, ...]
     hop: str
     lexical_key: str
+    template_index: int = 0
+
+
+_TEMPLATES: dict[str, tuple[str, ...]] = {
+    "time_update": (
+        "What is the current passphrase for {key} after rotation",
+        "Which current passphrase for {key} applies after rotation",
+        "Name the current passphrase for {key} after rotation",
+    ),
+    "conflict": (
+        "What color is the cluster {key} in the platform note",
+        "Which color is the cluster {key} in the platform note",
+        "Name the color of the cluster {key} in the platform note",
+    ),
+    "delete": (
+        "What is the badge code for door {key}",
+        "Which badge code belongs to door {key}",
+        "Name the badge code for door {key}",
+    ),
+    "multi_tenant": (
+        "Which vial is on the warehouse shelf {key}",
+        "What vial is on the warehouse shelf {key}",
+        "Name the vial on the warehouse shelf {key}",
+    ),
+    "poisoning": (
+        "When does the backup window for host {key} start",
+        "What time does the backup window for host {key} start",
+        "Name when the backup window for host {key} starts",
+    ),
+    "multihop": (
+        "What allocation was approved for the project the owner asked about {key}",
+        "Which allocation was approved after the owner asked about {key}",
+        "Name the allocation approved for what the owner asked about {key}",
+    ),
+}
+
+
+def _ask(case_type: str, index: int, key: str) -> tuple[int, str]:
+    templates = _TEMPLATES[case_type]
+    template_index = index % len(templates)
+    return template_index, templates[template_index].format(key=key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +192,7 @@ def _near_distractor(split: str, case_type: str, index: int, stem: str) -> Docum
 
 def _build_question(split: str, case_type: str, index: int) -> tuple[Question, list[Document]]:
     key = _key(split, case_type, index)
+    template_index, asked = _ask(case_type, index, key)
     if case_type == "time_update":
         current_id = _doc_id(split, case_type, index, "open")
         closed_id = _doc_id(split, case_type, index, "old")
@@ -177,7 +219,7 @@ def _build_question(split: str, case_type: str, index: int) -> tuple[Question, l
             question_id=_question_id(split, case_type, index),
             case_type=case_type,
             split=split,
-            question=f"What is the current passphrase for {key} after rotation",
+            question=asked,
             tenant=CALLER_TENANT,
             evidence_ids=(current_id,),
             forbidden_ids=(closed_id,),
@@ -186,6 +228,7 @@ def _build_question(split: str, case_type: str, index: int) -> tuple[Question, l
             poison_channels=(),
             hop="single",
             lexical_key=key,
+            template_index=template_index,
         )
         return question, documents
     if case_type == "conflict":
@@ -214,7 +257,7 @@ def _build_question(split: str, case_type: str, index: int) -> tuple[Question, l
             question_id=_question_id(split, case_type, index),
             case_type=case_type,
             split=split,
-            question=f"What color is the cluster {key} in the platform note",
+            question=asked,
             tenant=CALLER_TENANT,
             evidence_ids=(left_id, right_id),
             forbidden_ids=(),
@@ -223,6 +266,7 @@ def _build_question(split: str, case_type: str, index: int) -> tuple[Question, l
             poison_channels=(),
             hop="single",
             lexical_key=key,
+            template_index=template_index,
         )
         return question, documents
     if case_type == "delete":
@@ -242,7 +286,7 @@ def _build_question(split: str, case_type: str, index: int) -> tuple[Question, l
             question_id=_question_id(split, case_type, index),
             case_type=case_type,
             split=split,
-            question=f"What is the badge code for door {key}",
+            question=asked,
             tenant=CALLER_TENANT,
             evidence_ids=(),
             forbidden_ids=(deleted_id,),
@@ -251,6 +295,7 @@ def _build_question(split: str, case_type: str, index: int) -> tuple[Question, l
             poison_channels=(),
             hop="single",
             lexical_key=key,
+            template_index=template_index,
         )
         return question, documents
     if case_type == "multi_tenant":
@@ -279,7 +324,7 @@ def _build_question(split: str, case_type: str, index: int) -> tuple[Question, l
             question_id=_question_id(split, case_type, index),
             case_type=case_type,
             split=split,
-            question=f"Which vial is on the warehouse shelf {key}",
+            question=asked,
             tenant=CALLER_TENANT,
             evidence_ids=(alpha_id,),
             forbidden_ids=(),
@@ -288,6 +333,7 @@ def _build_question(split: str, case_type: str, index: int) -> tuple[Question, l
             poison_channels=(),
             hop="single",
             lexical_key=key,
+            template_index=template_index,
         )
         return question, documents
     if case_type == "poisoning":
@@ -331,7 +377,7 @@ def _build_question(split: str, case_type: str, index: int) -> tuple[Question, l
             question_id=_question_id(split, case_type, index),
             case_type=case_type,
             split=split,
-            question=f"When does the backup window for host {key} start",
+            question=asked,
             tenant=CALLER_TENANT,
             evidence_ids=(truth_id,),
             forbidden_ids=(),
@@ -340,6 +386,7 @@ def _build_question(split: str, case_type: str, index: int) -> tuple[Question, l
             poison_channels=(channel,),
             hop="single",
             lexical_key=key,
+            template_index=template_index,
         )
         return question, documents
     if case_type == "multihop":
@@ -366,15 +413,16 @@ def _build_question(split: str, case_type: str, index: int) -> tuple[Question, l
             question_id=_question_id(split, case_type, index),
             case_type=case_type,
             split=split,
-            question=(f"What allocation was approved for the project the owner asked about {key}"),
+            question=asked,
             tenant=CALLER_TENANT,
-            evidence_ids=(gold_id,),
+            evidence_ids=(bridge_id, gold_id),
             forbidden_ids=(),
             other_tenant_ids=(),
             poison_ids=(),
             poison_channels=(),
             hop="multi",
             lexical_key=key,
+            template_index=template_index,
         )
         return question, documents
     raise ValueError(f"unknown case type: {case_type}")

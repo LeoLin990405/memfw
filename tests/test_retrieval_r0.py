@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import scripts.memfw_readonly_service as service
 from eval.retrieval_r0.baseline import build_report
 from eval.retrieval_r0.cases import CASE_TYPES, SPLITS, generate, gold_leaks
 from eval.retrieval_r0.corpus import load_corpus, search_path
@@ -19,8 +20,15 @@ from eval.retrieval_r0.power import (
 )
 from memfw.index import MemoryIndex
 from memfw.mcp.server import Gateway, client_endpoint_fields
+from memfw.notes.index import NotesIndex
 from memfw.stats.keyness import tokenize
 from scripts.memfw_readonly_service import ServiceError, reject_client_endpoints
+
+
+# The suite-wide socket guard would refuse the loopback /stage and /search client.
+@pytest.fixture(autouse=True)
+def disable_network() -> None:
+    """These tests talk to the in-process readonly service on loopback."""
 
 
 def test_holm_alpha_is_stricter_than_the_family_alpha() -> None:
@@ -107,17 +115,35 @@ def test_questions_keep_gold_ids_and_secrets_out_of_the_text() -> None:
     assert channels == {"stage", "notes"}
 
 
-def test_multihop_gold_shares_no_tokenizer_term_with_the_question() -> None:
+def test_each_class_uses_at_least_three_templates() -> None:
+    corpora = generate(6, seed=5)
+    for case_type in CASE_TYPES:
+        indexes = {question.template_index for question in corpora[("report", case_type)].questions}
+        assert indexes == {0, 1, 2}
+
+
+def test_full_chain_scores_bridge_and_terminal_separately() -> None:
+    chain = ("bridge", "gold")
+    assert evidence_recall(["bridge"], chain, (), k=10) == 0.5
+    assert all_evidence(["bridge"], chain, (), k=10) == 0.0
+    assert evidence_recall(["gold"], chain, (), k=10) == 0.5
+    assert all_evidence(["gold"], chain, (), k=10) == 0.0
+    assert evidence_recall(["bridge", "gold"], chain, (), k=10) == 1.0
+    assert all_evidence(["bridge", "gold"], chain, (), k=10) == 1.0
+
+
+def test_multihop_terminal_shares_no_tokenizer_term_with_the_question() -> None:
     corpus = generate(6, seed=5)[("report", "multihop")]
     documents = {document.doc_id: document for document in corpus.documents}
     for question in corpus.questions:
         query_terms = set(tokenize(question.question))
         assert question.lexical_key in question.question
-        for evidence_id in question.evidence_ids:
-            document = documents[evidence_id]
-            evidence_terms = set(tokenize(document.title)) | set(tokenize(document.body))
-            assert query_terms.isdisjoint(evidence_terms)
-            assert question.lexical_key not in document.body
+        bridge = documents[question.evidence_ids[0]]
+        terminal = documents[question.evidence_ids[1]]
+        assert question.lexical_key in bridge.body
+        terminal_terms = set(tokenize(terminal.title)) | set(tokenize(terminal.body))
+        assert query_terms.isdisjoint(terminal_terms)
+        assert question.lexical_key not in terminal.body
 
 
 def test_single_hop_gold_contains_the_lexical_key(tmp_path: Path) -> None:
@@ -138,12 +164,10 @@ def test_deleted_valid_to_row_is_absent_from_the_shipped_index(tmp_path: Path) -
     for path in ("memory_fts", "memory_bm25", "vault_bm25"):
         retrieved = search_path(path, built, question, limit=10)
         assert set(question.forbidden_ids).isdisjoint(retrieved)
-        assert evidence_recall(
-            retrieved, question.evidence_ids, question.forbidden_ids, k=10
-        ) == 1.0
-        assert all_evidence(
-            retrieved, question.evidence_ids, question.forbidden_ids, k=10
-        ) == 1.0
+        assert (
+            evidence_recall(retrieved, question.evidence_ids, question.forbidden_ids, k=10) == 1.0
+        )
+        assert all_evidence(retrieved, question.evidence_ids, question.forbidden_ids, k=10) == 1.0
 
 
 def test_search_receives_the_question_and_not_the_gold_id(
@@ -217,13 +241,21 @@ def test_report_split_runs_every_shipped_path(tmp_path: Path) -> None:
         "vault_bm25",
         "hybrid_fts",
         "mcp_fts",
+        "mcp_default",
+        "http_search",
         "notes_fts",
     }
-    for _path, payload in measured.items():
+    phrase_paths = {"memory_fts", "mcp_fts", "http_search"}
+    for path, payload in measured.items():
         assert payload["ranking_repeat_matched"] is True
         assert payload["overall"]["n"] == len(CASE_TYPES)
         assert payload["by_class"]["delete"]["n"] == 1
-        assert payload["by_class"]["multihop"]["evidence_recall@10"] == 0.0
+        multihop = payload["by_class"]["multihop"]
+        assert multihop["all_evidence@10"] == 0.0
+        if path in phrase_paths:
+            assert multihop["evidence_recall@10"] == 0.0
+        else:
+            assert multihop["evidence_recall@10"] == 0.5
     memory_delete = measured["memory_bm25"]["by_class"]["delete"]
     assert memory_delete["evidence_recall@10"] == 1.0
     assert memory_delete["forbidden_in_topk_rate"] == 0.0
@@ -239,7 +271,72 @@ def test_report_split_runs_every_shipped_path(tmp_path: Path) -> None:
     assert hybrid_tenant["evidence_recall@10"] == 1.0
     assert hybrid_tenant["other_tenant_in_topk_rate"] == 0.0
     poison = measured["memory_bm25"]["by_class"]["poisoning"]
-    assert poison["poison_in_topk_rate"] == 1.0
+    assert poison["poison_in_topk_rate"] == 0.0
+    assert measured["http_search"]["observed_mode"] == "fts"
+    assert measured["http_search"]["observed_degraded"] is False
+    assert measured["mcp_default"]["observed_mode"] == "fts"
+    assert measured["mcp_default"]["observed_degraded"] is True
+
+
+def test_stage_and_notes_use_their_write_entry_points(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = {"stage": 0, "notes": 0, "search_vault": 0, "gateway": 0}
+    real_stage = service.stage_candidate
+    real_search = service.search_vault
+    real_index = NotesIndex.index
+    real_gateway = Gateway.search
+
+    def spy_stage(root: Path, payload: dict) -> dict:
+        calls["stage"] += 1
+        result = real_stage(root, payload)
+        assert result["authority"] is False
+        return result
+
+    def spy_search(*args, **kwargs):  # type: ignore[no-untyped-def]
+        calls["search_vault"] += 1
+        return real_search(*args, **kwargs)
+
+    def spy_index(self: NotesIndex, root: Path, **kwargs):  # type: ignore[no-untyped-def]
+        calls["notes"] += 1
+        return real_index(self, root, **kwargs)
+
+    def spy_gateway(self: Gateway, *args, **kwargs):  # type: ignore[no-untyped-def]
+        calls["gateway"] += 1
+        return real_gateway(self, *args, **kwargs)
+
+    monkeypatch.setattr(service, "stage_candidate", spy_stage)
+    monkeypatch.setattr(service, "search_vault", spy_search)
+    monkeypatch.setattr(NotesIndex, "index", spy_index)
+    monkeypatch.setattr(Gateway, "search", spy_gateway)
+    corpus = generate(2, seed=3)[("report", "poisoning")]
+    built = load_corpus(corpus, tmp_path / "vault")
+    assert calls["stage"] == 1
+    assert calls["notes"] == 1
+    assert built.stage_calls == 1
+    assert built.repository_adds > 0
+    for question in corpus.questions:
+        poison_id = question.poison_ids[0]
+        memory_ids = search_path("memory_bm25", built, question, limit=10)
+        assert poison_id not in memory_ids
+        if question.poison_channels == ("stage",):
+            notes_ids = search_path("notes_fts", built, question, limit=10)
+            http_ids = search_path("http_search", built, question, limit=10)
+            assert poison_id not in notes_ids
+            assert poison_id not in http_ids
+            candidate = (
+                built.repository.root / "_candidates" / "remember" / f"conductor-{poison_id}.md"
+            )
+            assert candidate.is_file()
+            assert "authority: false" in candidate.read_text(encoding="utf-8")
+            assert not (built.repository.root / "memories" / f"{poison_id}.md").exists()
+        else:
+            notes_ids = search_path("notes_fts", built, question, limit=10)
+            assert poison_id in notes_ids
+            assert not (built.repository.root / "memories" / f"{poison_id}.md").exists()
+    search_path("mcp_default", built, corpus.questions[0], limit=5)
+    assert calls["search_vault"] >= 1
+    assert calls["gateway"] == 1
 
 
 def test_search_path_refuses_an_endpoint_argument(tmp_path: Path) -> None:

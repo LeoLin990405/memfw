@@ -102,6 +102,12 @@ def run_experiment(
         "per_class": per_class,
         "seed": seed,
         "ranking_repeats": 1,
+        "templates_per_class": 3,
+        "prd": "memfw-retrieval-roadmap.md",
+        "assumptions": [
+            "paired gains are treated as monotonic",
+            "the interval does not add misses beyond the measured paired differences",
+        ],
         "multihop": multihop_interval,
         "single_hop": single_interval,
         "by_class": by_class,

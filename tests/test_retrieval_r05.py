@@ -4,12 +4,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from eval.retrieval_r0.cases import generate
 from eval.retrieval_r0.corpus import load_corpus, search_path
 from eval.retrieval_r0.expand import document_frequencies, expanded_search, expansion_terms
-from eval.retrieval_r0.metrics import evidence_recall
+from eval.retrieval_r0.metrics import all_evidence, evidence_recall
 from eval.retrieval_r0.r05 import gain_interval
 from memfw.index import MemoryIndex
+
+
+# Loopback is unused here, but load_corpus stages through the readonly service.
+@pytest.fixture(autouse=True)
+def disable_network() -> None:
+    """Allow the in-process loopback /stage client used while loading a corpus."""
 
 
 def test_gain_interval_stays_at_zero_when_nothing_changes() -> None:
@@ -61,11 +69,17 @@ def test_expansion_retrieves_the_second_hop_without_the_gold_id(tmp_path: Path) 
             expanded_total += evidence_recall(
                 expanded, question.evidence_ids, question.forbidden_ids, k=10
             )
+            assert (
+                all_evidence(baseline, question.evidence_ids, question.forbidden_ids, k=10) == 0.0
+            )
+            assert (
+                all_evidence(expanded, question.evidence_ids, question.forbidden_ids, k=10) == 1.0
+            )
             for evidence_id in question.evidence_ids:
                 assert all(evidence_id not in query for query in seen)
     finally:
         MemoryIndex.ranked_search = real  # type: ignore[method-assign]
-    assert baseline_total == 0
+    assert baseline_total == 0.5 * len(corpus.questions)
     assert expanded_total == len(corpus.questions)
 
 
