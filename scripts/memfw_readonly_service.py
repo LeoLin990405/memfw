@@ -51,7 +51,7 @@ import sqlite3
 import sys
 import traceback
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -93,6 +93,8 @@ CONTROL_CHARACTERS = (
     | {"\u2028", "\u2029"}
 )
 CANDIDATE_DIRECTORY = ("_candidates", "remember")
+CANDIDATE_TTL_DAYS = 30
+MERGE_JACCARD = 0.8
 INTERNAL_MESSAGE = "internal error"
 ERROR_CODES = {
     400: "bad_request",
@@ -921,6 +923,7 @@ def _validate_stage_payload(payload: dict[str, Any]) -> dict[str, Any]:
         raise _bad_request("related must be an array of strings")
     tenant = _header_text(payload.get("tenant", ""), "tenant")
     source = _header_text(payload.get("source", "conductor"), "source", single_line=True)
+    occurred_at = _optional_occurred_at(payload.get("occurred_at", None))
     return {
         "proposal_id": proposal_id,
         "title": title,
@@ -929,7 +932,25 @@ def _validate_stage_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "related": [_header_text(item, "related entries") for item in related],
         "tenant": tenant,
         "source": source or "conductor",
+        "occurred_at": occurred_at,
     }
+
+
+def _optional_occurred_at(value: Any) -> str:
+    """Event time. Empty means the server clock is both stamps."""
+
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str):
+        raise _bad_request("occurred_at must be a timestamp")
+    text = _header_text(value, "occurred_at", single_line=True)
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise _bad_request("occurred_at must be an ISO timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise _bad_request("occurred_at must include a timezone")
+    return parsed.isoformat()
 
 
 class _SingleLine(str):
@@ -971,6 +992,7 @@ def _candidate_markdown(metadata: dict[str, Any], content: str) -> str:
         "tags": metadata["tags"],
         "related": metadata["related"],
         "created_at": metadata["created_at"],
+        "recorded_at": metadata["recorded_at"],
         "content_hash": metadata["content_hash"],
         "authority": False,
         "metadata": copy.deepcopy(
@@ -982,6 +1004,7 @@ def _candidate_markdown(metadata: dict[str, Any], content: str) -> str:
                 "related": metadata["related"],
                 "title": title,
                 "created_at": metadata["created_at"],
+                "recorded_at": metadata["recorded_at"],
                 "content_hash": metadata["content_hash"],
                 "authority": False,
             }
@@ -1126,6 +1149,105 @@ def _publish_candidate(directory_fd: int, candidate_id: str, markdown_text: str)
             pass
 
 
+def _candidate_body(raw: str) -> str:
+    if not raw.startswith("---\n"):
+        return ""
+    try:
+        _, _header, rest = raw.split("---\n", 2)
+    except ValueError:
+        return ""
+    return rest.strip("\n")
+
+
+def _stored_candidates(base: Path) -> list[dict[str, str]]:
+    """Read sibling candidates. Symlinks are skipped."""
+
+    directory = base.joinpath(*CANDIDATE_DIRECTORY)
+    if not directory.is_dir() or directory.is_symlink():
+        return []
+    stored: list[dict[str, str]] = []
+    for path in sorted(directory.glob("*.md")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        meta = _metadata_from_text(raw)
+        proposal_id = str(meta.get("proposal_id") or "")
+        stored.append(
+            {
+                "proposal_id": proposal_id,
+                "candidate_id": path.stem,
+                "path": "/".join((*CANDIDATE_DIRECTORY, path.name)),
+                "content_hash": str(meta.get("content_hash") or ""),
+                "tenant": str(meta.get("tenant") or ""),
+                "body": _candidate_body(raw),
+            }
+        )
+    return stored
+
+
+def _candidate_relation(content: str, content_hash: str, other_body: str, other_hash: str) -> str:
+    """Return duplicate, conflict, merge, or an empty string."""
+
+    if content_hash and content_hash == other_hash:
+        return "duplicate"
+    tokens = content.split()
+    other_tokens = other_body.split()
+    if len(tokens) >= 4 and len(tokens) == len(other_tokens):
+        differences = sum(left != right for left, right in zip(tokens, other_tokens, strict=True))
+        if differences == 1:
+            return "conflict"
+    left = set(tokens)
+    right = set(other_tokens)
+    union = left | right
+    if union and len(left & right) / len(union) >= MERGE_JACCARD:
+        return "merge"
+    return ""
+
+
+def mark_expired_candidates(root: Path | str, *, now: datetime) -> dict[str, int]:
+    """Mark candidates older than 30 days. The file stays on disk."""
+
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("now must include a timezone")
+    base = Path(root).expanduser().resolve()
+    directory = base.joinpath(*CANDIDATE_DIRECTORY)
+    expired = 0
+    if directory.is_dir() and not directory.is_symlink():
+        cutoff = now - timedelta(days=CANDIDATE_TTL_DAYS)
+        for path in sorted(directory.glob("*.md")):
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            meta = _metadata_from_text(text)
+            if meta.get("expired") is True or meta.get("lifecycle") == "expired":
+                continue
+            stamp = str(meta.get("recorded_at") or meta.get("created_at") or "")
+            try:
+                recorded = datetime.fromisoformat(stamp)
+            except ValueError:
+                continue
+            if recorded.tzinfo is None or recorded.utcoffset() is None or recorded > cutoff:
+                continue
+            needle = 'lifecycle: "active"'
+            if needle not in text:
+                continue
+            updated = text.replace(needle, 'lifecycle: "expired"', 1)
+            updated = updated.replace(
+                'lifecycle: "expired"\n',
+                'lifecycle: "expired"\nexpired: true\n',
+                1,
+            )
+            path.write_text(updated, encoding="utf-8", newline="\n")
+            expired += 1
+    return {"expired": expired, "deleted": 0}
+
+
 def stage_candidate(root: Path | str, payload: dict[str, Any]) -> dict[str, Any]:
     """Stage one candidate under ``<vault>/_candidates/remember/`` (never the vault)."""
     base = Path(root).expanduser().resolve()
@@ -1149,7 +1271,31 @@ def stage_candidate(root: Path | str, payload: dict[str, Any]) -> dict[str, Any]
         if _published_candidate_hash(base, relative) == content_hash:
             return duplicate_response
         raise ServiceError(409, "candidate exists with different content")
-    created_at = datetime.now(UTC).isoformat()
+    conflicts: list[dict[str, str]] = []
+    merges: list[dict[str, str]] = []
+    for other in _stored_candidates(base):
+        if other["tenant"] != values["tenant"] or other["proposal_id"] == values["proposal_id"]:
+            continue
+        relation = _candidate_relation(
+            values["content"], content_hash, other["body"], other["content_hash"]
+        )
+        if relation == "duplicate":
+            return {
+                "contract": CONTRACT,
+                "staged": True,
+                "duplicate": True,
+                "candidate_id": other["candidate_id"],
+                "path": other["path"],
+                "authority": False,
+                "duplicate_of": other["proposal_id"],
+            }
+        pointer = {"proposal_id": other["proposal_id"], "content_hash": other["content_hash"]}
+        if relation == "conflict":
+            conflicts.append(pointer)
+        elif relation == "merge":
+            merges.append(pointer)
+    recorded_at = datetime.now(UTC).isoformat()
+    created_at = values["occurred_at"] or recorded_at
     header = {
         "proposal_id": values["proposal_id"],
         "source": values["source"],
@@ -1158,6 +1304,7 @@ def stage_candidate(root: Path | str, payload: dict[str, Any]) -> dict[str, Any]
         "related": values["related"],
         "title": values["title"],
         "created_at": created_at,
+        "recorded_at": recorded_at,
         "content_hash": content_hash,
         "authority": False,
     }
@@ -1168,7 +1315,7 @@ def stage_candidate(root: Path | str, payload: dict[str, Any]) -> dict[str, Any]
         if _published_candidate_hash(base, relative) == content_hash:
             return duplicate_response
         raise ServiceError(409, "candidate exists with different content")
-    return {
+    response = {
         "contract": CONTRACT,
         "staged": True,
         "duplicate": False,
@@ -1176,6 +1323,11 @@ def stage_candidate(root: Path | str, payload: dict[str, Any]) -> dict[str, Any]
         "path": relative,
         "authority": False,
     }
+    if conflicts:
+        response["conflict_candidates"] = conflicts
+    if merges:
+        response["merge_candidates"] = merges
+    return response
 
 
 # ---------------------------------------------------------------------------
