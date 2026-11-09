@@ -28,9 +28,6 @@ Contract summary:
 * temporal filtering and tenant filtering both happen in SQL, before ranking
   and the limit cut. Tenant is exact equality on ``memory_access.tenant``.
   An empty tenant matches only memories whose tenant is empty.
-  A request with no ``MemFW-Contract`` header, or with ``memfw-http/2``, stays
-  on this contract. ``memfw-http/3`` adds ``recorded_at`` on each search hit,
-  allows ``mode=multihop``, and serves ``POST /context``.
 
 Configuration: ``MEMFW_READONLY_ROOT`` (or ``--root``; ``--root`` falls back
 to the environment variable), ``MEMFW_RELATED_DB`` (or ``--related-db``),
@@ -81,10 +78,7 @@ def _load_read_path():
 
 read_path = _load_read_path()
 
-CONTRACT_V2 = "memfw-http/2"
-CONTRACT_V3 = "memfw-http/3"
-CONTRACT = CONTRACT_V2
-CONTRACT_HEADER = "MemFW-Contract"
+CONTRACT = "memfw-http/2"
 TOKEN_HEADER = "X-Memfw-Token"
 MAX_QUERY_CHARS = 512
 MAX_LIMIT = 50
@@ -165,128 +159,12 @@ _ENDPOINT_KEYS = frozenset(
 
 
 def reject_unavailable_search_mode(payload: dict[str, Any]) -> None:
-    """v2 HTTP search stays on FTS. Other modes are refused."""
+    """HTTP search stays on FTS. Other modes are refused until the v3 contract."""
 
     if "mode" not in payload:
         return
     if payload.get("mode") != "fts":
         raise _bad_request("mode is not available")
-
-
-def selected_contract(header: str | None) -> str:
-    """Absent or v2 stays v2. v3 is explicit. Anything else is rejected."""
-
-    requested = header or ""
-    if requested in ("", CONTRACT_V2):
-        return CONTRACT_V2
-    if requested == CONTRACT_V3:
-        return CONTRACT_V3
-    raise _bad_request("contract is not available")
-
-
-def _memory_recorded_at(root: Path, memory_id: str) -> str | None:
-    """Receipt time from the note. Missing or unreadable is null."""
-
-    path = root / "memories" / f"{memory_id}.md"
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    metadata = _metadata_from_text(text)
-    value = metadata.get("recorded_at", metadata.get("created_at"))
-    if isinstance(value, datetime):
-        if value.tzinfo is None or value.utcoffset() is None:
-            value = value.replace(tzinfo=UTC)
-        return value.astimezone(UTC).isoformat()
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    return None
-
-
-def _attach_recorded_at(root: Path, result: dict[str, Any]) -> None:
-    for item in result["results"]:
-        item["recorded_at"] = _memory_recorded_at(root, str(item["id"]))
-
-
-def _search_arguments(payload: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "limit": payload.get("limit", 10),
-        "source": payload.get("source", ""),
-        "tenant": payload.get("tenant", ""),
-        "include_history": payload.get("include_history", False),
-        "as_of": payload.get("as_of"),
-    }
-
-
-def _search_for_contract(root: Path, payload: dict[str, Any], contract: str) -> dict[str, Any]:
-    """v2 is FTS only. v3 also runs multihop and stamps ``recorded_at``."""
-
-    if contract == CONTRACT_V2:
-        reject_unavailable_search_mode(payload)
-        return search_vault(root, payload.get("query", ""), **_search_arguments(payload))
-    mode = payload.get("mode", "fts")
-    if mode not in ("fts", "multihop"):
-        raise _bad_request("mode is not available")
-    if mode == "multihop":
-        return _search_multihop(root, payload)
-    result = search_vault(root, payload.get("query", ""), **_search_arguments(payload))
-    result["contract"] = CONTRACT_V3
-    _attach_recorded_at(root, result)
-    return result
-
-
-def _search_multihop(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
-    """Lazy import so ``--help`` does not load the memfw package."""
-
-    from memfw.mcp.server import Gateway
-
-    arguments = _search_arguments(payload)
-    tenant = arguments["tenant"] if isinstance(arguments["tenant"], str) else ""
-    limit = arguments["limit"] if isinstance(arguments["limit"], int) else 10
-    try:
-        found = Gateway(root, tenant=tenant, entity_enabled=False).search(
-            str(payload.get("query") or ""),
-            limit=limit,
-            mode="multihop",
-            source=str(arguments["source"] or ""),
-            include_history=bool(arguments["include_history"]),
-            as_of=arguments["as_of"],
-        )
-    except ValueError as exc:
-        raise _bad_request(str(exc)) from exc
-    results = [_multihop_hit(root, item) for item in found["results"]]
-    return {
-        "contract": CONTRACT_V3,
-        "mode": str(found.get("mode") or "multihop"),
-        "degraded": bool(found.get("degraded")),
-        "errors": list(found.get("errors") or []),
-        "results": results,
-    }
-
-
-def _multihop_hit(root: Path, item: dict[str, Any]) -> dict[str, Any]:
-    payload = _document_payload(root, str(item.get("id") or "")) or {}
-    return {
-        "id": item.get("id"),
-        "title": item.get("title"),
-        "source": item.get("source"),
-        "score": item.get("score"),
-        "content_hash": item.get("content_hash") or payload.get("content_hash"),
-        "tenant": payload.get("tenant", ""),
-        "valid_from": item.get("valid_from", payload.get("valid_from")),
-        "valid_to": item.get("valid_to", payload.get("valid_to")),
-        "superseded_by": item.get("superseded_by", payload.get("superseded_by")),
-        "provenance_type": item.get("provenance_type"),
-        "why": item.get("why"),
-        "index_version": item.get("index_version") or "",
-        "sot_version": item.get("sot_version"),
-        "stale": bool(item.get("stale")),
-        "recorded_at": _memory_recorded_at(root, str(item.get("id") or "")),
-    }
-
-
-def _context_lines(result: dict[str, Any]) -> str:
-    return "\n".join(f"{item['id']}: {item.get('title') or ''}" for item in result["results"])
 
 
 def reject_client_endpoints(payload: dict[str, Any]) -> None:
@@ -1720,13 +1598,10 @@ class Handler(BaseHTTPRequestHandler):
         if include_body:
             self.wfile.write(data)
 
-    def _selected_contract(self) -> str:
-        return selected_contract(self.headers.get(CONTRACT_HEADER))
-
-    def _fail(self, error: ServiceError, contract: str = CONTRACT_V2) -> None:
+    def _fail(self, error: ServiceError) -> None:
         self._send(
             error.status,
-            {"contract": contract, "error": {"code": error.code, "message": error.message}},
+            {"contract": CONTRACT, "error": {"code": error.code, "message": error.message}},
         )
 
     def send_error(self, code: int, message: str | None = None, explain: str | None = None) -> None:
@@ -1795,26 +1670,20 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- routing -----------------------------------------------------------
     def do_GET(self) -> None:  # noqa: N802
-        contract = CONTRACT_V2
         try:
-            contract = self._selected_contract()
             if self.path == "/health":
-                payload = health_payload()
-                payload["contract"] = contract
-                self._send(200, payload)
+                self._send(200, health_payload())
                 return
             raise ServiceError(404, "not found")
         except ServiceError as error:
-            self._fail(error, contract)
+            self._fail(error)
         except Exception:
             traceback.print_exc()
-            self._fail(_internal(), contract)
+            self._fail(_internal())
 
     def do_POST(self) -> None:  # noqa: N802
-        contract = CONTRACT_V2
         try:
-            contract = self._selected_contract()
-            if self.path not in ("/search", "/related", "/stage", "/forget", "/context"):
+            if self.path not in ("/search", "/related", "/stage", "/forget"):
                 raise ServiceError(404, "not found")
             self._authorise()
             writing = self.path in {"/stage", "/forget"}
@@ -1822,12 +1691,17 @@ class Handler(BaseHTTPRequestHandler):
             payload = self._read_json(body_limit)
             reject_client_endpoints(payload)
             root = _root()
-            if self.path == "/context" and contract != CONTRACT_V3:
-                raise _bad_request("contract does not include /context")
-            if self.path in {"/search", "/context"}:
-                result = _search_for_contract(root, payload, contract)
-                if self.path == "/context":
-                    result["context"] = _context_lines(result)
+            if self.path == "/search":
+                reject_unavailable_search_mode(payload)
+                result = search_vault(
+                    root,
+                    payload.get("query", ""),
+                    limit=payload.get("limit", 10),
+                    source=payload.get("source", ""),
+                    tenant=payload.get("tenant", ""),
+                    include_history=payload.get("include_history", False),
+                    as_of=payload.get("as_of"),
+                )
             elif self.path == "/related":
                 result = related_vault(
                     root,
@@ -1835,19 +1709,16 @@ class Handler(BaseHTTPRequestHandler):
                     limit=payload.get("limit", 10),
                     tenant=payload.get("tenant", ""),
                 )
-                result["contract"] = contract
             elif self.path == "/forget":
                 result = forget_request(root, payload)
-                result["contract"] = contract
             else:
                 result = stage_candidate(root, payload)
-                result["contract"] = contract
             self._send(200, result)
         except ServiceError as error:
-            self._fail(error, contract)
+            self._fail(error)
         except Exception:
             traceback.print_exc()
-            self._fail(_internal(), contract)
+            self._fail(_internal())
 
     def do_HEAD(self) -> None:  # noqa: N802
         self._not_found()
