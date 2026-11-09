@@ -1,0 +1,98 @@
+{
+  "adopted_proposal_rate": null,
+  "adopted_proposal_rate_online": true,
+  "cases": 7,
+  "conflict_detection_rate": 1.0,
+  "dream_implemented": false,
+  "false_merge_rate": 0.0,
+  "merge_accuracy": 1.0,
+  "note": "Gold scored against itself. A dream implementation is not in this package. adopted_proposal_rate stays null until a person adopts proposals.",
+  "per_case": [
+    {
+      "case_id": "duplicate-lamp",
+      "conflict_hits": 0,
+      "conflict_total": 0,
+      "false_merges": 0,
+      "kind": "duplicate",
+      "merge_hits": 1,
+      "merge_total": 1,
+      "proposed_merges": 1,
+      "stale_hits": 0,
+      "stale_total": 0
+    },
+    {
+      "case_id": "duplicate-port",
+      "conflict_hits": 0,
+      "conflict_total": 0,
+      "false_merges": 0,
+      "kind": "duplicate",
+      "merge_hits": 1,
+      "merge_total": 1,
+      "proposed_merges": 1,
+      "stale_hits": 0,
+      "stale_total": 0
+    },
+    {
+      "case_id": "duplicate-three",
+      "conflict_hits": 0,
+      "conflict_total": 0,
+      "false_merges": 0,
+      "kind": "duplicate",
+      "merge_hits": 2,
+      "merge_total": 2,
+      "proposed_merges": 2,
+      "stale_hits": 0,
+      "stale_total": 0
+    },
+    {
+      "case_id": "conflict-color",
+      "conflict_hits": 1,
+      "conflict_total": 1,
+      "false_merges": 0,
+      "kind": "conflict",
+      "merge_hits": 0,
+      "merge_total": 0,
+      "proposed_merges": 0,
+      "stale_hits": 0,
+      "stale_total": 0
+    },
+    {
+      "case_id": "different-attributes",
+      "conflict_hits": 0,
+      "conflict_total": 0,
+      "false_merges": 0,
+      "kind": "conflict",
+      "merge_hits": 0,
+      "merge_total": 0,
+      "proposed_merges": 0,
+      "stale_hits": 0,
+      "stale_total": 0
+    },
+    {
+      "case_id": "stale-closed",
+      "conflict_hits": 0,
+      "conflict_total": 0,
+      "false_merges": 0,
+      "kind": "stale",
+      "merge_hits": 0,
+      "merge_total": 0,
+      "proposed_merges": 0,
+      "stale_hits": 1,
+      "stale_total": 1
+    },
+    {
+      "case_id": "stale-superseded",
+      "conflict_hits": 1,
+      "conflict_total": 1,
+      "false_merges": 0,
+      "kind": "stale",
+      "merge_hits": 0,
+      "merge_total": 0,
+      "proposed_merges": 0,
+      "stale_hits": 1,
+      "stale_total": 1
+    }
+  ],
+  "stale_mark_recall": 1.0,
+  "synthetic": true
+}
