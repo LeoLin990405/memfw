@@ -281,6 +281,17 @@ Conductor v1 (released 2026-11-07) talks to MemFW through the `memfw-http/2`
 contract: score, separate read and write tokens, `/stage`, root-only endpoints,
 redirect refusal, and a `forget` that says when it is not supported.
 
+**Hardening after the 2026-11-08 memory test** (PRs #15 and #16):
+
+- **Tenant scoping:** `/related` and MCP `memory_related` are tenant-scoped. Tenant and scope are written to the edge table and filtered before the cap, and the live tenant is re-checked before an ID or title is returned. Related reasons keep their real method, and scores are bounded to [0, 1].
+- **`memory_remember`:** candidates written in the same second no longer overwrite each other, and every one of them can be applied.
+- **Outbound HTTP:** it never follows redirects and never forwards `Authorization`.
+- **Notes indexing:** symlinks that escape the notes root are skipped.
+- **Reranking:** a caller can no longer choose the rerank endpoint; only the server can configure it.
+- **Readonly service:** `scripts/memfw_readonly_service.py` runs standalone with no `memfw` import. [`docs/HA500-UPGRADE.md`](docs/HA500-UPGRADE.md) covers moving an older readonly deployment to `memfw-http/2`, including a `/health` contract check.
+- **Field aliases:** `valid_until` and `superseded` are accepted as input aliases of `valid_to` and `superseded_by`. Output always uses the canonical names. A conflicting pair is rejected, and supersession IDs are compared exactly.
+- **Test suite:** the full suite on `main` after #16 is 652 passed, 2 skipped (offline; live and network tests excluded).
+
 
 ## Relatedness projection
 

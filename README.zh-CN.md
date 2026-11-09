@@ -256,6 +256,18 @@ memfw code map --db /tmp/memfw-code.sqlite
 Conductor v1（2026-11-07 发布）通过 `memfw-http/2` 契约访问 MemFW。这个契约包括：score、读写分离的 token、`/stage`、只接受根地址、拒绝重定向，以及在不支持 `forget` 时明确说明。
 
 
+
+**2026-11-08 记忆库测试后的加固**（PR #15、#16）：
+
+- **租户隔离：** `/related` 和 MCP `memory_related` 按租户隔离。边表会写入 tenant/scope，并在截断之前过滤；返回 ID 或标题前，会再校验一次当前租户。related 的召回理由保留真实来源，分数限定在 [0, 1] 之间。
+- **`memory_remember`：** 同一秒写入的候选不再互相覆盖，每条都能批准生效。
+- **外发 HTTP：** 不跟随重定向，也不转发 `Authorization`。
+- **Notes 索引：** 跳过逃出 notes 根目录的符号链接。
+- **重排：** 调用方不能再指定 rerank 端点，只能由服务端配置。
+- **只读服务：** `scripts/memfw_readonly_service.py` 可独立运行，不依赖 `import memfw`。[`docs/HA500-UPGRADE.md`](docs/HA500-UPGRADE.md) 说明如何把旧的只读部署升级到 `memfw-http/2`，包括 `/health` 契约检查。
+- **字段别名：** 输入接受 `valid_until`、`superseded`，作为 `valid_to`、`superseded_by` 的别名；输出一律使用规范名。互相冲突的一对字段会被拒绝；被取代记录的 ID 按字符串精确比较。
+- **测试：** #16 之后 `main` 上的全量测试为 652 个通过、2 个跳过（离线运行，不含 live/network 测试）。
+
 ## 关联性投影
 
 `memfw.related` 从显式 wikilink/`related`、共享 tag/课程、共享实体和词法重叠构建可丢弃的边表：
