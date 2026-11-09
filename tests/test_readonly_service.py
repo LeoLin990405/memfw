@@ -261,45 +261,6 @@ def test_read_token_cannot_stage(
     _assert_error(payload, "forbidden")
 
 
-def test_forget_over_http_keeps_the_memory_file(
-    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    root = seed_vault(tmp_path / "vault")
-    _use_vault(monkeypatch, root)
-    monkeypatch.setenv("MEMFW_TENANT", "tenant-a")
-    path = root / "memories" / "mem-alpha.md"
-    before = path.read_bytes()
-    status, payload = _post(
-        httpd,
-        "/forget",
-        {"proposal_id": "del-http", "memory_id": "mem-alpha"},
-        WRITE_TOKEN,
-    )
-    assert status == 200, payload
-    assert payload["contract"] == CONTRACT
-    assert payload["deleted"] is False
-    assert payload["authority"] is False
-    assert payload["kind"] == "delete-request"
-    assert payload["file_present"] is True
-    assert path.read_bytes() == before
-    status, denied = _post(
-        httpd,
-        "/forget",
-        {"proposal_id": "del-http-2", "memory_id": "mem-alpha"},
-        READ_TOKEN,
-    )
-    assert status == 403
-    _assert_error(denied, "forbidden")
-    status, client_tenant = _post(
-        httpd,
-        "/forget",
-        {"proposal_id": "del-http-3", "memory_id": "mem-alpha", "tenant": "beta"},
-        WRITE_TOKEN,
-    )
-    assert status == 400
-    assert client_tenant["error"]["message"] == "tenant is server-assigned"
-
-
 def test_stage_is_403_when_no_write_token_is_configured(
     httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

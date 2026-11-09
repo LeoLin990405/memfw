@@ -2,17 +2,16 @@
 """Read-only HTTP facade over a MemFW vault, implementing contract ``memfw-http/2``.
 
 The service exposes ``GET /health`` and authenticated ``POST /search``,
-``POST /related``, ``POST /stage`` and ``POST /forget``. It reads Markdown and
-the disposable SQLite index/related projections only. ``/stage`` and
-``/forget`` write a candidate file under ``<vault>/_candidates/remember/`` and
-never the vault. ``/forget`` does not erase a memory file.
+``POST /related`` and ``POST /stage``. It reads Markdown and the disposable
+SQLite index/related projections only; the one write path, ``/stage``, writes a
+candidate file under ``<vault>/_candidates/remember/`` and never the vault.
 
 Contract summary:
 
 * every response body carries ``"contract": "memfw-http/2"``;
 * ``/search`` and ``/related`` accept the read token or the write token,
-  ``/stage`` and ``/forget`` accept the write token only; with no write token
-  configured, those two paths answer 403;
+  ``/stage`` accepts the write token only; with no write token configured,
+  ``/stage`` always answers 403;
 * ``score`` is normalised to ``[0, 1]`` and grows with relevance. With a bm25
   raw score, ``raw_score`` keeps the SQLite FTS5 value (smaller is better) and
   ``score = x / (1 + x)`` with ``x = max(0, -raw_score)``; with no bm25 (a
@@ -1494,50 +1493,6 @@ def _stage_locked(
     return response
 
 
-def forget_request(root: Path | str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Record a delete request. The memory file stays where it is."""
-
-    if "tenant" in payload:
-        raise _bad_request("tenant is server-assigned")
-    tenant = os.environ.get("MEMFW_TENANT", "").strip()
-    if not tenant:
-        raise _bad_request("tenant is not configured")
-    proposal_id = payload.get("proposal_id")
-    memory_id = payload.get("memory_id")
-    if not isinstance(proposal_id, str) or PROPOSAL_ID_PATTERN.fullmatch(proposal_id) is None:
-        raise _bad_request("proposal_id must match [A-Za-z0-9_-]{1,128}")
-    if not isinstance(memory_id, str) or PROPOSAL_ID_PATTERN.fullmatch(memory_id) is None:
-        raise _bad_request("memory_id is invalid")
-    base = Path(root).expanduser().resolve()
-    memory_path = base / "memories" / f"{memory_id}.md"
-    existed = memory_path.is_file()
-    staged = stage_candidate(
-        base,
-        {
-            "proposal_id": proposal_id,
-            "title": "Delete request",
-            "content": f"delete-request {memory_id}",
-            "tenant": tenant,
-            "source": "forget",
-            "tags": ["delete-request"],
-            "related": [memory_id],
-        },
-    )
-    if memory_path.is_file() != existed:
-        raise _internal()
-    return {
-        "contract": CONTRACT,
-        "staged": True,
-        "authority": False,
-        "kind": "delete-request",
-        "memory_id": memory_id,
-        "candidate_id": staged["candidate_id"],
-        "path": staged["path"],
-        "deleted": False,
-        "file_present": memory_path.is_file(),
-    }
-
-
 # ---------------------------------------------------------------------------
 # /health
 # ---------------------------------------------------------------------------
@@ -1631,7 +1586,7 @@ class Handler(BaseHTTPRequestHandler):
     def _authorise(self) -> None:
         provided = self.headers.get(TOKEN_HEADER, "")
         _configured_tokens()
-        if self.path in {"/stage", "/forget"}:
+        if self.path == "/stage":
             expected = write_token()
             if not expected:
                 raise ServiceError(403, "write access is not configured")
@@ -1683,11 +1638,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         try:
-            if self.path not in ("/search", "/related", "/stage", "/forget"):
+            if self.path not in ("/search", "/related", "/stage"):
                 raise ServiceError(404, "not found")
             self._authorise()
-            writing = self.path in {"/stage", "/forget"}
-            body_limit = STAGE_BODY_BYTES if writing else SEARCH_BODY_BYTES
+            body_limit = STAGE_BODY_BYTES if self.path == "/stage" else SEARCH_BODY_BYTES
             payload = self._read_json(body_limit)
             reject_client_endpoints(payload)
             root = _root()
@@ -1709,8 +1663,6 @@ class Handler(BaseHTTPRequestHandler):
                     limit=payload.get("limit", 10),
                     tenant=payload.get("tenant", ""),
                 )
-            elif self.path == "/forget":
-                result = forget_request(root, payload)
             else:
                 result = stage_candidate(root, payload)
             self._send(200, result)
