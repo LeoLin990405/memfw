@@ -16,6 +16,7 @@ from typing import Any, Literal
 from ..core.errors import IntegrityError
 from ..core.models import MemoryDocument
 from ..core.repository import Repository
+from .fts_terms import fts_query, fts_query_from_terms
 
 _ROW_COLUMNS = (
     "id",
@@ -65,6 +66,19 @@ def _jieba() -> Callable[[str], list[str]]:
             "install the declared jieba dependency"
         ) from exc
     return lambda text: [token for token in jieba.lcut(text, cut_all=False) if token.strip()]
+
+
+def _match_text(needle: str, tokenizer: _TOKENIZER) -> str | None:
+    """Quoted-term OR used by both ``search`` entry points.
+
+    A trigram index stores the raw text, so the query is the regex helper.
+    A unicode61 index stores jieba segments, so the query is segmented the
+    same way and then quoted. Either way the match is an OR, not one phrase.
+    """
+
+    if tokenizer == "unicode61":
+        return fts_query_from_terms(_jieba()(needle))
+    return fts_query(needle)
 
 
 def _tokenize(text: str, tokenizer: _TOKENIZER, segment: Callable[[str], list[str]] | None) -> str:
@@ -274,14 +288,9 @@ class MemoryIndex:
                 )
                 return [(str(row[0]), str(row[1])) for row in rows]
 
-            if tokenizer == "trigram":
-                match = '"' + needle.replace('"', '""') + '"'
-            else:
-                segment = _jieba()
-                terms = segment(needle)
-                if not terms:
-                    return []
-                match = " AND ".join('"' + term.replace('"', '""') + '"' for term in terms)
+            match = _match_text(needle, tokenizer)
+            if match is None:
+                return []
             rows = connection.execute(
                 "SELECT r.id,r.title FROM memory_fts AS f "
                 "JOIN memory_rows AS r ON r.id=f.id "
@@ -295,14 +304,17 @@ class MemoryIndex:
     def search_many(
         self, queries: Iterable[str], *, limit: int = 100_000
     ) -> dict[str, list[tuple[str, str]]]:
-        """Search many terms on one read-only connection, preserving FTS behavior."""
+        """Search many terms on one read-only connection.
+
+        Queries longer than two characters use the same quoted-term OR as
+        ``search``. A query with no usable term returns an empty list.
+        """
         if not self.path.exists() or limit <= 0:
             return {query: [] for query in dict.fromkeys(queries)}
         unique_queries = tuple(dict.fromkeys(queries))
         output: dict[str, list[tuple[str, str]]] = {}
         with closing(sqlite3.connect(self.path)) as connection:
             tokenizer = self._tokenizer(connection)
-            segment = _jieba() if tokenizer != "trigram" else None
             for query in unique_queries:
                 needle = query.strip()
                 if len(needle) < 2:
@@ -319,15 +331,10 @@ class MemoryIndex:
                         (needle, needle, needle, needle, limit),
                     )
                 else:
-                    if tokenizer == "trigram":
-                        match = '"' + needle.replace('"', '""') + '"'
-                    else:
-                        assert segment is not None
-                        terms = segment(needle)
-                        if not terms:
-                            output[query] = []
-                            continue
-                        match = " AND ".join('"' + term.replace('"', '""') + '"' for term in terms)
+                    match = _match_text(needle, tokenizer)
+                    if match is None:
+                        output[query] = []
+                        continue
                     rows = connection.execute(
                         "SELECT r.id,r.title FROM memory_fts AS f "
                         "JOIN memory_rows AS r ON r.id=f.id "

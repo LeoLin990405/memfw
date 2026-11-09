@@ -245,26 +245,31 @@ def test_report_split_runs_every_shipped_path(tmp_path: Path) -> None:
         "http_search",
         "notes_fts",
     }
-    phrase_paths = {"memory_fts", "mcp_fts", "http_search"}
-    for path, payload in measured.items():
+    for payload in measured.values():
         assert payload["ranking_repeat_matched"] is True
         assert payload["overall"]["n"] == len(CASE_TYPES)
         assert payload["by_class"]["delete"]["n"] == 1
         multihop = payload["by_class"]["multihop"]
         assert multihop["all_evidence@10"] == 0.0
-        if path in phrase_paths:
-            assert multihop["evidence_recall@10"] == 0.0
-        else:
-            assert multihop["evidence_recall@10"] == 0.5
+        # One of the two hop documents shares a query term. Term OR recalls it.
+        assert multihop["evidence_recall@10"] == 0.5
     memory_delete = measured["memory_bm25"]["by_class"]["delete"]
     assert memory_delete["evidence_recall@10"] == 1.0
     assert memory_delete["forbidden_in_topk_rate"] == 0.0
     notes_delete = measured["notes_fts"]["by_class"]["delete"]
     assert notes_delete["evidence_recall@10"] == 0.0
     assert notes_delete["forbidden_in_topk_rate"] == 1.0
-    phrase = measured["memory_fts"]["by_class"]["multi_tenant"]
-    assert phrase["evidence_recall@10"] == 0.0
-    assert phrase["mean_hit_count"] == 0.0
+    library_tenant = measured["memory_fts"]["by_class"]["multi_tenant"]
+    assert library_tenant["evidence_recall@10"] == 1.0
+    assert library_tenant["mean_hit_count"] == 10.0
+    # MemoryIndex.search does not apply the tenant predicate. HTTP and MCP do.
+    assert library_tenant["other_tenant_in_topk_rate"] == 1.0
+    http_tenant = measured["http_search"]["by_class"]["multi_tenant"]
+    assert http_tenant["evidence_recall@10"] == 1.0
+    assert http_tenant["other_tenant_in_topk_rate"] == 0.0
+    mcp_tenant = measured["mcp_fts"]["by_class"]["multi_tenant"]
+    assert mcp_tenant["evidence_recall@10"] == 1.0
+    assert mcp_tenant["other_tenant_in_topk_rate"] == 0.0
     memory_tenant = measured["memory_bm25"]["by_class"]["multi_tenant"]
     assert memory_tenant["other_tenant_in_topk_rate"] == 1.0
     hybrid_tenant = measured["hybrid_fts"]["by_class"]["multi_tenant"]

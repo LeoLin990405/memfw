@@ -424,6 +424,6 @@ def test_forget_apply_scope_all_archives_cold_stub_and_keeps_replay_index_consis
     assert indexed["cold-memory"][2] == ""
     assert indexed["cold-memory"][11] == 1
     assert indexed["cold-memory"][12] == cold.archive_ref
-    assert index.search("Body for cold-memory") == [
-        ("cold-memory", "Title cold-memory"),
-    ]
+    found = index.search("Body for cold-memory")
+    assert found[0] == ("cold-memory", "Title cold-memory")
+    assert ("hot-memory", "Title hot-memory") in found
