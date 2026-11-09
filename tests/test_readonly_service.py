@@ -692,6 +692,24 @@ def test_stage_never_touches_the_vault(tmp_path: Path) -> None:
     assert not (root / "_candidates").joinpath("memfw").exists()
 
 
+def test_search_rejects_a_non_fts_mode(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
+    status, payload = _post(
+        httpd, "/search", {"query": "corpus keyword", "mode": "hybrid"}, READ_TOKEN
+    )
+    assert status == 400
+    _assert_error(payload, "bad_request")
+    assert payload["error"]["message"] == "mode is not available"
+    status, payload = _post(
+        httpd, "/search", {"query": "corpus keyword", "mode": "fts"}, READ_TOKEN
+    )
+    assert status == 200
+    assert payload["mode"] == "fts"
+    assert payload["results"]
+
+
 def test_envelope_fields_and_summary_truncation(tmp_path: Path) -> None:
     documents = [_memory("mem-long", "Long note", "corpus " + "detail " * 200)]
     root = seed_vault(tmp_path / "vault", documents)

@@ -32,7 +32,7 @@ from memfw.capture.suggestions import suggest_related
 from memfw.core.errors import NotFoundError
 from memfw.core.models import Layer, Tier
 from memfw.core.repository import Repository
-from memfw.memory_hybrid import MemoryHybridRetriever
+from memfw.memory_hybrid import MemoryHybridRetriever, shared_readonly
 from memfw.notes import HttpEmbeddingProvider
 from memfw.related import RelatedIndex
 
@@ -294,6 +294,23 @@ def _publish_candidate(root: Path, filename: str, text: str) -> None:
         os.close(directory_fd)
 
 
+def _content_hash(path: Path) -> str:
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _annotate_hit(row: dict[str, Any], document: Any, item: dict[str, Any], *, why: str) -> None:
+    """Stamp the shared read-path fields. Versions already on ``item`` win."""
+
+    shared_readonly().read_path.annotate(
+        row,
+        provenance=str(document.provenance or ""),
+        source=str(document.source or ""),
+        index_version=item.get("index_version", document.version),
+        sot_version=item.get("sot_version", document.version),
+        why=why,
+    )
+
+
 class Gateway:
     """MCP tool implementations bound to one local vault root."""
 
@@ -370,24 +387,27 @@ class Gateway:
             as_of=as_of,
             tenant=self.tenant,
         )
+        why = "lexical" if result["mode"] == "fts" else "semantic"
         rows = []
         for item in result["results"]:
             document = repository.get(item["id"])
-            rows.append(
-                {
-                    "id": document.id,
-                    "title": document.title,
-                    "layer": document.layer.value,
-                    "tier": document.tier.value,
-                    "updated_at": document.updated_at.isoformat(),
-                    "valid_from": document.valid_from.isoformat() if document.valid_from else None,
-                    "valid_to": document.valid_to.isoformat() if document.valid_to else None,
-                    "superseded_by": document.superseded_by,
-                    "type": document.type,
-                    "score": item["score"],
-                    "source": document.source,
-                }
-            )
+            row = {
+                "id": document.id,
+                "title": document.title,
+                "layer": document.layer.value,
+                "tier": document.tier.value,
+                "updated_at": document.updated_at.isoformat(),
+                "valid_from": document.valid_from.isoformat() if document.valid_from else None,
+                "valid_to": document.valid_to.isoformat() if document.valid_to else None,
+                "superseded_by": document.superseded_by,
+                "type": document.type,
+                "score": item["score"],
+                "source": document.source,
+                "content_hash": item.get("content_hash")
+                or _content_hash(repository.root / "memories" / f"{document.id}.md"),
+            }
+            _annotate_hit(row, document, item, why=str(item.get("why") or why))
+            rows.append(row)
         return {
             "mode": result["mode"],
             "degraded": result["degraded"],

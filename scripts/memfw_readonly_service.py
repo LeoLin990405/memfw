@@ -60,6 +60,23 @@ from urllib.parse import quote, urlsplit
 
 import yaml
 
+
+def _load_read_path():
+    """Load the stdlib read-path helper beside this file. It does not import memfw."""
+
+    import importlib.util
+
+    path = Path(__file__).with_name("read_path.py")
+    spec = importlib.util.spec_from_file_location("memfw_read_path", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("read_path.py is missing")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+read_path = _load_read_path()
+
 CONTRACT = "memfw-http/2"
 TOKEN_HEADER = "X-Memfw-Token"
 MAX_QUERY_CHARS = 512
@@ -136,6 +153,15 @@ _ENDPOINT_KEYS = frozenset(
         "openai_base_url",
     }
 )
+
+
+def reject_unavailable_search_mode(payload: dict[str, Any]) -> None:
+    """HTTP search stays on FTS. Other modes are refused until the v3 contract."""
+
+    if "mode" not in payload:
+        return
+    if payload.get("mode") != "fts":
+        raise _bad_request("mode is not available")
 
 
 def reject_client_endpoints(payload: dict[str, Any]) -> None:
@@ -385,6 +411,8 @@ def _document_payload(root: Path, identifier: str) -> dict[str, Any] | None:
         "valid_to": _iso_string(metadata.get("valid_to")),
         "superseded_by": _iso_string(metadata.get("superseded_by")),
         "content_hash": "sha256:" + hashlib.sha256(raw).hexdigest(),
+        "provenance": str(metadata.get("provenance") or ""),
+        "version": metadata.get("version"),
     }
 
 
@@ -462,7 +490,8 @@ def _search_batch(
         select = (
             "SELECT r.id AS id, r.title AS title, r.summary AS summary, "
             "r.search_body AS search_body, r.source AS source, r.tier AS tier, "
-            "r.layer AS layer, NULL AS raw_score FROM memory_rows r"
+            "r.layer AS layer, r.provenance AS provenance, r.version AS version, "
+            "NULL AS raw_score FROM memory_rows r"
         )
         where = [
             "(instr(lower(r.title), ?) > 0 OR instr(lower(r.search_body), ?) > 0 "
@@ -474,7 +503,8 @@ def _search_batch(
         select = (
             "SELECT r.id AS id, r.title AS title, r.summary AS summary, "
             "r.search_body AS search_body, r.source AS source, r.tier AS tier, "
-            "r.layer AS layer, bm25(memory_fts) AS raw_score "
+            "r.layer AS layer, r.provenance AS provenance, r.version AS version, "
+            "bm25(memory_fts) AS raw_score "
             "FROM memory_fts JOIN memory_rows r ON r.id = memory_fts.id"
         )
         where = ["memory_fts MATCH ?"]
@@ -576,24 +606,31 @@ def search_vault(
         summary = _collapsed(
             str(row["summary"] or "") or str(row["search_body"] or ""), MAX_SUMMARY_CHARS
         )
-        results.append(
-            {
-                "id": str(row["id"]),
-                "title": str(row["title"]),
-                "summary": summary,
-                "source": str(row["source"]),
-                "tier": str(row["tier"]),
-                "layer": str(row["layer"]),
-                "tenant": payload["tenant"],
-                "related": payload["related"],
-                "valid_from": _optional(payload["valid_from"]),
-                "valid_to": _optional(payload["valid_to"]),
-                "superseded_by": _optional(payload["superseded_by"]),
-                "score": score,
-                "raw_score": raw_score,
-                "content_hash": payload["content_hash"],
-            }
+        item = {
+            "id": str(row["id"]),
+            "title": str(row["title"]),
+            "summary": summary,
+            "source": str(row["source"]),
+            "tier": str(row["tier"]),
+            "layer": str(row["layer"]),
+            "tenant": payload["tenant"],
+            "related": payload["related"],
+            "valid_from": _optional(payload["valid_from"]),
+            "valid_to": _optional(payload["valid_to"]),
+            "superseded_by": _optional(payload["superseded_by"]),
+            "score": score,
+            "raw_score": raw_score,
+            "content_hash": payload["content_hash"],
+        }
+        read_path.annotate(
+            item,
+            provenance=str(payload.get("provenance") or row["provenance"] or ""),
+            source=str(row["source"]),
+            index_version=row["version"],
+            sot_version=payload.get("version"),
+            why="lexical",
         )
+        results.append(item)
     return {
         "contract": CONTRACT,
         "mode": "fts",
@@ -1294,6 +1331,7 @@ class Handler(BaseHTTPRequestHandler):
             reject_client_endpoints(payload)
             root = _root()
             if self.path == "/search":
+                reject_unavailable_search_mode(payload)
                 result = search_vault(
                     root,
                     payload.get("query", ""),

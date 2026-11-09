@@ -14,6 +14,7 @@ from typing import Any
 from .core.models import EventKind, MemoryDocument, Tier
 from .core.repository import Repository
 from .entities import EntityIndex, load_dictionary
+from .index import MemoryIndex
 from .notes import HttpEmbeddingProvider, NotesIndex, NotesRetriever, RetrievalConfig
 from .notes.versioning import (
     IndexCompatibilityError,
@@ -23,7 +24,38 @@ from .notes.versioning import (
     verify_manifest,
     write_manifest,
 )
-from .retrieval import VaultRetriever
+
+_READONLY: Any = None
+
+
+def shared_readonly():
+    """Load the readonly service module that owns ``search_vault``.
+
+    The file sits beside this repository, not inside the ``memfw`` package, so
+    the HTTP script can use it without importing ``memfw``.
+    """
+
+    global _READONLY
+    if _READONLY is not None:
+        return _READONLY
+    import importlib.util
+    import sys
+
+    path = Path(__file__).resolve().parents[2] / "scripts" / "memfw_readonly_service.py"
+    spec = importlib.util.spec_from_file_location("memfw_readonly_service_shared", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"readonly service is not available at {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    _READONLY = module
+    return module
+
+
+def _shared_search_vault():
+    """Return HTTP ``search_vault``. One FTS implementation for both entries."""
+
+    return shared_readonly().search_vault
 
 
 class MemoryHybridRetriever:
@@ -128,6 +160,24 @@ class MemoryHybridRetriever:
             raise ValueError("as_of must include a timezone")
         return parsed.astimezone(UTC)
 
+    def _memory_index_is_stale(self) -> bool:
+        path = self.repository.index_path
+        if not path.is_file():
+            return True
+        memories = self.repository.memories_dir
+        if not memories.is_dir():
+            return False
+        indexed_at = path.stat().st_mtime
+        return any(item.stat().st_mtime > indexed_at for item in memories.glob("*.md"))
+
+    def _ensure_memory_projection(self) -> None:
+        """Rebuild the disposable memory index so FTS matches HTTP ``/search``."""
+
+        if not self._memory_index_is_stale():
+            return
+        self.repository.init()
+        MemoryIndex(self.repository.index_path).rebuild(self.repository)
+
     def _fts_search(
         self,
         query: str,
@@ -138,71 +188,52 @@ class MemoryHybridRetriever:
         as_of: datetime | None = None,
         tenant: str = "",
     ) -> tuple[list[dict[str, Any]], list[str]]:
+        """FTS through the same ``search_vault`` implementation HTTP ``/search`` uses."""
+
         errors: list[str] = []
-        notes_result = None
         try:
-            self._ensure_index()
-            retriever = NotesRetriever(
-                self.notes_index,
-                config=RetrievalConfig(
-                    mode="fts",
-                    candidates=self.candidates,
-                    final_k=max(1, limit),
-                    rrf_k=self.rrf_k,
-                ),
+            self._ensure_memory_projection()
+            payload = _shared_search_vault()(
+                self.repository.root,
+                query,
+                limit=max(1, limit),
+                source=source,
+                tenant=tenant,
+                include_history=include_history,
+                as_of=as_of.isoformat() if as_of is not None else None,
             )
-            notes_result = retriever.search(query, limit=max(1, limit))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 - projection or query boundary
             errors.append(f"fts index unavailable: {exc}")
-        if notes_result is not None:
-            results: list[dict[str, Any]] = []
-            for hit in notes_result.hits:
-                memory_id = Path(hit.path).stem
-                try:
-                    document = self.repository.get(memory_id)
-                except Exception:
-                    continue
-                if document.tenant != tenant:
-                    continue
-                if not self._visible(document, include_history=include_history, as_of=as_of):
-                    continue
-                if not self._source_allowed(document.source, source):
-                    continue
-                if document.is_stub or document.tier == Tier.COLD:
-                    self.repository.autowarm(document.id, actor="mechanism")
-                    document = self.repository.get(document.id)
-                self.repository.capture_event(
-                    EventKind.MEMORY_ACCESS,
-                    actor="mechanism",
-                    details={"memory_id": document.id, "operation": "fts_retrieve"},
-                )
-                results.append(
-                    {
-                        "id": document.id,
-                        "title": document.title,
-                        "score": hit.score,
-                        "source": document.source,
-                        "path": f"memories/{document.id}.md",
-                    }
-                )
-            return results, errors
-        legacy = VaultRetriever(self.repository).retrieve(query, limit=max(0, limit))
-        results = []
-        for memory_id in legacy:
-            document = self.repository.get(memory_id)
-            if document.tenant != tenant:
+            return [], errors
+        results: list[dict[str, Any]] = []
+        for item in payload["results"]:
+            if not self._source_allowed(str(item["source"]), source):
                 continue
-            if not self._visible(document, include_history=include_history, as_of=as_of):
+            try:
+                document = self.repository.get(str(item["id"]))
+            except Exception:
                 continue
-            if not self._source_allowed(document.source, source):
-                continue
+            if document.is_stub or document.tier == Tier.COLD:
+                self.repository.autowarm(document.id, actor="mechanism")
+                document = self.repository.get(document.id)
+            self.repository.capture_event(
+                EventKind.MEMORY_ACCESS,
+                actor="mechanism",
+                details={"memory_id": document.id, "operation": "fts_retrieve"},
+            )
             results.append(
                 {
                     "id": document.id,
                     "title": document.title,
-                    "score": 0.0,
+                    "score": item["score"],
                     "source": document.source,
                     "path": f"memories/{document.id}.md",
+                    "content_hash": item["content_hash"],
+                    "provenance_type": item["provenance_type"],
+                    "why": item["why"],
+                    "index_version": item["index_version"],
+                    "sot_version": item["sot_version"],
+                    "stale": item["stale"],
                 }
             )
         return results, errors
@@ -325,6 +356,7 @@ class MemoryHybridRetriever:
                         "score": 0.0,
                         "source": document.source,
                         "path": f"memories/{document.id}.md",
+                        "why": "related",
                     }
                 results = sorted(
                     by_id.values(), key=lambda item: (-scores.get(item["id"], 0.0), item["id"])
