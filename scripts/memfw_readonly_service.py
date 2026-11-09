@@ -80,6 +80,8 @@ CONTRACT = "memfw-http/2"
 TOKEN_HEADER = "X-Memfw-Token"
 MAX_QUERY_CHARS = 512
 MAX_LIMIT = 50
+MAX_TERMS = 16
+_TERM = re.compile(r"\w+", re.UNICODE)
 MAX_SUMMARY_CHARS = 500
 MAX_TITLE_CHARS = 200
 MAX_CONTENT_BYTES = 64 * 1024
@@ -443,8 +445,29 @@ def _document_payload(root: Path, identifier: str) -> dict[str, Any] | None:
 # ---------------------------------------------------------------------------
 
 
-def _fts_query(query: str) -> str:
-    return '"' + query.replace('"', '""') + '"'
+def _fts_terms(query: str) -> list[str]:
+    """Same rules as ``memfw.index.fts_terms``. This process does not import memfw."""
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for token in _TERM.findall(query):
+        key = token.casefold()
+        if len(token) < 2 or key in seen:
+            continue
+        seen.add(key)
+        out.append(token)
+        if len(out) == MAX_TERMS:
+            break
+    return out
+
+
+def _fts_query(query: str) -> str | None:
+    """Quote each term and join them with OR. ``None`` means there is no term."""
+
+    terms = _fts_terms(query)
+    if not terms:
+        return None
+    return " OR ".join('"' + term.replace('"', '""') + '"' for term in terms)
 
 
 def _unsupported_query(text: str) -> bool:
@@ -532,8 +555,11 @@ def _search_batch(
             "FROM memory_fts JOIN memory_rows r ON r.id = memory_fts.id "
             "JOIN memory_access a ON a.id = r.id"
         )
+        match = _fts_query(needle)
+        if match is None:
+            return []
         where = ["memory_fts MATCH ?"]
-        params = [_fts_query(needle)]
+        params = [match]
         order = " ORDER BY raw_score, r.id"
     where.append("a.tenant = ?")
     params.append(tenant)
