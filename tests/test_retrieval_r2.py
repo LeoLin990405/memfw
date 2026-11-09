@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -72,6 +73,34 @@ def test_multihop_retrieves_the_second_hop_and_fts_does_not(tmp_path: Path) -> N
     assert gold["provenance_type"] == "user_said"
     assert gold["content_hash"].startswith("sha256:")
     assert gold["stale"] is False
+    document = repository.get("gold")
+    gold_path = repository.root / "memories" / "gold.md"
+    assert gold["title"] == document.title
+    assert gold["layer"] == document.layer.value
+    assert gold["tier"] == document.tier.value
+    assert gold["updated_at"] == document.updated_at.isoformat()
+    assert gold["valid_from"] == (document.valid_from.isoformat() if document.valid_from else None)
+    assert gold["valid_to"] == (document.valid_to.isoformat() if document.valid_to else None)
+    assert gold["superseded_by"] == document.superseded_by
+    assert gold["type"] == document.type
+    assert gold["source"] == document.source
+    assert gold["content_hash"] == "sha256:" + hashlib.sha256(gold_path.read_bytes()).hexdigest()
+
+
+def test_multihop_does_not_parse_each_hit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repository = _vault(tmp_path)
+    calls: list[str] = []
+    real_get = Repository.get
+
+    def counting_get(self: Repository, memory_id: str):
+        calls.append(memory_id)
+        return real_get(self, memory_id)
+
+    monkeypatch.setattr(Repository, "get", counting_get)
+    gateway = Gateway(repository.root, tenant="alpha")
+    expanded = gateway.search("Where is the labelkey marker recorded", limit=10, mode="multihop")
+    assert "gold" in {item["id"] for item in expanded["results"]}
+    assert calls == []
 
 
 def test_no_new_hit_falls_back_and_marks_degraded(tmp_path: Path) -> None:

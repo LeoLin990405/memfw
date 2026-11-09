@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import os
 import re
+import sqlite3
 from collections import Counter
+from contextlib import closing
 from datetime import datetime
 from typing import Any
 
-from memfw.core.models import MemoryDocument
 from memfw.core.repository import Repository
 from memfw.stats.bm25 import BM25Scorer
 from memfw.stats.keyness import tokenize
@@ -92,28 +93,29 @@ def search_multihop(
     as_of: datetime | None = None,
     rounds: int | None = None,
 ) -> dict[str, Any]:
-    """Run one routed search. ``degraded`` is true when expansion adds no hit."""
+    """Run one routed search. ``degraded`` is true when expansion adds no hit.
+
+    Ranking reads the disposable index once. Tenant is applied while walking
+    that rank, before the limit cut. Markdown is opened only for a tenant check.
+    """
 
     budget = expansion_rounds(rounds)
     bounded = max(1, min(int(limit), 50))
-    documents = list(repository.list())
+    rows = _index_rows(repository)
+    by_id = {row["id"]: row for row in rows}
     visible = [
-        document
-        for document in documents
-        if _visible(document, include_history=include_history, as_of=as_of)
-        and _source_ok(document, source, allowed_sources)
+        row
+        for row in rows
+        if _row_visible(row, include_history=include_history, as_of=as_of)
+        and _source_ok(row, source, allowed_sources)
     ]
-    by_id = {document.id: document for document in documents}
-    frequencies: Counter[str] = Counter()
-    for document in documents:
-        frequencies.update(set(tokenize(f"{document.title}\n{document.body}")))
     corpus = {
-        document.id: " ".join(
-            (document.title, document.body, document.summary, " ".join(document.tags))
-        )
-        for document in visible
+        row["id"]: " ".join((row["title"], row["search_body"], row["summary"], row["tags"]))
+        for row in visible
     }
     scorer = BM25Scorer(corpus) if corpus else None
+    frequencies = _document_frequencies(rows, scorer)
+    tenants: dict[str, str] = {}
     route = classify_query(query)
     first = _first_hop(
         route,
@@ -121,6 +123,8 @@ def search_multihop(
         scorer,
         visible,
         by_id,
+        repository=repository,
+        tenants=tenants,
         tenant=tenant,
         limit=bounded,
     )
@@ -129,11 +133,24 @@ def search_multihop(
     if route == "expand" and scorer is not None:
         current = list(first)
         for _round in range(budget):
-            passages = [_passage(by_id[item]) for item in current[:PASSAGE_K] if item in by_id]
+            passages = [
+                f"{by_id[item]['title']}\n{by_id[item]['body']}"
+                for item in current[:PASSAGE_K]
+                if item in by_id
+            ]
             terms = expansion_terms(passages, query, frequencies)
             if not terms:
                 break
-            follow = _rank(scorer, " ".join(terms), visible, tenant=tenant, limit=bounded)
+            follow = _rank(
+                scorer,
+                " ".join(terms),
+                visible,
+                by_id,
+                repository=repository,
+                tenants=tenants,
+                tenant=tenant,
+                limit=bounded,
+            )
             added = [item for item in follow if item not in set(current)]
             if not added:
                 break
@@ -145,20 +162,28 @@ def search_multihop(
     first_ids = set(first)
     results = []
     for identifier in ordered:
-        document = by_id.get(identifier)
-        if document is None:
+        row = by_id.get(identifier)
+        if row is None:
             continue
-        results.append(
-            {
-                "id": document.id,
-                "title": document.title,
-                "score": 0.0,
-                "source": document.source,
-                "why": "lexical" if identifier in first_ids else "expansion",
-                "index_version": document.version,
-                "sot_version": document.version,
-            }
-        )
+        item = {
+            "id": row["id"],
+            "title": row["title"],
+            "score": 0.0,
+            "source": row["source"],
+            "why": "lexical" if identifier in first_ids else "expansion",
+            "index_version": row["version"],
+            "sot_version": row["version"],
+            "layer": row["layer"],
+            "tier": row["tier"],
+            "updated_at": row["updated_at"],
+            "valid_from": row["valid_from"] or None,
+            "valid_to": row["valid_to"] or None,
+            "superseded_by": row["superseded_by"] or None,
+            "provenance": row["provenance"],
+        }
+        if row.get("tenant_known"):
+            item["memory_type"] = row["memory_type"]
+        results.append(item)
     return {
         "mode": "multihop",
         "degraded": degraded,
@@ -170,6 +195,85 @@ def search_multihop(
     }
 
 
+def _index_rows(repository: Repository) -> list[dict[str, Any]]:
+    """One read of the disposable index. Missing index means there is nothing to rank."""
+
+    path = repository.index_path
+    if not path.is_file():
+        return []
+    with closing(sqlite3.connect(path)) as connection:
+        connection.row_factory = sqlite3.Row
+        has_access = (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_access'"
+            ).fetchone()
+            is not None
+        )
+        tenant_sql = (
+            "a.tenant AS tenant, a.memory_type AS memory_type"
+            if has_access
+            else "NULL AS tenant, NULL AS memory_type"
+        )
+        join = "LEFT JOIN memory_access a ON a.id = r.id" if has_access else ""
+        fetched = connection.execute(
+            "SELECT r.id, r.title, r.body, r.search_body, r.summary, r.tags, "
+            "r.source, r.provenance, r.version, r.layer, r.tier, r.updated_at, "
+            "COALESCE(t.valid_from, '') AS valid_from, "
+            "COALESCE(t.valid_to, '') AS valid_to, "
+            "COALESCE(t.superseded_by, '') AS superseded_by, "
+            f"{tenant_sql} "
+            "FROM memory_rows r LEFT JOIN memory_temporal t ON t.id = r.id "
+            f"{join} "
+            "ORDER BY r.id"
+        ).fetchall()
+    rows = []
+    for item in fetched:
+        tenant = item["tenant"]
+        row = {
+            "id": str(item["id"]),
+            "title": str(item["title"]),
+            "body": str(item["body"]),
+            "search_body": str(item["search_body"]),
+            "summary": str(item["summary"]),
+            "tags": str(item["tags"]),
+            "source": str(item["source"]),
+            "provenance": str(item["provenance"]),
+            "version": int(item["version"]),
+            "layer": str(item["layer"]),
+            "tier": str(item["tier"]),
+            "updated_at": str(item["updated_at"]),
+            "valid_from": str(item["valid_from"]),
+            "valid_to": str(item["valid_to"]),
+            "superseded_by": str(item["superseded_by"]),
+            "memory_type": item["memory_type"],
+        }
+        if has_access and tenant is not None:
+            row["tenant_known"] = True
+            row["tenant"] = str(tenant)
+        rows.append(row)
+    return rows
+
+
+def _document_frequencies(rows: list[dict[str, Any]], scorer: BM25Scorer | None) -> Counter[str]:
+    """Document frequency of title and body. Reuse the scorer tokens when they match."""
+
+    frequencies: Counter[str] = Counter()
+    scored = scorer._documents if scorer is not None else {}
+    for row in rows:
+        counts = scored.get(row["id"])
+        same_text = (
+            counts is not None
+            and row["search_body"] == row["body"]
+            and row["summary"] == ""
+            and row["tags"] == ""
+        )
+        if same_text:
+            frequencies.update(counts.keys())
+            continue
+        frequencies.update(set(tokenize(f"{row['title']}\n{row['body']}")))
+    return frequencies
+
+
 def _looks_like_id_or_path(text: str) -> bool:
     if text.startswith("memories/") or text.endswith(".md"):
         return True
@@ -178,38 +282,79 @@ def _looks_like_id_or_path(text: str) -> bool:
     return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", text))
 
 
-def _passage(document: MemoryDocument) -> str:
-    return f"{document.title}\n{document.body}"
-
-
-def _visible(document: MemoryDocument, *, include_history: bool, as_of: datetime | None) -> bool:
+def _row_visible(row: dict[str, Any], *, include_history: bool, as_of: datetime | None) -> bool:
     if include_history:
         return True
     if as_of is not None:
-        start = document.valid_from or document.created_at
-        end = document.valid_to
-        return start <= as_of and (end is None or end > as_of)
-    return document.valid_to is None
+        start = _parse_instant(row["valid_from"])
+        end = _parse_instant(row["valid_to"])
+        if start is not None and start > as_of:
+            return False
+        return end is None or end > as_of
+    return row["valid_to"] == ""
 
 
-def _source_ok(document: MemoryDocument, source: str, allowed_sources: tuple[str, ...]) -> bool:
-    if source and document.source != source:
+def _parse_instant(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed
+
+
+def _source_ok(row: dict[str, Any], source: str, allowed_sources: tuple[str, ...]) -> bool:
+    if source and row["source"] != source:
         return False
-    return not allowed_sources or document.source in allowed_sources
+    return not allowed_sources or row["source"] in allowed_sources
+
+
+def _tenant_of(repository: Repository, memory_id: str, cache: dict[str, str]) -> str:
+    """Read the tenant line. The index does not store tenant."""
+
+    cached = cache.get(memory_id)
+    if cached is not None:
+        return cached
+    path = repository.root / "memories" / f"{memory_id}.md"
+    try:
+        head = path.read_text(encoding="utf-8")[:4000]
+    except OSError:
+        cache[memory_id] = ""
+        return ""
+    match = re.search(r"(?m)^tenant:\s*'?\"?([^'\"\n]*)", head)
+    value = match.group(1).strip() if match else ""
+    cache[memory_id] = value
+    return value
+
+
+def _row_tenant(row: dict[str, Any], repository: Repository, cache: dict[str, str]) -> str:
+    if row.get("tenant_known"):
+        value = str(row.get("tenant") or "")
+        cache[row["id"]] = value
+        return value
+    return _tenant_of(repository, row["id"], cache)
 
 
 def _rank(
     scorer: BM25Scorer,
     query: str,
-    visible: list[MemoryDocument],
+    visible: list[dict[str, Any]],
+    by_id: dict[str, dict[str, Any]],
     *,
+    repository: Repository,
+    tenants: dict[str, str],
     tenant: str,
     limit: int,
 ) -> list[str]:
-    allowed = {document.id for document in visible if not tenant or document.tenant == tenant}
+    allowed = {row["id"] for row in visible}
     chosen: list[str] = []
     for identifier in scorer.rank(query):
         if identifier not in allowed:
+            continue
+        if tenant and _row_tenant(by_id[identifier], repository, tenants) != tenant:
             continue
         chosen.append(identifier)
         if len(chosen) >= limit:
@@ -221,9 +366,11 @@ def _first_hop(
     route: str,
     query: str,
     scorer: BM25Scorer | None,
-    visible: list[MemoryDocument],
-    by_id: dict[str, MemoryDocument],
+    visible: list[dict[str, Any]],
+    by_id: dict[str, dict[str, Any]],
     *,
+    repository: Repository,
+    tenants: dict[str, str],
     tenant: str,
     limit: int,
 ) -> list[str]:
@@ -231,19 +378,35 @@ def _first_hop(
     if route == "direct":
         quoted = _QUOTED.findall(text)
         if quoted and scorer is not None:
-            return _rank(scorer, " ".join(quoted), visible, tenant=tenant, limit=limit)
+            return _rank(
+                scorer,
+                " ".join(quoted),
+                visible,
+                by_id,
+                repository=repository,
+                tenants=tenants,
+                tenant=tenant,
+                limit=limit,
+            )
         identifier = _identifier(text)
-        document = by_id.get(identifier)
-        if document is None:
+        row = by_id.get(identifier)
+        if row is None or row["id"] not in {item["id"] for item in visible}:
             return []
-        if tenant and document.tenant != tenant:
+        if tenant and _row_tenant(row, repository, tenants) != tenant:
             return []
-        if document.id not in {item.id for item in visible}:
-            return []
-        return [document.id]
+        return [row["id"]]
     if scorer is None:
         return []
-    return _rank(scorer, text, visible, tenant=tenant, limit=limit)
+    return _rank(
+        scorer,
+        text,
+        visible,
+        by_id,
+        repository=repository,
+        tenants=tenants,
+        tenant=tenant,
+        limit=limit,
+    )
 
 
 def _identifier(text: str) -> str:

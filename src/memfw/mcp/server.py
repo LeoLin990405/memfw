@@ -304,9 +304,14 @@ def _ensure_search_index(repository: Repository) -> None:
     stale = not path.is_file()
     if not stale and repository.memories_dir.is_dir():
         indexed_at = path.stat().st_mtime
-        stale = any(
-            item.stat().st_mtime > indexed_at for item in repository.memories_dir.glob("*.md")
-        )
+        stale = False
+        with os.scandir(repository.memories_dir) as entries:
+            for item in entries:
+                if not item.name.endswith(".md"):
+                    continue
+                if item.stat(follow_symlinks=False).st_mtime > indexed_at:
+                    stale = True
+                    break
     if stale:
         repository.init()
         MemoryIndex(path).rebuild(repository)
@@ -397,6 +402,7 @@ class Gateway:
             raise ValueError("source is not allowed for this account")
         repository = self._repo()
         if mode == "multihop":
+            _ensure_search_index(repository)
             parsed_as_of = None
             if as_of:
                 parsed_as_of = datetime.fromisoformat(as_of)
@@ -450,6 +456,32 @@ class Gateway:
         why = "lexical" if result["mode"] == "fts" else "semantic"
         rows = []
         for item in result["results"]:
+            if "memory_type" in item:
+                row = {
+                    "id": item["id"],
+                    "title": item["title"],
+                    "layer": item["layer"],
+                    "tier": item["tier"],
+                    "updated_at": item["updated_at"],
+                    "valid_from": item["valid_from"],
+                    "valid_to": item["valid_to"],
+                    "superseded_by": item["superseded_by"],
+                    "type": item["memory_type"],
+                    "score": item["score"],
+                    "source": item["source"],
+                    "content_hash": item.get("content_hash")
+                    or _content_hash(repository.root / "memories" / f"{item['id']}.md"),
+                }
+                shared_readonly().read_path.annotate(
+                    row,
+                    provenance=str(item.get("provenance") or ""),
+                    source=str(item.get("source") or ""),
+                    index_version=item.get("index_version"),
+                    sot_version=item.get("sot_version"),
+                    why=str(item.get("why") or why),
+                )
+                rows.append(row)
+                continue
             document = repository.get(item["id"])
             row = {
                 "id": document.id,

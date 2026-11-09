@@ -1,0 +1,56 @@
+{
+  "by_class": {
+    "conflict": {
+      "gain": 0.0,
+      "multihop_recall": 1.0,
+      "n": 160.0,
+      "single_recall": 1.0
+    },
+    "delete": {
+      "gain": 0.0,
+      "multihop_recall": 1.0,
+      "n": 160.0,
+      "single_recall": 1.0
+    },
+    "multi_tenant": {
+      "gain": 0.0,
+      "multihop_recall": 1.0,
+      "n": 160.0,
+      "single_recall": 1.0
+    },
+    "multihop": {
+      "gain": 0.5,
+      "multihop_recall": 1.0,
+      "n": 160.0,
+      "single_recall": 0.5
+    },
+    "poisoning": {
+      "gain": 0.0,
+      "multihop_recall": 1.0,
+      "n": 160.0,
+      "single_recall": 1.0
+    },
+    "time_update": {
+      "gain": 0.0,
+      "multihop_recall": 1.0,
+      "n": 160.0,
+      "single_recall": 1.0
+    }
+  },
+  "gate_drop": true,
+  "gate_gain": true,
+  "gate_p95": true,
+  "http_multihop": false,
+  "judge": false,
+  "multihop_gain": 0.5,
+  "multihop_p95": 0.006966,
+  "p95_ratio": 1.62926,
+  "per_class": 160,
+  "phase": "R2",
+  "primary_k": 10,
+  "rounds": 1,
+  "seed": 20261108,
+  "single_hop_drop": -0.0,
+  "single_hop_p95": 0.004276,
+  "synthetic": true
+}

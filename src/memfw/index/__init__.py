@@ -113,6 +113,9 @@ def _create_schema(connection: sqlite3.Connection, tokenizer: _TOKENIZER) -> Non
         "valid_to TEXT NOT NULL DEFAULT '', superseded_by TEXT NOT NULL DEFAULT '')"
     )
     connection.execute(
+        "CREATE TABLE memory_access (id TEXT PRIMARY KEY, tenant TEXT NOT NULL, memory_type TEXT)"
+    )
+    connection.execute(
         "CREATE VIRTUAL TABLE memory_fts USING fts5("
         "id UNINDEXED, title, body, summary, tags, tokenize='" + tokenizer + "')"
     )
@@ -154,6 +157,10 @@ def _insert_documents(
                 document.valid_to.isoformat() if document.valid_to else "",
                 document.superseded_by or "",
             ),
+        )
+        connection.execute(
+            "INSERT INTO memory_access (id, tenant, memory_type) VALUES (?,?,?)",
+            (document.id, document.tenant, document.type),
         )
         fts_values = (
             document.id,
