@@ -57,6 +57,7 @@ from .okf import export_okf, validate_okf_bundle
 from .policies import PolicyName
 from .related import RelatedIndex
 from .retrieval import VaultRetriever
+from .retrieval.forget import projection_residue
 from .stats import measure_runtime
 from .tiers import BudgetAwareTierPolicy
 
@@ -1664,6 +1665,17 @@ def layer_set(
 
 
 layer_alias_app.command("set")(layer_set)
+
+
+@app.command("projection-residue")
+def projection_residue_command(
+    root: Annotated[Path, typer.Option("--root", "-r")] = Path("."),
+) -> None:
+    """List open index rows whose Markdown file is missing. Deletes nothing."""
+    repository = _repo(root)
+    typer.echo(
+        json.dumps({"residue": projection_residue(repository)}, ensure_ascii=False, sort_keys=True)
+    )
 
 
 @app.command("stats")
