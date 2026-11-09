@@ -295,7 +295,7 @@ redirect refusal, and a `forget` that says when it is not supported.
 - **Outbound HTTP:** it never follows redirects and never forwards `Authorization`.
 - **Notes indexing:** symlinks that escape the notes root are skipped.
 - **Reranking:** a caller can no longer choose the rerank endpoint; only the server can configure it.
-- **Readonly service:** `scripts/memfw_readonly_service.py` runs standalone with no `memfw` import. [`docs/HA500-UPGRADE.md`](docs/HA500-UPGRADE.md) covers moving an older readonly deployment to `memfw-http/2`, including a `/health` contract check.
+- **Readonly service:** `scripts/memfw_readonly_service.py` runs standalone with no `memfw` import. [`docs/READONLY-SERVICE-UPGRADE.md`](docs/READONLY-SERVICE-UPGRADE.md) covers moving an older readonly deployment to `memfw-http/2`, including a `/health` contract check.
 - **Field aliases:** `valid_until` and `superseded` are accepted as input aliases of `valid_to` and `superseded_by`. Output always uses the canonical names. A conflicting pair is rejected, and supersession IDs are compared exactly.
 - **Test suite:** the full suite on `main` after #16 is 652 passed, 2 skipped (offline; live and network tests excluded).
 

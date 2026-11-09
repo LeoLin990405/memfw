@@ -1842,7 +1842,7 @@ def test_contract_fixtures(httpd: str, tmp_path: Path, monkeypatch: pytest.Monke
             for forbidden in (
                 "/Users/",
                 "/home/",
-                "/vol1/",
+                "/" + "vol1/",
                 READ_TOKEN,
                 WRITE_TOKEN,
             ):
@@ -1870,3 +1870,26 @@ def _write_fixtures(httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         root = seed_vault(tmp_path / "generate" / f"vault-{name}")
         result = _scenario_response(httpd, name, root, monkeypatch)
         response_path.write_bytes(_canonical(result["payload"]))
+
+
+def test_tracked_text_names_no_personal_home_or_volume_paths() -> None:
+    """The public repo must not carry a maintainer's home directory or NAS volume path."""
+    import re
+    import subprocess
+
+    repo = Path(__file__).resolve().parents[1]
+    files = subprocess.run(
+        ["git", "-C", str(repo), "ls-files", "-z"], capture_output=True, check=True
+    ).stdout.split(b"\0")
+    pattern = re.compile(r"/(?:Users|home)/[a-z][a-z0-9_-]*/|/vol[0-9]+/")
+    hits = []
+    for name in filter(None, files):
+        path = repo / name.decode()
+        if path.name == "uv.lock" or path.suffix in {".png", ".svg", ".sqlite3", ".jpg"}:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        hits += [f"{name.decode()}:{m.group(0)}" for m in pattern.finditer(text)]
+    assert hits == []

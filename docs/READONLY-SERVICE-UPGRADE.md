@@ -37,5 +37,5 @@ Exit 0 means the body advertises `memfw-http/2`. Exit 1 means the service was
 unreachable, not JSON, or still missing `contract`. The same function is what
 the tests call against a local server.
 
-Do not point the check at a live HA500 host. Tests bind `127.0.0.1` on an
+Do not point the check at a live host. Tests bind `127.0.0.1` on an
 ephemeral port and use a local fake for the pre-v2 body.

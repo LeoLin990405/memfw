@@ -22,7 +22,7 @@ complete replacement of Conductor's proposal/approval memory.
 ## Conductor adapter
 
 The Conductor V1 adapter is prepared in the isolated worktree
-`/Users/leo/conductor-wt/memfw-v1`, branch `feat/memfw-v1-federation`:
+a dedicated worktree, branch `feat/memfw-v1-federation`:
 
 - uses the read-only HTTP service, not a vault copy or mount;
 - accepts MemFW `supersede` events;
@@ -199,7 +199,7 @@ acceptable only on a private tailnet between MemFW and Conductor; it is not a
 public-network design. The default bind is `127.0.0.1`; deployment sets
 `--host` explicitly to the tailnet address.
 
-On HA500, the service is rooted at `/vol1/fleet-memory/memfw-vault`, bound to
+On the deployment host, the service is rooted at the vault directory, bound to
 the tailnet on port 18080, and protected by `X-Memfw-Token`. Conductor binds
 `memfw_url` and reads `MEMFW_READONLY_TOKEN` from its environment. No vault sync
 is performed.
@@ -246,7 +246,7 @@ write bridge"). Old candidates are not migrated automatically.
    ```bash
    install -m 0600 /dev/null "$HOME/memfw-remote/memfw-write-token"
    # put the token on one line in that file, then add to the EnvironmentFile:
-   #   MEMFW_WRITE_TOKEN_FILE=/home/leo/memfw-remote/memfw-write-token
+   #   MEMFW_WRITE_TOKEN_FILE=~/memfw-remote/memfw-write-token
    ```
 
    The read token stays in `MEMFW_READONLY_TOKEN`/`MEMFW_READONLY_TOKEN_FILE`;
@@ -352,13 +352,13 @@ Conductor's optional `MEMFW_WRITE_BRIDGE=1` path stages a human-approved
 proposal after its own approval. The approval result includes `memfw_staging`,
 and a staging failure does not roll back that approval.
 
-The HA500 service is a systemd user unit:
+The deployed service is a systemd user unit:
 
 ```text
 ~/.config/systemd/user/memfw-readonly.service
 ```
 
-with `EnvironmentFile=/home/leo/memfw-remote/memfw-readonly.env`. Deployment
+with `EnvironmentFile=%h/memfw-remote/memfw-readonly.env`. Deployment
 requirement: that file holds the read credential and, once `/stage` is used, the
 write credential, both mode 0600; the unit is enabled and started with
 `systemctl --user enable --now memfw-readonly`, and `GET /health` must return
