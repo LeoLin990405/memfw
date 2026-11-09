@@ -32,6 +32,10 @@ Markdown is the source of truth · hash-linked JSONL events · rebuildable FTS5 
   verify` proves the local history is intact.
 - **Rebuildable FTS5 projection.** Search is a disposable index; lose it and `memfw index rebuild`
   restores it from Markdown.
+- **Per-term matching.** Each query word is quoted on its own and the words are OR-joined, ranked by
+  bm25, so a natural-language sentence finds memories that share any of its words. FTS syntax in a
+  query is treated as plain text, and a query with no usable words returns an empty result. The
+  library, MCP and HTTP paths share one helper (`memfw.index.fts_terms`).
 - **Deterministic retention.** Five selection policies (`fifo`, `lru`, `decay`, `salience`,
   `consolidate_then_forget`), explicit budgets, and reviewable plans — never a silent model call.
 - **Human-gated writes.** Model writes require confirmation by default; anchor decisions always
@@ -149,6 +153,9 @@ logical retention projection rather than a physical-vault capacity test.
 - **Day 10 null-result analysis:** [`reports/day10_null_result_analysis.md`](reports/day10_null_result_analysis.md)
 - **Day 11 Mem0 baseline:** [`reports/day11_baseline_comparison.md`](reports/day11_baseline_comparison.md)
 - **Step G experiment:** [`results/stepG/REPORT.md`](results/stepG/REPORT.md)
+- **Dream evaluation data:** synthetic duplicate, conflict and stale cases, plus merge-accuracy,
+  conflict-detection and false-merge metrics ([`eval/dreams/`](eval/dreams)). `memfw dream` itself is
+  not implemented yet.
 
 ## 📁 Repository layout
 
