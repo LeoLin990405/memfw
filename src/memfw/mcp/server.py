@@ -324,6 +324,7 @@ def _content_hash(path: Path) -> str:
 
 _FRESHNESS_LIMIT = 10
 _FRESHNESS_CACHE_CAP = 2048
+_FRESHNESS_READ_ATTEMPTS = 3
 _StatKey = tuple[str, int, int, int, int]
 
 
@@ -361,7 +362,8 @@ class _RawHashCache:
 
     A user edit cannot preserve ctime, so a file whose mtime was restored
     still misses. The cached value is the hash plus the version line from
-    those same bytes.
+    those same bytes. The stat key is taken before and after the read, and
+    the pair is stored only when those keys match.
     """
 
     def __init__(self, cap: int) -> None:
@@ -369,36 +371,46 @@ class _RawHashCache:
         self._items: dict[_StatKey, tuple[str, str]] = {}
         self._lock = threading.Lock()
 
-    def lookup(self, path: Path) -> tuple[str, str]:
-        """Return ``(sha256-hash, version)``. A missing file is ``("", "")``."""
+    def lookup(self, path: Path) -> tuple[str, str, bool]:
+        """Return ``(sha256-hash, version, consistent)``.
 
-        try:
-            stat = path.stat()
-        except OSError:
-            return "", ""
-        key = _stat_key(path, stat)
-        with self._lock:
-            found = self._items.get(key)
-            if found is not None:
-                self._items.pop(key)
-                self._items[key] = found
-                return found
-        try:
-            raw = path.read_bytes()
-            after = path.stat()
-        except OSError:
-            return "", ""
-        stored = (
-            "sha256:" + hashlib.sha256(raw).hexdigest(),
-            _frontmatter_version(raw),
-        )
-        key = _stat_key(path, after)
-        with self._lock:
-            self._items.pop(key, None)
-            self._items[key] = stored
-            while len(self._items) > self._cap:
-                self._items.pop(next(iter(self._items)))
-        return stored
+        A missing file is ``("", "", True)``. When the stat key still
+        differs after every attempt, nothing is stored and the third value
+        is false so the caller can fail closed.
+        """
+
+        for _attempt in range(_FRESHNESS_READ_ATTEMPTS):
+            try:
+                before = path.stat()
+            except OSError:
+                return "", "", True
+            key = _stat_key(path, before)
+            with self._lock:
+                found = self._items.get(key)
+                if found is not None:
+                    self._items.pop(key)
+                    self._items[key] = found
+                    return (*found, True)
+            try:
+                raw = path.read_bytes()
+                after = path.stat()
+            except OSError:
+                return "", "", True
+            # The key has to name the bytes just read. A mid-read replace
+            # must not publish the old digest under the new stat key.
+            if _stat_key(path, after) != key:
+                continue
+            stored = (
+                "sha256:" + hashlib.sha256(raw).hexdigest(),
+                _frontmatter_version(raw),
+            )
+            with self._lock:
+                self._items.pop(key, None)
+                self._items[key] = stored
+                while len(self._items) > self._cap:
+                    self._items.pop(next(iter(self._items)))
+            return (*stored, True)
+        return "", "", False
 
 
 _RAW_HASH_CACHE = _RawHashCache(_FRESHNESS_CACHE_CAP)
@@ -566,12 +578,13 @@ class Gateway:
                 memory_path = repository.root / "memories" / f"{item['id']}.md"
                 checked = offset < _FRESHNESS_LIMIT
                 if checked:
-                    live_hash, live_version = _RAW_HASH_CACHE.lookup(memory_path)
+                    live_hash, live_version, consistent = _RAW_HASH_CACHE.lookup(memory_path)
                 else:
-                    live_hash, live_version = "", ""
+                    live_hash, live_version, consistent = "", "", True
                 index_version = (
                     item["index_version"] if item.get("index_version") is not None else ""
                 )
+                indexed_hash = str(item.get("content_hash") or "")
                 row = {
                     "id": item["id"],
                     "title": item["title"],
@@ -584,7 +597,11 @@ class Gateway:
                     "type": item["memory_type"],
                     "score": item["score"],
                     "source": item["source"],
-                    "content_hash": live_hash or str(item.get("content_hash") or ""),
+                    # An inconsistent read has no digest. Do not fill in the
+                    # indexed hash, which would look like a verified live one.
+                    "content_hash": (
+                        "" if checked and not consistent else (live_hash or indexed_hash)
+                    ),
                 }
                 shared_readonly().read_path.annotate(
                     row,
@@ -597,7 +614,8 @@ class Gateway:
                     why=str(item.get("why") or why),
                 )
                 if checked:
-                    indexed_hash = str(item.get("content_hash") or "")
+                    if not consistent:
+                        row["stale"] = True
                     if indexed_hash and not _hash_matches(live_hash, indexed_hash):
                         row["stale"] = True
                     projection_hash = str(item.get("projection_hash") or "")

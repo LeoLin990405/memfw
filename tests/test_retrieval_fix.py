@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import zipfile
@@ -147,7 +148,8 @@ def test_raw_hash_cache_misses_when_ctime_changes(
     path = tmp_path / "record.md"
     path.write_bytes(b"---\nversion: 1\n---\n\nbody\n")
     cache = server._RawHashCache(1)
-    first_hash, first_version = cache.lookup(path)
+    first_hash, first_version, first_ok = cache.lookup(path)
+    assert first_ok is True
     assert first_version == "1"
     assert first_hash == "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
     assert server._frontmatter_version(b"---\nid: a\n---\n\nversion: 9\n") == ""
@@ -159,13 +161,14 @@ def test_raw_hash_cache_misses_when_ctime_changes(
         return real_read(self)
 
     monkeypatch.setattr(Path, "read_bytes", counting)
-    assert cache.lookup(path) == (first_hash, first_version)
+    assert cache.lookup(path) == (first_hash, first_version, True)
     assert reads["n"] == 0
     before = path.stat()
     path.write_bytes(b"---\nversion: 2\n---\n\nbody changed\n")
     os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
     assert path.stat().st_mtime_ns == before.st_mtime_ns
-    second_hash, second_version = cache.lookup(path)
+    second_hash, second_version, second_ok = cache.lookup(path)
+    assert second_ok is True
     assert second_version == "2"
     assert second_hash != first_hash
     other = tmp_path / "other.md"
@@ -173,6 +176,153 @@ def test_raw_hash_cache_misses_when_ctime_changes(
     assert cache.lookup(other)[1] == "3"
     assert cache.lookup(path)[1] == "2"
     assert reads["n"] == 3
+
+
+def test_warm_cache_same_length_mtime_restore_misses_on_ctime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from memfw.mcp import server
+
+    path = tmp_path / "record.md"
+    original = b"---\nversion: 1\n---\n\nbody\n"
+    path.write_bytes(original)
+    cache = server._RawHashCache(4)
+    first_hash, first_version, first_ok = cache.lookup(path)
+    assert first_ok is True
+    assert first_version == "1"
+    before = path.stat()
+    updated = original.replace(b"version: 1\n", b"version: 2\n")
+    assert len(updated) == len(original) and updated != original
+    path.write_bytes(updated)
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert path.stat().st_mtime_ns == before.st_mtime_ns
+    assert path.stat().st_size == before.st_size
+    assert path.stat().st_ctime_ns != before.st_ctime_ns
+    reads = {"n": 0}
+    real_read = Path.read_bytes
+
+    def counting(self: Path) -> bytes:
+        reads["n"] += 1
+        return real_read(self)
+
+    monkeypatch.setattr(Path, "read_bytes", counting)
+    second_hash, second_version, second_ok = cache.lookup(path)
+    assert second_ok is True
+    assert second_version == "2"
+    assert second_hash == "sha256:" + hashlib.sha256(updated).hexdigest()
+    assert second_hash != first_hash
+    assert reads["n"] == 1
+    assert cache.lookup(path) == (second_hash, second_version, True)
+    assert reads["n"] == 1
+
+
+def test_same_length_update_during_read_serves_the_current_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = Repository(tmp_path / "vault")
+    repository.init()
+    repository.add(
+        "alpha original",
+        "alpha keyword marker",
+        memory_id="record",
+        tenant="alpha",
+    )
+    MemoryIndex(repository.index_path).rebuild(repository)
+    target = repository.memories_dir / "record.md"
+    before = target.stat()
+    original = target.read_bytes()
+    updated = original.replace(b"version: 1\n", b"version: 2\n")
+    assert original != updated and len(original) == len(updated)
+    changed = {"done": False}
+    real_read = Path.read_bytes
+
+    def interleave(self: Path) -> bytes:
+        raw = real_read(self)
+        if self == target and not changed["done"]:
+            target.write_bytes(updated)
+            os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns))
+            changed["done"] = True
+        return raw
+
+    monkeypatch.setattr(Path, "read_bytes", interleave)
+    gateway = Gateway(repository.root, tenant="alpha", entity_enabled=False)
+    hits = [
+        gateway.search("alpha keyword", mode="multihop")["results"][0]
+        for _ in range(3)
+    ]
+    actual = "sha256:" + hashlib.sha256(real_read(target)).hexdigest()
+    old = "sha256:" + hashlib.sha256(original).hexdigest()
+    assert target.stat().st_mtime_ns == before.st_mtime_ns
+    assert target.stat().st_ctime_ns != before.st_ctime_ns
+    assert actual != old
+    for hit in hits:
+        assert hit["index_version"] == "1"
+        assert hit["sot_version"] == "2"
+        assert hit["content_hash"] == actual
+        assert hit["stale"] is True
+
+
+def test_repeated_stat_mismatch_is_not_cached_and_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from memfw.mcp import server
+
+    repository = Repository(tmp_path / "vault")
+    repository.init()
+    repository.add(
+        "alpha original",
+        "alpha keyword marker",
+        memory_id="record",
+        tenant="alpha",
+    )
+    MemoryIndex(repository.index_path).rebuild(repository)
+    target = repository.memories_dir / "record.md"
+    before = target.stat()
+    real_read = Path.read_bytes
+    active = {"on": True}
+    writes = {"n": 0}
+
+    def tear(self: Path) -> bytes:
+        raw = real_read(self)
+        if active["on"] and self == target:
+            writes["n"] += 1
+            text = raw.decode("utf-8")
+            version = writes["n"] + 1
+            rewritten, count = re.subn(
+                r"version: \d+",
+                f"version: {version}",
+                text,
+                count=1,
+            )
+            assert count == 1
+            encoded = rewritten.encode("utf-8")
+            assert len(encoded) == len(raw)
+            target.write_bytes(encoded)
+            os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns))
+        return raw
+
+    monkeypatch.setattr(Path, "read_bytes", tear)
+    gateway = Gateway(repository.root, tenant="alpha", entity_enabled=False)
+    first = gateway.search("alpha keyword", mode="multihop")["results"][0]
+    assert writes["n"] == server._FRESHNESS_READ_ATTEMPTS
+    assert target.stat().st_mtime_ns == before.st_mtime_ns
+    assert first["stale"] is True
+    assert first["content_hash"] == ""
+    assert first["sot_version"] == ""
+    assert first["index_version"] == "1"
+    assert all(key[0] != str(target) for key in server._RAW_HASH_CACHE._items)
+    active["on"] = False
+    current = real_read(target)
+    second = gateway.search("alpha keyword", mode="multihop")["results"][0]
+    assert second["content_hash"] == "sha256:" + hashlib.sha256(current).hexdigest()
+    assert second["sot_version"] == server._frontmatter_version(current)
+    assert second["sot_version"] != "1"
+    assert second["index_version"] == "1"
+    assert second["stale"] is True
+    third = gateway.search("alpha keyword", mode="multihop")["results"][0]
+    assert third["content_hash"] == second["content_hash"]
+    assert third["sot_version"] == second["sot_version"]
+    assert third["stale"] is True
 
 
 def test_multihop_freshness_does_not_parse_yaml(
@@ -220,7 +370,7 @@ def test_freshness_checks_only_the_first_ten_returned_hits(
     seen: list[str] = []
     real_lookup = server._RAW_HASH_CACHE.lookup
 
-    def counting(path: Path) -> tuple[str, str]:
+    def counting(path: Path) -> tuple[str, str, bool]:
         seen.append(path.name)
         return real_lookup(path)
 
