@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import subprocess
 import sys
 import zipfile
-from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -18,7 +16,6 @@ from memfw.core.repository import Repository
 from memfw.index import MemoryIndex
 from memfw.mcp.server import Gateway
 from memfw.retrieval.judge import LocalJudge, judge_from_environment
-from scripts.memfw_readonly_service import ServiceError, mark_expired_candidates, stage_candidate
 
 ROOT = Path(__file__).resolve().parents[1]
 ENDPOINT = "http://127.0.0.1:9/judge"
@@ -125,28 +122,65 @@ def test_as_of_hides_a_memory_created_later(tmp_path: Path) -> None:
     assert _ids(found) == []
 
 
-def test_configured_judge_has_a_transport_and_failures_degrade(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_configured_judge_is_not_reached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MEMFW_JUDGE_URL", ENDPOINT)
     monkeypatch.setenv("MEMFW_JUDGE_ALLOWLIST", ENDPOINT)
     configured = judge_from_environment()
     assert configured is not None
     assert configured.transport is not None
-    repository = _pair(tmp_path)
-    gateway = Gateway(repository.root, tenant="alpha", entity_enabled=False)
+    calls: list[str] = []
 
     def explode(endpoint: str, question: str, passage: str, context: str) -> float:
         del endpoint, question, passage, context
+        calls.append("called")
         raise TimeoutError("synthetic local judge timeout")
 
-    monkeypatch.setattr(configured, "transport", explode)
     monkeypatch.setattr("memfw.retrieval.judge.local_judge_transport", explode)
+    repository = _pair(tmp_path)
+    gateway = Gateway(repository.root, tenant="alpha", entity_enabled=False)
     found = gateway.search("weather", mode="multihop")
-    assert found["mode"] == "fts"
-    assert found["degraded"] is True
+    assert calls == []
+    assert found["mode"] == "multihop"
     assert _ids(found) == ["secret"]
     assert all("judge_score" not in item for item in found["results"])
+
+
+def test_multihop_fallback_filters_source_and_tenant(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "vault")
+    repository.init()
+    repository.add(
+        "Allowed bulletin",
+        "alpha marker bulletin",
+        memory_id="allowed",
+        tenant="alpha",
+        source="nas",
+    )
+    repository.add(
+        "Blocked bulletin",
+        "alpha marker bulletin",
+        memory_id="blocked",
+        tenant="alpha",
+        source="manual",
+    )
+    repository.add(
+        "Other tenant bulletin",
+        "alpha marker bulletin",
+        memory_id="other",
+        tenant="beta",
+        source="nas",
+    )
+    MemoryIndex(repository.index_path).rebuild(repository)
+    gateway = Gateway(
+        repository.root,
+        tenant="alpha",
+        entity_enabled=False,
+        allowed_sources=("nas",),
+    )
+    found = gateway.search("alpha marker bulletin", mode="multihop")
+    assert found["mode"] == "multihop"
+    assert found["route"] == "expand"
+    assert found["degraded"] is True
+    assert _ids(found) == ["allowed"]
 
 
 def test_a_bad_judge_config_does_not_break_fts_or_hybrid(
@@ -165,93 +199,6 @@ def test_nan_judge_score_is_rejected() -> None:
     judge = LocalJudge(ENDPOINT, (ENDPOINT,), lambda *_args: float("nan"))
     with pytest.raises(ValueError, match="0, 1"):
         judge.score("q", "p", "")
-
-
-def test_deduped_proposal_keeps_its_original_hash(tmp_path: Path) -> None:
-    root = tmp_path / "vault"
-    root.mkdir()
-    stage_candidate(root, {"proposal_id": "a", "title": "T", "content": "original body"})
-    duplicate = stage_candidate(
-        root, {"proposal_id": "b", "title": "T", "content": "original body"}
-    )
-    assert duplicate["duplicate"] is True
-    assert duplicate["duplicate_of"] == "a"
-    again = stage_candidate(root, {"proposal_id": "b", "title": "T", "content": "original body"})
-    assert again["duplicate"] is True
-    assert again["duplicate_of"] == "a"
-    with pytest.raises(ServiceError) as caught:
-        stage_candidate(root, {"proposal_id": "b", "title": "T", "content": "changed body"})
-    assert caught.value.status == 409
-    names = sorted(path.name for path in (root / "_candidates" / "remember").glob("*.md"))
-    assert names == ["conductor-a.md"]
-
-
-def test_deduped_proposal_survives_a_new_process(tmp_path: Path) -> None:
-    root = tmp_path / "vault"
-    root.mkdir()
-    stage_candidate(root, {"proposal_id": "a", "title": "T", "content": "original body"})
-    stage_candidate(root, {"proposal_id": "b", "title": "T", "content": "original body"})
-    script = tmp_path / "retry.py"
-    script.write_text(
-        "import json, sys\n"
-        "from pathlib import Path\n"
-        "from scripts.memfw_readonly_service import ServiceError, stage_candidate\n"
-        "root = Path(sys.argv[1])\n"
-        "try:\n"
-        "    print(json.dumps(stage_candidate(root, "
-        "{'proposal_id': 'b', 'title': 'T', 'content': 'changed body'})))\n"
-        "except ServiceError as exc:\n"
-        "    print(json.dumps({'status': exc.status}))\n",
-        encoding="utf-8",
-    )
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(ROOT)
-    completed = subprocess.run(
-        [sys.executable, str(script), str(root)],
-        cwd=tmp_path,
-        env=env,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    assert json.loads(completed.stdout) == {"status": 409}
-
-
-def test_concurrent_same_body_publishes_one_file(tmp_path: Path) -> None:
-    root = tmp_path / "vault"
-    root.mkdir()
-
-    def publish(proposal_id: str) -> dict:
-        return stage_candidate(
-            root, {"proposal_id": proposal_id, "title": "T", "content": "same body"}
-        )
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(publish, ("a", "b")))
-    files = list((root / "_candidates" / "remember").glob("*.md"))
-    assert len(files) == 1
-    assert sum(1 for item in results if item["duplicate"]) == 1
-    assert sum(1 for item in results if not item["duplicate"]) == 1
-
-
-def test_ttl_does_not_follow_a_candidate_symlink(tmp_path: Path) -> None:
-    external = tmp_path / "external"
-    external.mkdir()
-    staged = stage_candidate(
-        external, {"proposal_id": "outside", "title": "T", "content": "outside body"}
-    )
-    path = external / staged["path"]
-    text = path.read_text(encoding="utf-8")
-    recorded = text.split('recorded_at: "', 1)[1].split('"', 1)[0]
-    old = datetime.now(UTC).replace(year=datetime.now(UTC).year - 1).isoformat()
-    path.write_text(text.replace(recorded, old), encoding="utf-8")
-    before = hashlib.sha256(path.read_bytes()).hexdigest()
-    guard = tmp_path / "guard"
-    guard.mkdir()
-    (guard / "_candidates").symlink_to(external / "_candidates", target_is_directory=True)
-    result = mark_expired_candidates(guard, now=datetime.now(UTC))
-    assert hashlib.sha256(path.read_bytes()).hexdigest() == before
-    assert result == {"expired": 0, "deleted": 0}
 
 
 def test_wheel_search_runs_outside_the_checkout(tmp_path: Path) -> None:

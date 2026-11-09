@@ -43,14 +43,14 @@
   "http_multihop": false,
   "judge": false,
   "multihop_gain": 0.5,
-  "multihop_p95": 0.006966,
-  "p95_ratio": 1.62926,
+  "multihop_p95": 0.00941,
+  "p95_ratio": 1.85541,
   "per_class": 160,
   "phase": "R2",
   "primary_k": 10,
   "rounds": 1,
   "seed": 20261108,
   "single_hop_drop": -0.0,
-  "single_hop_p95": 0.004276,
+  "single_hop_p95": 0.005072,
   "synthetic": true
 }

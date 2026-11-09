@@ -36,7 +36,6 @@ from memfw.index import MemoryIndex
 from memfw.memory_hybrid import MemoryHybridRetriever, shared_readonly
 from memfw.notes import HttpEmbeddingProvider
 from memfw.related import RelatedIndex
-from memfw.retrieval.judge import Judge, apply_judge, judge_cap, judge_from_environment
 from memfw.retrieval.multihop import search_multihop
 
 SERVER_INFO = {"name": "memfw", "version": "0.1.0"}
@@ -400,37 +399,6 @@ class Gateway:
             allowed_sources=self.allowed_sources,
         )
 
-    def _degraded_fts(
-        self,
-        query: str,
-        limit: int,
-        *,
-        source: str,
-        include_history: bool,
-        as_of: str | None,
-    ) -> dict[str, Any]:
-        """Lexical results after the judge cannot score this multihop query."""
-
-        repository = self._repo()
-        _ensure_search_index(repository)
-        payload = shared_readonly().search_vault(
-            repository.root,
-            query,
-            limit=max(1, min(int(limit), 50)),
-            source=source,
-            tenant=self.tenant,
-            include_history=include_history,
-            as_of=as_of,
-        )
-        return {
-            "mode": "fts",
-            "degraded": True,
-            "errors": ["judge unavailable"],
-            "model_versions": {},
-            "results": payload["results"],
-            "route": "fts",
-        }
-
     def search(
         self,
         query: str,
@@ -441,8 +409,10 @@ class Gateway:
         include_history: bool = False,
         as_of: str | None = None,
         rounds: int | None = None,
-        judge: Judge | None = None,
+        judge: object | None = None,
     ) -> dict[str, Any]:
+        # This delivery does not score hits. An injected judge is ignored.
+        del judge
         if not query.strip():
             raise ValueError("query required")
         if source and self.allowed_sources and source not in self.allowed_sources:
@@ -547,23 +517,6 @@ class Gateway:
             }
             _annotate_hit(row, document, item, why=str(item.get("why") or why))
             rows.append(row)
-        if result["mode"] == "multihop":
-            try:
-                active_judge = judge if judge is not None else judge_from_environment()
-                if active_judge is not None:
-                    passages: dict[str, str] = {}
-                    for row in rows:
-                        document = repository.get(row["id"])
-                        passages[row["id"]] = f"{document.title}\n{document.body}"
-                    rows, _calls = apply_judge(rows, passages, query, active_judge, cap=judge_cap())
-            except (TimeoutError, ValueError, RuntimeError, OSError):
-                return self._degraded_fts(
-                    query,
-                    limit,
-                    source=source,
-                    include_history=include_history,
-                    as_of=as_of,
-                )
         payload = {
             "mode": result["mode"],
             "degraded": result["degraded"],

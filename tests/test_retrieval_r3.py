@@ -79,7 +79,8 @@ def test_default_search_makes_no_judge_call(
         del args, kwargs
         seen.append(1)
 
-    monkeypatch.setattr("memfw.mcp.server.apply_judge", forbidden)
+    monkeypatch.setattr("memfw.retrieval.judge.apply_judge", forbidden)
+    monkeypatch.setattr("memfw.retrieval.judge.judge_from_environment", forbidden)
     repository = _vault(tmp_path)
     found = Gateway(repository.root, tenant="alpha").search(
         "Where is the labelkey marker recorded",
@@ -91,7 +92,7 @@ def test_default_search_makes_no_judge_call(
     assert all("judge_score" not in item for item in found["results"])
 
 
-def test_injected_judge_stops_at_the_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_injected_judge_is_not_called(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MEMFW_JUDGE_CAP", "1")
     calls: list[str] = []
 
@@ -108,9 +109,10 @@ def test_injected_judge_stops_at_the_cap(tmp_path: Path, monkeypatch: pytest.Mon
         mode="multihop",
         judge=judge,
     )
-    assert len(calls) == 1
-    assert found["results"][0]["judge_score"] == 0.9
-    assert found["results"][-1]["judge_score"] is None
+    assert calls == []
+    assert found["mode"] == "multihop"
+    assert "gold" in {item["id"] for item in found["results"]}
+    assert all("judge_score" not in item for item in found["results"])
 
 
 def test_request_body_cannot_name_a_judge_endpoint() -> None:

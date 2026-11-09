@@ -50,7 +50,7 @@ import sqlite3
 import sys
 import traceback
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -58,7 +58,6 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 
 import yaml
-from filelock import FileLock, Timeout
 
 
 def _load_read_path():
@@ -93,8 +92,6 @@ CONTROL_CHARACTERS = (
     | {"\u2028", "\u2029"}
 )
 CANDIDATE_DIRECTORY = ("_candidates", "remember")
-CANDIDATE_TTL_DAYS = 30
-MERGE_JACCARD = 0.8
 INTERNAL_MESSAGE = "internal error"
 ERROR_CODES = {
     400: "bad_request",
@@ -935,7 +932,6 @@ def _validate_stage_payload(payload: dict[str, Any]) -> dict[str, Any]:
         raise _bad_request("related must be an array of strings")
     tenant = _header_text(payload.get("tenant", ""), "tenant")
     source = _header_text(payload.get("source", "conductor"), "source", single_line=True)
-    occurred_at = _optional_occurred_at(payload.get("occurred_at", None))
     return {
         "proposal_id": proposal_id,
         "title": title,
@@ -944,25 +940,7 @@ def _validate_stage_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "related": [_header_text(item, "related entries") for item in related],
         "tenant": tenant,
         "source": source or "conductor",
-        "occurred_at": occurred_at,
     }
-
-
-def _optional_occurred_at(value: Any) -> str:
-    """Event time. Empty means the server clock is both stamps."""
-
-    if value is None or value == "":
-        return ""
-    if not isinstance(value, str):
-        raise _bad_request("occurred_at must be a timestamp")
-    text = _header_text(value, "occurred_at", single_line=True)
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError as exc:
-        raise _bad_request("occurred_at must be an ISO timestamp") from exc
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise _bad_request("occurred_at must include a timezone")
-    return parsed.isoformat()
 
 
 class _SingleLine(str):
@@ -1004,7 +982,6 @@ def _candidate_markdown(metadata: dict[str, Any], content: str) -> str:
         "tags": metadata["tags"],
         "related": metadata["related"],
         "created_at": metadata["created_at"],
-        "recorded_at": metadata["recorded_at"],
         "content_hash": metadata["content_hash"],
         "authority": False,
         "metadata": copy.deepcopy(
@@ -1016,7 +993,6 @@ def _candidate_markdown(metadata: dict[str, Any], content: str) -> str:
                 "related": metadata["related"],
                 "title": title,
                 "created_at": metadata["created_at"],
-                "recorded_at": metadata["recorded_at"],
                 "content_hash": metadata["content_hash"],
                 "authority": False,
             }
@@ -1161,200 +1137,6 @@ def _publish_candidate(directory_fd: int, candidate_id: str, markdown_text: str)
             pass
 
 
-def _candidate_body(raw: str) -> str:
-    if not raw.startswith("---\n"):
-        return ""
-    try:
-        _, _header, rest = raw.split("---\n", 2)
-    except ValueError:
-        return ""
-    return rest.strip("\n")
-
-
-def _stored_candidates(base: Path) -> list[dict[str, str]]:
-    """Read sibling candidates. Symlinks are skipped."""
-
-    directory = base.joinpath(*CANDIDATE_DIRECTORY)
-    if not directory.is_dir() or directory.is_symlink():
-        return []
-    stored: list[dict[str, str]] = []
-    for path in sorted(directory.glob("*.md")):
-        if path.is_symlink() or not path.is_file():
-            continue
-        try:
-            raw = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        meta = _metadata_from_text(raw)
-        proposal_id = str(meta.get("proposal_id") or "")
-        stored.append(
-            {
-                "proposal_id": proposal_id,
-                "candidate_id": path.stem,
-                "path": "/".join((*CANDIDATE_DIRECTORY, path.name)),
-                "content_hash": str(meta.get("content_hash") or ""),
-                "tenant": str(meta.get("tenant") or ""),
-                "body": _candidate_body(raw),
-            }
-        )
-    return stored
-
-
-def _candidate_relation(content: str, content_hash: str, other_body: str, other_hash: str) -> str:
-    """Return duplicate, conflict, merge, or an empty string."""
-
-    if content_hash and content_hash == other_hash:
-        return "duplicate"
-    tokens = content.split()
-    other_tokens = other_body.split()
-    if len(tokens) >= 4 and len(tokens) == len(other_tokens):
-        differences = sum(left != right for left, right in zip(tokens, other_tokens, strict=True))
-        if differences == 1:
-            return "conflict"
-    left = set(tokens)
-    right = set(other_tokens)
-    union = left | right
-    if union and len(left & right) / len(union) >= MERGE_JACCARD:
-        return "merge"
-    return ""
-
-
-def mark_expired_candidates(root: Path | str, *, now: datetime) -> dict[str, int]:
-    """Mark candidates older than 30 days. The file stays on disk."""
-
-    if now.tzinfo is None or now.utcoffset() is None:
-        raise ValueError("now must include a timezone")
-    base = Path(root).expanduser().resolve()
-    directory = base.joinpath(*CANDIDATE_DIRECTORY)
-    try:
-        _assert_safe_candidate_directory(base, directory)
-    except ServiceError:
-        return {"expired": 0, "deleted": 0}
-    expired = 0
-    if directory.is_dir() and not directory.is_symlink():
-        cutoff = now - timedelta(days=CANDIDATE_TTL_DAYS)
-        for path in sorted(directory.glob("*.md")):
-            if path.is_symlink() or not path.is_file():
-                continue
-            try:
-                text = path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
-            meta = _metadata_from_text(text)
-            if meta.get("expired") is True or meta.get("lifecycle") == "expired":
-                continue
-            stamp = str(meta.get("recorded_at") or meta.get("created_at") or "")
-            try:
-                recorded = datetime.fromisoformat(stamp)
-            except ValueError:
-                continue
-            if recorded.tzinfo is None or recorded.utcoffset() is None or recorded > cutoff:
-                continue
-            needle = 'lifecycle: "active"'
-            if needle not in text:
-                continue
-            updated = text.replace(needle, 'lifecycle: "expired"', 1)
-            updated = updated.replace(
-                'lifecycle: "expired"\n',
-                'lifecycle: "expired"\nexpired: true\n',
-                1,
-            )
-            path.write_text(updated, encoding="utf-8", newline="\n")
-            expired += 1
-    return {"expired": expired, "deleted": 0}
-
-
-_LEDGER_NAME = ".proposal-ledger.json"
-
-
-def _read_ledger(directory_fd: int) -> dict[str, dict[str, str]]:
-    """Read proposal bindings. A missing ledger is empty. A symlink is refused."""
-
-    try:
-        descriptor = os.open(_LEDGER_NAME, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
-    except FileNotFoundError:
-        return {}
-    except OSError as exc:
-        raise _internal() from exc
-    try:
-        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
-            raw = handle.read()
-    except OSError as exc:
-        raise _internal() from exc
-    if not raw.strip():
-        return {}
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise _internal() from exc
-    proposals = payload.get("proposals") if isinstance(payload, dict) else None
-    if not isinstance(proposals, dict):
-        return {}
-    clean: dict[str, dict[str, str]] = {}
-    for key, value in proposals.items():
-        if isinstance(key, str) and isinstance(value, dict):
-            clean[key] = {str(item_key): str(item) for item_key, item in value.items()}
-    return clean
-
-
-def _write_ledger(directory_fd: int, proposals: dict[str, dict[str, str]]) -> None:
-    """Replace the ledger through the no-follow directory descriptor."""
-
-    text = json.dumps({"proposals": proposals}, ensure_ascii=False, sort_keys=True)
-    temporary = f".proposal-ledger.{uuid.uuid4().hex}.tmp"
-    descriptor = os.open(
-        temporary,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-        0o600,
-        dir_fd=directory_fd,
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        try:
-            os.unlink(_LEDGER_NAME, dir_fd=directory_fd)
-        except FileNotFoundError:
-            pass
-        os.link(temporary, _LEDGER_NAME, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
-    finally:
-        try:
-            os.unlink(temporary, dir_fd=directory_fd)
-        except FileNotFoundError:
-            pass
-
-
-def _binding(
-    *,
-    content_hash: str,
-    canonical_proposal_id: str,
-    candidate_id: str,
-    path: str,
-) -> dict[str, str]:
-    return {
-        "content_hash": content_hash,
-        "canonical_proposal_id": canonical_proposal_id,
-        "candidate_id": candidate_id,
-        "path": path,
-    }
-
-
-def _duplicate_of_binding(bound: dict[str, str], proposal_id: str) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "contract": CONTRACT,
-        "staged": True,
-        "duplicate": True,
-        "candidate_id": bound.get("candidate_id") or f"conductor-{proposal_id}",
-        "path": bound.get("path") or _relative_candidate_path(proposal_id),
-        "authority": False,
-    }
-    canonical = bound.get("canonical_proposal_id") or proposal_id
-    if canonical != proposal_id:
-        payload["duplicate_of"] = canonical
-    return payload
-
-
 def stage_candidate(root: Path | str, payload: dict[str, Any]) -> dict[str, Any]:
     """Stage one candidate under ``<vault>/_candidates/remember/`` (never the vault)."""
     base = Path(root).expanduser().resolve()
@@ -1366,27 +1148,6 @@ def stage_candidate(root: Path | str, payload: dict[str, Any]) -> dict[str, Any]
     _assert_safe_candidate_directory(base, directory)
     candidate_id = f"conductor-{values['proposal_id']}"
     content_hash = "sha256:" + hashlib.sha256(values["content"].encode("utf-8")).hexdigest()
-    lock = FileLock(str(base / ".memfw-stage.lock"), timeout=30)
-    try:
-        lock.acquire()
-    except Timeout as exc:
-        raise _internal() from exc
-    try:
-        return _stage_locked(base, values, relative, candidate_id, content_hash)
-    finally:
-        lock.release()
-
-
-def _stage_locked(
-    base: Path,
-    values: dict[str, Any],
-    relative: str,
-    candidate_id: str,
-    content_hash: str,
-) -> dict[str, Any]:
-    """Check, bind, and publish one proposal while the vault stage lock is held."""
-
-    proposal_id = values["proposal_id"]
     duplicate_response = {
         "contract": CONTRACT,
         "staged": True,
@@ -1395,90 +1156,30 @@ def _stage_locked(
         "path": relative,
         "authority": False,
     }
+    if (base / relative).exists() or (base / relative).is_symlink():
+        if _published_candidate_hash(base, relative) == content_hash:
+            return duplicate_response
+        raise ServiceError(409, "candidate exists with different content")
+    created_at = datetime.now(UTC).isoformat()
+    header = {
+        "proposal_id": values["proposal_id"],
+        "source": values["source"],
+        "tenant": values["tenant"],
+        "tags": values["tags"],
+        "related": values["related"],
+        "title": values["title"],
+        "created_at": created_at,
+        "content_hash": content_hash,
+        "authority": False,
+    }
+    markdown_text = _candidate_markdown(header, values["content"])
     with _open_candidate_directory(base) as directory_handle:
-        descriptor = directory_handle.descriptor
-        proposals = _read_ledger(descriptor)
-        bound = proposals.get(proposal_id)
-        if bound and bound.get("content_hash"):
-            if bound["content_hash"] != content_hash:
-                raise ServiceError(409, "candidate exists with different content")
-            return _duplicate_of_binding(bound, proposal_id)
-        if (base / relative).exists() or (base / relative).is_symlink():
-            if _published_candidate_hash(base, relative) != content_hash:
-                raise ServiceError(409, "candidate exists with different content")
-            proposals[proposal_id] = _binding(
-                content_hash=content_hash,
-                canonical_proposal_id=proposal_id,
-                candidate_id=candidate_id,
-                path=relative,
-            )
-            _write_ledger(descriptor, proposals)
+        published = _publish_candidate(directory_handle.descriptor, candidate_id, markdown_text)
+    if not published:
+        if _published_candidate_hash(base, relative) == content_hash:
             return duplicate_response
-        conflicts: list[dict[str, str]] = []
-        merges: list[dict[str, str]] = []
-        for other in _stored_candidates(base):
-            if other["tenant"] != values["tenant"] or other["proposal_id"] == proposal_id:
-                continue
-            relation = _candidate_relation(
-                values["content"], content_hash, other["body"], other["content_hash"]
-            )
-            if relation == "duplicate":
-                proposals[proposal_id] = _binding(
-                    content_hash=content_hash,
-                    canonical_proposal_id=other["proposal_id"],
-                    candidate_id=other["candidate_id"],
-                    path=other["path"],
-                )
-                _write_ledger(descriptor, proposals)
-                return {
-                    "contract": CONTRACT,
-                    "staged": True,
-                    "duplicate": True,
-                    "candidate_id": other["candidate_id"],
-                    "path": other["path"],
-                    "authority": False,
-                    "duplicate_of": other["proposal_id"],
-                }
-            pointer = {"proposal_id": other["proposal_id"], "content_hash": other["content_hash"]}
-            if relation == "conflict":
-                conflicts.append(pointer)
-            elif relation == "merge":
-                merges.append(pointer)
-        recorded_at = datetime.now(UTC).isoformat()
-        created_at = values["occurred_at"] or recorded_at
-        header = {
-            "proposal_id": proposal_id,
-            "source": values["source"],
-            "tenant": values["tenant"],
-            "tags": values["tags"],
-            "related": values["related"],
-            "title": values["title"],
-            "created_at": created_at,
-            "recorded_at": recorded_at,
-            "content_hash": content_hash,
-            "authority": False,
-        }
-        markdown_text = _candidate_markdown(header, values["content"])
-        published = _publish_candidate(descriptor, candidate_id, markdown_text)
-        if not published:
-            if _published_candidate_hash(base, relative) != content_hash:
-                raise ServiceError(409, "candidate exists with different content")
-            proposals[proposal_id] = _binding(
-                content_hash=content_hash,
-                canonical_proposal_id=proposal_id,
-                candidate_id=candidate_id,
-                path=relative,
-            )
-            _write_ledger(descriptor, proposals)
-            return duplicate_response
-        proposals[proposal_id] = _binding(
-            content_hash=content_hash,
-            canonical_proposal_id=proposal_id,
-            candidate_id=candidate_id,
-            path=relative,
-        )
-        _write_ledger(descriptor, proposals)
-    response = {
+        raise ServiceError(409, "candidate exists with different content")
+    return {
         "contract": CONTRACT,
         "staged": True,
         "duplicate": False,
@@ -1486,11 +1187,6 @@ def _stage_locked(
         "path": relative,
         "authority": False,
     }
-    if conflicts:
-        response["conflict_candidates"] = conflicts
-    if merges:
-        response["merge_candidates"] = merges
-    return response
 
 
 # ---------------------------------------------------------------------------
