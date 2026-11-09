@@ -3,7 +3,17 @@ Copyright 2026 Leo Lin (LeoLin990405)
 
 This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 
-This distribution contains no absorbed third-party source code. Third-party
-Python dependencies remain under their own licenses. If future distributions
-include material from another project, that project's attribution and license
-text must be added here and in the documentation.
+Third-party Python dependencies remain under their own licenses.
+
+This distribution includes data derived from OpenCC:
+
+  OpenCC (Open Chinese Convert), https://github.com/BYVoid/OpenCC
+  Copyright (c) Carbo Kuo (BYVoid) and contributors
+  Licensed under the Apache License, Version 2.0
+
+  src/memfw/ontology/t2s.py holds the one-character entries of OpenCC's
+  TSCharacters.txt (Traditional to Simplified), reduced to the first
+  simplified form of each character. No other OpenCC code or data is included.
+
+If future distributions include material from another project, that project's
+attribution and license text must be added here and in the documentation.

@@ -51,6 +51,7 @@ memfw is the engine only. It makes no assumptions about hosts, SSH or external s
 - **Hash-linked audit log.** Every state change is appended to a JSONL event chain.
 - **Rebuildable search.** Lose the FTS5 index and `memfw index rebuild` restores it from Markdown.
 - **Natural-language queries.** Each query word is matched on its own and ranked by bm25, so a whole sentence finds relevant memories.
+- **Concepts and aliases.** One canonical concept per thing, with aliases (`memfw concepts`), so searching any alias finds every memory about that concept.
 - **Deterministic retention.** Five policies (`fifo`, `lru`, `decay`, `salience`, `consolidate_then_forget`), with budgets and reviewable plans.
 - **Human-gated writes.** Model writes need confirmation, and anchor decisions stay with a person.
 - **Local MCP server.** `memfw-mcp` serves search/get/remember/status over stdio for one vault.
@@ -230,5 +231,6 @@ Issues and pull requests are welcome. Before opening a PR:
 
 ## 📄 License
 
-Licensed under the [Apache License 2.0](LICENSE). This distribution contains no absorbed third-party
-source code; see [`NOTICE`](NOTICE).
+Licensed under the [Apache License 2.0](LICENSE). The Traditional-to-Simplified character map in
+`src/memfw/ontology/t2s.py` is derived from [OpenCC](https://github.com/BYVoid/OpenCC) (Apache-2.0);
+see [`NOTICE`](NOTICE).

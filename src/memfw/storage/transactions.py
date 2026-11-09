@@ -142,9 +142,19 @@ class TransactionMixin:
         for path in sorted(self.root.rglob("*")):
             if not path.is_file() or path.name in {".memfw.lock", ".pending.json"}:
                 continue
-            digest.update(path.relative_to(self.root).as_posix().encode())
+            relative = path.relative_to(self.root)
+            digest.update(relative.as_posix().encode())
             digest.update(b"\0")
-            digest.update(hashlib.sha256(path.read_bytes()).digest())
+            try:
+                body = path.read_bytes()
+            except OSError:
+                # A concept anchor that cannot be read must not take the vault
+                # down. Alias expansion reports that failure and keeps FTS.
+                if not relative.parts or relative.parts[0] != "concepts":
+                    raise
+                digest.update(b"unreadable")
+                continue
+            digest.update(hashlib.sha256(body).digest())
         return digest.hexdigest()
 
     def _transaction_targets(

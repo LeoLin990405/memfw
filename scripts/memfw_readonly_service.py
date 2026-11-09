@@ -24,8 +24,10 @@ Contract summary:
   ``/search`` always runs FTS (the only implemented mode) and reports false,
   ``/related`` reports false on the edges projection and true when it falls back
   to lexical search;
-* temporal filtering and tenant filtering both happen in SQL, before ranking
-  and the limit cut. Tenant is exact equality on ``memory_access.tenant``.
+* temporal filtering and tenant filtering both happen before a hit is ranked
+  into the returned page. Alias hits use that same temporal rule, then
+  reciprocal-rank fusion with the lexical candidates, then the limit cut.
+  Tenant is exact equality on ``memory_access.tenant``.
   An empty tenant matches only memories whose tenant is empty.
 
 Configuration: ``MEMFW_READONLY_ROOT`` (or ``--root``; ``--root`` falls back
@@ -583,6 +585,84 @@ def _score_from_raw(raw_score: Any, rank: int) -> tuple[float, float | None, boo
     return x / (1.0 + x), raw, True
 
 
+def _alias_expansion(
+    base: Path,
+    query: str,
+    tenant: str,
+    source: str,
+    results: list[dict[str, Any]],
+    limit: int,
+    *,
+    include_history: bool,
+    as_of: str | None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Fuse alias hits into ``results``. No ``concepts/`` directory costs one stat."""
+
+    directory = base / "concepts"
+    if directory.is_symlink() or not directory.is_dir():
+        return [], None
+    try:
+        from memfw.ontology.expand import fuse_rows, matching_memories
+        from memfw.ontology.model import OntologyError
+    except ImportError:
+        del results[limit:]
+        return [], "alias expansion unavailable"
+    try:
+        hits, ambiguities = matching_memories(
+            base,
+            query,
+            tenant=tenant,
+            source=source,
+            include_history=include_history,
+            as_of=as_of,
+        )
+    except OntologyError as exc:
+        del results[limit:]
+        return [], str(exc)
+    alias_rows: list[dict[str, Any]] = []
+    for memory_id, why in hits:
+        payload = _document_payload(base, memory_id)
+        if payload is None or payload["tenant"] != tenant:
+            continue
+        meta = _metadata(base / "memories" / f"{memory_id}.md")
+        if source and str(meta.get("source") or "") != source:
+            continue
+        item = {
+            "id": memory_id,
+            "title": str(meta.get("title") or ""),
+            "summary": _collapsed(str(meta.get("summary") or ""), MAX_SUMMARY_CHARS),
+            "source": str(meta.get("source") or ""),
+            "tier": str(meta.get("tier") or ""),
+            "layer": str(meta.get("layer") or ""),
+            "tenant": payload["tenant"],
+            "related": payload["related"],
+            "valid_from": _optional(payload["valid_from"]),
+            "valid_to": _optional(payload["valid_to"]),
+            "superseded_by": _optional(payload["superseded_by"]),
+            "score": 1.0,
+            "raw_score": None,
+            "content_hash": payload["content_hash"],
+            # Present so MCP fts keeps this hit without parsing extra frontmatter
+            # through MemoryDocument, which forbids unknown keys.
+            "updated_at": _iso_string(meta.get("updated_at")),
+            "memory_type": meta.get("type"),
+            "provenance": str(meta.get("provenance") or ""),
+            "why": why,
+        }
+        read_path.annotate(
+            item,
+            provenance=str(payload.get("provenance") or ""),
+            source=str(meta.get("source") or ""),
+            index_version=payload.get("version"),
+            sot_version=payload.get("version"),
+            why=why,
+        )
+        alias_rows.append(item)
+    fused = fuse_rows(results, alias_rows, limit=limit)
+    results[:] = fused
+    return ambiguities, None
+
+
 def search_vault(
     root: Path | str,
     query: str,
@@ -627,7 +707,9 @@ def search_vault(
         temporal_sql, temporal_params = _temporal_clause(
             connection, include_history, as_of_normalised
         )
-        batch = limit
+        concepts = base / "concepts"
+        pool = MAX_LIMIT if concepts.is_dir() and not concepts.is_symlink() else limit
+        batch = pool
         offset = 0
         matched: list[sqlite3.Row] = []
         payloads: list[dict[str, Any]] = []
@@ -653,9 +735,9 @@ def search_vault(
                     continue
                 matched.append(row)
                 payloads.append(payload)
-                if len(matched) >= limit:
+                if len(matched) >= pool:
                     break
-            if len(matched) >= limit or len(rows) < batch:
+            if len(matched) >= pool or len(rows) < batch:
                 break
     finally:
         connection.close()
@@ -691,13 +773,29 @@ def search_vault(
             why="lexical",
         )
         results.append(item)
-    return {
+    ambiguities, alias_error = _alias_expansion(
+        base,
+        needle,
+        tenant,
+        source,
+        results,
+        limit,
+        include_history=include_history,
+        as_of=as_of_normalised,
+    )
+    errors: list[str] = []
+    if alias_error:
+        errors.append(alias_error)
+    response: dict[str, Any] = {
         "contract": CONTRACT,
         "mode": "fts",
         "degraded": False,
-        "errors": [],
+        "errors": errors,
         "results": results,
     }
+    if ambiguities:
+        response["ambiguity"] = ambiguities
+    return response
 
 
 # ---------------------------------------------------------------------------

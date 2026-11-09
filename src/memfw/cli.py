@@ -54,6 +54,7 @@ from .notes.mcp import NotesGateway
 from .notes.mcp import serve as serve_notes_mcp
 from .notes.retrieval import Mode
 from .okf import export_okf, validate_okf_bundle
+from .ontology.cli import app as concepts_app
 from .policies import PolicyName
 from .related import RelatedIndex
 from .retrieval import VaultRetriever
@@ -82,6 +83,7 @@ app.add_typer(tier_app, name="tiers")
 app.add_typer(tier_alias_app, name="tier")
 app.add_typer(layer_alias_app, name="layer")
 app.add_typer(capture_app, name="capture")
+app.add_typer(concepts_app, name="concepts")
 capture_app.command(name="confirm")(confirm_command)
 
 

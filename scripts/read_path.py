@@ -12,6 +12,22 @@ PROVENANCE_TYPES = ("user_said", "agent_inferred", "imported", "derived")
 WHY_VALUES = ("lexical", "semantic", "expansion", "related")
 
 
+def _accepted_why(why: str) -> str:
+    """Keep a known channel, or an ``alias(<label>→<oid>)`` expansion."""
+
+    if why in WHY_VALUES:
+        return why
+    if (
+        why.startswith("alias(")
+        and why.endswith(")")
+        and "→" in why[6:-1]
+        and "\n" not in why
+        and len(why) <= 400
+    ):
+        return why
+    return "lexical"
+
+
 def _version_text(value: Any) -> str:
     if value is None or value == "":
         return ""
@@ -48,7 +64,7 @@ def annotate(
     index_text = _version_text(index_version)
     sot_text = _version_text(sot_version)
     result["provenance_type"] = provenance_type(provenance, source)
-    result["why"] = why if why in WHY_VALUES else "lexical"
+    result["why"] = _accepted_why(why)
     result["index_version"] = index_text
     result["sot_version"] = sot_text
     result["stale"] = index_text != sot_text
