@@ -51,6 +51,7 @@ memfw 只是引擎，不对主机、SSH 或外部检索后端做任何假设；�
 - **哈希链审计日志。** 每次状态变化都追加到 JSONL 事件链。
 - **可重建的搜索。** FTS5 索引丢了，`memfw index rebuild` 能从 Markdown 恢复。
 - **自然语言查询。** 查询里的每个词分别匹配，按 bm25 排序，一整句话也能找到相关记忆。
+- **概念与别名。** 每个东西一个统一概念，并登记别名（`memfw concepts`），用任何一个别名都能找到关于这个概念的所有记忆。
 - **确定性保留。** 五种策略（`fifo`、`lru`、`decay`、`salience`、`consolidate_then_forget`），带预算和可审核的计划。
 - **写入要人确认。** 模型写入需要确认，anchor 决策始终由人来做。
 - **本地 MCP 服务。** `memfw-mcp` 通过 stdio 为一个 vault 提供 search/get/remember/status。
@@ -218,4 +219,4 @@ uv sync --frozen --extra dev
 
 ## 📄 许可证
 
-使用 [Apache License 2.0](LICENSE)。本发行版不包含吸收的第三方源码；见 [`NOTICE`](NOTICE)。
+使用 [Apache License 2.0](LICENSE)。`src/memfw/ontology/t2s.py` 中的繁简字符映射取自 [OpenCC](https://github.com/BYVoid/OpenCC)（Apache-2.0）；见 [`NOTICE`](NOTICE)。
