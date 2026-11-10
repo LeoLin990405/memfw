@@ -712,3 +712,53 @@ def test_http_as_of_hides_legacy_valid_until(tmp_path: Path) -> None:
         as_of="2021-06-01T00:00:00Z",
     )
     assert "mem-about" not in [item["id"] for item in found["results"]]
+
+
+def test_alias_expansion_reads_memories_once_and_refreshes_on_concept_edit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from eval.retrieval_r0.alias_eval import _recall_vault, _tag
+    from memfw.ontology import expand, model
+
+    root = _recall_vault(tmp_path / "cache")
+    reads: list[str] = []
+    concept_reads: list[str] = []
+    real_frontmatter = expand._frontmatter
+    real_read_concept = model._read_concept
+
+    def counting_frontmatter(path: Path) -> dict[str, object]:
+        reads.append(Path(path).name)
+        return real_frontmatter(path)
+
+    def counting_read_concept(path: Path) -> Concept:
+        concept_reads.append(Path(path).name)
+        return real_read_concept(path)
+
+    monkeypatch.setattr(expand, "_frontmatter", counting_frontmatter)
+    monkeypatch.setattr(model, "_read_concept", counting_read_concept)
+
+    first = expand.matching_memories(root, "hammer", tenant="alpha")[0]
+    assert {row[0] for row in first} == {"mem-about", "mem-about-2", "mem-applies"}
+    assert reads and concept_reads
+    reads.clear()
+    concept_reads.clear()
+
+    for query in ("hammer", "mallet", "pounder", "unrelated words"):
+        expand.matching_memories(root, query, tenant="alpha")
+    assert reads == [], "memory files were scanned again for an unchanged vault"
+    assert concept_reads == [], "concept files were parsed again without a change"
+
+    concept_path = root / "concepts" / "Concept" / "hammer.md"
+    text = concept_path.read_text(encoding="utf-8")
+    assert "sledge" not in text
+    edited = text.replace("- mallet\n", "- mallet\n- sledge\n", 1)
+    concept_path.write_text(edited, encoding="utf-8")
+    refreshed = expand.matching_memories(root, "sledge", tenant="alpha")[0]
+    assert {row[0] for row in refreshed} == {"mem-about", "mem-about-2", "mem-applies"}
+    assert concept_reads, "an edited concept file must rebuild the alias map"
+    assert reads == [], "a concept edit must not rescan memory files"
+
+    _tag(root / "memories/mem-about.md", {"about": "concept:tool:other"})
+    after = expand.matching_memories(root, "hammer", tenant="alpha")[0]
+    assert "mem-about" not in {row[0] for row in after}
+    assert reads == ["mem-about.md"], "only the edited memory is parsed again"
