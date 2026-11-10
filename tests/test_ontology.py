@@ -832,8 +832,10 @@ def test_scoped_alias_resolves_only_in_its_scope(tmp_path: Path) -> None:
     assert [item["id"] for item in scoped["results"]] == ["mem-other"]
     from scripts.memfw_readonly_service import ServiceError
 
-    with pytest.raises(ServiceError):
+    with pytest.raises(ServiceError, match="scope must be a string"):
         search_vault(root, "forge-tool", tenant="alpha", scope=7)  # type: ignore[arg-type]
+    with pytest.raises(ServiceError, match="scope too long"):
+        search_vault(root, "forge-tool", tenant="alpha", scope="s" * 513)
     gateway = Gateway(root, tenant="alpha", entity_enabled=False, allowed_sources=())
     for mode in ("fts", "hybrid", "multihop"):
         plain = gateway.search("forge-tool", limit=10, mode=mode)
@@ -841,6 +843,10 @@ def test_scoped_alias_resolves_only_in_its_scope(tmp_path: Path) -> None:
         handler = gateway.handlers()["memory_search"]
         scoped_payload = handler({"query": "forge-tool", "mode": mode, "scope": "project:smithy"})
         assert [item["id"] for item in scoped_payload["results"]] == ["mem-other"], mode
+        with pytest.raises(ValueError, match="scope must be a string"):
+            handler({"query": "forge-tool", "mode": mode, "scope": 7})
+        with pytest.raises(ValueError, match="scope too long"):
+            handler({"query": "forge-tool", "mode": mode, "scope": "s" * 513})
 
 
 def test_scoped_label_conflicting_with_unscoped_label_is_ambiguous_only_in_scope(

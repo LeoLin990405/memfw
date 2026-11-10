@@ -450,6 +450,20 @@ def _annotate_hit(row: dict[str, Any], document: Any, item: dict[str, Any], *, w
             row["stale"] = True
 
 
+_MAX_SCOPE_CHARS = 512
+
+
+def _checked_scope(scope: object) -> str:
+    """Same rule as HTTP ``/search``: optional string of at most 512 characters."""
+    if scope is None:
+        return ""
+    if not isinstance(scope, str):
+        raise ValueError("scope must be a string")
+    if len(scope) > _MAX_SCOPE_CHARS:
+        raise ValueError("scope too long")
+    return scope.strip()
+
+
 class Gateway:
     """MCP tool implementations bound to one local vault root."""
 
@@ -594,6 +608,7 @@ class Gateway:
         del judge
         if not query.strip():
             raise ValueError("query required")
+        scope = _checked_scope(scope)
         if source and self.allowed_sources and source not in self.allowed_sources:
             raise ValueError("source is not allowed for this account")
         repository = self._repo()
@@ -926,7 +941,7 @@ class Gateway:
                 include_history=bool(args.get("include_history", False)),
                 as_of=(str(args["as_of"]) if args.get("as_of") else None),
                 rounds=(int(args["rounds"]) if args.get("rounds") is not None else None),
-                scope=str(args.get("scope") or ""),
+                scope=args.get("scope"),
             ),
             "memory_get": lambda args: self.get(str(args.get("memory_id") or "")),
             "memory_remember": lambda args: self.remember(

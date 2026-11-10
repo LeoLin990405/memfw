@@ -168,3 +168,17 @@ def test_trigram_terms_are_unchanged_by_the_shared_builder() -> None:
         assert query_terms(query) == fts_terms(query) == query_terms(query, "trigram")
         assert _fts_query(query) == _fts_query(query, "trigram") == fts_query(query)
     assert query_terms("帮我看一下 HAL9000 的部署") == ["帮我看一下", "HAL9000", "的部署"]
+
+
+@pytest.mark.parametrize("missing", ["memfw.index.fts_terms", "jieba"])
+def test_unicode61_http_reports_a_missing_term_builder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, missing: str
+) -> None:
+    import sys
+
+    repository = _unicode61_vault(tmp_path, monkeypatch)
+    monkeypatch.setitem(sys.modules, missing, None)
+    payload = search_vault(repository.root, "实体记忆检索", limit=10, tenant="")
+    assert payload["degraded"] is True
+    assert any("unicode61 query terms unavailable" in item for item in payload["errors"])
+    assert isinstance(payload["results"], list)

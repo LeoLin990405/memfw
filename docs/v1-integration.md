@@ -164,7 +164,17 @@ scope. Unscoped labels resolve in every scope and stay globally unique. When a
 scoped label and an unscoped label of the same text name different concepts,
 the request in that scope gets a `duplicate_alias` ambiguity and no winner;
 other scopes are unaffected. `scope` does not filter lexical hits or tenants.
-A request without `scope` behaves exactly as before.
+The parameter is optional and the response shape is unchanged. One behaviour
+does change for vaults that already store `{label, scope}` aliases: before
+this release those labels resolved in every request, and now they resolve only
+when the request names their scope. Vaults with unscoped labels only see no
+difference. `scope` must be a string of at most 512 characters (400
+`bad_request`: "scope must be a string" / "scope too long").
+
+On a unicode61 index (no FTS5 trigram), query terms are segmented with jieba
+through `memfw.index.fts_terms.query_terms`, the same builder as the library
+search. If `memfw` or `jieba` cannot be imported, the service falls back to
+regex terms, sets `degraded: true` and names the cause in `errors`.
 
 ### Score
 
