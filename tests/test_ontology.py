@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -712,3 +713,275 @@ def test_http_as_of_hides_legacy_valid_until(tmp_path: Path) -> None:
         as_of="2021-06-01T00:00:00Z",
     )
     assert "mem-about" not in [item["id"] for item in found["results"]]
+
+
+def test_alias_expansion_reads_memories_once_and_refreshes_on_concept_edit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from eval.retrieval_r0.alias_eval import _recall_vault, _tag
+    from memfw.ontology import expand, model
+
+    root = _recall_vault(tmp_path / "cache")
+    reads: list[str] = []
+    concept_reads: list[str] = []
+    real_frontmatter = expand._frontmatter
+    real_read_concept = model._read_concept
+
+    def counting_frontmatter(path: Path) -> dict[str, object]:
+        reads.append(Path(path).name)
+        return real_frontmatter(path)
+
+    def counting_read_concept(path: Path) -> Concept:
+        concept_reads.append(Path(path).name)
+        return real_read_concept(path)
+
+    monkeypatch.setattr(expand, "_frontmatter", counting_frontmatter)
+    monkeypatch.setattr(model, "_read_concept", counting_read_concept)
+    # Query well after the files were written, so their stamps are settled.
+    later = time.time_ns() + 60_000_000_000
+    monkeypatch.setattr(expand, "_clock_ns", lambda: later)
+
+    first = expand.matching_memories(root, "hammer", tenant="alpha")[0]
+    assert {row[0] for row in first} == {"mem-about", "mem-about-2", "mem-applies"}
+    assert reads and concept_reads
+    reads.clear()
+    concept_reads.clear()
+
+    for query in ("hammer", "mallet", "pounder", "unrelated words"):
+        expand.matching_memories(root, query, tenant="alpha")
+    assert reads == [], "memory files were scanned again for an unchanged vault"
+    assert concept_reads == [], "concept files were parsed again without a change"
+
+    concept_path = root / "concepts" / "Concept" / "hammer.md"
+    text = concept_path.read_text(encoding="utf-8")
+    assert "sledge" not in text
+    edited = text.replace("- mallet\n", "- mallet\n- sledge\n", 1)
+    concept_path.write_text(edited, encoding="utf-8")
+    refreshed = expand.matching_memories(root, "sledge", tenant="alpha")[0]
+    assert {row[0] for row in refreshed} == {"mem-about", "mem-about-2", "mem-applies"}
+    assert concept_reads, "an edited concept file must rebuild the alias map"
+    assert reads == [], "a concept edit must not rescan memory files"
+
+    _tag(root / "memories/mem-about.md", {"about": "concept:tool:other"})
+    after = expand.matching_memories(root, "hammer", tenant="alpha")[0]
+    assert "mem-about" not in {row[0] for row in after}
+    assert reads == ["mem-about.md"], "only the edited memory is parsed again"
+
+
+def _scoped_vault(root: Path) -> Path:
+    """Recall vault plus scoped labels.
+
+    ``forge-tool`` is a scoped label of wedge in ``project:smithy`` and of
+    hammer in ``project:workshop``. ``mallet`` is unscoped on hammer and
+    scoped on wedge in ``project:smithy``.
+    """
+    from eval.retrieval_r0.alias_eval import _recall_vault
+    from memfw.ontology.model import Label, _render
+
+    _recall_vault(root)
+    concepts = load_concepts(root)
+    hammer = concepts["concept:tool:hammer"]
+    hammer.alt_labels = (*hammer.alt_labels, Label("forge-tool", "project:workshop"))
+    wedge = concepts["concept:tool:other"]
+    wedge.alt_labels = (
+        Label("forge-tool", "project:smithy"),
+        Label("mallet", "project:smithy"),
+    )
+    for concept in (hammer, wedge):
+        assert concept.path is not None
+        concept.path.write_text(_render(concept), encoding="utf-8")
+    return root
+
+
+_HAMMER = {"mem-about", "mem-about-2", "mem-applies"}
+
+
+def test_unscoped_aliases_resolve_in_every_scope(tmp_path: Path) -> None:
+    from memfw.ontology.expand import matching_memories
+
+    root = _scoped_vault(tmp_path / "unscoped")
+    for scope in ("", "project:smithy", "project:workshop", "project:none"):
+        hits, ambiguities = matching_memories(root, "wedge", tenant="alpha", scope=scope)
+        assert [row[0] for row in hits] == ["mem-other"], scope
+        assert ambiguities == [], scope
+        hits, _ = matching_memories(root, "pounder", tenant="alpha", scope=scope)
+        assert {row[0] for row in hits} == _HAMMER, scope
+    index = project_aliases(load_concepts(root))
+    assert normalise("forge-tool") not in index.by_alias
+    assert normalise("forge-tool") not in index.ambiguous
+
+
+def test_scoped_alias_resolves_only_in_its_scope(tmp_path: Path) -> None:
+    from memfw.index import MemoryIndex
+    from memfw.mcp.server import Gateway
+    from memfw.ontology.expand import matching_memories
+
+    root = _scoped_vault(tmp_path / "scoped")
+    smithy, _ = matching_memories(root, "forge-tool", tenant="alpha", scope="project:smithy")
+    assert smithy == [("mem-other", "alias(forge-tool→concept:tool:other)")]
+    workshop, _ = matching_memories(root, "forge-tool", tenant="alpha", scope="project:workshop")
+    assert {row[0] for row in workshop} == _HAMMER
+    for scope in ("", "project:none", "project:smith", " "):
+        hits, ambiguities = matching_memories(root, "forge-tool", tenant="alpha", scope=scope)
+        assert hits == [] and ambiguities == [], scope
+
+    MemoryIndex(root / "index.sqlite3").rebuild(Repository(root))
+    unscoped = search_vault(root, "forge-tool", tenant="alpha", limit=10)
+    assert unscoped["results"] == []
+    scoped = search_vault(root, "forge-tool", tenant="alpha", limit=10, scope="project:smithy")
+    assert [item["id"] for item in scoped["results"]] == ["mem-other"]
+    from scripts.memfw_readonly_service import ServiceError
+
+    with pytest.raises(ServiceError, match="scope must be a string"):
+        search_vault(root, "forge-tool", tenant="alpha", scope=7)  # type: ignore[arg-type]
+    with pytest.raises(ServiceError, match="scope too long"):
+        search_vault(root, "forge-tool", tenant="alpha", scope="s" * 513)
+    gateway = Gateway(root, tenant="alpha", entity_enabled=False, allowed_sources=())
+    for mode in ("fts", "hybrid", "multihop"):
+        plain = gateway.search("forge-tool", limit=10, mode=mode)
+        assert plain["results"] == [], mode
+        handler = gateway.handlers()["memory_search"]
+        scoped_payload = handler({"query": "forge-tool", "mode": mode, "scope": "project:smithy"})
+        assert [item["id"] for item in scoped_payload["results"]] == ["mem-other"], mode
+        with pytest.raises(ValueError, match="scope must be a string"):
+            handler({"query": "forge-tool", "mode": mode, "scope": 7})
+        with pytest.raises(ValueError, match="scope too long"):
+            handler({"query": "forge-tool", "mode": mode, "scope": "s" * 513})
+
+
+def test_scoped_label_conflicting_with_unscoped_label_is_ambiguous_only_in_scope(
+    tmp_path: Path,
+) -> None:
+    from memfw.ontology.expand import matching_memories
+
+    root = _scoped_vault(tmp_path / "conflict")
+    outside, ambiguities = matching_memories(root, "mallet", tenant="alpha")
+    assert {row[0] for row in outside} == _HAMMER
+    assert ambiguities == []
+    elsewhere, _ = matching_memories(root, "mallet", tenant="alpha", scope="project:workshop")
+    assert {row[0] for row in elsewhere} == _HAMMER
+    inside, ambiguities = matching_memories(
+        root, "mallet", tenant="alpha", scope="project:smithy"
+    )
+    assert inside == []
+    assert ambiguities == [
+        {
+            "kind": "duplicate_alias",
+            "alias": "mallet",
+            "detail": "mallet",
+            "oids": ["concept:tool:hammer", "concept:tool:other"],
+        }
+    ]
+    review = [
+        item for item in lint_concepts(load_concepts(root)) if item["kind"] == "duplicate_alias"
+    ]
+    assert review == [
+        {
+            "kind": "duplicate_alias",
+            "oid": "concept:tool:hammer",
+            "detail": "mallet",
+            "scope": "project:smithy",
+            "oids": ["concept:tool:hammer", "concept:tool:other"],
+        }
+    ]
+
+
+def _replace_same_size(path: Path, old: str, new: str) -> None:
+    """Rewrite in place with the same size and put the old mtime back."""
+    assert len(old.encode()) == len(new.encode())
+    before = path.stat()
+    text = path.read_text(encoding="utf-8")
+    assert old in text
+    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert path.stat().st_mtime_ns == before.st_mtime_ns
+    assert path.stat().st_size == before.st_size
+
+
+def _settled_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    from memfw.ontology import expand
+
+    later = time.time_ns() + 60_000_000_000
+    monkeypatch.setattr(expand, "_clock_ns", lambda: later)
+
+
+def test_alias_cache_sees_same_size_edit_with_restored_mtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from eval.retrieval_r0.alias_eval import _recall_vault
+    from memfw.ontology.expand import matching_memories
+
+    root = _recall_vault(tmp_path / "same-size")
+    _settled_clock(monkeypatch)
+    assert {row[0] for row in matching_memories(root, "hammer", tenant="alpha")[0]} == _HAMMER
+
+    _replace_same_size(root / "memories/mem-about.md", "tenant: alpha", "tenant: bravo")
+    alpha = {row[0] for row in matching_memories(root, "hammer", tenant="alpha")[0]}
+    bravo = {row[0] for row in matching_memories(root, "hammer", tenant="bravo")[0]}
+    assert alpha == _HAMMER - {"mem-about"}
+    assert bravo == {"mem-about"}
+
+    concept = root / "concepts" / "Concept" / "hammer.md"
+    _replace_same_size(concept, "- mallet\n", "- maulet\n")
+    assert matching_memories(root, "mallet", tenant="alpha")[0] == []
+    assert {row[0] for row in matching_memories(root, "maulet", tenant="alpha")[0]} == (
+        _HAMMER - {"mem-about"}
+    )
+
+
+def test_alias_cache_drops_a_deleted_memory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from eval.retrieval_r0.alias_eval import _recall_vault
+    from memfw.ontology.expand import matching_memories
+
+    root = _recall_vault(tmp_path / "deleted")
+    _settled_clock(monkeypatch)
+    assert {row[0] for row in matching_memories(root, "hammer", tenant="alpha")[0]} == _HAMMER
+    (root / "memories/mem-about-2.md").unlink()
+    after = {row[0] for row in matching_memories(root, "hammer", tenant="alpha")[0]}
+    assert after == _HAMMER - {"mem-about-2"}
+
+
+def test_alias_cache_reparses_files_changed_within_the_racy_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A coarse-timestamp filesystem: every stamp field stays identical."""
+    from eval.retrieval_r0.alias_eval import _recall_vault
+    from memfw.ontology import expand
+
+    root = _recall_vault(tmp_path / "racy")
+    tick = (time.time_ns() // 1_000_000_000) * 1_000_000_000
+    frozen: dict[str, int] = {}
+
+    def coarse_row(path: Path) -> tuple[str, int, int, int, int]:
+        size = frozen.setdefault(str(path), path.stat().st_size)
+        return (str(path), tick, tick, size, 1)
+
+    monkeypatch.setattr(expand, "_file_row", coarse_row)
+    monkeypatch.setattr(expand, "_clock_ns", lambda: tick + 500_000_000)
+    reads: list[str] = []
+    real_frontmatter = expand._frontmatter
+
+    def counting_frontmatter(path: Path) -> dict[str, object]:
+        reads.append(Path(path).name)
+        return real_frontmatter(path)
+
+    monkeypatch.setattr(expand, "_frontmatter", counting_frontmatter)
+    hits = {row[0] for row in expand.matching_memories(root, "hammer", tenant="alpha")[0]}
+    assert hits == _HAMMER
+    path = root / "memories/mem-applies.md"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("tenant: alpha", "tenant: bravo", 1),
+        encoding="utf-8",
+    )
+    concept = root / "concepts" / "Concept" / "hammer.md"
+    concept.write_text(
+        concept.read_text(encoding="utf-8").replace("- mallet\n", "- maulet\n", 1),
+        encoding="utf-8",
+    )
+    reads.clear()
+    alpha = {row[0] for row in expand.matching_memories(root, "maulet", tenant="alpha")[0]}
+    assert "mem-applies.md" in reads, "a file edited just now must be parsed again"
+    assert alpha == _HAMMER - {"mem-applies"}
+    assert expand.matching_memories(root, "mallet", tenant="alpha")[0] == []

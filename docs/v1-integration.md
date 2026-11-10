@@ -105,6 +105,7 @@ Authenticated requests send the shared token in the `X-Memfw-Token` header.
 | Item | Value |
 |---|---|
 | `/search` `query` | 1..512 characters |
+| `/search` `scope` | optional string, ≤ 512 characters (default empty) |
 | `limit` on `/search` and `/related` | 1..50; out-of-range values are truncated to the bound, not an error |
 | result `summary` | ≤ 500 characters |
 | `/search` and `/related` request body | ≤ 8 KiB (413 above that) |
@@ -152,6 +153,28 @@ before the result limit:
 index stores temporal values as UTC ISO-8601 strings and the comparison runs on
 that canonical form in SQL. When both `as_of` and `include_history=true` are
 supplied, `include_history` wins and no time filter applies.
+
+### Alias scope
+
+`/search` accepts an optional string `scope` (default empty; MCP
+`memory_search` takes the same argument). It only affects alias expansion
+from `concepts/`: a concept label written as `{label, scope}` resolves only
+when the request's `scope` equals that label's scope, and never in any other
+scope. Unscoped labels resolve in every scope and stay globally unique. When a
+scoped label and an unscoped label of the same text name different concepts,
+the request in that scope gets a `duplicate_alias` ambiguity and no winner;
+other scopes are unaffected. `scope` does not filter lexical hits or tenants.
+The parameter is optional and the response shape is unchanged. One behaviour
+does change for vaults that already store `{label, scope}` aliases: before
+this release those labels resolved in every request, and now they resolve only
+when the request names their scope. Vaults with unscoped labels only see no
+difference. `scope` must be a string of at most 512 characters (400
+`bad_request`: "scope must be a string" / "scope too long").
+
+On a unicode61 index (no FTS5 trigram), query terms are segmented with jieba
+through `memfw.index.fts_terms.query_terms`, the same builder as the library
+search. If `memfw` or `jieba` cannot be imported, the service falls back to
+regex terms, sets `degraded: true` and names the cause in `errors`.
 
 ### Score
 

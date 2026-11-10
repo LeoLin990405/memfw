@@ -448,7 +448,7 @@ def _document_payload(root: Path, identifier: str) -> dict[str, Any] | None:
 
 
 def _fts_terms(query: str) -> list[str]:
-    """Same rules as ``memfw.index.fts_terms``. This process does not import memfw."""
+    """Stdlib copy of the trigram rules in ``memfw.index.fts_terms.query_terms``."""
 
     seen: set[str] = set()
     out: list[str] = []
@@ -463,13 +463,56 @@ def _fts_terms(query: str) -> list[str]:
     return out
 
 
-def _fts_query(query: str) -> str | None:
+def _shared_query_terms() -> tuple[Any, str | None]:
+    """The shared unicode61 term builder, or ``None`` and why it is unavailable."""
+
+    try:
+        from memfw.index.fts_terms import jieba_segmenter, query_terms
+    except ImportError:
+        return None, "unicode61 query terms unavailable: memfw is not importable; regex terms used"
+    try:
+        jieba_segmenter()
+    except RuntimeError:
+        return None, "unicode61 query terms unavailable: jieba is not installed; regex terms used"
+    return query_terms, None
+
+
+def _query_terms(query: str, tokenizer: str = "trigram") -> list[str]:
+    """Terms for an index built with ``tokenizer``.
+
+    A trigram index keeps the stdlib path and needs no ``memfw`` import. A
+    unicode61 index stores jieba segments, so the terms come from the shared
+    ``memfw.index.fts_terms.query_terms``, the same function the library
+    search uses. When that is unavailable the regex terms are used and
+    ``search_vault`` reports it in ``errors`` with ``degraded`` true.
+    """
+
+    if tokenizer == "unicode61":
+        builder, _note = _shared_query_terms()
+        if builder is not None:
+            terms: list[str] = builder(query, tokenizer)
+            return terms
+    return _fts_terms(query)
+
+
+def _fts_query(query: str, tokenizer: str = "trigram") -> str | None:
     """Quote each term and join them with OR. ``None`` means there is no term."""
 
-    terms = _fts_terms(query)
+    terms = _query_terms(query, tokenizer)
     if not terms:
         return None
     return " OR ".join('"' + term.replace('"', '""') + '"' for term in terms)
+
+
+def _index_tokenizer(connection: sqlite3.Connection) -> str:
+    """``trigram`` or ``unicode61``, read from the ``memory_fts`` schema."""
+
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='memory_fts'"
+    ).fetchone()
+    if row is None or row[0] is None:
+        return "trigram"
+    return "trigram" if "trigram" in str(row[0]).lower() else "unicode61"
 
 
 def _unsupported_query(text: str) -> bool:
@@ -530,6 +573,7 @@ def _search_batch(
     temporal_params: list[Any],
     limit: int,
     offset: int,
+    tokenizer: str = "trigram",
 ) -> list[sqlite3.Row]:
     if len(needle) <= 2:
         # FTS drops tokens this short. Match every field, and fold ASCII case
@@ -557,7 +601,7 @@ def _search_batch(
             "FROM memory_fts JOIN memory_rows r ON r.id = memory_fts.id "
             "JOIN memory_access a ON a.id = r.id"
         )
-        match = _fts_query(needle)
+        match = _fts_query(needle, tokenizer)
         if match is None:
             return []
         where = ["memory_fts MATCH ?"]
@@ -595,8 +639,12 @@ def _alias_expansion(
     *,
     include_history: bool,
     as_of: str | None,
+    scope: str = "",
 ) -> tuple[list[dict[str, Any]], str | None]:
-    """Fuse alias hits into ``results``. No ``concepts/`` directory costs one stat."""
+    """Fuse alias hits into ``results``. No ``concepts/`` directory costs one stat.
+
+    ``scope`` only selects scoped alias labels; it does not filter lexical hits.
+    """
 
     directory = base / "concepts"
     if directory.is_symlink() or not directory.is_dir():
@@ -615,6 +663,7 @@ def _alias_expansion(
             source=source,
             include_history=include_history,
             as_of=as_of,
+            scope=scope,
         )
     except OntologyError as exc:
         del results[limit:]
@@ -672,6 +721,7 @@ def search_vault(
     tenant: str = "",
     include_history: bool = False,
     as_of: str | None = None,
+    scope: str = "",
 ) -> dict[str, Any]:
     base = Path(root).expanduser().resolve()
     if not (base / "vault.yaml").is_file() or not (base / "index.sqlite3").is_file():
@@ -690,6 +740,12 @@ def search_vault(
         raise _bad_request("source must be a string")
     if not isinstance(tenant, str):
         raise _bad_request("tenant must be a string")
+    if scope is None:
+        scope = ""
+    if not isinstance(scope, str):
+        raise _bad_request("scope must be a string")
+    if len(scope) > MAX_QUERY_CHARS:
+        raise _bad_request("scope too long")
     as_of_normalised = _normalise_as_of(as_of) if as_of is not None else None
     if not isinstance(include_history, bool):
         raise _bad_request("include_history must be a boolean")
@@ -707,6 +763,10 @@ def search_vault(
         temporal_sql, temporal_params = _temporal_clause(
             connection, include_history, as_of_normalised
         )
+        tokenizer = _index_tokenizer(connection)
+        term_note = None
+        if tokenizer == "unicode61" and len(needle) > 2:
+            term_note = _shared_query_terms()[1]
         concepts = base / "concepts"
         pool = MAX_LIMIT if concepts.is_dir() and not concepts.is_symlink() else limit
         batch = pool
@@ -723,6 +783,7 @@ def search_vault(
                 temporal_params=temporal_params,
                 limit=batch,
                 offset=offset,
+                tokenizer=tokenizer,
             )
             if not rows:
                 break
@@ -782,14 +843,17 @@ def search_vault(
         limit,
         include_history=include_history,
         as_of=as_of_normalised,
+        scope=scope.strip(),
     )
     errors: list[str] = []
+    if term_note:
+        errors.append(term_note)
     if alias_error:
         errors.append(alias_error)
     response: dict[str, Any] = {
         "contract": CONTRACT,
         "mode": "fts",
-        "degraded": False,
+        "degraded": term_note is not None,
         "errors": errors,
         "results": results,
     }
@@ -1498,6 +1562,7 @@ class Handler(BaseHTTPRequestHandler):
                     tenant=scope_tenant(payload.get("tenant", "")),
                     include_history=payload.get("include_history", False),
                     as_of=payload.get("as_of"),
+                    scope=payload.get("scope", ""),
                 )
             elif self.path == "/related":
                 result = related_vault(

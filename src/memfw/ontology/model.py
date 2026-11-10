@@ -99,10 +99,33 @@ class Concept:
 
 @dataclass
 class AliasIndex:
-    """Rebuildable alias → oid projection. Ambiguous keys are not winners."""
+    """Rebuildable alias → oid projection. Ambiguous keys are not winners.
+
+    ``by_alias`` and ``ambiguous`` hold unscoped labels only. ``scoped`` and
+    ``scoped_ambiguous`` are keyed by scope first; each entry already folds in
+    the unscoped owner of the same key, so a scoped label that names a
+    different oid than an unscoped one is ambiguous inside that scope.
+    """
 
     by_alias: dict[str, str] = field(default_factory=dict)
     ambiguous: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    scoped: dict[str, dict[str, str]] = field(default_factory=dict)
+    scoped_ambiguous: dict[str, dict[str, tuple[str, ...]]] = field(default_factory=dict)
+
+    def lookup(self, key: str, scope: str = "") -> tuple[str | None, tuple[str, ...]]:
+        """Return ``(oid, ())`` for a winner, ``(None, oids)`` when ambiguous.
+
+        A scoped label resolves only when ``scope`` equals its scope.
+        """
+        scope = scope.strip()
+        if scope:
+            if key in self.scoped_ambiguous.get(scope, {}):
+                return None, self.scoped_ambiguous[scope][key]
+            if key in self.scoped.get(scope, {}):
+                return self.scoped[scope][key], ()
+        if key in self.ambiguous:
+            return None, self.ambiguous[key]
+        return self.by_alias.get(key), ()
 
 
 def load_concepts(vault: Path) -> dict[str, Concept]:
@@ -130,7 +153,6 @@ def load_concepts(vault: Path) -> dict[str, Concept]:
 def lint_concepts(concepts: dict[str, Concept]) -> list[dict[str, Any]]:
     """Review list. The files are not modified."""
     items: list[dict[str, Any]] = []
-    owners: dict[str, list[str]] = {}
     known = set(concepts)
     for concept in concepts.values():
         if concept.class_name not in CLASSES:
@@ -184,17 +206,8 @@ def lint_concepts(concepts: dict[str, Concept]) -> list[dict[str, Any]]:
                             "detail": referent,
                         }
                     )
-        if concept.status != "active":
-            continue
-        target = _resolve(concept.oid, concepts)
-        for label in concept.names():
-            key = normalise(label.text)
-            if not key:
-                continue
-            owners.setdefault(key, [])
-            if target not in owners[key]:
-                owners[key].append(target)
-    for key, oids in sorted(owners.items()):
+    unscoped, scoped = _label_owners(concepts)
+    for key, oids in sorted(unscoped.items()):
         if len(oids) > 1:
             items.append(
                 {
@@ -204,6 +217,18 @@ def lint_concepts(concepts: dict[str, Concept]) -> list[dict[str, Any]]:
                     "oids": list(oids),
                 }
             )
+    for scope, keys in sorted(scoped.items()):
+        for key, oids in sorted(_fold_scope(unscoped, keys).items()):
+            if len(oids) > 1:
+                items.append(
+                    {
+                        "kind": "duplicate_alias",
+                        "oid": oids[0],
+                        "detail": key,
+                        "scope": scope,
+                        "oids": list(oids),
+                    }
+                )
     reported: set[frozenset[str]] = set()
     for concept in concepts.values():
         status, chain = _walk(concept.oid, concepts)
@@ -233,9 +258,33 @@ def lint_concepts(concepts: dict[str, Concept]) -> list[dict[str, Any]]:
 
 
 def project_aliases(concepts: dict[str, Concept]) -> AliasIndex:
-    """Alias projection. Duplicate aliases are listed and do not pick a winner."""
+    """Alias projection. Duplicate aliases are listed and do not pick a winner.
+
+    Unscoped labels stay globally unique. A scoped label is projected only
+    under its own scope, together with any unscoped owner of the same key.
+    """
     index = AliasIndex()
-    owners: dict[str, list[str]] = {}
+    unscoped, scoped = _label_owners(concepts)
+    for key, oids in unscoped.items():
+        if len(oids) == 1:
+            index.by_alias[key] = oids[0]
+        else:
+            index.ambiguous[key] = tuple(oids)
+    for scope, keys in scoped.items():
+        for key, oids in _fold_scope(unscoped, keys).items():
+            if len(oids) == 1:
+                index.scoped.setdefault(scope, {})[key] = oids[0]
+            else:
+                index.scoped_ambiguous.setdefault(scope, {})[key] = tuple(oids)
+    return index
+
+
+def _label_owners(
+    concepts: dict[str, Concept],
+) -> tuple[dict[str, list[str]], dict[str, dict[str, list[str]]]]:
+    """Active owners per normalised label: unscoped, and per scope."""
+    unscoped: dict[str, list[str]] = {}
+    scoped: dict[str, dict[str, list[str]]] = {}
     for concept in concepts.values():
         if concept.status != "active":
             continue
@@ -244,15 +293,26 @@ def project_aliases(concepts: dict[str, Concept]) -> AliasIndex:
             key = normalise(label.text)
             if not key:
                 continue
-            bucket = owners.setdefault(key, [])
+            scope = label.scope.strip()
+            table = scoped.setdefault(scope, {}) if scope else unscoped
+            bucket = table.setdefault(key, [])
             if target not in bucket:
                 bucket.append(target)
-    for key, oids in owners.items():
-        if len(oids) == 1:
-            index.by_alias[key] = oids[0]
-        else:
-            index.ambiguous[key] = tuple(oids)
-    return index
+    return unscoped, scoped
+
+
+def _fold_scope(
+    unscoped: dict[str, list[str]], keys: dict[str, list[str]]
+) -> dict[str, list[str]]:
+    """Owners of each scoped key inside its scope: unscoped owners first."""
+    folded: dict[str, list[str]] = {}
+    for key, oids in keys.items():
+        merged = list(unscoped.get(key, []))
+        for oid in oids:
+            if oid not in merged:
+                merged.append(oid)
+        folded[key] = merged
+    return folded
 
 
 def save_concept(vault: Path, concept: Concept, *, apply: bool = False) -> dict[str, Any]:
