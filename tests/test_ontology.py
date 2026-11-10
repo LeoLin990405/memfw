@@ -762,3 +762,115 @@ def test_alias_expansion_reads_memories_once_and_refreshes_on_concept_edit(
     after = expand.matching_memories(root, "hammer", tenant="alpha")[0]
     assert "mem-about" not in {row[0] for row in after}
     assert reads == ["mem-about.md"], "only the edited memory is parsed again"
+
+
+def _scoped_vault(root: Path) -> Path:
+    """Recall vault plus scoped labels.
+
+    ``forge-tool`` is a scoped label of wedge in ``project:smithy`` and of
+    hammer in ``project:workshop``. ``mallet`` is unscoped on hammer and
+    scoped on wedge in ``project:smithy``.
+    """
+    from eval.retrieval_r0.alias_eval import _recall_vault
+    from memfw.ontology.model import Label, _render
+
+    _recall_vault(root)
+    concepts = load_concepts(root)
+    hammer = concepts["concept:tool:hammer"]
+    hammer.alt_labels = (*hammer.alt_labels, Label("forge-tool", "project:workshop"))
+    wedge = concepts["concept:tool:other"]
+    wedge.alt_labels = (
+        Label("forge-tool", "project:smithy"),
+        Label("mallet", "project:smithy"),
+    )
+    for concept in (hammer, wedge):
+        assert concept.path is not None
+        concept.path.write_text(_render(concept), encoding="utf-8")
+    return root
+
+
+_HAMMER = {"mem-about", "mem-about-2", "mem-applies"}
+
+
+def test_unscoped_aliases_resolve_in_every_scope(tmp_path: Path) -> None:
+    from memfw.ontology.expand import matching_memories
+
+    root = _scoped_vault(tmp_path / "unscoped")
+    for scope in ("", "project:smithy", "project:workshop", "project:none"):
+        hits, ambiguities = matching_memories(root, "wedge", tenant="alpha", scope=scope)
+        assert [row[0] for row in hits] == ["mem-other"], scope
+        assert ambiguities == [], scope
+        hits, _ = matching_memories(root, "pounder", tenant="alpha", scope=scope)
+        assert {row[0] for row in hits} == _HAMMER, scope
+    index = project_aliases(load_concepts(root))
+    assert normalise("forge-tool") not in index.by_alias
+    assert normalise("forge-tool") not in index.ambiguous
+
+
+def test_scoped_alias_resolves_only_in_its_scope(tmp_path: Path) -> None:
+    from memfw.index import MemoryIndex
+    from memfw.mcp.server import Gateway
+    from memfw.ontology.expand import matching_memories
+
+    root = _scoped_vault(tmp_path / "scoped")
+    smithy, _ = matching_memories(root, "forge-tool", tenant="alpha", scope="project:smithy")
+    assert smithy == [("mem-other", "alias(forge-tool→concept:tool:other)")]
+    workshop, _ = matching_memories(root, "forge-tool", tenant="alpha", scope="project:workshop")
+    assert {row[0] for row in workshop} == _HAMMER
+    for scope in ("", "project:none", "project:smith", " "):
+        hits, ambiguities = matching_memories(root, "forge-tool", tenant="alpha", scope=scope)
+        assert hits == [] and ambiguities == [], scope
+
+    MemoryIndex(root / "index.sqlite3").rebuild(Repository(root))
+    unscoped = search_vault(root, "forge-tool", tenant="alpha", limit=10)
+    assert unscoped["results"] == []
+    scoped = search_vault(root, "forge-tool", tenant="alpha", limit=10, scope="project:smithy")
+    assert [item["id"] for item in scoped["results"]] == ["mem-other"]
+    from scripts.memfw_readonly_service import ServiceError
+
+    with pytest.raises(ServiceError):
+        search_vault(root, "forge-tool", tenant="alpha", scope=7)  # type: ignore[arg-type]
+    gateway = Gateway(root, tenant="alpha", entity_enabled=False, allowed_sources=())
+    for mode in ("fts", "hybrid", "multihop"):
+        plain = gateway.search("forge-tool", limit=10, mode=mode)
+        assert plain["results"] == [], mode
+        handler = gateway.handlers()["memory_search"]
+        scoped_payload = handler({"query": "forge-tool", "mode": mode, "scope": "project:smithy"})
+        assert [item["id"] for item in scoped_payload["results"]] == ["mem-other"], mode
+
+
+def test_scoped_label_conflicting_with_unscoped_label_is_ambiguous_only_in_scope(
+    tmp_path: Path,
+) -> None:
+    from memfw.ontology.expand import matching_memories
+
+    root = _scoped_vault(tmp_path / "conflict")
+    outside, ambiguities = matching_memories(root, "mallet", tenant="alpha")
+    assert {row[0] for row in outside} == _HAMMER
+    assert ambiguities == []
+    elsewhere, _ = matching_memories(root, "mallet", tenant="alpha", scope="project:workshop")
+    assert {row[0] for row in elsewhere} == _HAMMER
+    inside, ambiguities = matching_memories(
+        root, "mallet", tenant="alpha", scope="project:smithy"
+    )
+    assert inside == []
+    assert ambiguities == [
+        {
+            "kind": "duplicate_alias",
+            "alias": "mallet",
+            "detail": "mallet",
+            "oids": ["concept:tool:hammer", "concept:tool:other"],
+        }
+    ]
+    review = [
+        item for item in lint_concepts(load_concepts(root)) if item["kind"] == "duplicate_alias"
+    ]
+    assert review == [
+        {
+            "kind": "duplicate_alias",
+            "oid": "concept:tool:hammer",
+            "detail": "mallet",
+            "scope": "project:smithy",
+            "oids": ["concept:tool:hammer", "concept:tool:other"],
+        }
+    ]

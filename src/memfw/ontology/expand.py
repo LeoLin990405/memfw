@@ -41,8 +41,13 @@ def matching_memories(
     source: str = "",
     include_history: bool = False,
     as_of: str | None = None,
+    scope: str = "",
 ) -> tuple[list[tuple[str, str]], list[dict[str, Any]]]:
     """Return ``(memory_id, why)`` rows and ambiguity candidates.
+
+    ``scope`` selects scoped aliases (``alt_labels: [{label, scope}]``). A
+    scoped label resolves only when ``scope`` equals its scope; the default
+    empty scope sees unscoped labels only.
 
     An ambiguous alias is never a winner. ``merged_into`` is followed on the
     alias and on each memory's ``about`` and ``applies_to`` values. Hits use
@@ -57,7 +62,7 @@ def matching_memories(
     if directory.is_symlink() or not directory.is_dir():
         return [], []
     concepts, index = _projection(directory)
-    wanted, ambiguities = _query_oids(query, index)
+    wanted, ambiguities = _query_oids(query, index, scope=scope)
     if not wanted:
         return [], ambiguities
     memories = root / "memories"
@@ -250,7 +255,7 @@ def _terms(query: str) -> list[str]:
 
 
 def _query_oids(
-    query: str, index: AliasIndex
+    query: str, index: AliasIndex, *, scope: str = ""
 ) -> tuple[dict[str, tuple[str, str]], list[dict[str, Any]]]:
     wanted: dict[str, tuple[str, str]] = {}
     ambiguities: list[dict[str, Any]] = []
@@ -259,7 +264,8 @@ def _query_oids(
         key = normalise(term)
         if not key:
             continue
-        if key in index.ambiguous:
+        oid, candidates = index.lookup(key, scope)
+        if candidates:
             if key not in seen_ambiguous:
                 seen_ambiguous.add(key)
                 ambiguities.append(
@@ -267,11 +273,10 @@ def _query_oids(
                         "kind": "duplicate_alias",
                         "alias": term,
                         "detail": key,
-                        "oids": list(index.ambiguous[key]),
+                        "oids": list(candidates),
                     }
                 )
             continue
-        oid = index.by_alias.get(key)
         if oid is None or key in wanted:
             continue
         wanted[key] = (oid, term)

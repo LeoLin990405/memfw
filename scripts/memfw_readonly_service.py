@@ -595,8 +595,12 @@ def _alias_expansion(
     *,
     include_history: bool,
     as_of: str | None,
+    scope: str = "",
 ) -> tuple[list[dict[str, Any]], str | None]:
-    """Fuse alias hits into ``results``. No ``concepts/`` directory costs one stat."""
+    """Fuse alias hits into ``results``. No ``concepts/`` directory costs one stat.
+
+    ``scope`` only selects scoped alias labels; it does not filter lexical hits.
+    """
 
     directory = base / "concepts"
     if directory.is_symlink() or not directory.is_dir():
@@ -615,6 +619,7 @@ def _alias_expansion(
             source=source,
             include_history=include_history,
             as_of=as_of,
+            scope=scope,
         )
     except OntologyError as exc:
         del results[limit:]
@@ -672,6 +677,7 @@ def search_vault(
     tenant: str = "",
     include_history: bool = False,
     as_of: str | None = None,
+    scope: str = "",
 ) -> dict[str, Any]:
     base = Path(root).expanduser().resolve()
     if not (base / "vault.yaml").is_file() or not (base / "index.sqlite3").is_file():
@@ -690,6 +696,10 @@ def search_vault(
         raise _bad_request("source must be a string")
     if not isinstance(tenant, str):
         raise _bad_request("tenant must be a string")
+    if scope is None:
+        scope = ""
+    if not isinstance(scope, str) or len(scope) > MAX_QUERY_CHARS:
+        raise _bad_request("scope must be a string")
     as_of_normalised = _normalise_as_of(as_of) if as_of is not None else None
     if not isinstance(include_history, bool):
         raise _bad_request("include_history must be a boolean")
@@ -782,6 +792,7 @@ def search_vault(
         limit,
         include_history=include_history,
         as_of=as_of_normalised,
+        scope=scope.strip(),
     )
     errors: list[str] = []
     if alias_error:
@@ -1498,6 +1509,7 @@ class Handler(BaseHTTPRequestHandler):
                     tenant=scope_tenant(payload.get("tenant", "")),
                     include_history=payload.get("include_history", False),
                     as_of=payload.get("as_of"),
+                    scope=payload.get("scope", ""),
                 )
             elif self.path == "/related":
                 result = related_vault(

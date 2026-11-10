@@ -51,7 +51,7 @@ memfw is the engine only. It makes no assumptions about hosts, SSH or external s
 - **Hash-linked audit log.** Every state change is appended to a JSONL event chain.
 - **Rebuildable search.** Lose the FTS5 index and `memfw index rebuild` restores it from Markdown.
 - **Natural-language queries.** Each query word is matched on its own and ranked by bm25, so a whole sentence finds relevant memories.
-- **Concepts and aliases.** One canonical concept per thing, with aliases (`memfw concepts`), so searching any alias finds every memory about that concept.
+- **Concepts and aliases.** One canonical concept per thing, with aliases (`memfw concepts`), so searching any alias finds every memory about that concept. An alias can be scoped (`{label, scope}`) so it only resolves for searches that pass the same `scope`.
 - **Deterministic retention.** Five policies (`fifo`, `lru`, `decay`, `salience`, `consolidate_then_forget`), with budgets and reviewable plans.
 - **Human-gated writes.** Model writes need confirmation, and anchor decisions stay with a person.
 - **Local MCP server.** `memfw-mcp` serves search/get/remember/status over stdio for one vault.
