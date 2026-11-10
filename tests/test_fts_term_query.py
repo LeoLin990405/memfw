@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
+
+import pytest
 
 from memfw.core.repository import Repository
 from memfw.index import MemoryIndex
@@ -102,3 +105,66 @@ def test_two_character_query_stays_on_the_substring_branch(tmp_path: Path) -> No
     assert all(item["raw_score"] is None for item in short["results"])
     folded = search_vault(repository.root, "ha", limit=10, tenant="alpha")
     assert [item["id"] for item in folded["results"]] == [item["id"] for item in short["results"]]
+
+
+_CJK_QUERIES = (
+    "实体记忆检索",
+    "帮我看一下实体记忆检索的部署",
+    "HAL9000 记忆检索 homelab",
+    "部署工具 HAL9000",
+    "帮我看一下 HAL9000 的部署",
+)
+
+
+def _unicode61_vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Repository:
+    import memfw.index as index_module
+
+    monkeypatch.setattr(index_module, "_supports_trigram", lambda *args, **kwargs: False)
+    repository = Repository(tmp_path / "vault")
+    repository.init()
+    repository.add("检索笔记", "本文讨论面向实体记忆检索的索引", memory_id="retrieval")
+    repository.add("部署记录", "HAL9000 的部署工具和部署步骤", memory_id="deploy")
+    repository.add("机房", "homelab 机房里的 HAL9000", memory_id="lab")
+    repository.add("天气", "今天的天气预报", memory_id="weather")
+    MemoryIndex(repository.index_path).rebuild(repository)
+    with sqlite3.connect(repository.index_path) as connection:
+        schema = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE name='memory_fts'"
+        ).fetchone()[0]
+    assert "tokenize='unicode61'" in schema
+    return repository
+
+
+def test_unicode61_library_and_http_share_terms_and_results(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import memfw.index as index_module
+    from memfw.index.fts_terms import query_terms
+    from scripts.memfw_readonly_service import _query_terms
+
+    repository = _unicode61_vault(tmp_path, monkeypatch)
+    index = MemoryIndex(repository.index_path)
+    for query in _CJK_QUERIES:
+        library_terms = query_terms(query, "unicode61")
+        assert library_terms, query
+        assert _query_terms(query, "unicode61") == library_terms, query
+        assert _fts_query(query, "unicode61") == index_module._match_text(query, "unicode61")
+        library_ids = [row[0] for row in index.search(query, limit=10)]
+        http_ids = [
+            item["id"]
+            for item in search_vault(repository.root, query, limit=10, tenant="")["results"]
+        ]
+        assert library_ids, query
+        assert http_ids == library_ids, query
+    assert "weather" not in {
+        item["id"] for item in search_vault(repository.root, "部署工具", tenant="")["results"]
+    }
+
+
+def test_trigram_terms_are_unchanged_by_the_shared_builder() -> None:
+    from memfw.index.fts_terms import query_terms
+
+    for query in (*_SAMPLES, *_CJK_QUERIES):
+        assert query_terms(query) == fts_terms(query) == query_terms(query, "trigram")
+        assert _fts_query(query) == _fts_query(query, "trigram") == fts_query(query)
+    assert query_terms("帮我看一下 HAL9000 的部署") == ["帮我看一下", "HAL9000", "的部署"]

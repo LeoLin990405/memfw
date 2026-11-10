@@ -16,7 +16,7 @@ from typing import Any, Literal
 from ..core.errors import IntegrityError
 from ..core.models import MemoryDocument
 from ..core.repository import Repository
-from .fts_terms import fts_query, fts_query_from_terms
+from .fts_terms import fts_match, jieba_segmenter
 
 _ROW_COLUMNS = (
     "id",
@@ -58,27 +58,18 @@ def _supports_trigram(connect: Callable[..., Any] | None = None) -> bool:
 
 
 def _jieba() -> Callable[[str], list[str]]:
-    try:
-        import jieba  # type: ignore[import-untyped]
-    except ImportError as exc:
-        raise RuntimeError(
-            "SQLite FTS5 trigram is unavailable and jieba is required for the unicode61 fallback; "
-            "install the declared jieba dependency"
-        ) from exc
-    return lambda text: [token for token in jieba.lcut(text, cut_all=False) if token.strip()]
+    return jieba_segmenter()
 
 
 def _match_text(needle: str, tokenizer: _TOKENIZER) -> str | None:
     """Quoted-term OR used by both ``search`` entry points.
 
-    A trigram index stores the raw text, so the query is the regex helper.
-    A unicode61 index stores jieba segments, so the query is segmented the
-    same way and then quoted. Either way the match is an OR, not one phrase.
+    ``fts_match`` builds the terms for either tokenizer; the HTTP readonly
+    service uses the same function for a unicode61 index. Either way the
+    match is an OR, not one phrase.
     """
 
-    if tokenizer == "unicode61":
-        return fts_query_from_terms(_jieba()(needle))
-    return fts_query(needle)
+    return fts_match(needle, tokenizer)
 
 
 def _tokenize(text: str, tokenizer: _TOKENIZER, segment: Callable[[str], list[str]] | None) -> str:

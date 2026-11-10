@@ -448,7 +448,7 @@ def _document_payload(root: Path, identifier: str) -> dict[str, Any] | None:
 
 
 def _fts_terms(query: str) -> list[str]:
-    """Same rules as ``memfw.index.fts_terms``. This process does not import memfw."""
+    """Stdlib copy of the trigram rules in ``memfw.index.fts_terms.query_terms``."""
 
     seen: set[str] = set()
     out: list[str] = []
@@ -463,13 +463,42 @@ def _fts_terms(query: str) -> list[str]:
     return out
 
 
-def _fts_query(query: str) -> str | None:
+def _query_terms(query: str, tokenizer: str = "trigram") -> list[str]:
+    """Terms for an index built with ``tokenizer``.
+
+    A trigram index keeps the stdlib path and needs no ``memfw`` import. A
+    unicode61 index stores jieba segments, so the terms come from the shared
+    ``memfw.index.fts_terms.query_terms``, the same function the library
+    search uses. Without ``memfw`` the regex terms are the fallback.
+    """
+
+    if tokenizer == "unicode61":
+        try:
+            from memfw.index.fts_terms import query_terms
+        except ImportError:
+            return _fts_terms(query)
+        return query_terms(query, tokenizer)
+    return _fts_terms(query)
+
+
+def _fts_query(query: str, tokenizer: str = "trigram") -> str | None:
     """Quote each term and join them with OR. ``None`` means there is no term."""
 
-    terms = _fts_terms(query)
+    terms = _query_terms(query, tokenizer)
     if not terms:
         return None
     return " OR ".join('"' + term.replace('"', '""') + '"' for term in terms)
+
+
+def _index_tokenizer(connection: sqlite3.Connection) -> str:
+    """``trigram`` or ``unicode61``, read from the ``memory_fts`` schema."""
+
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='memory_fts'"
+    ).fetchone()
+    if row is None or row[0] is None:
+        return "trigram"
+    return "trigram" if "trigram" in str(row[0]).lower() else "unicode61"
 
 
 def _unsupported_query(text: str) -> bool:
@@ -530,6 +559,7 @@ def _search_batch(
     temporal_params: list[Any],
     limit: int,
     offset: int,
+    tokenizer: str = "trigram",
 ) -> list[sqlite3.Row]:
     if len(needle) <= 2:
         # FTS drops tokens this short. Match every field, and fold ASCII case
@@ -557,7 +587,7 @@ def _search_batch(
             "FROM memory_fts JOIN memory_rows r ON r.id = memory_fts.id "
             "JOIN memory_access a ON a.id = r.id"
         )
-        match = _fts_query(needle)
+        match = _fts_query(needle, tokenizer)
         if match is None:
             return []
         where = ["memory_fts MATCH ?"]
@@ -717,6 +747,7 @@ def search_vault(
         temporal_sql, temporal_params = _temporal_clause(
             connection, include_history, as_of_normalised
         )
+        tokenizer = _index_tokenizer(connection)
         concepts = base / "concepts"
         pool = MAX_LIMIT if concepts.is_dir() and not concepts.is_symlink() else limit
         batch = pool
@@ -733,6 +764,7 @@ def search_vault(
                 temporal_params=temporal_params,
                 limit=batch,
                 offset=offset,
+                tokenizer=tokenizer,
             )
             if not rows:
                 break
