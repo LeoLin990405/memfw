@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -12,12 +13,17 @@ from memfw.core.models import fold_temporal_aliases
 from .model import AliasIndex, Concept, _frontmatter, _resolve, load_concepts, project_aliases
 from .normalise import normalise
 
-_Stamp = tuple[tuple[str, int, int, int], ...]
+_Row = tuple[str, int, int, int, int]
+_Stamp = tuple[_Row, ...]
 _MemoryRef = tuple[str, dict[str, Any]]
-# Both caches are keyed by directory and hold the (path, mtime, size, inode)
-# stamp they were built from. A query re-reads nothing unless a stamp changed.
-_CONCEPT_CACHE: dict[str, tuple[_Stamp, tuple[dict[str, Concept], AliasIndex]]] = {}
-_MEMORY_CACHE: dict[str, tuple[_Stamp, list[_MemoryRef]]] = {}
+# Both caches are keyed by directory. Each file is stamped with
+# (path, mtime_ns, ctime_ns, size, inode) and the build time is kept. As in
+# git's racy-index rule, a file whose mtime or ctime falls within
+# ``_RACY_NS`` of (or after) the build is never trusted from the cache: a
+# coarse-timestamp filesystem could hide a same-size edit in that tick.
+_CONCEPT_CACHE: dict[str, tuple[_Stamp, int, tuple[dict[str, Concept], AliasIndex]]] = {}
+_MEMORY_CACHE: dict[str, dict[str, tuple[_Row, int, _MemoryRef]]] = {}
+_RACY_NS = 2_000_000_000
 _CACHE_LIMIT = 32
 _LOCK = threading.Lock()
 _REF_KEYS = (
@@ -172,20 +178,33 @@ def _parse_instant(value: Any) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
+def _clock_ns() -> int:
+    return time.time_ns()
+
+
+def _file_row(path: Path) -> _Row | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return (str(path), stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_ino)
+
+
 def _stamp(directory: Path, pattern: str) -> _Stamp:
-    """``(path, mtime_ns, size, inode)`` per regular file. Stats only, no reads."""
-    rows: list[tuple[str, int, int, int]] = []
+    """One row per regular file. Stats only, no reads."""
+    rows: list[_Row] = []
     for path in sorted(directory.glob(pattern)):
-        if path.is_symlink():
+        if path.is_symlink() or not path.is_file():
             continue
-        try:
-            stat = path.stat()
-        except OSError:
-            continue
-        if not path.is_file():
-            continue
-        rows.append((str(path), stat.st_mtime_ns, stat.st_size, stat.st_ino))
+        row = _file_row(path)
+        if row is not None:
+            rows.append(row)
     return tuple(rows)
+
+
+def _settled(row: _Row, built_ns: int) -> bool:
+    """True when the file's times are safely older than the cache build."""
+    return max(row[1], row[2]) < built_ns - _RACY_NS
 
 
 def _remember(cache: dict[str, Any], key: str, value: Any) -> None:
@@ -198,15 +217,20 @@ def _remember(cache: dict[str, Any], key: str, value: Any) -> None:
 def _projection(directory: Path) -> tuple[dict[str, Concept], AliasIndex]:
     """Alias map built from the concept files only, rebuilt when one changes."""
     key = str(directory)
+    built_ns = _clock_ns()
     stamp = _stamp(directory, "*/*.md")
     with _LOCK:
         cached = _CONCEPT_CACHE.get(key)
-        if cached is not None and cached[0] == stamp:
-            return cached[1]
+    if (
+        cached is not None
+        and cached[0] == stamp
+        and all(_settled(row, cached[1]) for row in stamp)
+    ):
+        return cached[2]
     concepts = load_concepts(directory.parent)
     loaded = (concepts, project_aliases(concepts))
     with _LOCK:
-        _remember(_CONCEPT_CACHE, key, (stamp, loaded))
+        _remember(_CONCEPT_CACHE, key, (stamp, built_ns, loaded))
     return loaded
 
 
@@ -214,32 +238,30 @@ def _memory_refs(directory: Path) -> list[_MemoryRef]:
     """``(memory_id, folded frontmatter subset)`` for every memory file.
 
     Only the fields the alias channel filters on are kept. A memory file is
-    parsed again only when its own stamp changes, so a repeated query costs
-    one ``stat`` per file and no reads.
+    reused from the cache only when its stamp is unchanged and settled, so a
+    repeated query costs one ``stat`` per file and no reads; a file removed
+    from the directory drops out with its stamp.
     """
     key = str(directory)
+    built_ns = _clock_ns()
     stamp = _stamp(directory, "*.md")
     with _LOCK:
-        cached = _MEMORY_CACHE.get(key)
-        if cached is not None and cached[0] == stamp:
-            return cached[1]
-        previous = (
-            dict(zip((row[0] for row in cached[0]), cached[1], strict=True))
-            if cached is not None
-            else {}
-        )
-        previous_stamp = {row[0]: row for row in cached[0]} if cached is not None else {}
+        previous = dict(_MEMORY_CACHE.get(key, {}))
+    entries: dict[str, tuple[_Row, int, _MemoryRef]] = {}
     refs: list[_MemoryRef] = []
     for row in stamp:
-        reused = previous.get(row[0])
-        if reused is not None and previous_stamp.get(row[0]) == row:
-            refs.append(reused)
+        cached = previous.get(row[0])
+        if cached is not None and cached[0] == row and _settled(row, cached[1]):
+            entries[row[0]] = cached
+            refs.append(cached[2])
             continue
         path = Path(row[0])
         meta = fold_temporal_aliases(_frontmatter(path), strict=False)
-        refs.append((path.stem, {name: meta[name] for name in _REF_KEYS if name in meta}))
+        ref = (path.stem, {name: meta[name] for name in _REF_KEYS if name in meta})
+        entries[row[0]] = (row, built_ns, ref)
+        refs.append(ref)
     with _LOCK:
-        _remember(_MEMORY_CACHE, key, (stamp, refs))
+        _remember(_MEMORY_CACHE, key, entries)
     return refs
 
 

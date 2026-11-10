@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -736,6 +737,9 @@ def test_alias_expansion_reads_memories_once_and_refreshes_on_concept_edit(
 
     monkeypatch.setattr(expand, "_frontmatter", counting_frontmatter)
     monkeypatch.setattr(model, "_read_concept", counting_read_concept)
+    # Query well after the files were written, so their stamps are settled.
+    later = time.time_ns() + 60_000_000_000
+    monkeypatch.setattr(expand, "_clock_ns", lambda: later)
 
     first = expand.matching_memories(root, "hammer", tenant="alpha")[0]
     assert {row[0] for row in first} == {"mem-about", "mem-about-2", "mem-applies"}
@@ -874,3 +878,104 @@ def test_scoped_label_conflicting_with_unscoped_label_is_ambiguous_only_in_scope
             "oids": ["concept:tool:hammer", "concept:tool:other"],
         }
     ]
+
+
+def _replace_same_size(path: Path, old: str, new: str) -> None:
+    """Rewrite in place with the same size and put the old mtime back."""
+    assert len(old.encode()) == len(new.encode())
+    before = path.stat()
+    text = path.read_text(encoding="utf-8")
+    assert old in text
+    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert path.stat().st_mtime_ns == before.st_mtime_ns
+    assert path.stat().st_size == before.st_size
+
+
+def _settled_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    from memfw.ontology import expand
+
+    later = time.time_ns() + 60_000_000_000
+    monkeypatch.setattr(expand, "_clock_ns", lambda: later)
+
+
+def test_alias_cache_sees_same_size_edit_with_restored_mtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from eval.retrieval_r0.alias_eval import _recall_vault
+    from memfw.ontology.expand import matching_memories
+
+    root = _recall_vault(tmp_path / "same-size")
+    _settled_clock(monkeypatch)
+    assert {row[0] for row in matching_memories(root, "hammer", tenant="alpha")[0]} == _HAMMER
+
+    _replace_same_size(root / "memories/mem-about.md", "tenant: alpha", "tenant: bravo")
+    alpha = {row[0] for row in matching_memories(root, "hammer", tenant="alpha")[0]}
+    bravo = {row[0] for row in matching_memories(root, "hammer", tenant="bravo")[0]}
+    assert alpha == _HAMMER - {"mem-about"}
+    assert bravo == {"mem-about"}
+
+    concept = root / "concepts" / "Concept" / "hammer.md"
+    _replace_same_size(concept, "- mallet\n", "- maulet\n")
+    assert matching_memories(root, "mallet", tenant="alpha")[0] == []
+    assert {row[0] for row in matching_memories(root, "maulet", tenant="alpha")[0]} == (
+        _HAMMER - {"mem-about"}
+    )
+
+
+def test_alias_cache_drops_a_deleted_memory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from eval.retrieval_r0.alias_eval import _recall_vault
+    from memfw.ontology.expand import matching_memories
+
+    root = _recall_vault(tmp_path / "deleted")
+    _settled_clock(monkeypatch)
+    assert {row[0] for row in matching_memories(root, "hammer", tenant="alpha")[0]} == _HAMMER
+    (root / "memories/mem-about-2.md").unlink()
+    after = {row[0] for row in matching_memories(root, "hammer", tenant="alpha")[0]}
+    assert after == _HAMMER - {"mem-about-2"}
+
+
+def test_alias_cache_reparses_files_changed_within_the_racy_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A coarse-timestamp filesystem: every stamp field stays identical."""
+    from eval.retrieval_r0.alias_eval import _recall_vault
+    from memfw.ontology import expand
+
+    root = _recall_vault(tmp_path / "racy")
+    tick = (time.time_ns() // 1_000_000_000) * 1_000_000_000
+    frozen: dict[str, int] = {}
+
+    def coarse_row(path: Path) -> tuple[str, int, int, int, int]:
+        size = frozen.setdefault(str(path), path.stat().st_size)
+        return (str(path), tick, tick, size, 1)
+
+    monkeypatch.setattr(expand, "_file_row", coarse_row)
+    monkeypatch.setattr(expand, "_clock_ns", lambda: tick + 500_000_000)
+    reads: list[str] = []
+    real_frontmatter = expand._frontmatter
+
+    def counting_frontmatter(path: Path) -> dict[str, object]:
+        reads.append(Path(path).name)
+        return real_frontmatter(path)
+
+    monkeypatch.setattr(expand, "_frontmatter", counting_frontmatter)
+    hits = {row[0] for row in expand.matching_memories(root, "hammer", tenant="alpha")[0]}
+    assert hits == _HAMMER
+    path = root / "memories/mem-applies.md"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("tenant: alpha", "tenant: bravo", 1),
+        encoding="utf-8",
+    )
+    concept = root / "concepts" / "Concept" / "hammer.md"
+    concept.write_text(
+        concept.read_text(encoding="utf-8").replace("- mallet\n", "- maulet\n", 1),
+        encoding="utf-8",
+    )
+    reads.clear()
+    alpha = {row[0] for row in expand.matching_memories(root, "maulet", tenant="alpha")[0]}
+    assert "mem-applies.md" in reads, "a file edited just now must be parsed again"
+    assert alpha == _HAMMER - {"mem-applies"}
+    assert expand.matching_memories(root, "mallet", tenant="alpha")[0] == []
