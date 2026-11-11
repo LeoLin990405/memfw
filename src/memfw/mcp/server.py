@@ -1004,7 +1004,8 @@ class Gateway:
         index = TranscriptIndex(
             default_db(repository.root), sources, limits=HistoryLimits.from_config(config)
         )
-        index.refresh(min_interval=self.history_refresh_seconds)
+        # Never wait on another refresh: serve the existing index instead.
+        index.refresh(min_interval=self.history_refresh_seconds, blocking=False)
         return index
 
     def history_list(

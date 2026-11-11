@@ -39,7 +39,11 @@ _PARENT_WINDOW_KEYS = ("parent_window_id", "previous_window_id", "parentWindowId
 _TIME_KEYS = ("timestamp", "ts", "time", "created_at", "createdAt")
 _MAX_BLOCK_CHARS = 4000
 _MAX_DEPTH = 8
-_MAX_STRINGS = 20_000
+_MAX_STRINGS = 100_000
+
+
+class TooComplex(ValueError):
+    """A line too deeply nested or with too many strings to scan completely."""
 
 
 def iter_strings(value: Any, depth: int = 0) -> list[str]:
@@ -47,22 +51,34 @@ def iter_strings(value: Any, depth: int = 0) -> list[str]:
 
     The secret scan runs on each of them, so a credential that only appears
     JSON-escaped in the raw line (``{\\"password\\": ...}``) is still seen in
-    its decoded form.
+    its decoded form. JSON inside strings is decoded up to ``_MAX_DEPTH``
+    levels; past that the string stays opaque, and a copy with backslashes
+    removed is scanned as well so multiply-escaped pairs still match.
+    Raises :class:`TooComplex` when the strings cannot all be collected.
     """
 
     out: list[str] = []
     stack: list[tuple[Any, int]] = [(value, depth)]
-    while stack and len(out) < _MAX_STRINGS:
+    while stack:
+        if len(out) >= _MAX_STRINGS:
+            raise TooComplex("too many strings to scan")
         item, level = stack.pop()
         if isinstance(item, str):
             out.append(item)
             stripped = item.strip()
-            if level < _MAX_DEPTH and stripped[:1] in {"{", "["} and len(stripped) < 1_048_576:
-                try:
-                    nested = json.loads(stripped)
-                except ValueError:
-                    continue
-                stack.append((nested, level + 1))
+            if stripped[:1] not in {"{", "["} or len(stripped) >= 1_048_576:
+                continue
+            if level >= _MAX_DEPTH:
+                if "\\" in item:
+                    out.append(item.replace("\\", ""))
+                continue
+            try:
+                nested = json.loads(stripped)
+            except (ValueError, RecursionError):
+                if "\\" in item:
+                    out.append(item.replace("\\", ""))
+                continue
+            stack.append((nested, level + 1))
         elif isinstance(item, dict):
             for key, child in item.items():
                 out.append(str(key))
@@ -72,21 +88,30 @@ def iter_strings(value: Any, depth: int = 0) -> list[str]:
     return out
 
 
-def render(value: Any) -> str:
-    """Readable text for a tool input: decoded ``key: value`` pairs, not escaped JSON."""
+_RENDER_DEPTH = 16
 
+
+def render(value: Any, depth: int = 0) -> str:
+    """Readable text for a tool input: decoded ``key: value`` pairs, not escaped JSON.
+
+    Nesting deeper than ``_RENDER_DEPTH`` is shown as an ellipsis.
+    """
+
+    if depth >= _RENDER_DEPTH:
+        return "\u2026"
     if isinstance(value, str):
         stripped = value.strip()
         if stripped[:1] in {"{", "["}:
             try:
-                return render(json.loads(stripped))
-            except ValueError:
+                decoded = json.loads(stripped)
+            except (ValueError, RecursionError):
                 return value
+            return render(decoded, depth + 1)
         return value
     if isinstance(value, dict):
-        return "; ".join(f"{key}: {render(child)}" for key, child in value.items())
+        return "; ".join(f"{key}: {render(child, depth + 1)}" for key, child in value.items())
     if isinstance(value, list):
-        return "; ".join(render(child) for child in value)
+        return "; ".join(render(child, depth + 1) for child in value)
     return "" if value is None else str(value)
 
 
@@ -153,9 +178,11 @@ def _timestamp(mapping: dict[str, Any]) -> str:
     return ""
 
 
-def _blocks(content: Any) -> str:
+def _blocks(content: Any, depth: int = 0) -> str:
     """Text of a message content value: a string or a list of typed blocks."""
 
+    if depth >= _RENDER_DEPTH:
+        return ""
     if isinstance(content, str):
         return content
     if isinstance(content, dict):
@@ -178,7 +205,7 @@ def _blocks(content: Any) -> str:
             parts.append(f"[tool {name}] {render(payload)[:_MAX_BLOCK_CHARS]}")
             continue
         if kind == "tool_result":
-            parts.append(_blocks(block.get("content"))[:_MAX_BLOCK_CHARS])
+            parts.append(_blocks(block.get("content"), depth + 1)[:_MAX_BLOCK_CHARS])
             continue
         text = block.get("text")
         if isinstance(text, str):
@@ -288,16 +315,20 @@ def parse_line(line: str, *, jsonl: bool) -> Record | None:
         return Record(text=stripped, kind="line", agent="log", strings=[stripped])
     try:
         raw = json.loads(stripped)
-    except json.JSONDecodeError:
+    except (ValueError, RecursionError):
+        # Not JSON, or nested past the interpreter's recursion limit.
         return None
     if not isinstance(raw, dict):
         return None
-    payload = raw.get("payload")
-    if isinstance(payload, dict) and "type" in raw:
-        record = _codex(raw, payload)
-    elif "sessionId" in raw or ("message" in raw and "uuid" in raw):
-        record = _claude(raw)
-    else:
-        record = _generic(raw)
-    record.strings = iter_strings(raw)
+    try:
+        payload = raw.get("payload")
+        if isinstance(payload, dict) and "type" in raw:
+            record = _codex(raw, payload)
+        elif "sessionId" in raw or ("message" in raw and "uuid" in raw):
+            record = _claude(raw)
+        else:
+            record = _generic(raw)
+        record.strings = iter_strings(raw)
+    except (RecursionError, TooComplex):
+        return None
     return record

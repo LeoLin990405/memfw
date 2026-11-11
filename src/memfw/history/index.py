@@ -13,6 +13,8 @@ a root that became a symlink) is refused rather than followed.
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import functools
 import hashlib
 import json
@@ -26,8 +28,6 @@ from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
-
-from filelock import FileLock
 
 from memfw.index import _supports_trigram
 from memfw.index.fts_terms import fts_match, jieba_segmenter
@@ -55,6 +55,55 @@ _SPACE = re.compile(r"\s+")
 _DIR_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
 _FILE_FLAGS = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
 _REFRESH_LOCK = threading.Lock()
+LOCK_TIMEOUT = 60.0
+
+
+@contextlib.contextmanager
+def _refresh_lock(path: Path, *, blocking: bool, timeout: float) -> Iterator[bool]:
+    """Exclusive refresh lock: a thread lock plus ``flock`` on a lock file.
+
+    Yields False (lock not taken) when ``blocking`` is False and another
+    refresh holds it. The lock file is opened with ``O_NOFOLLOW`` and never
+    truncated, so a symlink planted in its place is refused.
+    """
+
+    deadline = time.monotonic() + (timeout if blocking else 0.0)
+    if blocking:
+        got = _REFRESH_LOCK.acquire(timeout=max(0.0, timeout))
+    else:
+        got = _REFRESH_LOCK.acquire(blocking=False)
+    if not got:
+        if not blocking:
+            yield False
+            return
+        raise HistoryError("history index is being refreshed elsewhere; try again later")
+    try:
+        try:
+            descriptor = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        except OSError as exc:
+            raise HistoryError(f"cannot open history lock file: {exc.strerror}") from exc
+        try:
+            while True:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if not blocking:
+                        yield False
+                        return
+                    if time.monotonic() >= deadline:
+                        raise HistoryError(
+                            "history index is being refreshed elsewhere; try again later"
+                        ) from None
+                    time.sleep(0.05)
+            try:
+                yield True
+            finally:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
+    finally:
+        _REFRESH_LOCK.release()
 
 
 class HistoryError(ValueError):
@@ -450,13 +499,21 @@ class TranscriptIndex:
 
     # -- indexing -----------------------------------------------------------------
 
-    def refresh(self, *, min_interval: float = 0.0) -> dict[str, Any]:
+    def refresh(
+        self, *, min_interval: float = 0.0, blocking: bool = True, timeout: float = LOCK_TIMEOUT
+    ) -> dict[str, Any]:
         """Incrementally index all sources.
 
         Unchanged files (size, mtime, ctime, inode) are skipped; a file that
         only grew is resumed from its last complete line. With
         ``min_interval``, a refresh within that many seconds of the last one is
-        skipped. Concurrent refreshes are serialised by a lock file.
+        skipped. Concurrent refreshes are serialised by a lock file: a
+        blocking refresh waits up to ``timeout`` seconds, then raises
+        :class:`HistoryError`; a non-blocking one returns at once with
+        ``skipped_locked`` set, leaving the existing index to be served.
+        Each file is indexed inside its own savepoint, so a failure in one
+        file is rolled back and counted (``files_failed``) without aborting
+        the refresh.
         """
 
         counts: dict[str, Any] = {
@@ -472,9 +529,15 @@ class TranscriptIndex:
             "skipped_other": 0,
             "limit_reached": None,
             "skipped_recent": False,
+            "skipped_locked": False,
+            "files_failed": 0,
         }
         self.db.parent.mkdir(parents=True, exist_ok=True)
-        with _REFRESH_LOCK, FileLock(str(self.db) + ".lock", timeout=60):
+        lock_path = Path(str(self.db) + ".lock")
+        with _refresh_lock(lock_path, blocking=blocking, timeout=timeout) as held:
+            if not held:
+                counts["skipped_locked"] = True
+                return counts
             with self._connect() as connection:
                 row = connection.execute(
                     "SELECT value FROM meta WHERE key = 'last_refresh'"
@@ -527,12 +590,22 @@ class TranscriptIndex:
                 if row is None and self._file_count(connection) >= self.limits.max_files:
                     counts["limit_reached"] = "max_files"
                     continue
+                # One savepoint per file: a failure rolls back only this file.
+                connection.execute("SAVEPOINT history_file")
                 try:
                     result = self._index_file(connection, source, relative, info, row)
                 except _Refused:
-                    counts["files_refused"] += 1
+                    connection.execute("ROLLBACK TO history_file")
                     self._drop(connection, source.name, relative)
+                    connection.execute("RELEASE history_file")
+                    counts["files_refused"] += 1
                     continue
+                except Exception:
+                    connection.execute("ROLLBACK TO history_file")
+                    connection.execute("RELEASE history_file")
+                    counts["files_failed"] += 1
+                    continue
+                connection.execute("RELEASE history_file")
                 counts["files_resumed" if result["resumed"] else "files_indexed"] += 1
                 for key in ("entries_indexed", "skipped_secret", "skipped_other"):
                     counts[key] += result[key]
@@ -680,7 +753,12 @@ class TranscriptIndex:
                     number -= 1
                 continue
             if not complete:
-                # A trailing line still being written: index it, but resume before it.
+                if not jsonl:
+                    # A plain-text line has no end marker but the newline: wait for it.
+                    resume_offset = offset
+                    number -= 1
+                    continue
+                # A trailing JSON line still being written: index it, resume before it.
                 resume_offset = offset
             # Parser state is persisted for resumes, so it only ever holds
             # redacted values.
@@ -1003,7 +1081,9 @@ class TranscriptIndex:
             try:
                 opened = os.fstat(descriptor)
                 if (opened.st_ino, opened.st_dev) != (file_row["ino"], file_row["dev"]):
+                    # Commit the drop: the raise below would otherwise roll it back.
                     self._drop(connection, name, relative)
+                    connection.commit()
                     raise HistoryError("transcript changed since indexing; re-index first")
                 anchor = connection.execute(
                     "SELECT * FROM entries WHERE source = ? AND path = ? AND offset = ?",
