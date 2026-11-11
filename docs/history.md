@@ -154,7 +154,8 @@ record is dropped together with the file.
 Secret patterns:
 
 - private key PEM headers (`-----BEGIN ... PRIVATE KEY-----`);
-- URLs with `user:pass@` credentials; only the userinfo before `@` is masked,
+- URLs with `user:pass@` credentials (the user may be empty, as in
+  `redis://:PASSWORD@host`); only the userinfo before `@` is masked,
   so host, port and path stay visible
   (`https://[REDACTED:credentials]@db.example.com:5432/app`);
 - token shapes (a digit glued in front, as in `1sk-...`, still counts as a
@@ -169,12 +170,17 @@ Secret patterns:
   `mypassword`, `spring.datasource.hikari.data-source-properties.password`,
   `SPRING_DATASOURCE_HIKARI_CONNECTION_PASSWORD`), up to three short suffixes
   after the key word (`SECRET_KEY_BASE`, `DB_PASSWORD_PROD`, `password1`,
-  `api_key_v2`), and `pass` after a common owner (`dbPass`, `adminPass`); with
+  `api_key_v2`; descriptive suffixes such as `_type`, `_name`, `_hash`,
+  `_header`, `_id`, `_file`, `_path`, `_url`, `_len`/`_length`, `_count`,
+  `_ref` do not count, so `token_type: bearer` is not a secret), and `pass` after a common owner (`dbPass`, `adminPass`); with
   `:`, `=` or `=>`, quoted or bare, a YAML block indicator (`PASSWORD: |`
   followed by the value on the next line), and pairs split across up to three
   line breaks;
+- values may contain `@` (`DB_PASSWORD=P@ss...`); inside a URL the userinfo
+  rule masks only what comes before the host;
 - command-line flags followed by a value: `--password VALUE`, `-token VALUE`,
-  `--api-key VALUE`, ...;
+  `--api-key VALUE`, ...; not when the value is a path or file name, another
+  flag, or a short plain word (it needs a digit or symbol, or 12+ letters);
   obvious placeholders (`null`, `changeme`, `${VAR}`, `<...>`, short numbers,
   an existing `[REDACTED:...]` marker) are ignored.
 
