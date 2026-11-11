@@ -45,7 +45,8 @@ _INVISIBLE = frozenset(
 # or digit, so STRIPE_SECRET_KEY and x-api-key match, but the key must end at a
 # separator, so max_tokens or token_count do not.
 _KEY = (
-    r"(?:pg|mysql_)?pass(?:word|wd|phrase)|pwd|secret(?:[_-]?(?:key|access[_-]?key|token))?|"
+    # secret_id (Vault AppRole) is a login credential, unlike other "_id" keys.
+    r"(?:client[_-]?)?secret[_-]?id|(?:pg|mysql_)?pass(?:word|wd|phrase)|pwd|secret(?:[_-]?(?:key|access[_-]?key|token))?|"
     r"client[_-]?secret|api[_-]?key|apikey|x[_-]api[_-]key|access[_-]?key(?:[_-]?id)?|"
     r"private[_-]?key|(?:auth|access|refresh|bearer|session|id)[_-]?token|token|"
     # A bare "pass" is too common a word; only common credential owners before it.
@@ -253,11 +254,16 @@ _FILENAME = re.compile(r"[\w.~-]*\.[A-Za-z][A-Za-z0-9]{0,5}")
 def _flag_value(value: str) -> bool:
     """Whether the word after ``--password`` / ``--token`` looks like a secret.
 
-    Not when it is a placeholder, a path or file name, or a short plain word
+    Not when it is a placeholder, a path (starting with ``/``, ``./``, ``../``
+    or ``~``) or file name, or a short plain word
     ("--token option"): it must contain a digit or symbol, or be 12+ letters.
     """
 
-    if _PLACEHOLDER.match(value) or "/" in value or _FILENAME.fullmatch(value):
+    if (
+        _PLACEHOLDER.match(value)
+        or value.startswith(("/", "./", "../", "~"))
+        or _FILENAME.fullmatch(value)
+    ):
         return False
     return not value.isalpha() or len(value) >= 12
 
