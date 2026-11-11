@@ -23,6 +23,7 @@ shapes, not every secret a person can type in prose (see docs/history.md).
 
 from __future__ import annotations
 
+import bisect
 import re
 import sys
 import unicodedata
@@ -54,13 +55,24 @@ _KEY = (
 _VALUE = (
     r"(?!\\?[\"']?\[REDACTED)"
     r"(?:\"(?P<dq>(?:[^\"\r\n\\]|\\(?!\")){4,256})\\?\"|'(?P<sq>[^'\r\n\\]{4,256})'"
-    r"|(?P<bare>[^\s\"',;}\]\[\\]{4,256}))"
+    # A bare value stops at "@", so user:token@host keeps the host visible.
+    r"|(?P<bare>[^\s\"',;}\]\[\\@]{4,256}))"
 )
+# Key: up to 128 characters glued in front (spring.datasource...password,
+# SPRING_..._PASSWORD), the key word, then up to three short suffixes after a
+# separator or digits (SECRET_KEY_BASE, DB_PASSWORD_PROD, password1, api_key_v2).
+# Separator: ":", "=" or "=>", optionally a YAML block indicator ("|", ">").
 _KV = re.compile(
-    r"(?i)(?<![A-Za-z0-9_.-])(?P<key>[A-Za-z0-9_.-]{0,32}?(?:"
+    r"(?i)(?<![A-Za-z0-9_.-])(?P<key>[A-Za-z0-9_.-]{0,128}?(?:"
     + _KEY
-    + r"))\\?[\"']?[ \t]{0,8}[:=][ \t]{0,8}"
+    + r")(?:[_-][A-Za-z0-9]{1,16}|[0-9]{1,4}){0,3})\\?[\"']?[ \t]{0,8}(?:=>|[:=])[ \t]{0,8}"
+    r"(?:[|>][-+]?[ \t]{0,8})?"
     r"(?:(?:\\r)?(?:\\n|\r?\n)[ \t]{0,16}){0,3}\\?" + _VALUE
+)
+# A command-line flag followed by its value: --password VALUE, -token VALUE.
+_FLAG = re.compile(
+    r"(?i)(?<![\w-])--?(?:password|passwd|pass|token|secret|client[_-]?secret|api[_-]?key|"
+    r"access[_-]?token|auth[_-]?token)[ \t]{1,8}(?P<value>(?![-\[])[^\s\"']{4,256})"
 )
 _PLACEHOLDER = re.compile(
     r"(?i)^(?:null|none|nil|true|false|redacted|\[REDACTED[^\]]*\]|x{3,}|\*{3,}|<[^>]*>?|\$\{?[\w.]+\}?|"
@@ -199,6 +211,9 @@ def _findings(value: str) -> list[Finding]:
         if _PLACEHOLDER.match(secret.strip()):
             continue
         findings.append(Finding("key_value", match.start(), match.end()))
+    for match in _FLAG.finditer(value):
+        if not _PLACEHOLDER.match(match.group("value")):
+            findings.append(Finding("cli_flag", match.start(), match.end()))
     findings.sort(key=lambda item: (item.start, item.end))
     return findings
 
@@ -237,6 +252,9 @@ def _secret_spans(value: str) -> list[tuple[int, int, str]]:
         secret, start, end = _kv_value(match)
         if not _PLACEHOLDER.match(secret.strip()):
             spans.append((start, end, "secret"))
+    for match in _FLAG.finditer(value):
+        if not _PLACEHOLDER.match(match.group("value")):
+            spans.append((match.start("value"), match.end("value"), "secret"))
     return spans
 
 
@@ -275,6 +293,20 @@ def _apply(text: str, finders: tuple[Callable[[str], list[tuple[int, int, str]]]
     )
     if not spans:
         return text
+    # URL userinfo (user:pass@host) also looks like an e-mail address; there
+    # only the userinfo is masked, so host, port and path stay visible.
+    credentials = [(start, end) for start, end, _rank, kind in spans if kind == "credentials"]
+    if credentials:
+        starts = [start for start, _end in credentials]
+
+        def inside_url(start: int, end: int) -> bool:
+            index = bisect.bisect_right(starts, end)
+            return any(
+                credentials[i][0] < end and start < credentials[i][1]
+                for i in range(max(0, index - 2), index)
+            )
+
+        spans = [span for span in spans if span[3] != "email" or not inside_url(span[0], span[1])]
     merged: list[list[Any]] = []
     for start, end, rank, kind in spans:
         if merged and start < merged[-1][1]:

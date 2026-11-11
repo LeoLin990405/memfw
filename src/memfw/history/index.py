@@ -666,6 +666,15 @@ class TranscriptIndex:
             }
             for gone in indexed - seen:
                 counts["files_removed"] += self._drop(connection, source.name, gone)
+            # Failure records of files that no longer exist (they never had a files row).
+            for failed in connection.execute(
+                "SELECT path FROM failures WHERE source = ?", (source.name,)
+            ).fetchall():
+                if failed["path"] not in seen:
+                    connection.execute(
+                        "DELETE FROM failures WHERE source = ? AND path = ?",
+                        (source.name, failed["path"]),
+                    )
 
     @staticmethod
     def _failing(
@@ -731,6 +740,7 @@ class TranscriptIndex:
         connection.execute(
             f"DELETE FROM entries_fts WHERE rowid IN (SELECT id FROM entries WHERE {where})", args
         )
+        connection.execute(f"DELETE FROM failures WHERE {where}", args)
         return connection.execute(f"DELETE FROM files WHERE {where}", args).rowcount
 
     @staticmethod
@@ -988,6 +998,23 @@ class TranscriptIndex:
 
     _SELECT = "SELECT e.*, f.fid AS fid FROM entries e JOIN files f USING (source, path)"
 
+    def _drop_stale(self, connection: sqlite3.Connection, source: str, path: str) -> None:
+        """Drop a file whose content changed, so the next refresh re-indexes it.
+
+        The drop is committed before the caller raises (a raise would roll it
+        back). If a refresh holds the write lock, the drop is skipped: that
+        refresh, or the next one, sees the change itself.
+        """
+
+        connection.execute("PRAGMA busy_timeout = 200")
+        try:
+            self._drop(connection, source, path)
+            connection.commit()
+        except sqlite3.OperationalError:
+            connection.rollback()
+        finally:
+            connection.execute("PRAGMA busy_timeout = 30000")
+
     def stats(self) -> dict[str, int]:
         with self._connect() as connection:
             row = connection.execute(
@@ -995,7 +1022,12 @@ class TranscriptIndex:
                 " COALESCE(SUM(skipped_secret), 0) AS skipped_secret,"
                 " COALESCE(SUM(skipped_other), 0) AS skipped_other FROM files"
             ).fetchone()
-            return {key: int(row[key]) for key in row.keys()}
+            failing = connection.execute(
+                "SELECT COUNT(*) FROM failures WHERE attempts >= ?", (MAX_FAILURES,)
+            ).fetchone()[0]
+            result = {key: int(row[key]) for key in row.keys()}
+            result["files_failing"] = int(failing)
+            return result
 
     def list(
         self,
@@ -1160,9 +1192,7 @@ class TranscriptIndex:
             try:
                 opened = os.fstat(descriptor)
                 if (opened.st_ino, opened.st_dev) != (file_row["ino"], file_row["dev"]):
-                    # Commit the drop: the raise below would otherwise roll it back.
-                    self._drop(connection, name, relative)
-                    connection.commit()
+                    self._drop_stale(connection, name, relative)
                     raise HistoryError("transcript changed since indexing; re-index first")
                 anchor = connection.execute(
                     "SELECT * FROM entries WHERE source = ? AND path = ? AND offset = ?",
@@ -1212,9 +1242,7 @@ class TranscriptIndex:
             length = min(int(row["length"]), MAX_LINE_BYTES)
             raw = _pread(descriptor, int(row["offset"]), length)
             if _digest(raw) != row["digest"]:
-                # Drop the stale file so the next refresh re-indexes it.
-                self._drop(connection, row["source"], row["path"])
-                connection.commit()
+                self._drop_stale(connection, row["source"], row["path"])
                 raise HistoryError("transcript changed since indexing; re-index first")
             line = raw.decode("utf-8", errors="replace")
             record = parse_line(line, jsonl=jsonl)
