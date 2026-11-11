@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import yaml
+from pydantic import ValidationError
 
 from ..core.common import sha256_text
 from ..core.context import RepositoryHost
@@ -217,6 +218,12 @@ class MarkdownStorageMixin:
         for key in ("about", "applies_to"):
             if metadata.get(key):
                 ordered[key] = metadata[key]
+        # Same for verification state: the default (unconfirmed, no evidence)
+        # is not written, so files that were never verified keep their bytes.
+        if metadata.get("status", "unconfirmed") != "unconfirmed":
+            ordered["status"] = metadata["status"]
+        if metadata.get("evidence"):
+            ordered["evidence"] = metadata["evidence"]
         frontmatter = yaml.safe_dump(ordered, allow_unicode=True, sort_keys=False).rstrip()
         body = document.body.rstrip("\n")
         return f"---\n{frontmatter}\n---\n\n{body}\n"
@@ -258,6 +265,25 @@ class MarkdownStorageMixin:
             body = body[:-1]
         try:
             return MemoryDocument.model_validate({**metadata, "body": body})
+        except ValidationError as exc:
+            # Forward compatibility: a newer memfw may write frontmatter keys this
+            # version does not know. Ignore exactly those keys (the document stays
+            # visible) instead of rejecting the whole memory; any other error is
+            # still an integrity error. A rewrite by this version drops them.
+            unknown = {
+                str(error["loc"][0])
+                for error in exc.errors()
+                if error["type"] == "extra_forbidden" and error.get("loc")
+            }
+            if not unknown or len(unknown) != len(exc.errors()):
+                raise IntegrityError(f"Invalid memory document: {exc}") from exc
+            known = {key: value for key, value in metadata.items() if str(key) not in unknown}
+            try:
+                document = MemoryDocument.model_validate({**known, "body": body})
+                document._ignored_keys = tuple(sorted(unknown))
+                return document
+            except Exception as retry:
+                raise IntegrityError(f"Invalid memory document: {retry}") from retry
         except Exception as exc:
             raise IntegrityError(f"Invalid memory document: {exc}") from exc
 

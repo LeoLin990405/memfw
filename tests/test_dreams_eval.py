@@ -1,4 +1,4 @@
-"""The dream package is evaluation data only."""
+"""Synthetic dream evaluation: gold labels, metrics, and the real curate step."""
 
 from __future__ import annotations
 
@@ -76,9 +76,24 @@ def test_adoption_rate_is_online_only() -> None:
     assert adoption_rate(("p1", "p2"), ("p2",)) == 0.5
 
 
-def test_memfw_dream_is_not_a_command() -> None:
+def test_memfw_dream_is_a_command_group_with_run() -> None:
     from memfw.cli import app
 
-    names = {command.name for command in app.registered_commands}
-    names.update(group.name for group in app.registered_groups)
-    assert "dream" not in names
+    groups = {group.name: group for group in app.registered_groups}
+    assert "dream" in groups
+    dream = groups["dream"].typer_instance
+    assert dream is not None
+    assert {command.name for command in dream.registered_commands} == {"run"}
+
+
+def test_real_curate_scores_on_the_synthetic_cases() -> None:
+    from eval.dreams.curate_adapter import predict_all
+
+    gold = cases()
+    report = score_cases(predict_all(gold), gold, implemented=True)
+    assert report["dream_implemented"] is True
+    assert report["false_merge_rate"] == 0
+    assert report["merge_accuracy"] == 1
+    assert report["conflict_detection_rate"] == 1
+    assert report["stale_mark_recall"] == 1
+    assert report["adopted_proposal_rate"] is None

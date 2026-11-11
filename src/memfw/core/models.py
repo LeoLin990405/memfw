@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
@@ -118,6 +118,10 @@ def fold_temporal_aliases(data: dict[str, Any], *, strict: bool = True) -> dict[
     return folded
 
 
+VerificationStatus = Literal["confirmed", "unconfirmed", "disputed"]
+"""Whether a memory has been checked against transcripts (see ``memfw dream``)."""
+
+
 class MemoryDocument(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -147,9 +151,20 @@ class MemoryDocument(BaseModel):
     valid_from: datetime | None = None
     valid_to: datetime | None = None
     superseded_by: str | None = None
+    # Verification state (dreams v0.2). Absent in older files: they parse as
+    # unconfirmed with no evidence, and render without the keys.
+    status: VerificationStatus = "unconfirmed"
+    evidence: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
     body: str
+    _ignored_keys: tuple[str, ...] = PrivateAttr(default=())
+
+    @property
+    def ignored_keys(self) -> tuple[str, ...]:
+        """Frontmatter keys this version did not know and ignored when parsing."""
+
+        return self._ignored_keys
 
     @model_validator(mode="before")
     @classmethod
@@ -157,6 +172,15 @@ class MemoryDocument(BaseModel):
         if isinstance(data, dict):
             return fold_temporal_aliases(data)
         return data
+
+    @field_validator("evidence", mode="before")
+    @classmethod
+    def evidence_is_a_list(cls, value: Any) -> Any:
+        if value is None or value == "":
+            return []
+        if isinstance(value, str):
+            return [value]
+        return value
 
     @field_validator("about", "applies_to", mode="before")
     @classmethod

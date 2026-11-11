@@ -18,7 +18,9 @@ from typing import Any
 from eval.dreams.cases import Case, Conflict
 
 
-def score_cases(found: tuple[Case, ...], gold: tuple[Case, ...]) -> dict[str, Any]:
+def score_cases(
+    found: tuple[Case, ...], gold: tuple[Case, ...], *, implemented: bool = False
+) -> dict[str, Any]:
     """Score one proposal set. ``found`` uses the same case ids as ``gold``."""
 
     by_id = {item.case_id: item for item in found}
@@ -48,7 +50,7 @@ def score_cases(found: tuple[Case, ...], gold: tuple[Case, ...]) -> dict[str, An
         stale_total += row["stale_total"]
     return {
         "synthetic": True,
-        "dream_implemented": False,
+        "dream_implemented": implemented,
         "cases": len(gold),
         "merge_accuracy": _rate(merge_hits, merge_total, empty=1.0),
         "conflict_detection_rate": _rate(conflict_hits, conflict_total, empty=1.0),

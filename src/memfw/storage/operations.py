@@ -102,9 +102,14 @@ class MemoryOperationsMixin:
         documents: list[MemoryDocument] = []
         for path in sorted(self.memories_dir.glob("*.md")):
             try:
-                documents.append(
-                    self.parse(path.read_bytes().decode("utf-8"), expected_id=path.stem)
-                )
+                document = self.parse(path.read_bytes().decode("utf-8"), expected_id=path.stem)
+                documents.append(document)
+                if document.ignored_keys:
+                    self._list_warnings.append(
+                        f"{path.name}: ignored unknown frontmatter keys: "
+                        f"{', '.join(document.ignored_keys)} "
+                        "(a typo? a rewrite by this version drops them)"
+                    )
             except (IntegrityError, UnicodeDecodeError) as exc:
                 self._list_warnings.append(f"{path.name}: invalid Markdown ({exc})")
         try:
@@ -191,6 +196,9 @@ class MemoryOperationsMixin:
             "valid_until",
             "superseded_by",
             "superseded",
+            # Verification state, set by a human approving a dream candidate.
+            "status",
+            "evidence",
         }
         if (
             actor != "human"
