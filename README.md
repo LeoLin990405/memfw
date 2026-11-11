@@ -153,6 +153,22 @@ memfw history read 'codex:3f9c2a71d04e8b65@18342' --root /path/to/vault
 
 See [`docs/history.md`](docs/history.md) for formats, lineage, redaction and limits.
 
+## 🌙 Dream (verify-first consolidation)
+
+`memfw dream run` checks cited memories against the transcript index and stages candidates:
+confirm / correct / mark-disputed (with opaque history refs as evidence), merge / supersede /
+mark-stale, and injected-layer budget demotions (200 lines / 25 KB). It is deterministic and
+local, and it never writes the vault: candidates land in `_candidates/dream/<dream_id>/<oid>.md`
+for a human to review. Memories gain optional `status` (`confirmed|unconfirmed|disputed`) and
+`evidence` fields; older files parse unchanged.
+
+```sh
+memfw dream run --root /path/to/vault --dry-run
+memfw dream run --root /path/to/vault --focus "deploy"
+```
+
+See [`docs/dream.md`](docs/dream.md).
+
 ## 📚 OKF projection
 
 Export the vault as an [Open Knowledge Format v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format)

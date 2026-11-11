@@ -151,6 +151,20 @@ memfw history read 'codex:3f9c2a71d04e8b65@18342' --root /path/to/vault
 
 格式、谱系、脱敏规则与局限见 [`docs/history.md`](docs/history.md)。
 
+## 🌙 做梦（dream，先核对）
+
+`memfw dream run` 拿被引用的记忆去会话记录索引里核对，并暂存候选：确认 / 改正 / 标记存疑（证据只用
+history 的不透明引用），合并 / 取代 / 标记过期，以及 injected 层预算（200 行 / 25 KB）的下沉提案。
+它是确定性的、纯本地的，从不写入 vault：候选落在 `_candidates/dream/<dream_id>/<oid>.md`，由人审核。
+记忆条目新增可选字段 `status`（`confirmed|unconfirmed|disputed`）和 `evidence`；旧文件照常解析。
+
+```sh
+memfw dream run --root /path/to/vault --dry-run
+memfw dream run --root /path/to/vault --focus "deploy"
+```
+
+详见 [`docs/dream.md`](docs/dream.md)。
+
 ## 📚 OKF 投影
 
 可把 vault 导出为 [Open Knowledge Format v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format)
