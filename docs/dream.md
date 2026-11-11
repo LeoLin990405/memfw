@@ -101,8 +101,11 @@ parsing and keep their bytes. New memories start `unconfirmed`.
 **Upgrade every reader before applying statuses.** memfw versions before
 this one reject frontmatter keys they do not know, so a memory with `status`
 or `evidence` disappears from an older reader. The reader in this version
-ignores unknown keys (that fix can ship on its own first); once every agent
-and service reading the vault has it, applying dream statuses is safe.
+ignores unknown keys (that fix can ship on its own first) and names them in
+`memfw list` warnings, so a typo such as `tennant:` shows up; once every
+agent and service reading the vault has it, applying dream statuses is safe.
+Note that rewriting a memory with a version that does not know a key drops
+that key.
 
 ## Injected-layer budget
 
@@ -133,7 +136,10 @@ memfw dream run --root /path/to/vault --focus "deploy"   # stage candidates
 
 A dry run writes nothing, not even the derived transcript index: it reads an
 existing index read-only, and without one it reports history as unavailable
-(build it with `memfw history index`).
+(build it with `memfw history index`). A checkpointed index is read as an
+immutable snapshot (no side files); an index with uncheckpointed changes in
+its WAL is read with SQLite's read-only mode, and if that is not possible the
+dream reports history as unavailable rather than using stale evidence.
 
 A staged dream is one directory, published with a single rename so concurrent
 dreams never overwrite each other. Staging works on directory file
@@ -179,6 +185,8 @@ adoption rate stays unknown until a person adopts proposals.
 
 - Lexical matching: paraphrased evidence without shared words is missed, and
   a correction is only proposed for a memory that states exactly one value.
+- Curate matches words, not meanings: synonyms ("deploys" / "deployments are
+  scheduled") are not recognised as duplicates.
 - Distill (③) is a stub; promote/demote (④) covers the budget check only.
 - Frequency-based scheduling ("often used, long unverified first") is limited
   to ordering by `reference_count`.
