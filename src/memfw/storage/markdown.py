@@ -217,6 +217,12 @@ class MarkdownStorageMixin:
         for key in ("about", "applies_to"):
             if metadata.get(key):
                 ordered[key] = metadata[key]
+        # Same for verification state: the default (unconfirmed, no evidence)
+        # is not written, so files that were never verified keep their bytes.
+        if metadata.get("status", "unconfirmed") != "unconfirmed":
+            ordered["status"] = metadata["status"]
+        if metadata.get("evidence"):
+            ordered["evidence"] = metadata["evidence"]
         frontmatter = yaml.safe_dump(ordered, allow_unicode=True, sort_keys=False).rstrip()
         body = document.body.rstrip("\n")
         return f"---\n{frontmatter}\n---\n\n{body}\n"

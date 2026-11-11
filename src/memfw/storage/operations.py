@@ -191,6 +191,9 @@ class MemoryOperationsMixin:
             "valid_until",
             "superseded_by",
             "superseded",
+            # Verification state, set by a human approving a dream candidate.
+            "status",
+            "evidence",
         }
         if (
             actor != "human"
