@@ -20,6 +20,7 @@ ids (``parent_window_id``, ``previous_window_id``) are used when present.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -39,7 +40,25 @@ _PARENT_WINDOW_KEYS = ("parent_window_id", "previous_window_id", "parentWindowId
 _TIME_KEYS = ("timestamp", "ts", "time", "created_at", "createdAt")
 _MAX_BLOCK_CHARS = 4000
 _MAX_DEPTH = 8
-_MAX_STRINGS = 100_000
+_MAX_STRINGS = 200_000
+_MAX_PAIR_CHARS = 4096
+
+
+_ESCAPED_U = re.compile(r"(?<!\\)\\+u([0-9a-fA-F]{4})")
+_ESCAPED_CONTROL = re.compile(r"(?<!\\)\\+([nrt])")
+_CONTROLS = {"n": "\n", "r": "\r", "t": "\t"}
+
+
+def unescape_layers(text: str) -> str:
+    """Undo any number of JSON string-escaping layers at once, for scanning only.
+
+    ``\\\\u0061`` (escaped twice) becomes ``a``, ``\\\\n`` a newline, and
+    every remaining backslash is dropped. Linear, and never used for output.
+    """
+
+    value = _ESCAPED_U.sub(lambda match: chr(int(match.group(1), 16)), text)
+    value = _ESCAPED_CONTROL.sub(lambda match: _CONTROLS[match.group(1)], value)
+    return value.replace("\\", "")
 
 
 class TooComplex(ValueError):
@@ -70,18 +89,22 @@ def iter_strings(value: Any, depth: int = 0) -> list[str]:
                 continue
             if level >= _MAX_DEPTH:
                 if "\\" in item:
-                    out.append(item.replace("\\", ""))
+                    out.append(unescape_layers(item))
                 continue
             try:
                 nested = json.loads(stripped)
             except (ValueError, RecursionError):
                 if "\\" in item:
-                    out.append(item.replace("\\", ""))
+                    out.append(unescape_layers(item))
                 continue
             stack.append((nested, level + 1))
         elif isinstance(item, dict):
             for key, child in item.items():
                 out.append(str(key))
+                if isinstance(child, (str, int, float)) and not isinstance(child, bool):
+                    # The decoded pair, so an escaped key ("\\u0061pi_key")
+                    # and its value are scanned together.
+                    out.append(f"{key}: {child}"[:_MAX_PAIR_CHARS])
                 stack.append((child, level + 1))
         elif isinstance(item, list):
             stack.extend((child, level + 1) for child in item)

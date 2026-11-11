@@ -23,7 +23,6 @@ shapes, not every secret a person can type in prose (see docs/history.md).
 
 from __future__ import annotations
 
-import bisect
 import re
 import sys
 import unicodedata
@@ -34,9 +33,11 @@ from typing import Any
 MAX_SCAN_CHARS = 1024 * 1024
 """Longest text the scanner accepts; callers skip longer entries outright."""
 
+# Removed from the scan copy: format characters (Cf), combining marks (Mn, Me),
+# the variation selector U+FE0F and the keycap mark U+20E3, U+034F and U+180E.
 _INVISIBLE = frozenset(
-    [cp for cp in range(sys.maxunicode + 1) if unicodedata.category(chr(cp)) == "Cf"]
-    + [0x034F, 0x180E]
+    [cp for cp in range(sys.maxunicode + 1) if unicodedata.category(chr(cp)) in {"Cf", "Mn", "Me"}]
+    + [0x034F, 0x180E, 0xFE0F, 0x20E3]
 )
 
 # Key words whose value is a credential. The lookbehind only rejects a letter
@@ -45,7 +46,10 @@ _INVISIBLE = frozenset(
 _KEY = (
     r"(?:pg|mysql_)?pass(?:word|wd|phrase)|pwd|secret(?:[_-]?(?:key|access[_-]?key|token))?|"
     r"client[_-]?secret|api[_-]?key|apikey|x[_-]api[_-]key|access[_-]?key(?:[_-]?id)?|"
-    r"private[_-]?key|(?:auth|access|refresh|bearer|session|id)[_-]?token|token"
+    r"private[_-]?key|(?:auth|access|refresh|bearer|session|id)[_-]?token|token|"
+    # A bare "pass" is too common a word; only common credential owners before it.
+    r"(?:db|admin|user|root|my|app|smtp|mail|ftp|ssh|redis|mysql|pg|postgres|mongo|ldap|"
+    r"proxy|wifi|vnc|[_-])[_-]?pass"
 )
 _VALUE = (
     r"(?!\\?[\"']?\[REDACTED)"
@@ -53,7 +57,9 @@ _VALUE = (
     r"|(?P<bare>[^\s\"',;}\]\[\\]{4,256}))"
 )
 _KV = re.compile(
-    r"(?i)(?<![A-Za-z0-9])(?P<key>" + _KEY + r")\\?[\"']?[ \t]{0,8}[:=][ \t]{0,8}"
+    r"(?i)(?<![A-Za-z0-9_.-])(?P<key>[A-Za-z0-9_.-]{0,32}?(?:"
+    + _KEY
+    + r"))\\?[\"']?[ \t]{0,8}[:=][ \t]{0,8}"
     r"(?:(?:\\r)?(?:\\n|\r?\n)[ \t]{0,16}){0,3}\\?" + _VALUE
 )
 _PLACEHOLDER = re.compile(
@@ -79,13 +85,13 @@ _TOKEN_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(r"(?:gh[pousr]_[A-Za-z0-9]{30,255}|github_pat_[A-Za-z0-9_]{22,255})"),
     ),
     ("gitlab_token", re.compile(r"glpat-[A-Za-z0-9_-]{20,255}")),
-    ("api_key", re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,512}")),
-    ("stripe_key", re.compile(r"(?<![A-Za-z0-9])[rsp]k_(?:live|test)_[A-Za-z0-9]{10,255}")),
-    ("huggingface_token", re.compile(r"(?<![A-Za-z0-9])hf_[A-Za-z0-9]{30,255}")),
-    ("npm_token", re.compile(r"(?<![A-Za-z0-9])npm_[A-Za-z0-9]{36,255}")),
+    ("api_key", re.compile(r"(?<![A-Za-z])sk-[A-Za-z0-9_-]{20,512}")),
+    ("stripe_key", re.compile(r"(?<![A-Za-z])[rsp]k_(?:live|test)_[A-Za-z0-9]{10,255}")),
+    ("huggingface_token", re.compile(r"(?<![A-Za-z])hf_[A-Za-z0-9]{30,255}")),
+    ("npm_token", re.compile(r"(?<![A-Za-z])npm_[A-Za-z0-9]{36,255}")),
     ("slack_token", re.compile(r"xox[abprs]-[A-Za-z0-9-]{10,255}")),
     ("google_api_key", re.compile(r"AIza[0-9A-Za-z_-]{35}")),
-    ("google_oauth", re.compile(r"(?<![A-Za-z0-9])ya29\.[A-Za-z0-9_-]{10,512}")),
+    ("google_oauth", re.compile(r"(?<![A-Za-z])ya29\.[A-Za-z0-9_-]{10,512}")),
     (
         "jwt",
         re.compile(r"eyJ[A-Za-z0-9_-]{8,4096}\.eyJ[A-Za-z0-9_-]{8,4096}\.[A-Za-z0-9_-]{8,4096}"),
@@ -258,34 +264,29 @@ def _apply(text: str, finders: tuple[Callable[[str], list[tuple[int, int, str]]]
     """Find spans on the normalised view, then mask them in the original text."""
 
     view, origin = _normalized(text)
-    accepted: list[list[Any]] = []
-    # Earlier finders win: a personal-data span overlapping a secret span is
-    # dropped, so a password before an "@" is not re-read as an e-mail.
-    for finder in finders:
-        group: list[list[Any]] = []
-        for start, end, kind in sorted(finder(view)):
-            if end <= start:
-                continue
-            if group and start < group[-1][1]:
-                group[-1][1] = max(group[-1][1], end)
-            else:
-                group.append([start, end, kind])
-        accepted.sort()
-        starts = [span[0] for span in accepted]
-        keep: list[list[Any]] = []
-        for span in group:
-            # Accepted spans are disjoint and sorted: only the neighbours can overlap.
-            index = bisect.bisect_left(starts, span[1])
-            if index and accepted[index - 1][1] > span[0]:
-                continue
-            keep.append(span)
-        accepted.extend(keep)
-    if not accepted:
+    # Overlapping spans are masked as their union, so no part of, say, an
+    # e-mail address with a token inside it stays visible. The kind shown is
+    # the one from the earliest finder (secrets before personal data).
+    spans = sorted(
+        (start, end, rank, kind)
+        for rank, finder in enumerate(finders)
+        for start, end, kind in finder(view)
+        if end > start
+    )
+    if not spans:
         return text
-    merged = sorted(accepted)
+    merged: list[list[Any]] = []
+    for start, end, rank, kind in spans:
+        if merged and start < merged[-1][1]:
+            last = merged[-1]
+            last[1] = max(last[1], end)
+            if rank < last[2]:
+                last[2], last[3] = rank, kind
+        else:
+            merged.append([start, end, rank, kind])
     out: list[str] = []
     cursor = 0
-    for start, end, kind in merged:
+    for start, end, _rank, kind in merged:
         if origin is None:
             original_start, original_end = start, end
         else:

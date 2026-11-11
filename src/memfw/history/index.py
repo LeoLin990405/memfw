@@ -47,7 +47,8 @@ MAX_READ_BYTES = 64 * 1024
 MAX_CONTEXT = 20
 LIKE_SCAN_ROWS = 50_000
 DIGEST_SPAN = 4096
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
+MAX_FAILURES = 2
 WITHHELD = "[withheld: secret detected]"
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _FID = re.compile(r"^[0-9a-f]{16}$")
@@ -79,15 +80,27 @@ def _refresh_lock(path: Path, *, blocking: bool, timeout: float) -> Iterator[boo
         raise HistoryError("history index is being refreshed elsewhere; try again later")
     try:
         try:
-            descriptor = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            descriptor = os.open(
+                path,
+                os.O_RDWR
+                | os.O_CREAT
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_NONBLOCK", 0),
+                0o600,
+            )
         except OSError as exc:
             raise HistoryError(f"cannot open history lock file: {exc.strerror}") from exc
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            os.close(descriptor)
+            raise HistoryError("history lock file is not a regular file")
         try:
             while True:
                 try:
                     fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     break
-                except BlockingIOError:
+                except OSError as exc:
+                    if not isinstance(exc, BlockingIOError):
+                        raise HistoryError(f"cannot lock history index: {exc.strerror}") from exc
                     if not blocking:
                         yield False
                         return
@@ -387,13 +400,27 @@ class TranscriptIndex:
         connection = sqlite3.connect(self.db, timeout=30)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
+        # WAL: readers (list/search/read, MCP) never wait for a refresh in progress.
+        # The mode is persistent, so after the first connection this is a no-op.
+        if str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower() != "wal":
+            connection.execute("PRAGMA journal_mode = WAL")
+        try:
+            current = connection.execute(
+                "SELECT value FROM meta WHERE key = 'schema_version'"
+            ).fetchone()
+        except sqlite3.OperationalError:
+            current = None
+        if current is not None and current["value"] == SCHEMA_VERSION:
+            # Schema is in place: no writes, so opening never takes the write lock.
+            return connection
         connection.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
         row = connection.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
         if row is not None and row["value"] != SCHEMA_VERSION:
             # Derived data: an older layout is dropped and rebuilt.
             connection.executescript(
                 "DROP TABLE IF EXISTS entries_fts; DROP TABLE IF EXISTS entries;"
-                " DROP TABLE IF EXISTS files; DELETE FROM meta;"
+                " DROP TABLE IF EXISTS files;"
+                " DROP TABLE IF EXISTS failures; DELETE FROM meta;"
             )
         tokenizer = "trigram" if _supports_trigram() else "unicode61"
         connection.executescript(
@@ -438,6 +465,15 @@ class TranscriptIndex:
                 snippet TEXT NOT NULL,
                 UNIQUE (source, path, offset),
                 FOREIGN KEY (source, path) REFERENCES files (source, path) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS failures (
+                source TEXT NOT NULL,
+                path TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                mtime_ns INTEGER NOT NULL,
+                ino INTEGER NOT NULL,
+                attempts INTEGER NOT NULL,
+                PRIMARY KEY (source, path)
             );
             CREATE INDEX IF NOT EXISTS entries_session ON entries (source, session_id, offset);
             CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
@@ -531,6 +567,7 @@ class TranscriptIndex:
             "skipped_recent": False,
             "skipped_locked": False,
             "files_failed": 0,
+            "files_skipped_failing": 0,
         }
         self.db.parent.mkdir(parents=True, exist_ok=True)
         lock_path = Path(str(self.db) + ".lock")
@@ -590,22 +627,30 @@ class TranscriptIndex:
                 if row is None and self._file_count(connection) >= self.limits.max_files:
                     counts["limit_reached"] = "max_files"
                     continue
-                # One savepoint per file: a failure rolls back only this file.
-                connection.execute("SAVEPOINT history_file")
+                if self._failing(connection, source.name, relative, info):
+                    counts["files_skipped_failing"] += 1
+                    continue
+                # Commit per file: readers see progress, and a failure rolls
+                # back only this file.
+                connection.commit()
                 try:
                     result = self._index_file(connection, source, relative, info, row)
                 except _Refused:
-                    connection.execute("ROLLBACK TO history_file")
+                    connection.rollback()
                     self._drop(connection, source.name, relative)
-                    connection.execute("RELEASE history_file")
+                    connection.commit()
                     counts["files_refused"] += 1
                     continue
                 except Exception:
-                    connection.execute("ROLLBACK TO history_file")
-                    connection.execute("RELEASE history_file")
+                    connection.rollback()
+                    self._record_failure(connection, source.name, relative, info)
+                    connection.commit()
                     counts["files_failed"] += 1
                     continue
-                connection.execute("RELEASE history_file")
+                connection.execute(
+                    "DELETE FROM failures WHERE source = ? AND path = ?", (source.name, relative)
+                )
+                connection.commit()
                 counts["files_resumed" if result["resumed"] else "files_indexed"] += 1
                 for key in ("entries_indexed", "skipped_secret", "skipped_other"):
                     counts[key] += result[key]
@@ -621,6 +666,40 @@ class TranscriptIndex:
             }
             for gone in indexed - seen:
                 counts["files_removed"] += self._drop(connection, source.name, gone)
+
+    @staticmethod
+    def _failing(
+        connection: sqlite3.Connection, source: str, path: str, info: os.stat_result
+    ) -> bool:
+        """A file that failed MAX_FAILURES times is skipped until it changes."""
+
+        row = connection.execute(
+            "SELECT size, mtime_ns, ino, attempts FROM failures WHERE source = ? AND path = ?",
+            (source, path),
+        ).fetchone()
+        if row is None:
+            return False
+        if (row["size"], row["mtime_ns"], row["ino"]) != (
+            info.st_size,
+            info.st_mtime_ns,
+            info.st_ino,
+        ):
+            connection.execute("DELETE FROM failures WHERE source = ? AND path = ?", (source, path))
+            return False
+        return int(row["attempts"]) >= MAX_FAILURES
+
+    @staticmethod
+    def _record_failure(
+        connection: sqlite3.Connection, source: str, path: str, info: os.stat_result
+    ) -> None:
+        connection.execute(
+            "INSERT INTO failures (source, path, size, mtime_ns, ino, attempts)"
+            " VALUES (?, ?, ?, ?, ?, 1) ON CONFLICT (source, path) DO UPDATE SET"
+            " attempts = CASE WHEN size = excluded.size AND mtime_ns = excluded.mtime_ns"
+            " AND ino = excluded.ino THEN attempts + 1 ELSE 1 END,"
+            " size = excluded.size, mtime_ns = excluded.mtime_ns, ino = excluded.ino",
+            (source, path, info.st_size, info.st_mtime_ns, info.st_ino),
+        )
 
     @staticmethod
     def _file_count(connection: sqlite3.Connection) -> int:
