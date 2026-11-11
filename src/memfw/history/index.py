@@ -402,23 +402,29 @@ class TranscriptIndex:
         if not self.db.is_file() or self.db.is_symlink():
             raise HistoryError("no transcript index yet; run `memfw history index` first")
         base = self.db.resolve().as_uri()
-        current = None
-        connection: sqlite3.Connection | None = None
-        # mode=ro reads the WAL too; when the WAL side files are missing and cannot
-        # be used read-only, fall back to an immutable snapshot of the main file.
-        for query in ("?mode=ro", "?mode=ro&immutable=1"):
-            connection = sqlite3.connect(base + query, uri=True, timeout=30)
-            connection.row_factory = sqlite3.Row
-            try:
-                current = connection.execute(
-                    "SELECT value FROM meta WHERE key = 'schema_version'"
-                ).fetchone()
-                break
-            except sqlite3.DatabaseError:
-                connection.close()
-                connection = None
-        if connection is None:
-            raise HistoryError("transcript index is unreadable; refresh it first")
+        wal = self.db.with_name(self.db.name + "-wal")
+        try:
+            pending = wal.stat().st_size > 0
+        except FileNotFoundError:
+            pending = False
+        # Committed rows may still sit in a non-empty WAL. Then only mode=ro
+        # (which reads the WAL) is correct; an immutable snapshot would silently
+        # miss them, so there is no fallback. With no WAL to read, an immutable
+        # snapshot of the main file is exact and creates no -wal/-shm files.
+        query = "?mode=ro" if pending else "?mode=ro&immutable=1"
+        connection = sqlite3.connect(base + query, uri=True, timeout=30)
+        connection.row_factory = sqlite3.Row
+        try:
+            current = connection.execute(
+                "SELECT value FROM meta WHERE key = 'schema_version'"
+            ).fetchone()
+        except sqlite3.DatabaseError as exc:
+            connection.close()
+            raise HistoryError(
+                "transcript index cannot be read read-only right now"
+                + (" (it has uncheckpointed changes)" if pending else "")
+                + "; run a refresh first"
+            ) from exc
         if current is None or current["value"] != SCHEMA_VERSION:
             connection.close()
             raise HistoryError("transcript index has an old layout; refresh it first")

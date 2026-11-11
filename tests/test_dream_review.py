@@ -293,3 +293,73 @@ def test_correct_refuses_long_digit_replacements(tmp_path: Path) -> None:
     (candidate,) = [item for item in result.candidates if item.operation == "verify"]
     assert candidate.action == "mark-disputed"
     assert phone not in _staged_text(root, result.staged)
+
+
+# -- read-only index: checkpointed vs uncheckpointed WAL ----------------------------------
+
+
+def _checkpoint(db: Path) -> None:
+    import gc
+    import sqlite3
+
+    gc.collect()  # close any connection objects the refresh left for the GC
+    connection = sqlite3.connect(db)
+    connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    connection.close()
+
+
+def test_dry_run_on_a_checkpointed_index_creates_no_side_files(tmp_path: Path) -> None:
+    root = _with_transcripts(tmp_path)
+    db = root / ".memfw-history.sqlite"
+    run_dream(root, now=NOW, options=DreamOptions(dream_id="first", all_memories=True))
+    _checkpoint(db)
+    for side in (".memfw-history.sqlite-wal", ".memfw-history.sqlite-shm"):
+        (root / side).unlink(missing_ok=True)
+    before = _tree(root)
+    result = run_dream(root, now=NOW, dry_run=True, options=DreamOptions(all_memories=True))
+    assert _tree(root) == before
+    assert not (root / ".memfw-history.sqlite-shm").exists()
+    assert not (root / ".memfw-history.sqlite-wal").exists()
+    assert any(item.action == "confirm" for item in result.candidates)
+
+
+def test_unreadable_pending_wal_is_unavailable_not_stale(tmp_path: Path) -> None:
+    import os
+    import subprocess
+
+    root = _with_transcripts(tmp_path)
+    db = root / ".memfw-history.sqlite"
+    run_dream(root, now=NOW, options=DreamOptions(dream_id="first", all_memories=True))
+    _checkpoint(db)
+    logs = tmp_path / "logs"
+    (logs / "s2.jsonl").write_text(
+        json.dumps({"session_id": "s2", "text": "the greenhouse sensor reads 25 degrees"}) + "\n",
+        "utf-8",
+    )
+    # A refresh that dies before checkpointing leaves committed rows in the WAL.
+    child = (
+        "import os, sys\n"
+        "from pathlib import Path\n"
+        "import memfw.history.index as index\n"
+        "keep = []\n"
+        "original = index.TranscriptIndex._connect\n"
+        "def hold(self):\n"
+        "    connection = original(self)\n"
+        "    keep.append(connection)\n"
+        "    return connection\n"
+        "index.TranscriptIndex._connect = hold\n"
+        "index.TranscriptIndex(Path(sys.argv[1]),"
+        " [index.SourceRoot.create('logs', Path(sys.argv[2]))]).refresh()\n"
+        "os._exit(0)\n"
+    )
+    subprocess.run([sys.executable, "-W", "ignore", "-c", child, str(db), str(logs)], check=True)
+    wal = root / ".memfw-history.sqlite-wal"
+    assert wal.stat().st_size > 0
+    (root / ".memfw-history.sqlite-shm").unlink(missing_ok=True)
+    os.chmod(wal, 0)
+    try:
+        result = run_dream(root, now=NOW, dry_run=True, options=DreamOptions(all_memories=True))
+    finally:
+        os.chmod(wal, 0o600)
+    assert result.report["history"]["available"] is False
+    assert not [item for item in result.candidates if item.operation == "verify"]
