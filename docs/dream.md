@@ -17,18 +17,23 @@ In priority order:
      evidence refs;
    - `correct`: the newest evidence contradicts the memory and states a single
      replacement value (`18` -> `21`); proposes the corrected body,
-     `status: confirmed` and the refs;
+     `status: confirmed` and the refs. A value with more than six digits
+     (phone-, card- or account-like) or anything the redactor would mask is
+     never copied: such evidence gives `mark-disputed` instead;
    - `mark-disputed`: contradicting evidence without one replacement value, or
      support and contradiction together; proposes `status: disputed`.
    A memory with no evidence gets no candidate and stays `unconfirmed`.
 2. **Curate.** Inside each concept (`about` oid):
    - `merge`: identical bodies, near-identical wording, or paraphrases that
      state the same values (numbers, number words, attribute values) with
-     shared context; the earliest memory is kept;
+     shared context; the earliest memory is kept. Never across different
+     subjects (staging vs production, Alice vs Bob, `service: api` vs
+     `service: worker`) or when one memory negates the other;
    - `supersede`: the same attribute (`key: value` lines or `The <thing> is
      <value>` sentences) or the same context with different values; the newer
      memory is proposed to supersede the older one, which would get
-     `valid_to`. Nothing is silently overwritten;
+     `valid_to`. Both must be about the same subject, and "X" vs "not X" is
+     proposed here rather than merged. Nothing is silently overwritten;
    - `mark-stale`: a memory superseded by another but without `valid_to`, or an
      unreferenced, unconfirmed memory not updated for `--stale-days` (180).
      Nothing is deleted.
@@ -49,12 +54,18 @@ least half of a memory's content words (and at least two). Values (numbers,
 versions) decide support or contradiction; negations (`not`, `no longer`,
 `deprecated`, ...) also contradict. Redaction markers are ignored.
 
-An optional **local** judge can replace the per-entry classification:
+An optional **local** judge can replace the per-entry classification. The
+judge is Python code that sees transcript text, so only the operator chooses
+it:
 
-```yaml
-# vault.yaml
-dream_judge: my_package.judges:classify   # off unless set; --judge overrides
+```sh
+memfw dream run --root /path/to/vault --judge my_package.judges:classify
 ```
+
+`dream_judge: module:function` in `vault.yaml` is **ignored** unless the run
+also passes `--allow-config-judge`: the same file chooses the transcript
+sources, so an untrusted vault must not be able to pick code that reads them.
+The report says when a configured judge was ignored.
 
 The callable gets `(memory_text, evidence_text)` and returns `support`,
 `contradict` or `neutral`; errors are counted and the rule result is kept.
@@ -87,6 +98,12 @@ Missing fields mean `unconfirmed` with no evidence, and files are only
 written with them when they differ from that default, so existing vaults keep
 parsing and keep their bytes. New memories start `unconfirmed`.
 
+**Upgrade every reader before applying statuses.** memfw versions before
+this one reject frontmatter keys they do not know, so a memory with `status`
+or `evidence` disappears from an older reader. The reader in this version
+ignores unknown keys (that fix can ship on its own first); once every agent
+and service reading the vault has it, applying dream statuses is safe.
+
 ## Injected-layer budget
 
 Files loaded at the start of every session must stay small: at most 200 lines
@@ -99,20 +116,29 @@ injected_files:
   - /path/to/agent/CLAUDE.md
 ```
 
-Paths are relative to the vault unless absolute; symlinks and missing files
-are skipped. For a file over budget the dream proposes demoting its largest
-sections (replaced by a one-line pointer) until it fits. It never edits the
-file.
+Paths are relative to the vault unless absolute. Missing files are left out;
+a symlink (or a file reached through a symlinked directory in the vault) and
+a non-regular file are reported as skipped, never followed. For a file over
+budget the dream proposes demoting its largest sections (at most 20,
+replaced by a one-line pointer) until it fits. Headings are redacted in the
+proposals, and a heading that looks like a secret is withheld. It never
+edits the file.
 
 ## Output
 
 ```sh
-memfw dream run --root /path/to/vault --dry-run          # print, write nothing
+memfw dream run --root /path/to/vault --dry-run          # print, write nothing at all
 memfw dream run --root /path/to/vault --focus "deploy"   # stage candidates
 ```
 
+A dry run writes nothing, not even the derived transcript index: it reads an
+existing index read-only, and without one it reports history as unavailable
+(build it with `memfw history index`).
+
 A staged dream is one directory, published with a single rename so concurrent
-dreams never overwrite each other:
+dreams never overwrite each other. Staging works on directory file
+descriptors and refuses a symlink or file anywhere in
+`_candidates/dream/`:
 
 ```
 _candidates/dream/<dream_id>/
@@ -126,7 +152,7 @@ file says `authority: false`.
 
 Options: `--all`, `--limit`, `--focus` (steers the search only), `--max-sessions`,
 `--source-name`, `--since`, `--until`, `--tenant`, `--stale-days`, `--dream-id`,
-`--judge`, `--no-refresh`, `--now` (inject the clock).
+`--judge`, `--allow-config-judge`, `--no-refresh`, `--now` (inject the clock).
 
 ## Applying
 
