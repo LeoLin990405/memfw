@@ -55,7 +55,8 @@ Files are walked recursively under each root. Only two suffixes are indexed:
   - generic / Conductor Worker / Ticket JSONL: `session_id`, `ticket_id` or
     `run_id`; `handoff_from` / `parent_id` for the parent; `ts` / `timestamp`;
     text from `message`, `text` or `content`;
-- `*.log` plain text: one line per entry, session = file stem.
+- `*.log` plain text: one line per entry, session = file stem; a last line
+  without its newline is not indexed until it is complete.
 
 Other notes:
 
@@ -89,7 +90,9 @@ Windows:
 - derived SQLite at `<vault>/.memfw-history.sqlite` (override with `--db`),
   next to the vault's other derived indexes;
 - never committed: memfw's own `.gitignore` lists it. **If your vault is a git
-  repository, add `.memfw-history.sqlite*` to the vault's `.gitignore`**, or
+  repository, add `.memfw-history.sqlite*` (this covers the `-wal`/`-shm`
+  files and the `.memfw-history.sqlite.lock` lock file) to the vault's
+  `.gitignore`**, or
   pass `--db` to keep the index outside the vault. The index only holds
   redacted data, but snippets of session text are still private;
 - rebuildable at any time: delete the file and run `memfw history index`;
@@ -117,18 +120,29 @@ Every line is scanned before it is indexed. The scan covers:
 
 - the raw line;
 - every decoded string of the parsed JSON (keys and values, recursively,
-  including JSON nested inside strings), so a credential that only appears
-  JSON-escaped in the raw line, such as a `curl -d '{"password": ...}'` tool
-  input, is still found;
+  including JSON nested inside strings, decoded up to 8 levels), so a
+  credential that only appears JSON-escaped in the raw line, such as a
+  `curl -d '{"password": ...}'` tool input, is still found. Past that bound a
+  string stays opaque, and a copy with backslashes removed is scanned too;
 - the metadata fields returned to callers (session, parent, window and entry
   ids, role, kind, agent, timestamp);
 - the decoded text joined to the tail of the previous non-empty entry, so a key
   on one entry with its value on the next is caught (empty entries between
   them do not break the pair).
 
-Text is NFKC-normalised first (a fullwidth colon or a no-break space becomes
-ASCII) and zero-width characters are removed. All patterns are anchored and
-bounded, so scanning is linear; a line over 1 MiB is skipped, not scanned.
+Matching runs on a normalised view: NFKC (a fullwidth colon or a no-break
+space becomes ASCII) with every Unicode format character (category Cf:
+zero-width, bidi marks, invisible operators) plus U+034F and U+180E removed.
+Masks are mapped back onto the original text, so snippets and windows show
+the original characters (`x²` stays `x²`) with masks applied. All patterns
+are anchored and bounded, so scanning is linear; a line over 1 MiB is
+skipped, not scanned.
+
+Hostile structure never aborts a refresh: a line nested past the
+interpreter's recursion limit, or with more than 100000 strings, is skipped
+(`skipped_other`); tool inputs are rendered at most 16 levels deep (deeper
+parts show as `…`); and each file is indexed in its own savepoint, so any
+other failure rolls back only that file and is counted as `files_failed`.
 
 Secret patterns:
 
@@ -188,7 +202,11 @@ Limitations (not detected):
   the already-open parent directory, and the opened inode must match the
   walk's, so a symlink swapped in during a refresh is refused
   (`files_refused`) rather than followed;
-- refreshes are serialised by a lock file next to the index;
+- refreshes are serialised by a lock file next to the index
+  (`.memfw-history.sqlite.lock`, opened with `O_NOFOLLOW`, never truncated).
+  The CLI waits up to 60 seconds and then fails with a clear error; the MCP
+  tools never wait: if another refresh holds the lock they serve the existing
+  index (`skipped_locked`);
 - `list` and `search` refresh first by default; pass `--no-refresh` to query
   the index as it is;
 - symlinked files and directories under a root are never followed; they are
