@@ -62,14 +62,20 @@ _PROSE_ATTRIBUTE = re.compile(
     r"(?:now\s+|still\s+)?(?P<value>[^\s].{0,79}?)\s*$"
 )
 _SENTENCE = re.compile(r"[.!?;\n]+")
+# Clauses inside a sentence: "the host is db1 and the port is 5432",
+# "18 bar, set by the night shift".
+_CLAUSE = re.compile(r",\s*(?:and\s+)?|\s+and\s+")
 
 
 def _prose_attributes(body: str) -> dict[str, str]:
     """``The <thing> <attribute> is <value>.`` sentences, keyed by the subject phrase."""
 
     found: dict[str, str] = {}
-    for sentence in _SENTENCE.split(body.lower()):
-        match = _PROSE_ATTRIBUTE.match(sentence.strip())
+    clauses = (
+        clause for sentence in _SENTENCE.split(body.lower()) for clause in _CLAUSE.split(sentence)
+    )
+    for clause in clauses:
+        match = _PROSE_ATTRIBUTE.match(clause.strip())
         if match is None:
             continue
         key = _KEY_SEPARATORS.sub("_", match.group("key").strip()).strip("_")
@@ -122,9 +128,10 @@ _NEGATIONS = frozenset(
     "not no never none nobody nothing nowhere cannot can't don't doesn't didn't isn't "
     "aren't wasn't weren't won't without".split()
 )
+# Keys that name *which* thing a memory is about. host, region, owner, team and
+# the like are attributes of a thing and may change (a move, a hand-over).
 _IDENTITY_KEYS = frozenset(
-    "service name host hostname env environment user owner team id project repo region "
-    "cluster account tenant".split()
+    "service name env environment project repo cluster account tenant app application".split()
 )
 PARAPHRASE_CONTEXT = 0.3
 """Shared-word Jaccard two memories need, besides equal values, to be paraphrases."""
@@ -190,17 +197,24 @@ def _same_subject(left: _Features, right: _Features) -> bool:
 
     if not (left.subject <= right.subject or right.subject <= left.subject):
         return False
-    for key in left.attributes.keys() & right.attributes.keys():
-        if key.split("_")[-1] in _IDENTITY_KEYS and left.attributes[key] != right.attributes[key]:
-            return False  # service: api vs service: worker
+    shared = left.attributes.keys() & right.attributes.keys()
+    agreeing = [key for key in shared if left.attributes[key] == right.attributes[key]]
+    for key in shared:
+        if (
+            key.split("_")[-1] in _IDENTITY_KEYS
+            and left.attributes[key] != right.attributes[key]
+            and not agreeing
+        ):
+            # service: api vs service: worker with nothing else in common. With an
+            # agreeing key (same service, new owner) it is the same thing.
+            return False
     return True
 
 
 def _conflict(left: _Features, right: _Features) -> list[str]:
     """Human-readable descriptions of how two memories disagree (empty: no conflict).
 
-    Only memories about the same subject can conflict; differing shared keys
-    are a conflict unless every shared key differs (then nothing anchors them).
+    Only memories about the same subject can conflict (see ``_same_subject``).
     """
 
     if not _same_subject(left, right):
@@ -208,8 +222,7 @@ def _conflict(left: _Features, right: _Features) -> list[str]:
     reasons: list[str] = []
     shared = sorted(left.attributes.keys() & right.attributes.keys())
     differing = [key for key in shared if left.attributes[key] != right.attributes[key]]
-    if differing and not (len(shared) > 1 and len(differing) == len(shared)):
-        reasons.extend(f"attribute '{key}' differs" for key in differing)
+    reasons.extend(f"attribute '{key}' differs" for key in differing)
     if not reasons and left.negated != right.negated:
         reasons.append("one memory negates the other")
     if (
@@ -263,6 +276,11 @@ def _merge_candidates(
                 bool(a.signature)
                 and a.signature == b.signature
                 and _jaccard(a.stems, b.stems) >= PARAPHRASE_CONTEXT
+            ) or (
+                # Same subject words and the same (possibly no) values: a reworded
+                # duplicate such as "Do not deploy on Fridays" / "Never deploy on
+                # a Friday".
+                len(a.subject) >= 2 and a.subject == b.subject and a.signature == b.signature
             )
             if not identical and not paraphrase and _jaccard(a.words, b.words) < MERGE_THRESHOLD:
                 continue

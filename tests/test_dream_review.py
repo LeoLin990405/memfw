@@ -363,3 +363,103 @@ def test_unreadable_pending_wal_is_unavailable_not_stale(tmp_path: Path) -> None
         os.chmod(wal, 0o600)
     assert result.report["history"]["available"] is False
     assert not [item for item in result.candidates if item.operation == "verify"]
+
+
+# -- curate: the re-review's curate6 pairs ----------------------------------------------------
+
+
+CURATE6 = [
+    (
+        "dup-extra-detail",
+        "merge",
+        "The irrigation valve pressure is 18 bar.",
+        "The irrigation valve pressure is 18 bar, set by the night shift.",
+    ),
+    (
+        "dup-reordered",
+        "merge",
+        "Backups run nightly on the staging cluster.",
+        "On the staging cluster, backups run nightly.",
+    ),
+    (
+        "dup-kv-vs-prose",
+        "merge",
+        "- host: db1\n- port: 5432",
+        "The host is db1 and the port is 5432.",
+    ),
+    ("dup-both-negated", "merge", "Do not deploy on Fridays.", "Never deploy on a Friday."),
+    (
+        "con-changed-value",
+        "supersede",
+        "The irrigation valve pressure is 18 bar.",
+        "After the upgrade the irrigation valve pressure is 21 bar.",
+    ),
+    ("con-host-moved", "supersede", "- host: db1\n- port: 5432", "- host: db2\n- port: 6432"),
+    (
+        "con-owner-changed",
+        "supersede",
+        "- owner: alice\n- service: api",
+        "- owner: bob\n- service: api",
+    ),
+    (
+        "con-negation-added",
+        "supersede",
+        "Nightly backups run on the staging cluster.",
+        "Nightly backups no longer run on the staging cluster.",
+    ),
+    (
+        "con-version-bump",
+        "supersede",
+        "The api service runs Postgres 14.",
+        "The api service now runs Postgres 16 since March.",
+    ),
+    ("con-region", "supersede", "- region: us-east-1", "- region: eu-west-1"),
+    (
+        "none-different-env",
+        "none",
+        "The web port for staging is 8080.",
+        "The web port for production is 8080.",
+    ),
+]
+
+
+def _pair_action(first: str, second: str) -> str:
+    from datetime import timedelta
+
+    from memfw.core.models import MemoryDocument
+    from memfw.dream.curate import curate
+
+    documents = [
+        MemoryDocument(
+            id=f"m{index}",
+            title="note",
+            body=body,
+            about=["concept:x:shared"],
+            reference_count=1,
+            created_at=NOW - timedelta(days=10 - index),
+            updated_at=NOW - timedelta(days=10 - index),
+        )
+        for index, body in enumerate((first, second))
+    ]
+    actions = {item.action for item in curate(documents, now=NOW) if len(item.memory_ids) == 2}
+    return "merge" if "merge" in actions else "supersede" if "supersede" in actions else "none"
+
+
+@pytest.mark.parametrize(
+    ("name", "expected", "first", "second"), CURATE6, ids=[c[0] for c in CURATE6]
+)
+def test_curate6_pairs(name: str, expected: str, first: str, second: str) -> None:
+    assert _pair_action(first, second) == expected
+
+
+@pytest.mark.xfail(
+    strict=True, reason="synonyms (deploys/deployments, happen/scheduled) are not matched"
+)
+def test_curate_synonym_duplicate_is_a_known_limit() -> None:
+    assert (
+        _pair_action(
+            "Deploys happen on Tuesdays at 10:00.",
+            "Deployments are scheduled for Tuesday at 10:00.",
+        )
+        == "merge"
+    )
