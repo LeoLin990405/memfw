@@ -187,3 +187,109 @@ def test_staging_through_a_file_or_symlink_is_a_clean_error(tmp_path: Path) -> N
     with pytest.raises(DreamStageError):
         run_dream(root, now=NOW, options=DreamOptions(dream_id="d1"))
     assert list(outside.iterdir()) == []
+
+
+def test_injected_file_through_a_symlinked_directory_is_skipped(tmp_path: Path) -> None:
+    root = _vault(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "AGENTS.md").write_text("# a\n" + "y\n" * 400, "utf-8")
+    (root / "linkdir").symlink_to(outside)
+    (report,) = check_budget(root, {"injected_files": ["linkdir/AGENTS.md"]})
+    assert report.skipped == "symlink" and report.over is False
+
+
+# -- curate: subjects and negation (the review's curate5 cases) ---------------------------
+
+
+CURATE_CASES = {
+    "env_port": (
+        ["The web port for staging is 8080.", "The web port for production is 8080."],
+        set(),
+    ),
+    "negation": (
+        [
+            "Nightly backups run on the staging cluster at 02:00.",
+            "Nightly backups do not run on the staging cluster at 02:00.",
+        ],
+        {"supersede"},
+    ),
+    "two_services": (
+        ["- service: api\n- region: us-east-1", "- service: worker\n- region: eu-west-1"],
+        set(),
+    ),
+    "different_people": (
+        [
+            "Alice uses a laptop with 32 GB of memory and 2 TB disk.",
+            "Bob uses a laptop with 32 GB of memory and 2 TB disk.",
+        ],
+        set(),
+    ),
+    "count_vs_times": (
+        [
+            "The infra team has 5 members on call.",
+            "The infra team has on call shifts 3 times a week.",
+        ],
+        set(),
+    ),
+    "true_dup": (
+        ["The irrigation valve pressure is 18 bar.", "Irrigation valve pressure: 18 bar."],
+        {"merge"},
+    ),
+    "true_conflict": (
+        ["The irrigation valve pressure is 18 bar.", "The irrigation valve pressure is 21 bar."],
+        {"supersede"},
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(CURATE_CASES))
+def test_curate_respects_subjects_and_negation(name: str) -> None:
+    from datetime import timedelta
+
+    from memfw.core.models import MemoryDocument
+    from memfw.dream.curate import curate
+
+    bodies, expected = CURATE_CASES[name]
+    documents = [
+        MemoryDocument(
+            id=f"{name}-{index}",
+            title="note",
+            body=body,
+            about=["concept:x:shared"],
+            reference_count=1,
+            created_at=NOW - timedelta(days=10 - index),
+            updated_at=NOW - timedelta(days=10 - index),
+        )
+        for index, body in enumerate(bodies)
+    ]
+    actions = {candidate.action for candidate in curate(documents, now=NOW)}
+    assert actions == expected
+
+
+# -- correct never copies a phone- or card-like value -----------------------------------------
+
+
+def test_correct_refuses_long_digit_replacements(tmp_path: Path) -> None:
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    phone = "41555" + "52671"
+    (logs / "s.jsonl").write_text(
+        json.dumps(
+            {
+                "session_id": "s",
+                "ts": "2026-01-04T00:00:00Z",
+                "text": f"the door pin code for the office router room is {phone}",
+            }
+        )
+        + "\n",
+        "utf-8",
+    )
+    root = _vault(tmp_path, history_sources={"logs": str(logs)})
+    Repository(root).add(
+        "Door pin", "The door pin code for the office router room is 1234.", memory_id="m-pin"
+    )
+    result = run_dream(root, now=NOW, options=DreamOptions(all_memories=True))
+    (candidate,) = [item for item in result.candidates if item.operation == "verify"]
+    assert candidate.action == "mark-disputed"
+    assert phone not in _staged_text(root, result.staged)

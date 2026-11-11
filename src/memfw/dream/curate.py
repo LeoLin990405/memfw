@@ -118,6 +118,14 @@ _NUMBER_WORDS = {
     )
 }
 _FILLER = frozenset("the a an is are was were be on in of for at to and holds has have".split())
+_NEGATIONS = frozenset(
+    "not no never none nobody nothing nowhere cannot can't don't doesn't didn't isn't "
+    "aren't wasn't weren't won't without".split()
+)
+_IDENTITY_KEYS = frozenset(
+    "service name host hostname env environment user owner team id project repo region "
+    "cluster account tenant".split()
+)
 PARAPHRASE_CONTEXT = 0.3
 """Shared-word Jaccard two memories need, besides equal values, to be paraphrases."""
 
@@ -135,7 +143,17 @@ def _canonical_text(text: str) -> str:
 
 
 class _Features:
-    __slots__ = ("words", "context", "numbers", "body", "attributes", "stems", "signature")
+    __slots__ = (
+        "words",
+        "context",
+        "numbers",
+        "body",
+        "attributes",
+        "stems",
+        "signature",
+        "subject",
+        "negated",
+    )
 
     def __init__(self, document: MemoryDocument) -> None:
         text = f"{document.title}\n{document.body}"
@@ -158,15 +176,42 @@ class _Features:
         numbers = {token for token in tokens if _DIGITS_ONLY.match(token)}
         values = {value for value in self.attributes.values() if not _NUMBER.search(value)}
         self.signature = frozenset(numbers or values)
+        # What a memory is about: its content words without the values it states
+        # and without negation words. Two memories describe the same subject only
+        # when one subject is contained in the other (staging vs production, Alice
+        # vs Bob are different subjects).
+        value_words = {word for value in self.attributes.values() for word in value.split()}
+        self.negated = bool(_NEGATIONS & set(tokens))
+        self.subject = self.stems - value_words - _NEGATIONS - {"do", "doe", "did"}
+
+
+def _same_subject(left: _Features, right: _Features) -> bool:
+    """Whether two memories talk about the same thing (see ``_Features.subject``)."""
+
+    if not (left.subject <= right.subject or right.subject <= left.subject):
+        return False
+    for key in left.attributes.keys() & right.attributes.keys():
+        if key.split("_")[-1] in _IDENTITY_KEYS and left.attributes[key] != right.attributes[key]:
+            return False  # service: api vs service: worker
+    return True
 
 
 def _conflict(left: _Features, right: _Features) -> list[str]:
-    """Human-readable descriptions of how two memories disagree (empty: no conflict)."""
+    """Human-readable descriptions of how two memories disagree (empty: no conflict).
 
+    Only memories about the same subject can conflict; differing shared keys
+    are a conflict unless every shared key differs (then nothing anchors them).
+    """
+
+    if not _same_subject(left, right):
+        return []
     reasons: list[str] = []
-    for key in sorted(left.attributes.keys() & right.attributes.keys()):
-        if left.attributes[key] != right.attributes[key]:
-            reasons.append(f"attribute '{key}' differs")
+    shared = sorted(left.attributes.keys() & right.attributes.keys())
+    differing = [key for key in shared if left.attributes[key] != right.attributes[key]]
+    if differing and not (len(shared) > 1 and len(differing) == len(shared)):
+        reasons.extend(f"attribute '{key}' differs" for key in differing)
+    if not reasons and left.negated != right.negated:
+        reasons.append("one memory negates the other")
     if (
         not reasons
         and left.numbers
@@ -221,6 +266,8 @@ def _merge_candidates(
             )
             if not identical and not paraphrase and _jaccard(a.words, b.words) < MERGE_THRESHOLD:
                 continue
+            if not identical and (not _same_subject(a, b) or a.negated != b.negated):
+                continue  # different subjects, or one says "not": never a duplicate
             if not identical and _conflict(a, b):
                 continue  # near-identical but disagreeing: that is a conflict, not a duplicate
             finder.union(left.id, right.id)

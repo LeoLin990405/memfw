@@ -49,6 +49,21 @@ def _is_regular_file(path: Path) -> bool:
         return False
 
 
+def _through_symlink(vault: Path, path: Path) -> bool:
+    """Whether a path inside the vault passes through a symlinked directory."""
+
+    try:
+        relative = path.relative_to(vault)
+    except ValueError:
+        return False
+    current = vault
+    for part in relative.parts[:-1]:
+        current = current / part
+        if current.is_symlink():
+            return True
+    return False
+
+
 def _entries(vault: Path, config: dict[str, Any]) -> list[tuple[Path, str | None]]:
     """Every configured injected path with why it is skipped (``None``: measure it).
 
@@ -72,7 +87,7 @@ def _entries(vault: Path, config: dict[str, Any]) -> list[tuple[Path, str | None
         if key in seen:
             continue
         seen.add(key)
-        if path.is_symlink():
+        if path.is_symlink() or _through_symlink(vault, path):
             found.append((path, "symlink"))
         elif _is_regular_file(path):
             found.append((path, None))

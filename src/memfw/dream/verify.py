@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from memfw.core.models import MemoryDocument
-from memfw.history import HistoryError
+from memfw.history import HistoryError, has_secret, redact
 
 from .model import Candidate, EvidenceRef, Polarity, concept_key
 
@@ -150,6 +150,24 @@ def _query(document: MemoryDocument, focus: str) -> str:
     return " ".join([*ordered[:12], *extra[:4]])
 
 
+MAX_VALUE_DIGITS = 6
+"""A replacement with more digits (phone, card, account numbers) is never copied."""
+
+
+def safe_value(value: str) -> bool:
+    """Whether a value from a transcript may be copied into a candidate.
+
+    Long digit runs (phone-, card- or account-like), anything the history
+    redactor would mask, and redaction markers are refused; the candidate is
+    then ``mark-disputed`` without the value.
+    """
+
+    digits = sum(char.isdigit() for char in value)
+    if digits > MAX_VALUE_DIGITS or "REDACTED" in value or "withheld" in value:
+        return False
+    return not has_secret(value) and redact(value) == value
+
+
 def _replace_value(body: str, old: str, new: str) -> str | None:
     pattern = re.compile(r"(?<![\w.])(v?)" + re.escape(old) + r"(?![\w.]*\d)")
     replaced, count = pattern.subn(lambda match: match.group(1) + new, body)
@@ -267,7 +285,12 @@ def _decide(
     stated = values(f"{document.title}\n{document.body}")
     replacements = {frozenset(item[2]) for item in contradicts if item[2]}
     latest_replacement = newest[2] if newest[1].polarity == "contradict" else set()
-    if newest[1].polarity == "contradict" and len(stated) == 1 and len(latest_replacement) == 1:
+    if (
+        newest[1].polarity == "contradict"
+        and len(stated) == 1
+        and len(latest_replacement) == 1
+        and safe_value(next(iter(latest_replacement)))
+    ):
         old = next(iter(stated))
         new = next(iter(latest_replacement))
         corrected = _replace_value(document.body, old, new)
