@@ -18,6 +18,7 @@ import pytest
 from memfw.core.repository import Repository
 from memfw.dream import DreamOptions, run_dream
 from memfw.dream.budget import check_budget
+from memfw.history import TranscriptIndex, default_db, sources_from_config
 
 NOW = datetime(2026, 3, 1, 12, 0, tzinfo=UTC)
 GHP = "gh" + "p_" + "A1b2C3d4" * 5
@@ -109,6 +110,7 @@ def test_dream_judge_in_vault_yaml_is_ignored_by_default(
     root = _vault(tmp_path, dream_judge="vault_judge:grab", history_sources={"logs": str(logs)})
     repository = Repository(root)
     repository.add("Sensor", "The greenhouse sensor reads 18 degrees.", memory_id="m1")
+    TranscriptIndex(default_db(root), sources_from_config(repository.read_config())).refresh()
     result = run_dream(root, now=NOW, dry_run=True, options=DreamOptions(all_memories=True))
     assert not marker.exists()
     assert result.report["judge"].startswith("none")
@@ -121,3 +123,67 @@ def test_dream_judge_in_vault_yaml_is_ignored_by_default(
     )
     assert marker.exists() and allowed.report["judge"] == "local hook"
     sys.modules.pop("vault_judge", None)
+
+
+# -- dry runs write nothing ---------------------------------------------------------------
+
+
+def _tree(root: Path) -> dict[str, str]:
+    import hashlib
+
+    return {
+        path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def _with_transcripts(tmp_path: Path) -> Path:
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "s.jsonl").write_text(
+        json.dumps({"session_id": "s", "text": "the greenhouse sensor reads 18 degrees"}) + "\n",
+        "utf-8",
+    )
+    root = _vault(tmp_path, history_sources={"logs": str(logs)})
+    Repository(root).add("Sensor", "The greenhouse sensor reads 18 degrees.", memory_id="m1")
+    return root
+
+
+def test_dry_run_without_an_index_creates_nothing(tmp_path: Path) -> None:
+    root = _with_transcripts(tmp_path)
+    before = _tree(root)
+    result = run_dream(root, now=NOW, dry_run=True, options=DreamOptions(all_memories=True))
+    assert _tree(root) == before
+    assert not (root / ".memfw-history.sqlite").exists()
+    assert result.report["history"]["available"] is False
+
+
+def test_dry_run_reads_an_existing_index_without_writing(tmp_path: Path) -> None:
+    root = _with_transcripts(tmp_path)
+    run_dream(root, now=NOW, options=DreamOptions(dream_id="first", all_memories=True))
+    before = _tree(root)
+    result = run_dream(root, now=NOW, dry_run=True, options=DreamOptions(all_memories=True))
+    assert _tree(root) == before
+    assert result.report["history"]["read_only"] is True
+    assert any(item.action == "confirm" for item in result.candidates)
+
+
+# -- staging errors ------------------------------------------------------------------------
+
+
+def test_staging_through_a_file_or_symlink_is_a_clean_error(tmp_path: Path) -> None:
+    from memfw.dream.stage import DreamStageError
+
+    root = _vault(tmp_path)
+    (root / "_candidates").write_text("not a directory", "utf-8")
+    with pytest.raises(DreamStageError):
+        run_dream(root, now=NOW, options=DreamOptions(dream_id="d1"))
+    (root / "_candidates").unlink()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (root / "_candidates").mkdir()
+    (root / "_candidates" / "dream").symlink_to(outside)
+    with pytest.raises(DreamStageError):
+        run_dream(root, now=NOW, options=DreamOptions(dream_id="d1"))
+    assert list(outside.iterdir()) == []

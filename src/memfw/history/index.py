@@ -387,15 +387,46 @@ class TranscriptIndex:
         sources: Iterable[SourceRoot],
         *,
         limits: HistoryLimits | None = None,
+        read_only: bool = False,
     ) -> None:
         self.db = Path(db)
         self.sources = {source.name: source for source in _unique(list(sources))}
         self.limits = limits or HistoryLimits()
+        self.read_only = read_only
+        """Never create or modify the index file (``refresh`` is refused)."""
         self._segment: Any = None
 
     # -- storage -----------------------------------------------------------------
 
+    def _connect_read_only(self) -> sqlite3.Connection:
+        if not self.db.is_file() or self.db.is_symlink():
+            raise HistoryError("no transcript index yet; run `memfw history index` first")
+        base = self.db.resolve().as_uri()
+        current = None
+        connection: sqlite3.Connection | None = None
+        # mode=ro reads the WAL too; when the WAL side files are missing and cannot
+        # be used read-only, fall back to an immutable snapshot of the main file.
+        for query in ("?mode=ro", "?mode=ro&immutable=1"):
+            connection = sqlite3.connect(base + query, uri=True, timeout=30)
+            connection.row_factory = sqlite3.Row
+            try:
+                current = connection.execute(
+                    "SELECT value FROM meta WHERE key = 'schema_version'"
+                ).fetchone()
+                break
+            except sqlite3.DatabaseError:
+                connection.close()
+                connection = None
+        if connection is None:
+            raise HistoryError("transcript index is unreadable; refresh it first")
+        if current is None or current["value"] != SCHEMA_VERSION:
+            connection.close()
+            raise HistoryError("transcript index has an old layout; refresh it first")
+        return connection
+
     def _connect(self) -> sqlite3.Connection:
+        if self.read_only:
+            return self._connect_read_only()
         self.db.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(self.db, timeout=30)
         connection.row_factory = sqlite3.Row
@@ -552,6 +583,8 @@ class TranscriptIndex:
         the refresh.
         """
 
+        if self.read_only:
+            raise HistoryError("this transcript index was opened read-only")
         counts: dict[str, Any] = {
             "files_indexed": 0,
             "files_resumed": 0,

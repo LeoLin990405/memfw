@@ -23,6 +23,7 @@ from memfw.core.errors import IntegrityError
 from memfw.core.repository import Repository
 from memfw.dream import DreamOptions, classify, load_judge, run_dream
 from memfw.dream.stage import DreamExistsError
+from memfw.history import TranscriptIndex, default_db, sources_from_config
 
 NOW = datetime(2026, 3, 1, 12, 0, tzinfo=UTC)
 REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*:[0-9a-f]{16}@\d+$")
@@ -98,7 +99,15 @@ def _vault(tmp_path: Path, *, history: bool = True) -> Path:
         config = repository.read_config()
         config["history_sources"] = {"logs": str(logs)}
         repository.configure(config)
+        _build_index(root)
     return root
+
+
+def _build_index(root: Path) -> None:
+    """Dry runs never build the transcript index; tests build it up front."""
+
+    config = Repository(root).read_config()
+    TranscriptIndex(default_db(root), sources_from_config(config)).refresh()
 
 
 def _vault_state(root: Path) -> dict[str, str]:

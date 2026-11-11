@@ -97,7 +97,7 @@ def _dream_id(repository: Repository, options: DreamOptions, now: datetime) -> s
 
 
 def _history(
-    repository: Repository, config: dict[str, Any], refresh: bool
+    repository: Repository, config: dict[str, Any], refresh: bool, *, dry_run: bool = False
 ) -> tuple[TranscriptIndex | None, dict[str, Any]]:
     try:
         sources = sources_from_config(config)
@@ -105,9 +105,29 @@ def _history(
         return None, {"available": False, "reason": str(exc)}
     if not sources:
         return None, {"available": False, "reason": "no history_sources in vault.yaml"}
-    index = TranscriptIndex(
-        default_db(repository.root), sources, limits=HistoryLimits.from_config(config)
-    )
+    db = default_db(repository.root)
+    if dry_run:
+        # A dry run writes nothing, not even the derived index: read an existing
+        # index as an immutable snapshot, or report that there is none.
+        if not db.is_file():
+            return None, {
+                "available": False,
+                "reason": "no transcript index yet (dry runs never build one); "
+                "run `memfw history index` first",
+            }
+        index = TranscriptIndex(
+            db, sources, limits=HistoryLimits.from_config(config), read_only=True
+        )
+        try:
+            index.stats()
+        except HistoryError as exc:
+            return None, {"available": False, "reason": str(exc)}
+        return index, {
+            "available": True,
+            "sources": sorted(item.name for item in sources),
+            "read_only": True,
+        }
+    index = TranscriptIndex(db, sources, limits=HistoryLimits.from_config(config))
     info: dict[str, Any] = {"available": True, "sources": sorted(item.name for item in sources)}
     if refresh:
         try:
@@ -153,7 +173,7 @@ def run_dream(
         if options.all_memories
         else cited(documents)
     )[: max(0, options.limit)]
-    index, history_info = _history(repository, config, options.refresh)
+    index, history_info = _history(repository, config, options.refresh, dry_run=dry_run)
     verified, stats = verify(
         to_verify,
         index,

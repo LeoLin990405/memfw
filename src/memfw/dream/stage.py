@@ -68,13 +68,45 @@ def render_concept(dream_id: str, oid: str, candidates: list[Candidate], created
     return f"---\n{dumped}\n---\n\n" + "\n".join(lines) + "\n"
 
 
-def _write_new(path: Path, text: str) -> None:
+class DreamStageError(ValueError):
+    """The staging area is unusable (a symlink, a file, or not writable)."""
+
+
+_DIR_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+
+def _child_dir(parent: int, name: str, *, create: bool) -> int:
+    """Open (creating if asked) directory ``name`` under the open ``parent``, never
+    following a symlink."""
+
+    if create:
+        try:
+            os.mkdir(name, 0o700, dir_fd=parent)
+        except FileExistsError:
+            pass
+    try:
+        return os.open(name, _DIR_FLAGS, dir_fd=parent)
+    except OSError as exc:
+        raise DreamStageError(
+            f"refusing to stage dreams: {name} is not a plain directory ({exc.strerror})"
+        ) from exc
+
+
+def _write_new(directory: int, name: str, text: str) -> None:
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags, 0o600)
+    descriptor = os.open(name, flags, 0o600, dir_fd=directory)
     with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
         handle.write(text)
         handle.flush()
         os.fsync(handle.fileno())
+
+
+def _exists(directory: int, name: str) -> bool:
+    try:
+        os.stat(name, dir_fd=directory, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return True
 
 
 def stage(
@@ -85,45 +117,72 @@ def stage(
     *,
     created_at: str,
 ) -> Path:
-    """Publish one dream; return its directory (relative to the vault)."""
+    """Publish one dream; return its directory (relative to the vault).
+
+    Every step works on directory file descriptors (``openat``-style), so a
+    symlink swapped into the staging path is refused, not followed.
+    """
 
     check_dream_id(dream_id)
-    base = Path(vault) / DREAM_DIR
-    for part in (Path(vault) / "_candidates", base):
-        if part.is_symlink():
-            raise ValueError(f"refusing to stage through a symlink: {part.name}")
-    base.mkdir(parents=True, exist_ok=True)
-    final = base / dream_id
-    if final.exists() or final.is_symlink():
-        raise DreamExistsError(f"dream {dream_id} is already staged")
-    temporary = base / f".tmp-{dream_id}-{os.getpid()}"
-    temporary.mkdir(mode=0o700)
+    opened: list[int] = []
     try:
-        names: dict[str, str] = {}
-        for oid, items in group_by_concept(candidates).items():
-            name = candidate_filename(oid)
-            if name in names.values():
-                stem = name[:-3]
-                counter = 2
-                while f"{stem}-{counter}.md" in names.values():
-                    counter += 1
-                name = f"{stem}-{counter}.md"
-            names[oid] = name
-            _write_new(temporary / name, render_concept(dream_id, oid, items, created_at))
-        report = {**report, "files": names}
-        _write_new(
-            temporary / "report.json",
-            json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        )
-        # One rename publishes the whole dream; it fails if another dream won.
+        root = os.open(Path(vault), _DIR_FLAGS & ~getattr(os, "O_NOFOLLOW", 0))
+        opened.append(root)
+        candidates_dir = _child_dir(root, DREAM_DIR.parts[0], create=True)
+        opened.append(candidates_dir)
+        base = _child_dir(candidates_dir, DREAM_DIR.parts[1], create=True)
+        opened.append(base)
+        if _exists(base, dream_id):
+            raise DreamExistsError(f"dream {dream_id} is already staged")
+        temporary = f".tmp-{dream_id}-{os.getpid()}-{os.urandom(4).hex()}"
         try:
-            os.rename(temporary, final)
+            os.mkdir(temporary, 0o700, dir_fd=base)
         except OSError as exc:
-            raise DreamExistsError(f"dream {dream_id} is already staged") from exc
-    except BaseException:
-        for leftover in sorted(temporary.glob("*")) if temporary.exists() else []:
-            leftover.unlink()
-        if temporary.exists():
-            temporary.rmdir()
-        raise
-    return final.relative_to(Path(vault))
+            raise DreamStageError(f"cannot create a staging directory: {exc.strerror}") from exc
+        work = _child_dir(base, temporary, create=False)
+        opened.append(work)
+        written: list[str] = []
+        try:
+            names: dict[str, str] = {}
+            for oid, items in group_by_concept(candidates).items():
+                name = candidate_filename(oid)
+                if name in names.values():
+                    stem = name[:-3]
+                    counter = 2
+                    while f"{stem}-{counter}.md" in names.values():
+                        counter += 1
+                    name = f"{stem}-{counter}.md"
+                names[oid] = name
+                _write_new(work, name, render_concept(dream_id, oid, items, created_at))
+                written.append(name)
+            full_report = {**report, "files": names}
+            _write_new(
+                work,
+                "report.json",
+                json.dumps(full_report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            )
+            written.append("report.json")
+            # One rename publishes the whole dream; it fails if another dream won.
+            if _exists(base, dream_id):
+                raise DreamExistsError(f"dream {dream_id} is already staged")
+            try:
+                os.rename(temporary, dream_id, src_dir_fd=base, dst_dir_fd=base)
+            except OSError as exc:
+                raise DreamExistsError(f"dream {dream_id} is already staged") from exc
+        except BaseException:
+            for name in written:
+                try:
+                    os.unlink(name, dir_fd=work)
+                except OSError:
+                    pass
+            try:
+                os.rmdir(temporary, dir_fd=base)
+            except OSError:
+                pass
+            raise
+    except NotADirectoryError as exc:
+        raise DreamStageError(f"refusing to stage dreams: {exc.strerror}") from exc
+    finally:
+        for descriptor in reversed(opened):
+            os.close(descriptor)
+    return DREAM_DIR / dream_id

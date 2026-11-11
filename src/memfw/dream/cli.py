@@ -12,7 +12,7 @@ import typer
 from ..core.errors import MemfwError
 from ..history import HistoryError
 from .run import MAX_SESSIONS, DreamOptions, run_dream
-from .stage import DreamExistsError
+from .stage import DreamExistsError, DreamStageError
 
 app = typer.Typer(
     help="Offline memory consolidation that only stages candidates", no_args_is_help=True
@@ -89,7 +89,15 @@ def dream_run(
     )
     try:
         result = run_dream(root, now=_now(now), dry_run=dry_run, options=options)
-    except (DreamExistsError, HistoryError, MemfwError, ValueError, ImportError) as exc:
+    except (
+        DreamExistsError,
+        DreamStageError,
+        HistoryError,
+        MemfwError,
+        ValueError,
+        ImportError,
+        OSError,
+    ) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(2) from exc
     typer.echo(json.dumps(result.as_dict(), ensure_ascii=False, indent=2))
