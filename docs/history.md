@@ -172,15 +172,17 @@ Secret patterns:
   after the key word (`SECRET_KEY_BASE`, `DB_PASSWORD_PROD`, `password1`,
   `api_key_v2`; descriptive suffixes such as `_type`, `_name`, `_hash`,
   `_header`, `_id`, `_file`, `_path`, `_url`, `_len`/`_length`, `_count`,
-  `_ref` do not count, so `token_type: bearer` is not a secret), and `pass` after a common owner (`dbPass`, `adminPass`); with
+  `_ref` do not count, so `token_type: bearer` is not a secret; `secret_id`,
+  e.g. a Vault AppRole secret id, is always a credential), and `pass` after a common owner (`dbPass`, `adminPass`); with
   `:`, `=` or `=>`, quoted or bare, a YAML block indicator (`PASSWORD: |`
   followed by the value on the next line), and pairs split across up to three
   line breaks;
 - values may contain `@` (`DB_PASSWORD=P@ss...`); inside a URL the userinfo
   rule masks only what comes before the host;
 - command-line flags followed by a value: `--password VALUE`, `-token VALUE`,
-  `--api-key VALUE`, ...; not when the value is a path or file name, another
-  flag, or a short plain word (it needs a digit or symbol, or 12+ letters);
+  `--api-key VALUE`, ...; not when the value is a path (starting with `/`,
+  `./`, `../` or `~`), a file name, another flag, or a short plain word (it
+  needs a digit or symbol, or 12+ letters);
   obvious placeholders (`null`, `changeme`, `${VAR}`, `<...>`, short numbers,
   an existing `[REDACTED:...]` marker) are ignored.
 
@@ -214,6 +216,10 @@ Limitations (not detected):
   other ways (base64 of a whole config, URL-encoded, split over more than
   three line breaks or over non-adjacent entries);
 - IPv6 addresses and hostnames are not masked;
+- a raw `@` inside a URL password (not allowed by RFC 3986, which requires
+  `%40`) ends the userinfo early: the rest of the password and the host are
+  then masked as an e-mail address, so `redact()` output can hide the host.
+  The secret scan still flags such a line, so it is never indexed;
 - a secret that slips through ends up in a snippet; delete the index file to
   purge it, then re-index.
 
