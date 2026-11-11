@@ -55,17 +55,24 @@ _KEY = (
 _VALUE = (
     r"(?!\\?[\"']?\[REDACTED)"
     r"(?:\"(?P<dq>(?:[^\"\r\n\\]|\\(?!\")){4,256})\\?\"|'(?P<sq>[^'\r\n\\]{4,256})'"
-    # A bare value stops at "@", so user:token@host keeps the host visible.
-    r"|(?P<bare>[^\s\"',;}\]\[\\@]{4,256}))"
+    r"|(?P<bare>[^\s\"',;}\]\[\\]{4,256}))"
 )
 # Key: up to 128 characters glued in front (spring.datasource...password,
 # SPRING_..._PASSWORD), the key word, then up to three short suffixes after a
 # separator or digits (SECRET_KEY_BASE, DB_PASSWORD_PROD, password1, api_key_v2).
 # Separator: ":", "=" or "=>", optionally a YAML block indicator ("|", ">").
+# Suffixes that name something about a credential rather than the credential
+# itself (token_type, password_hash, api_key_header, secret_name, ...).
+_BENIGN_SUFFIX = (
+    r"(?!(?:type|name|hash|header|id|file|path|url|len|length|count|ref|min|max|"
+    r"policy|prompt|reset|expiry|expires|ttl)(?![A-Za-z0-9]))"
+)
 _KV = re.compile(
     r"(?i)(?<![A-Za-z0-9_.-])(?P<key>[A-Za-z0-9_.-]{0,128}?(?:"
     + _KEY
-    + r")(?:[_-][A-Za-z0-9]{1,16}|[0-9]{1,4}){0,3})\\?[\"']?[ \t]{0,8}(?:=>|[:=])[ \t]{0,8}"
+    + r")(?:[_-]"
+    + _BENIGN_SUFFIX
+    + r"[A-Za-z0-9]{1,16}|[0-9]{1,4}){0,3})\\?[\"']?[ \t]{0,8}(?:=>|[:=])[ \t]{0,8}"
     r"(?:[|>][-+]?[ \t]{0,8})?"
     r"(?:(?:\\r)?(?:\\n|\r?\n)[ \t]{0,16}){0,3}\\?" + _VALUE
 )
@@ -88,7 +95,7 @@ _PEM_BLOCK = re.compile(
 _PEM_HEADER = re.compile(r"-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY[A-Z0-9 ]{0,40}-----")
 _URL_CREDENTIALS = re.compile(
     r"(?i)(?<![a-z0-9+.-])(?P<scheme>[a-z][a-z0-9+.-]{1,20}://)"
-    r"(?P<user>[^\s/:@\"'<>]{1,256}):(?P<password>[^\s/@\"'<>]{1,256})@"
+    r"(?P<user>[^\s/:@\"'<>]{0,256}):(?P<password>[^\s/@\"'<>]{1,256})@"
 )
 _TOKEN_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("aws_access_key", re.compile(r"(?:AKIA|ASIA)[0-9A-Z]{16}(?![0-9A-Z])")),
@@ -212,7 +219,7 @@ def _findings(value: str) -> list[Finding]:
             continue
         findings.append(Finding("key_value", match.start(), match.end()))
     for match in _FLAG.finditer(value):
-        if not _PLACEHOLDER.match(match.group("value")):
+        if _flag_value(match.group("value")):
             findings.append(Finding("cli_flag", match.start(), match.end()))
     findings.sort(key=lambda item: (item.start, item.end))
     return findings
@@ -240,6 +247,21 @@ def _blob_mixed(blob: str) -> bool:
     )
 
 
+_FILENAME = re.compile(r"[\w.~-]*\.[A-Za-z][A-Za-z0-9]{0,5}")
+
+
+def _flag_value(value: str) -> bool:
+    """Whether the word after ``--password`` / ``--token`` looks like a secret.
+
+    Not when it is a placeholder, a path or file name, or a short plain word
+    ("--token option"): it must contain a digit or symbol, or be 12+ letters.
+    """
+
+    if _PLACEHOLDER.match(value) or "/" in value or _FILENAME.fullmatch(value):
+        return False
+    return not value.isalpha() or len(value) >= 12
+
+
 def _secret_spans(value: str) -> list[tuple[int, int, str]]:
     spans: list[tuple[int, int, str]] = []
     for match in _PEM_BLOCK.finditer(value):
@@ -253,7 +275,7 @@ def _secret_spans(value: str) -> list[tuple[int, int, str]]:
         if not _PLACEHOLDER.match(secret.strip()):
             spans.append((start, end, "secret"))
     for match in _FLAG.finditer(value):
-        if not _PLACEHOLDER.match(match.group("value")):
+        if _flag_value(match.group("value")):
             spans.append((match.start("value"), match.end("value"), "secret"))
     return spans
 
@@ -293,8 +315,10 @@ def _apply(text: str, finders: tuple[Callable[[str], list[tuple[int, int, str]]]
     )
     if not spans:
         return text
-    # URL userinfo (user:pass@host) also looks like an e-mail address; there
-    # only the userinfo is masked, so host, port and path stay visible.
+    # URL userinfo also looks like an e-mail address, or like a key/value pair
+    # when the user name ends in a key word. The credentials mask covers the
+    # userinfo, and those overlapping matches are dropped, so host, port and
+    # path stay visible.
     credentials = [(start, end) for start, end, _rank, kind in spans if kind == "credentials"]
     if credentials:
         starts = [start for start, _end in credentials]
@@ -306,7 +330,11 @@ def _apply(text: str, finders: tuple[Callable[[str], list[tuple[int, int, str]]]
                 for i in range(max(0, index - 2), index)
             )
 
-        spans = [span for span in spans if span[3] != "email" or not inside_url(span[0], span[1])]
+        spans = [
+            span
+            for span in spans
+            if span[3] not in {"email", "secret"} or not inside_url(span[0], span[1])
+        ]
     merged: list[list[Any]] = []
     for start, end, rank, kind in spans:
         if merged and start < merged[-1][1]:
