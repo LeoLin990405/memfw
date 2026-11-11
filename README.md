@@ -130,7 +130,7 @@ Example client configuration (stdio):
 | `memory_context` | Token-budgeted resident context: anchors and procedural memories first |
 | `memory_status` | Vault size, layer/tier counts, and log summary |
 | `history_list` | List indexed transcript sessions with lineage; with `session`, its windows and entries (read-only) |
-| `history_search` | Search redacted transcript snippets; each hit carries a `SOURCE:PATH@OFFSET` ref (read-only) |
+| `history_search` | Search redacted transcript snippets; each hit carries a `SOURCE:FILE@OFFSET` ref (read-only) |
 | `history_read` | Redacted, size-capped window at a stored ref; refuses symlinks and paths outside configured roots |
 
 The server is deliberately local-only: no SSH, no remote host, no external search backend. If you
@@ -142,12 +142,13 @@ need those, build them in your application or adapter.
 JSONL, plain `.log`). Sources come from `history_sources` in `vault.yaml` or `--source NAME=PATH`;
 nothing is hard-coded. The derived index (`<vault>/.memfw-history.sqlite`) keeps only locations,
 lineage ids, timestamps and redacted snippets; entries that hit the secret scan are skipped, and
-raw lines never enter the index or the vault.
+raw lines never enter the index or the vault. If the vault itself is a git repository, add
+`.memfw-history.sqlite*` to its `.gitignore` or keep the index elsewhere with `--db`.
 
 ```sh
 memfw history index --root /path/to/vault
 memfw history search "migration rollback" --root /path/to/vault
-memfw history read 'codex:2026/01/rollout-example.jsonl@18342' --root /path/to/vault
+memfw history read 'codex:3f9c2a71d04e8b65@18342' --root /path/to/vault
 ```
 
 See [`docs/history.md`](docs/history.md) for formats, lineage, redaction and limits.

@@ -130,7 +130,7 @@ memfw-mcp --root localdata/demo-vault
 | `memory_context` | 按 token 预算返回常驻上下文：anchor 与 procedural 优先 |
 | `memory_status` | vault 规模、layer/tier 统计与日志摘要 |
 | `history_list` | 列出已索引的会话记录及其谱系；指定 `session` 时列出其上下文窗口与条目（只读） |
-| `history_search` | 检索脱敏后的会话片段；每条命中带 `SOURCE:PATH@OFFSET` 引用（只读） |
+| `history_search` | 检索脱敏后的会话片段；每条命中带 `SOURCE:FILE@OFFSET` 引用（只读） |
 | `history_read` | 按已存储的引用读取脱敏且限长的窗口；拒绝符号链接和配置根目录以外的路径 |
 
 服务刻意保持本地化：无 SSH、无远程主机、无外部检索后端。需要这些能力时，请在应用或适配器中实现。
@@ -140,12 +140,13 @@ memfw-mcp --root localdata/demo-vault
 `memfw history` 是面向 Agent 会话日志（Claude Code、Codex、Conductor JSONL、纯文本 `.log`）的只读索引。
 来源来自 `vault.yaml` 中的 `history_sources` 或 `--source NAME=PATH`，不做任何硬编码。派生索引
 （`<vault>/.memfw-history.sqlite`）只保存位置、谱系 id、时间戳和脱敏片段；命中密钥扫描的条目直接跳过，
-原始日志行不会进入索引或 vault。
+原始日志行不会进入索引或 vault。如果 vault 本身是 git 仓库，请把 `.memfw-history.sqlite*` 加进它的
+`.gitignore`，或用 `--db` 把索引放到 vault 之外。
 
 ```sh
 memfw history index --root /path/to/vault
 memfw history search "migration rollback" --root /path/to/vault
-memfw history read 'codex:2026/01/rollout-example.jsonl@18342' --root /path/to/vault
+memfw history read 'codex:3f9c2a71d04e8b65@18342' --root /path/to/vault
 ```
 
 格式、谱系、脱敏规则与局限见 [`docs/history.md`](docs/history.md)。
