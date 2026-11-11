@@ -54,7 +54,7 @@ memfw is the engine only. It makes no assumptions about hosts, SSH or external s
 - **Concepts and aliases.** One canonical concept per thing, with aliases (`memfw concepts`), so searching any alias finds every memory about that concept. An alias can be scoped (`{label, scope}`) so it only resolves for searches that pass the same `scope`; existing scoped aliases no longer match searches without that scope.
 - **Deterministic retention.** Five policies (`fifo`, `lru`, `decay`, `salience`, `consolidate_then_forget`), with budgets and reviewable plans.
 - **Human-gated writes.** Model writes need confirmation, and anchor decisions stay with a person.
-- **Local MCP server.** `memfw-mcp` serves search/get/remember/status over stdio for one vault.
+- **Local MCP server.** `memfw-mcp` serves search/get/remember/status, plus read-only transcript history, over stdio for one vault.
 - **OKF export.** Export a vault as a standards-based OKF v0.2 bundle.
 
 ## 🧠 Architecture
@@ -129,9 +129,28 @@ Example client configuration (stdio):
 | `memory_related` | Read derived related-memory edges (read-only) |
 | `memory_context` | Token-budgeted resident context: anchors and procedural memories first |
 | `memory_status` | Vault size, layer/tier counts, and log summary |
+| `history_list` | List indexed transcript sessions with lineage; with `session`, its windows and entries (read-only) |
+| `history_search` | Search redacted transcript snippets; each hit carries a `SOURCE:PATH@OFFSET` ref (read-only) |
+| `history_read` | Redacted, size-capped window at a stored ref; refuses symlinks and paths outside configured roots |
 
 The server is deliberately local-only: no SSH, no remote host, no external search backend. If you
 need those, build them in your application or adapter.
+
+## 🗂️ Transcript history
+
+`memfw history` is a read-only index over agent session logs (Claude Code, Codex, Conductor
+JSONL, plain `.log`). Sources come from `history_sources` in `vault.yaml` or `--source NAME=PATH`;
+nothing is hard-coded. The derived index (`<vault>/.memfw-history.sqlite`) keeps only locations,
+lineage ids, timestamps and redacted snippets; entries that hit the secret scan are skipped, and
+raw lines never enter the index or the vault.
+
+```sh
+memfw history index --root /path/to/vault
+memfw history search "migration rollback" --root /path/to/vault
+memfw history read 'codex:2026/01/rollout-example.jsonl@18342' --root /path/to/vault
+```
+
+See [`docs/history.md`](docs/history.md) for formats, lineage, redaction and limits.
 
 ## 📚 OKF projection
 

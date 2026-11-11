@@ -22,6 +22,7 @@ from .core.models import Layer, Tier
 from .core.repository import Repository
 from .curation.engine import enforce_budget, plan_forget, run_forget
 from .curation.review_cli import review_command as run_review
+from .history.cli import app as history_app
 from .index import MemoryIndex
 from .notes import (
     FeedbackStore,
@@ -84,6 +85,7 @@ app.add_typer(tier_alias_app, name="tier")
 app.add_typer(layer_alias_app, name="layer")
 app.add_typer(capture_app, name="capture")
 app.add_typer(concepts_app, name="concepts")
+app.add_typer(history_app, name="history")
 capture_app.command(name="confirm")(confirm_command)
 
 
