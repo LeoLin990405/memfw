@@ -36,7 +36,7 @@ from memfw.capture.suggestions import suggest_related
 from memfw.core.errors import NotFoundError
 from memfw.core.models import Layer, Tier
 from memfw.core.repository import Repository
-from memfw.history import TranscriptIndex, default_db, sources_from_config
+from memfw.history import HistoryLimits, TranscriptIndex, default_db, sources_from_config
 from memfw.index import MemoryIndex
 from memfw.memory_hybrid import MemoryHybridRetriever, shared_readonly
 from memfw.notes import HttpEmbeddingProvider
@@ -162,7 +162,7 @@ TOOLS: list[dict[str, Any]] = [
         "name": "history_read",
         "description": (
             "Read the redacted, size-capped window of entries at a stored ref "
-            "(SOURCE:PATH@OFFSET); refuses symlinks and paths outside configured roots."
+            "(SOURCE:FILE@OFFSET); refuses symlinks and paths outside configured roots."
         ),
         "inputSchema": {
             "type": "object",
@@ -554,6 +554,9 @@ class Gateway:
                     dimension=int(os.environ.get("MEMFW_EMBEDDING_DIMENSION", "1024")),
                 )
         self.embedder = embedder
+        self.history_refresh_seconds = float(
+            os.environ.get("MEMFW_HISTORY_REFRESH_SECONDS", "30") or 0
+        )
 
     def _alias_candidates(
         self,
@@ -988,13 +991,20 @@ class Gateway:
         }
 
     def _history(self) -> TranscriptIndex:
-        """Transcript index from ``history_sources`` in vault.yaml; refreshed per call."""
+        """Transcript index from ``history_sources`` in vault.yaml.
+
+        Refreshed incrementally, at most once per ``MEMFW_HISTORY_REFRESH_SECONDS``
+        (default 30); concurrent refreshes are serialised by the index's lock.
+        """
         repository = self._repo()
-        sources = sources_from_config(repository.read_config())
+        config = repository.read_config()
+        sources = sources_from_config(config)
         if not sources:
             raise ValueError("no history_sources configured in vault.yaml")
-        index = TranscriptIndex(default_db(repository.root), sources)
-        index.refresh()
+        index = TranscriptIndex(
+            default_db(repository.root), sources, limits=HistoryLimits.from_config(config)
+        )
+        index.refresh(min_interval=self.history_refresh_seconds)
         return index
 
     def history_list(

@@ -233,7 +233,9 @@ def test_list_sessions_with_lineage(tmp_path: Path, roots: dict[str, Path]) -> N
     assert [entry["entry_id"] for entry in entries] == ["a1", "a2", "a2b", "a3", "a4"]
     assert entries[1]["parent_entry_id"] == "a1"
     assert all(entry["timestamp"] for entry in entries)
-    assert entries[0]["ref"] == "agents:project/alpha.jsonl@0"
+    assert entries[0]["path"] == "project/alpha.jsonl"
+    assert entries[0]["ref"].startswith("agents:") and entries[0]["ref"].endswith("@0")
+    assert "alpha" not in entries[0]["ref"]
     assert index.list(source="conductor")["sessions"]
     assert {row["session_id"] for row in index.list(since="2026-01-02")["sessions"]} == {
         "sess-beta"
@@ -441,14 +443,17 @@ def test_incremental_reindex(tmp_path: Path, roots: dict[str, Path]) -> None:
     with log.open("a", encoding="utf-8") as handle:
         handle.write("pump queue refilled\n")
     third = index.refresh()
-    assert third["files_indexed"] == 1 and third["files_unchanged"] == 3
+    assert third["files_resumed"] == 1 and third["files_unchanged"] == 3
+    assert third["entries_indexed"] == 1
     assert index.search("refilled")["results"]
 
-    # Same size, new mtime: still re-indexed.
+    # Same size, new mtime: revisited (resumed, since its content still matches).
     ticket = roots["conductor"] / "ticket-77.jsonl"
     stat = ticket.stat()
     os.utime(ticket, ns=(stat.st_atime_ns, stat.st_mtime_ns + 5_000_000_000))
-    assert index.refresh()["files_indexed"] == 1
+    touched = index.refresh()
+    assert touched["files_resumed"] + touched["files_indexed"] == 1
+    assert touched["entries_indexed"] == 0
 
     ticket.unlink()
     fourth = index.refresh()

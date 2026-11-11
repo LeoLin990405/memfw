@@ -20,7 +20,7 @@ ids (``parent_window_id``, ``previous_window_id``) are used when present.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -38,6 +38,56 @@ _WINDOW_KEYS = ("context_window_id", "window_id", "windowId")
 _PARENT_WINDOW_KEYS = ("parent_window_id", "previous_window_id", "parentWindowId")
 _TIME_KEYS = ("timestamp", "ts", "time", "created_at", "createdAt")
 _MAX_BLOCK_CHARS = 4000
+_MAX_DEPTH = 8
+_MAX_STRINGS = 20_000
+
+
+def iter_strings(value: Any, depth: int = 0) -> list[str]:
+    """Every decoded string in ``value``: keys, values, and JSON nested in strings.
+
+    The secret scan runs on each of them, so a credential that only appears
+    JSON-escaped in the raw line (``{\\"password\\": ...}``) is still seen in
+    its decoded form.
+    """
+
+    out: list[str] = []
+    stack: list[tuple[Any, int]] = [(value, depth)]
+    while stack and len(out) < _MAX_STRINGS:
+        item, level = stack.pop()
+        if isinstance(item, str):
+            out.append(item)
+            stripped = item.strip()
+            if level < _MAX_DEPTH and stripped[:1] in {"{", "["} and len(stripped) < 1_048_576:
+                try:
+                    nested = json.loads(stripped)
+                except ValueError:
+                    continue
+                stack.append((nested, level + 1))
+        elif isinstance(item, dict):
+            for key, child in item.items():
+                out.append(str(key))
+                stack.append((child, level + 1))
+        elif isinstance(item, list):
+            stack.extend((child, level + 1) for child in item)
+    return out
+
+
+def render(value: Any) -> str:
+    """Readable text for a tool input: decoded ``key: value`` pairs, not escaped JSON."""
+
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped[:1] in {"{", "["}:
+            try:
+                return render(json.loads(stripped))
+            except ValueError:
+                return value
+        return value
+    if isinstance(value, dict):
+        return "; ".join(f"{key}: {render(child)}" for key, child in value.items())
+    if isinstance(value, list):
+        return "; ".join(render(child) for child in value)
+    return "" if value is None else str(value)
 
 
 @dataclass
@@ -56,6 +106,23 @@ class Record:
     new_window: bool = False
     timestamp: str = ""
     agent: str = ""
+    strings: list[str] = field(default_factory=list)
+
+    def metadata(self) -> list[str]:
+        """Fields that are returned to callers besides the text."""
+
+        return [
+            self.role,
+            self.kind,
+            self.session_id,
+            self.parent_session_id,
+            self.entry_id,
+            self.parent_entry_id,
+            self.window_id,
+            self.parent_window_id,
+            self.timestamp,
+            self.agent,
+        ]
 
 
 def _str(value: Any) -> str:
@@ -108,8 +175,7 @@ def _blocks(content: Any) -> str:
         if kind in {"tool_use", "function_call"}:
             name = _str(block.get("name"))
             payload = block.get("input", block.get("arguments"))
-            rendered = payload if isinstance(payload, str) else json.dumps(payload, sort_keys=True)
-            parts.append(f"[tool {name}] {rendered[:_MAX_BLOCK_CHARS]}")
+            parts.append(f"[tool {name}] {render(payload)[:_MAX_BLOCK_CHARS]}")
             continue
         if kind == "tool_result":
             parts.append(_blocks(block.get("content"))[:_MAX_BLOCK_CHARS])
@@ -143,10 +209,7 @@ def _codex(raw: dict[str, Any], payload: dict[str, Any]) -> Record:
     elif item_type in {"function_call", "custom_tool_call", "local_shell_call"}:
         record.role = "tool"
         arguments = payload.get("arguments", payload.get("input", payload.get("action")))
-        rendered = (
-            arguments if isinstance(arguments, str) else json.dumps(arguments, sort_keys=True)
-        )
-        record.text = f"[tool {_str(payload.get('name'))}] {rendered[:_MAX_BLOCK_CHARS]}"
+        record.text = f"[tool {_str(payload.get('name'))}] {render(arguments)[:_MAX_BLOCK_CHARS]}"
     elif item_type in {"function_call_output", "custom_tool_call_output"}:
         record.role = "tool"
         output = payload.get("output")
@@ -222,7 +285,7 @@ def parse_line(line: str, *, jsonl: bool) -> Record | None:
     if not stripped:
         return None
     if not jsonl:
-        return Record(text=stripped, kind="line", agent="log")
+        return Record(text=stripped, kind="line", agent="log", strings=[stripped])
     try:
         raw = json.loads(stripped)
     except json.JSONDecodeError:
@@ -231,7 +294,10 @@ def parse_line(line: str, *, jsonl: bool) -> Record | None:
         return None
     payload = raw.get("payload")
     if isinstance(payload, dict) and "type" in raw:
-        return _codex(raw, payload)
-    if "sessionId" in raw or ("message" in raw and "uuid" in raw):
-        return _claude(raw)
-    return _generic(raw)
+        record = _codex(raw, payload)
+    elif "sessionId" in raw or ("message" in raw and "uuid" in raw):
+        record = _claude(raw)
+    else:
+        record = _generic(raw)
+    record.strings = iter_strings(raw)
+    return record

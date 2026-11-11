@@ -11,6 +11,7 @@ from ..core.errors import MemfwError
 from ..core.repository import Repository
 from .index import (
     HistoryError,
+    HistoryLimits,
     SourceRoot,
     TranscriptIndex,
     default_db,
@@ -41,15 +42,19 @@ def open_index(root: Path, sources: list[str] | None, db: Path | None) -> Transc
     """Build an index from CLI sources, else from ``history_sources`` in vault.yaml."""
 
     roots: list[SourceRoot]
+    repository = Repository(root)
+    config: dict[str, Any] = repository.read_config() if repository.config_path.exists() else {}
     if sources:
         roots = [parse_source_option(item) for item in sources]
     else:
-        repository = Repository(root)
-        config: dict[str, Any] = repository.read_config() if repository.config_path.exists() else {}
         roots = sources_from_config(config)
     if not roots:
         raise HistoryError("no history sources: set history_sources in vault.yaml or pass --source")
-    return TranscriptIndex(db or default_db(Path(root).expanduser().resolve()), roots)
+    return TranscriptIndex(
+        db or default_db(Path(root).expanduser().resolve()),
+        roots,
+        limits=HistoryLimits.from_config(config),
+    )
 
 
 def _run(action: Any) -> None:
@@ -126,7 +131,7 @@ def history_search(
 
 @app.command("read")
 def history_read(
-    ref: Annotated[str, typer.Argument(help="SOURCE:PATH@OFFSET from list or search")],
+    ref: Annotated[str, typer.Argument(help="SOURCE:FILE@OFFSET from list or search")],
     root: RootOption = Path("."),
     source: SourceOption = None,
     db: DbOption = None,
