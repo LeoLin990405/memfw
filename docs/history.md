@@ -119,11 +119,13 @@ Windows:
 Every line is scanned before it is indexed. The scan covers:
 
 - the raw line;
-- every decoded string of the parsed JSON (keys and values, recursively,
-  including JSON nested inside strings, decoded up to 8 levels), so a
-  credential that only appears JSON-escaped in the raw line, such as a
-  `curl -d '{"password": ...}'` tool input, is still found. Past that bound a
-  string stays opaque, and a copy with backslashes removed is scanned too;
+- every decoded string of the parsed JSON (keys, values and each decoded
+  `key: value` pair, recursively, including JSON nested inside strings,
+  decoded up to 8 levels), so a credential that only appears JSON-escaped in
+  the raw line, such as a `curl -d '{"password": ...}'` tool input or a
+  `\u`-escaped key, is still found. Past that bound a string stays opaque,
+  and a copy with every escaping layer undone (`\uXXXX`, `\n`, backslashes)
+  is scanned too;
 - the metadata fields returned to callers (session, parent, window and entry
   ids, role, kind, agent, timestamp);
 - the decoded text joined to the tail of the previous non-empty entry, so a key
@@ -131,8 +133,9 @@ Every line is scanned before it is indexed. The scan covers:
   them do not break the pair).
 
 Matching runs on a normalised view: NFKC (a fullwidth colon or a no-break
-space becomes ASCII) with every Unicode format character (category Cf:
-zero-width, bidi marks, invisible operators) plus U+034F and U+180E removed.
+space becomes ASCII, a circled digit becomes a digit) with every Unicode
+format character (category Cf: zero-width, bidi marks, invisible operators),
+every combining mark (Mn, Me), U+FE0F, U+20E3, U+034F and U+180E removed.
 Masks are mapped back onto the original text, so snippets and windows show
 the original characters (`x²` stays `x²`) with masks applied. All patterns
 are anchored and bounded, so scanning is linear; a line over 1 MiB is
@@ -141,21 +144,27 @@ skipped, not scanned.
 Hostile structure never aborts a refresh: a line nested past the
 interpreter's recursion limit, or with more than 100000 strings, is skipped
 (`skipped_other`); tool inputs are rendered at most 16 levels deep (deeper
-parts show as `…`); and each file is indexed in its own savepoint, so any
-other failure rolls back only that file and is counted as `files_failed`.
+parts show as `…`, but are still scanned); and each file is indexed and
+committed on its own, so any other failure rolls back only that file and is
+counted as `files_failed`. A file that fails twice without changing is
+skipped (`files_skipped_failing`) until its size, mtime or inode changes.
 
 Secret patterns:
 
 - private key PEM headers (`-----BEGIN ... PRIVATE KEY-----`);
 - URLs with `user:pass@` credentials;
-- token shapes: AWS access keys (also glued to a word), GitHub and GitLab
+- token shapes (a digit glued in front, as in `1sk-...`, still counts as a
+  boundary): AWS access keys (also glued to a word), GitHub and GitLab
   tokens, `sk-` API keys, Stripe `sk_live_` / `sk_test_` keys, Hugging Face
   `hf_`, npm `npm_`, Slack, Google API keys and OAuth tokens, JWTs,
   `Authorization: Basic|Bearer|Token ...` headers and `Bearer` tokens;
 - command-line credentials: `curl -u user:pass`, `mysql -pPASSWORD`;
 - secret key/value pairs (`password`, `PGPASSWORD`, `SECRET_KEY`, `token`,
-  `api_key`, `x-api-key`, `client_secret`, `access_token`, ...), with `:` or
-  `=`, quoted or bare, including pairs split across up to three line breaks;
+  `api_key`, `x-api-key`, `client_secret`, `access_token`, ...), also with up
+  to 32 characters glued in front (`dbPassword`, `jwtSecret`, `githubToken`,
+  `mypassword`, `app.secret`), and `pass` after a common owner (`dbPass`,
+  `adminPass`); with `:` or `=`, quoted or bare, including pairs split across
+  up to three line breaks;
   obvious placeholders (`null`, `changeme`, `${VAR}`, `<...>`, short numbers,
   an existing `[REDACTED:...]` marker) are ignored.
 
@@ -168,10 +177,13 @@ Behaviour:
   `-Users-<name>-` project directories that Claude Code uses) and long
   mixed-case base64-like blobs, in every snippet, field, path and read window,
   e.g. `[REDACTED:email]`, `[REDACTED:ip]`, `-Users-[REDACTED:user]-`,
-  `[REDACTED:blob]`, `[REDACTED:secret]`. Redaction is idempotent.
+  `[REDACTED:blob]`, `[REDACTED:secret]`. Overlapping matches are masked as
+  their union (a token inside an e-mail address hides the whole address).
+  Redaction is idempotent.
 
 Limitations (not detected):
 
+- key names with more than 32 characters glued in front;
 - secrets in prose ("the password is ..."), and values shorter than four
   characters;
 - custom or unknown token formats without a key name, and high-entropy strings
@@ -202,11 +214,15 @@ Limitations (not detected):
   the already-open parent directory, and the opened inode must match the
   walk's, so a symlink swapped in during a refresh is refused
   (`files_refused`) rather than followed;
+- the index runs in SQLite WAL mode and a refresh commits after every file,
+  so `list`, `search` and `read` never wait for a refresh in progress; they
+  see the files committed so far;
 - refreshes are serialised by a lock file next to the index
-  (`.memfw-history.sqlite.lock`, opened with `O_NOFOLLOW`, never truncated).
-  The CLI waits up to 60 seconds and then fails with a clear error; the MCP
-  tools never wait: if another refresh holds the lock they serve the existing
-  index (`skipped_locked`);
+  (`.memfw-history.sqlite.lock`, opened with `O_NOFOLLOW`, never truncated,
+  and refused unless it is a regular file). The CLI waits up to 60 seconds
+  and then fails with a clear error; the MCP tools never wait: if another
+  refresh holds the lock they skip refreshing (`skipped_locked`) and answer
+  from the existing index straight away;
 - `list` and `search` refresh first by default; pass `--no-refresh` to query
   the index as it is;
 - symlinked files and directories under a root are never followed; they are
