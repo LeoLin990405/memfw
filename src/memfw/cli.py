@@ -22,6 +22,7 @@ from .core.models import Layer, Tier
 from .core.repository import Repository
 from .curation.engine import enforce_budget, plan_forget, run_forget
 from .curation.review_cli import review_command as run_review
+from .dream.cli import app as dream_app
 from .history.cli import app as history_app
 from .index import MemoryIndex
 from .notes import (
@@ -86,6 +87,7 @@ app.add_typer(layer_alias_app, name="layer")
 app.add_typer(capture_app, name="capture")
 app.add_typer(concepts_app, name="concepts")
 app.add_typer(history_app, name="history")
+app.add_typer(dream_app, name="dream")
 capture_app.command(name="confirm")(confirm_command)
 
 
@@ -1072,12 +1074,27 @@ def update(
     body: Annotated[str | None, typer.Option("--body")] = None,
     layer: Annotated[Layer | None, typer.Option()] = None,
     tier: Annotated[Tier | None, typer.Option()] = None,
+    status: Annotated[
+        str | None, typer.Option("--status", help="confirmed, unconfirmed or disputed")
+    ] = None,
+    evidence: Annotated[
+        list[str] | None, typer.Option("--evidence", help="history ref (repeatable)")
+    ] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run/--apply")] = False,
 ) -> None:
     """Update selected memory fields; --dry-run validates without writing."""
-    changes = {
+    if status is not None and status not in {"confirmed", "unconfirmed", "disputed"}:
+        raise typer.BadParameter("--status must be confirmed, unconfirmed or disputed")
+    changes: dict[str, Any] = {
         key: value
-        for key, value in {"title": title, "body": body, "layer": layer, "tier": tier}.items()
+        for key, value in {
+            "title": title,
+            "body": body,
+            "layer": layer,
+            "tier": tier,
+            "status": status,
+            "evidence": evidence,
+        }.items()
         if value is not None
     }
     try:
