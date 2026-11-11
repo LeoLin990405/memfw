@@ -147,12 +147,16 @@ interpreter's recursion limit, or with more than 100000 strings, is skipped
 parts show as `…`, but are still scanned); and each file is indexed and
 committed on its own, so any other failure rolls back only that file and is
 counted as `files_failed`. A file that fails twice without changing is
-skipped (`files_skipped_failing`) until its size, mtime or inode changes.
+skipped (`files_skipped_failing`) until its size, mtime or inode changes;
+`stats` reports how many files are in that state (`files_failing`), and the
+record is dropped together with the file.
 
 Secret patterns:
 
 - private key PEM headers (`-----BEGIN ... PRIVATE KEY-----`);
-- URLs with `user:pass@` credentials;
+- URLs with `user:pass@` credentials; only the userinfo before `@` is masked,
+  so host, port and path stay visible
+  (`https://[REDACTED:credentials]@db.example.com:5432/app`);
 - token shapes (a digit glued in front, as in `1sk-...`, still counts as a
   boundary): AWS access keys (also glued to a word), GitHub and GitLab
   tokens, `sk-` API keys, Stripe `sk_live_` / `sk_test_` keys, Hugging Face
@@ -161,10 +165,16 @@ Secret patterns:
 - command-line credentials: `curl -u user:pass`, `mysql -pPASSWORD`;
 - secret key/value pairs (`password`, `PGPASSWORD`, `SECRET_KEY`, `token`,
   `api_key`, `x-api-key`, `client_secret`, `access_token`, ...), also with up
-  to 32 characters glued in front (`dbPassword`, `jwtSecret`, `githubToken`,
-  `mypassword`, `app.secret`), and `pass` after a common owner (`dbPass`,
-  `adminPass`); with `:` or `=`, quoted or bare, including pairs split across
-  up to three line breaks;
+  to 128 characters glued in front (`dbPassword`, `jwtSecret`, `githubToken`,
+  `mypassword`, `spring.datasource.hikari.data-source-properties.password`,
+  `SPRING_DATASOURCE_HIKARI_CONNECTION_PASSWORD`), up to three short suffixes
+  after the key word (`SECRET_KEY_BASE`, `DB_PASSWORD_PROD`, `password1`,
+  `api_key_v2`), and `pass` after a common owner (`dbPass`, `adminPass`); with
+  `:`, `=` or `=>`, quoted or bare, a YAML block indicator (`PASSWORD: |`
+  followed by the value on the next line), and pairs split across up to three
+  line breaks;
+- command-line flags followed by a value: `--password VALUE`, `-token VALUE`,
+  `--api-key VALUE`, ...;
   obvious placeholders (`null`, `changeme`, `${VAR}`, `<...>`, short numbers,
   an existing `[REDACTED:...]` marker) are ignored.
 
@@ -178,12 +188,16 @@ Behaviour:
   mixed-case base64-like blobs, in every snippet, field, path and read window,
   e.g. `[REDACTED:email]`, `[REDACTED:ip]`, `-Users-[REDACTED:user]-`,
   `[REDACTED:blob]`, `[REDACTED:secret]`. Overlapping matches are masked as
-  their union (a token inside an e-mail address hides the whole address).
+  their union (a token inside an e-mail address hides the whole address),
+  except that URL userinfo is never widened into the host.
   Redaction is idempotent.
 
 Limitations (not detected):
 
-- key names with more than 32 characters glued in front;
+- key names with more than 128 characters glued in front, or more than three
+  suffixes after the key word;
+- a YAML block scalar whose value starts more than three lines below the key,
+  and the later lines of a multi-line value (only its first line is matched);
 - secrets in prose ("the password is ..."), and values shorter than four
   characters;
 - custom or unknown token formats without a key name, and high-entropy strings
@@ -216,7 +230,13 @@ Limitations (not detected):
   (`files_refused`) rather than followed;
 - the index runs in SQLite WAL mode and a refresh commits after every file,
   so `list`, `search` and `read` never wait for a refresh in progress; they
-  see the files committed so far;
+  see the files committed so far. When `read` finds a changed file it drops
+  it so the next refresh re-indexes it; if a refresh holds the write lock it
+  skips the drop (that refresh sees the change) and still reports the error;
+- **keep the index on a local disk.** SQLite WAL needs shared memory, and
+  `flock` advisory locks are not reliable on network file systems (NFS, SMB):
+  on such a mount readers can see a corrupt index and two refreshes can run at
+  once. Put the vault on local storage, or pass `--db` with a local path;
 - refreshes are serialised by a lock file next to the index
   (`.memfw-history.sqlite.lock`, opened with `O_NOFOLLOW`, never truncated,
   and refused unless it is a regular file). The CLI waits up to 60 seconds
