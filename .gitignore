@@ -94,3 +94,8 @@ results/stepG/multiconv/runtime_reuse/
 
 # CodeGraph local index
 .codegraph/
+
+# memfw history: derived transcript index
+.memfw-history.sqlite
+.memfw-history.sqlite-*
+.memfw-history.sqlite.lock
