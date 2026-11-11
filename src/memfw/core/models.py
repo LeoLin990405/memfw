@@ -158,6 +158,13 @@ class MemoryDocument(BaseModel):
     created_at: datetime
     updated_at: datetime
     body: str
+    _ignored_keys: tuple[str, ...] = PrivateAttr(default=())
+
+    @property
+    def ignored_keys(self) -> tuple[str, ...]:
+        """Frontmatter keys this version did not know and ignored when parsing."""
+
+        return self._ignored_keys
 
     @model_validator(mode="before")
     @classmethod

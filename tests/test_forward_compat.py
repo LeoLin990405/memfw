@@ -40,3 +40,15 @@ def test_other_validation_errors_are_still_rejected(tmp_path: Path) -> None:
     _add_keys(repository.root / "memories" / "m-bad.md", strength=5, future_flag=True)
     with pytest.raises(IntegrityError):
         repository.get("m-bad")
+
+
+def test_ignored_keys_are_reported_by_list_warnings(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "vault")
+    repository.init()
+    repository.add("Typo", "body", memory_id="m-typo")
+    _add_keys(repository.root / "memories" / "m-typo.md", tennant="team-a", valid_too="x")
+    documents = repository.list()
+    assert [item.id for item in documents] == ["m-typo"]
+    assert documents[0].ignored_keys == ("tennant", "valid_too")
+    warnings = repository.list_warnings()
+    assert any("m-typo.md" in item and "tennant, valid_too" in item for item in warnings)

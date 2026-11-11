@@ -279,7 +279,9 @@ class MarkdownStorageMixin:
                 raise IntegrityError(f"Invalid memory document: {exc}") from exc
             known = {key: value for key, value in metadata.items() if str(key) not in unknown}
             try:
-                return MemoryDocument.model_validate({**known, "body": body})
+                document = MemoryDocument.model_validate({**known, "body": body})
+                document._ignored_keys = tuple(sorted(unknown))
+                return document
             except Exception as retry:
                 raise IntegrityError(f"Invalid memory document: {retry}") from retry
         except Exception as exc:
