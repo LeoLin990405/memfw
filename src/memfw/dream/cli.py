@@ -60,6 +60,13 @@ def dream_run(
         str | None,
         typer.Option("--judge", help="Optional local judge module:function (off by default)"),
     ] = None,
+    allow_config_judge: Annotated[
+        bool,
+        typer.Option(
+            "--allow-config-judge",
+            help="Also honour dream_judge from vault.yaml (it names code to import)",
+        ),
+    ] = False,
     refresh: Annotated[bool, typer.Option("--refresh/--no-refresh")] = True,
     now: Annotated[str | None, typer.Option("--now", help="Inject an ISO-8601 UTC time")] = None,
 ) -> None:
@@ -78,6 +85,7 @@ def dream_run(
         stale_days=stale_days,
         dream_id=dream_id,
         judge=judge,
+        allow_config_judge=allow_config_judge,
     )
     try:
         result = run_dream(root, now=_now(now), dry_run=dry_run, options=options)

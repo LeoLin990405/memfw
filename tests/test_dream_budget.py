@@ -114,7 +114,14 @@ def test_config_injected_files(tmp_path: Path) -> None:
         outside / "CLAUDE.md",
     ]
     reports = check_budget(vault, config)
-    assert [report.path for report in reports] == ["MEMORY.md", "agents/AGENTS.md", "CLAUDE.md"]
+    measured = [report.path for report in reports if report.skipped is None]
+    assert measured == ["MEMORY.md", "agents/AGENTS.md", "CLAUDE.md"]
+    # Symlinks and directories are reported as skipped, never followed.
+    assert {report.skipped for report in reports if report.skipped} <= {
+        "symlink",
+        "not a regular file",
+    }
+    assert any(report.skipped == "symlink" for report in reports)
     for report in reports:
         assert not Path(report.path).is_absolute()
         assert str(tmp_path) not in report.path

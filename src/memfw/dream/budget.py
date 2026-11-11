@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from memfw.dream.model import Candidate
+from memfw.history.redact import has_secret, redact
 
 MAX_LINES = 200
 MAX_BYTES = 25 * 1024
@@ -35,6 +36,8 @@ class BudgetReport:
     bytes: int
     over: bool
     proposals: list[dict[str, Any]] = field(default_factory=list)
+    skipped: str | None = None
+    """Why the file was not measured (``symlink``, ``not a regular file``), if so."""
 
 
 def _is_regular_file(path: Path) -> bool:
@@ -46,11 +49,11 @@ def _is_regular_file(path: Path) -> bool:
         return False
 
 
-def injected_files(vault: Path, config: dict[str, Any]) -> list[Path]:
-    """``<vault>/MEMORY.md`` (when present) and the configured ``injected_files``.
+def _entries(vault: Path, config: dict[str, Any]) -> list[tuple[Path, str | None]]:
+    """Every configured injected path with why it is skipped (``None``: measure it).
 
-    Relative entries resolve against the vault; ``~`` is expanded. Missing files,
-    directories and symlinks are skipped. Order is kept, duplicates dropped.
+    Missing files are dropped silently; a symlink or a non-regular file is
+    reported, never followed.
     """
 
     entries = config.get("injected_files")
@@ -58,22 +61,35 @@ def injected_files(vault: Path, config: dict[str, Any]) -> list[Path]:
         entries = []
     if not isinstance(entries, list) or not all(isinstance(item, str) for item in entries):
         raise ValueError("injected_files must be a list of strings")
-
     candidates = [vault / "MEMORY.md"]
     for entry in entries:
         path = Path(entry).expanduser()
         candidates.append(path if path.is_absolute() else vault / path)
-
     seen: set[str] = set()
-    found: list[Path] = []
+    found: list[tuple[Path, str | None]] = []
     for path in candidates:
         key = os.path.normcase(os.path.normpath(os.path.abspath(path)))
         if key in seen:
             continue
         seen.add(key)
-        if _is_regular_file(path):
-            found.append(path)
+        if path.is_symlink():
+            found.append((path, "symlink"))
+        elif _is_regular_file(path):
+            found.append((path, None))
+        elif path.exists():
+            found.append((path, "not a regular file"))
     return found
+
+
+def injected_files(vault: Path, config: dict[str, Any]) -> list[Path]:
+    """``<vault>/MEMORY.md`` (when present) and the configured ``injected_files``.
+
+    Relative entries resolve against the vault; ``~`` is expanded. Missing files,
+    directories and symlinks are left out (``check_budget`` reports the latter).
+    Order is kept, duplicates dropped.
+    """
+
+    return [path for path, skipped in _entries(vault, config) if skipped is None]
 
 
 def _display_path(vault: Path, path: Path) -> str:
@@ -81,10 +97,10 @@ def _display_path(vault: Path, path: Path) -> str:
 
     for base, target in ((vault.absolute(), path.absolute()), (vault.resolve(), path.resolve())):
         try:
-            return target.relative_to(base).as_posix()
+            return safe_heading(target.relative_to(base).as_posix())
         except ValueError:
             continue
-    return path.name
+    return safe_heading(path.name)
 
 
 def _count_lines(data: bytes) -> int:
@@ -110,12 +126,26 @@ def _sections(lines: list[str]) -> list[tuple[str, int, int]]:
             continue
         match = _HEADING.match(line.rstrip("\r\n"))
         if match is not None:
-            starts.append((index, match.group(2).strip() or match.group(1)))
+            starts.append((index, safe_heading(match.group(2).strip() or match.group(1))))
     result: list[tuple[str, int, int]] = []
     for position, (start, heading) in enumerate(starts):
         end = starts[position + 1][0] if position + 1 < len(starts) else len(lines)
         result.append((heading, start, end))
     return result
+
+
+WITHHELD_HEADING = "[withheld heading: secret detected]"
+MAX_PROPOSALS = 20
+"""Most demotion proposals per file (the largest sections first)."""
+
+
+def safe_heading(text: str) -> str:
+    """A heading as it may appear in a candidate: withheld if it holds a secret,
+    otherwise redacted (e-mail, IP, user names) and capped."""
+
+    if has_secret(text):
+        return WITHHELD_HEADING
+    return redact(text)[:200]
 
 
 def _pointer(heading: str) -> str:
@@ -135,7 +165,7 @@ def _proposals(text: str, total_lines: int, total_bytes: int) -> list[dict[str, 
         remaining_lines, remaining_bytes = total_lines, total_bytes
         proposals: list[dict[str, Any]] = []
         for heading, count, size, _start in measured:
-            if _within(remaining_lines, remaining_bytes):
+            if _within(remaining_lines, remaining_bytes) or len(proposals) >= MAX_PROPOSALS:
                 break
             keep = _pointer(heading)
             keep_bytes = len(keep.encode("utf-8")) + 1
@@ -179,7 +209,14 @@ def check_budget(vault: Path, config: dict[str, Any]) -> list[BudgetReport]:
     """Measure each injected file; over-budget files get demotion proposals."""
 
     reports: list[BudgetReport] = []
-    for path in injected_files(vault, config):
+    for path, skipped in _entries(vault, config):
+        if skipped is not None:
+            reports.append(
+                BudgetReport(
+                    path=_display_path(vault, path), lines=0, bytes=0, over=False, skipped=skipped
+                )
+            )
+            continue
         with path.open("rb") as handle:
             data = handle.read(_READ_LIMIT)
         size = max(len(data), path.stat().st_size)

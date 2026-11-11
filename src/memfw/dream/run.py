@@ -48,6 +48,8 @@ class DreamOptions:
     stale_days: int = 180
     dream_id: str | None = None
     judge: str | None = None
+    allow_config_judge: bool = False
+    """Honour ``dream_judge`` from vault.yaml. Off: the vault must not choose code to run."""
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -133,7 +135,14 @@ def run_dream(
     if not repository.config_path.exists():
         raise ValueError(f"not a memfw vault: {root}")
     config = repository.read_config()
-    judge = load_judge(options.judge or config.get("dream_judge"))
+    # The judge is code that sees transcript text. Only the operator picks it
+    # (--judge); vault.yaml, which also picks the transcript sources, may name
+    # one only when the operator explicitly allows that.
+    spec = options.judge
+    configured = config.get("dream_judge")
+    if spec is None and configured and options.allow_config_judge:
+        spec = str(configured)
+    judge = load_judge(spec)
     documents = [
         document
         for document in repository.list()
@@ -186,6 +195,7 @@ def run_dream(
             "promote": "proposal-only: injected-layer budget demotions",
         },
         "judge": "local hook" if judge is not None else "none (deterministic rules)",
+        "config_judge_ignored": bool(configured) and judge is None,
         "model_tokens": 0 if judge is None else None,
         "transcript_text_is_data": True,
     }
