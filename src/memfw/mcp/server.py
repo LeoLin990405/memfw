@@ -257,6 +257,7 @@ def _candidate_document(
 ) -> str:
     """Frontmatter `candidate-apply` can read: hash is sha256 of the body."""
     content_hash = "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+    # The candidate is recorded now; ``recorded_at`` is the TTL clock.
     created_at = datetime.now(UTC).isoformat()
     metadata = {
         "type": "candidate",
@@ -267,6 +268,7 @@ def _candidate_document(
         "tags": list(tags),
         "related": list(related),
         "created_at": created_at,
+        "recorded_at": created_at,
         "content_hash": content_hash,
         "suggestions": copy.deepcopy(suggestions),
         "authority": False,
@@ -282,6 +284,7 @@ def _candidate_document(
         "tags": list(tags),
         "related": list(related),
         "created_at": created_at,
+        "recorded_at": created_at,
         "content_hash": content_hash,
         "suggestions": copy.deepcopy(suggestions),
         "authority": False,
@@ -373,6 +376,46 @@ def _ensure_search_index(repository: Repository) -> None:
     if stale:
         repository.init()
         MemoryIndex(path).rebuild(repository)
+
+
+_FRONTMATTER_SCAN_BYTES = 64 * 1024
+
+
+def _frontmatter_scalar(raw: bytes, key: str) -> str:
+    """One top-level scalar from the frontmatter, by a prefix line scan.
+
+    Like ``_frontmatter_version`` this never calls the YAML parser, so the
+    search path stays free of it. Quotes are stripped; null is empty.
+    """
+
+    if not raw.startswith(b"---\n"):
+        return ""
+    end = raw.find(b"\n---\n", 4)
+    block = raw[4:] if end < 0 else raw[4:end]
+    prefix = key.encode("ascii") + b":"
+    for line in block.splitlines():
+        if not line.startswith(prefix):
+            continue
+        value = line[len(prefix) :].strip()
+        if len(value) >= 2 and value[0] in b"'\"" and value[-1:] == value[:1]:
+            value = value[1:-1].strip()
+        if value in {b"null", b"Null", b"NULL", b"~"}:
+            return ""
+        return value.decode("utf-8", "replace")
+    return ""
+
+
+def _recorded_at_of(path: Path) -> str | None:
+    """``recorded_at`` of one memory file, as the shared HTTP reader reports it."""
+
+    try:
+        with path.open("rb") as handle:
+            raw = handle.read(_FRONTMATTER_SCAN_BYTES)
+    except OSError:
+        return None
+    stamps = {key: _frontmatter_scalar(raw, key) for key in ("recorded_at", "created_at")}
+    result: str | None = shared_readonly()._recorded_at(stamps)
+    return result
 
 
 def _content_hash(path: Path) -> str:
@@ -617,6 +660,7 @@ class Gateway:
                 "valid_from": service._optional(service._iso_string(meta.get("valid_from"))),
                 "valid_to": service._optional(service._iso_string(meta.get("valid_to"))),
                 "superseded_by": service._optional(service._iso_string(meta.get("superseded_by"))),
+                "recorded_at": service._recorded_at(meta),
                 "type": meta.get("type"),
                 "score": 1.0,
                 "source": str(meta.get("source") or ""),
@@ -754,6 +798,8 @@ class Gateway:
                     "valid_from": item["valid_from"],
                     "valid_to": item["valid_to"],
                     "superseded_by": item["superseded_by"],
+                    # Alias and multihop items do not carry it: read the file.
+                    "recorded_at": item.get("recorded_at") or _recorded_at_of(memory_path),
                     "type": item["memory_type"],
                     "score": item["score"],
                     "source": item["source"],
@@ -795,6 +841,7 @@ class Gateway:
                 "valid_from": document.valid_from.isoformat() if document.valid_from else None,
                 "valid_to": document.valid_to.isoformat() if document.valid_to else None,
                 "superseded_by": document.superseded_by,
+                "recorded_at": (document.recorded_at or document.created_at).isoformat(),
                 "type": document.type,
                 "score": item["score"],
                 "source": document.source,

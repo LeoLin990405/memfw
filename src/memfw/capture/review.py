@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from ..core.errors import IntegrityError
+
+#: A staged candidate nobody applied is hidden this many days after memfw
+#: recorded it. Expiry only marks and hides; the file is never deleted.
+CANDIDATE_TTL_DAYS = 30
 
 
 @dataclass
@@ -30,6 +34,8 @@ class Candidate:
     status: str
     applied_memory_id: str | None
     frontmatter: dict[str, Any]
+    recorded_at: str | None = None
+    expired: bool = False
 
 
 def _field(frontmatter: dict[str, Any], metadata: dict[str, Any], key: str) -> Any:
@@ -89,6 +95,15 @@ def read_candidate(path: Path | str) -> Candidate:
     title_value = frontmatter["title"] if "title" in frontmatter else frontmatter.get("name")
     applied_memory_id = _optional_text(frontmatter.get("applied_memory_id"))
     applied = frontmatter.get("applied") is True
+    expired = not applied and (
+        frontmatter.get("expired") is True or frontmatter.get("lifecycle") == "expired"
+    )
+    if applied:
+        status = "applied"
+    elif expired:
+        status = "expired"
+    else:
+        status = "pending"
     return Candidate(
         path=candidate_path,
         candidate_id=candidate_path.stem,
@@ -102,9 +117,11 @@ def read_candidate(path: Path | str) -> Candidate:
         tenant=str(_field(frontmatter, metadata, "tenant") or ""),
         content_hash=_optional_text(_field(frontmatter, metadata, "content_hash")),
         created_at=_optional_text(_field(frontmatter, metadata, "created_at")),
-        status="applied" if applied else "pending",
+        status=status,
         applied_memory_id=applied_memory_id,
         frontmatter=frontmatter,
+        recorded_at=_optional_text(_field(frontmatter, metadata, "recorded_at")),
+        expired=expired,
     )
 
 
@@ -122,6 +139,7 @@ def candidate_dict(candidate: Candidate) -> dict[str, Any]:
         "source": candidate.source,
         "content_hash": candidate.content_hash,
         "created_at": candidate.created_at,
+        "recorded_at": candidate.recorded_at,
         "status": candidate.status,
         "applied_memory_id": candidate.applied_memory_id,
     }
@@ -194,25 +212,91 @@ def parse_candidate_provenance(provenance: str) -> dict[str, str] | None:
     return values
 
 
-def list_staged_candidates(root: Path | str) -> list[dict[str, Any]]:
+def _instant(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed
+
+
+def candidate_recorded_instant(candidate: Candidate) -> datetime | None:
+    """When memfw recorded the candidate, the instant the TTL counts from.
+
+    Candidates staged before ``recorded_at`` existed fall back to
+    ``created_at``: both writers stamped it from the server clock. A candidate
+    with neither, or with a stamp that has no timezone, has no age and never
+    expires.
+    """
+    return _instant(candidate.recorded_at) or _instant(candidate.created_at)
+
+
+def candidate_is_expired(
+    candidate: Candidate,
+    *,
+    now: datetime | None = None,
+    ttl_days: int = CANDIDATE_TTL_DAYS,
+) -> bool:
+    """A pending candidate already marked expired, or older than the TTL."""
+
+    if candidate.status == "applied":
+        return False
+    if candidate.expired:
+        return True
+    recorded = candidate_recorded_instant(candidate)
+    if recorded is None:
+        return False
+    current = now or datetime.now(UTC)
+    if current.tzinfo is None or current.utcoffset() is None:
+        raise ValueError("now must include a timezone")
+    return recorded <= current - timedelta(days=ttl_days)
+
+
+def staged_candidate_paths(root: Path | str) -> list[Path]:
     base = Path(root).expanduser() / "_candidates" / "remember"
     if not base.is_dir():
         return []
+    return sorted(base.glob("*.md"))
+
+
+def list_staged_candidates(
+    root: Path | str,
+    *,
+    include_expired: bool = False,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Staged candidates. Expired ones are hidden unless asked for."""
+
+    current = now or datetime.now(UTC)
     output: list[dict[str, Any]] = []
-    for path in sorted(base.glob("*.md")):
+    for path in staged_candidate_paths(root):
         candidate = read_candidate(path)
         validate_candidate_hash(candidate)
-        output.append(candidate_dict(candidate))
+        expired = candidate_is_expired(candidate, now=current)
+        if expired and not include_expired:
+            continue
+        row = candidate_dict(candidate)
+        if expired:
+            row["status"] = "expired"
+        output.append(row)
     return output
 
 
 __all__ = [
+    "CANDIDATE_TTL_DAYS",
     "Candidate",
+    "candidate_is_expired",
+    "candidate_recorded_instant",
     "candidate_content_hash",
     "candidate_dict",
     "candidate_provenance",
     "list_staged_candidates",
     "parse_candidate_provenance",
     "read_candidate",
+    "staged_candidate_paths",
     "validate_candidate_hash",
 ]
