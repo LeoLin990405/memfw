@@ -157,6 +157,11 @@ class MemoryDocument(BaseModel):
     evidence: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+    # Transaction time: when memfw itself wrote this memory, from the server
+    # clock (bitemporal with ``valid_from``/``valid_to``). Callers never set it,
+    # and updates keep it. Files written before it existed have none; readers
+    # then report ``created_at``, which ``add`` always stamped the same way.
+    recorded_at: datetime | None = None
     body: str
     _ignored_keys: tuple[str, ...] = PrivateAttr(default=())
 
@@ -191,7 +196,7 @@ class MemoryDocument(BaseModel):
             return [value]
         return value
 
-    @field_validator("created_at", "updated_at", "valid_from", "valid_to")
+    @field_validator("created_at", "updated_at", "recorded_at", "valid_from", "valid_to")
     @classmethod
     def timestamps_are_utc(cls, value: datetime | None) -> datetime | None:
         return None if value is None else _as_utc(value)

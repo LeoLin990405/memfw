@@ -215,6 +215,19 @@ Each result carries `id`, `title`, `summary` (≤ 500 characters), `source`,
 (`"sha256:"` plus the sha256 of the memory's Markdown bytes). The response top
 level is `contract`, `mode`, `degraded`, `errors` and `results`.
 
+`recorded_at` (below) is not a `memfw-http/2` result field: the contract
+fixtures fix these keys, and the roadmap adds it to `/search` with
+`memfw-http/3`. MCP `memory_search` already returns it.
+
+### `recorded_at`
+
+`recorded_at` is transaction time: the server-clock instant memfw wrote a memory
+or a staged candidate, in UTC. It sits beside the valid-time fields
+`valid_from`/`valid_to`. Callers cannot set it and updates keep it. A memory
+written before the field existed has no `recorded_at` key on disk (its bytes do
+not change); readers then report its `created_at`, which memfw stamped from the
+same clock, and null when neither is present.
+
 ### Transport and deployment
 
 The service speaks plain HTTP with a bearer-style shared header token. That is
@@ -323,6 +336,22 @@ non-authoritative: it writes one candidate to
 `<vault>/_candidates/remember/conductor-<proposal_id>.md` and never the vault.
 That directory is the only canonical candidate location, and
 `memfw candidates --root <vault>` lists what is staged there.
+
+Each staged candidate (from `/stage` or MCP `memory_remember`) records
+`recorded_at`, the server-clock write time, in its frontmatter. A candidate that
+is not applied within 30 days of `recorded_at` expires. Expiry only hides and
+marks; no file is deleted:
+
+- `memfw candidates` hides expired candidates; `--include-expired` lists them
+  with `status: "expired"`.
+- `memfw candidates-expire --root <vault> [--dry-run]` writes the mark
+  (`lifecycle: expired`, `expired: true`, `expired_at`, `status: expired`). The
+  body and its `content_hash` are unchanged, and the output always reports
+  `"deleted": 0`.
+- `memfw candidate-apply` still applies an expired candidate given its path.
+- Applied candidates never expire. Candidates staged before `recorded_at`
+  existed age from `created_at`; a candidate with neither stamp (or one without
+  a timezone) never expires.
 
 The request carries `proposal_id`, `title` and `content`:
 

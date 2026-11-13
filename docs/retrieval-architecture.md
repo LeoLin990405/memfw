@@ -569,6 +569,10 @@ permission ACLs, and production cutover.
 - `memfw candidates` shows staged candidates, tags, related ids, and
   duplicate/conflict suggestions; `memfw candidate-apply` is dry-run by default
   and requires an explicit human `--apply`.
+- Memories and staged candidates carry `recorded_at` (server write time,
+  bitemporal with `valid_from`/`valid_to`); MCP search results report it. Staged
+  candidates expire 30 days after `recorded_at`: `memfw candidates` hides them
+  and `memfw candidates-expire` marks them. Nothing is deleted.
 - Human apply persists `tags`, `related`, and `tenant` into the new memory.
 - `memory_eval.py` provides a generated five-class local evaluation scaffold
   (single-hop, multi-hop, temporal, update, refusal); it is not a substitute for

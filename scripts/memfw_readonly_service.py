@@ -364,6 +364,26 @@ def _optional(value: Any) -> Any:
     return text or None
 
 
+def _recorded_at(metadata: dict[str, Any]) -> str | None:
+    """When memfw wrote the record (server clock), for the result payload.
+
+    Files from before ``recorded_at`` existed report ``created_at``: memfw
+    stamped that from the same clock at write time. Neither present is None.
+    An aware instant is reported in UTC as ``isoformat`` writes it, the same
+    text MCP gives for the parsed document.
+    """
+    text = _optional(metadata.get("recorded_at")) or _optional(metadata.get("created_at"))
+    if text is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return text
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return text
+    return parsed.astimezone(UTC).isoformat()
+
+
 def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -436,6 +456,9 @@ def _document_payload(root: Path, identifier: str) -> dict[str, Any] | None:
         "valid_from": _iso_string(metadata.get("valid_from")),
         "valid_to": _iso_string(metadata.get("valid_to")),
         "superseded_by": _iso_string(metadata.get("superseded_by")),
+        # Read by MCP. HTTP ``/search`` gains it with memfw-http/3 (roadmap R6);
+        # ``memfw-http/2`` result keys are fixed by the contract fixtures.
+        "recorded_at": _recorded_at(metadata),
         "content_hash": "sha256:" + hashlib.sha256(raw).hexdigest(),
         "provenance": str(metadata.get("provenance") or ""),
         "version": metadata.get("version"),
@@ -1193,6 +1216,7 @@ def _candidate_markdown(metadata: dict[str, Any], content: str) -> str:
         "tags": metadata["tags"],
         "related": metadata["related"],
         "created_at": metadata["created_at"],
+        "recorded_at": metadata["recorded_at"],
         "content_hash": metadata["content_hash"],
         "authority": False,
         "metadata": copy.deepcopy(
@@ -1204,6 +1228,7 @@ def _candidate_markdown(metadata: dict[str, Any], content: str) -> str:
                 "related": metadata["related"],
                 "title": title,
                 "created_at": metadata["created_at"],
+                "recorded_at": metadata["recorded_at"],
                 "content_hash": metadata["content_hash"],
                 "authority": False,
             }
@@ -1380,6 +1405,8 @@ def stage_candidate(root: Path | str, payload: dict[str, Any]) -> dict[str, Any]
         "related": values["related"],
         "title": values["title"],
         "created_at": created_at,
+        # Server clock at write; the 30-day candidate TTL counts from here.
+        "recorded_at": created_at,
         "content_hash": content_hash,
         "authority": False,
     }

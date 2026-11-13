@@ -214,6 +214,9 @@ class MarkdownStorageMixin:
                 "superseded_by",
             )
         }
+        # Files written before ``recorded_at`` existed keep their bytes.
+        if metadata.get("recorded_at"):
+            ordered["recorded_at"] = metadata["recorded_at"]
         # Empty alias targets stay off the file so existing bytes do not change.
         for key in ("about", "applies_to"):
             if metadata.get(key):
