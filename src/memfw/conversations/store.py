@@ -107,6 +107,8 @@ class Turn:
     ts: str
     text: str
     tool_calls: tuple[dict[str, str], ...] = field(default_factory=tuple)
+    withheld: bool = False
+    """The store withheld this turn at write time (``text`` is the marker)."""
 
     @property
     def ref(self) -> str:

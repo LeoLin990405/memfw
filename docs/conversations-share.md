@@ -66,9 +66,28 @@ work tree, the vault or a synced folder).
 - Memory candidates: model-proposed claims are verified against the session
   first (the dream `classify` check, or `--judge module:function`), must not
   copy 40+ characters of the transcript, and are staged under
-  `_candidates/dream/conv-*/` for human review.
+  `_candidates/dream/conv-*/` for human review. Each staged file and its
+  `report.json` carry `recorded_at`, the server-clock write time (R4
+  transaction time); `created_at` is the worker's clock. The 30-day TTL of
+  `memfw candidates-expire` covers `_candidates/remember/` only; dream
+  candidates carry the stamp as data and do not expire.
 - Skill candidates: the worker only queues `episodes` (ids, offsets, intent,
-  outcome). The skill step consumes them with `EpisodeQueue.claim` / `ack`.
+  outcome). `memfw dream skills --from-queue` consumes them (`EpisodeQueue`
+  claim, then ack after staging or release on failure; claims older than six
+  hours are taken back).
+
+## Store adapter
+
+`memfw.conversations.adapter` is the only module that knows the store of
+`memfw.history.conversations` (schema version 1, table
+`conversation_turns`). It opens the file read-only; `withheld = 1` turns (the
+store kept no text because a secret shape was found) come back as withheld,
+never as text, and never match a search. Ingest is the store's own
+`ConversationStore.ingest` with its `OptOut` (`conversation_optout`); an agent
+opted out there is skipped and its stored rows are deleted, the same as with
+`memfw history ingest`. The store path follows `conversation_store.path`; the
+location rules of both modules apply (`conversation_store.synced_dirs` adds
+folders to refuse).
 
 ## Scheduling
 

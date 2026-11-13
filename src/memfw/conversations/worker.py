@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from .adapter import Ingestor, data_dir, synced_dirs
+from .adapter import Ingestor, checked_location, data_dir
 from .backends import PROMPT_VERSION, ModelBackend, estimate_tokens, parse_reply
 from .policy import SharePolicy
 from .store import (
@@ -44,7 +44,6 @@ from .store import (
     ConversationSource,
     SessionInfo,
     Turn,
-    check_private_location,
     ensure_private_dir,
     ensure_private_file,
     safe_text,
@@ -70,7 +69,7 @@ def state_path(config: Mapping[str, Any] | None, *, vault: Path | None = None) -
         raise ConversationError("conversation_worker must be a mapping")
     raw = section.get("state_path")
     path = Path(str(raw)).expanduser() if raw else data_dir() / STATE_NAME
-    return check_private_location(path, vault=vault, extra_synced=synced_dirs(config))
+    return checked_location(path, config, vault=vault)
 
 
 @dataclass
@@ -306,6 +305,53 @@ class EpisodeQueue:
                 (episode_id,),
             )
         return cursor.rowcount == 1
+
+    def release(self, episode_id: str) -> bool:
+        """Put a claimed episode back to pending (its consumer failed)."""
+
+        with self.state.open() as connection:
+            cursor = connection.execute(
+                "UPDATE episodes SET status = 'pending', claimed_by = '', claimed_at = ''"
+                " WHERE episode_id = ? AND status = 'claimed'",
+                (episode_id,),
+            )
+        return cursor.rowcount == 1
+
+    def rows(self, episode_ids: Sequence[str]) -> list[dict[str, Any]]:
+        """The episodes with these ids, in the given order (unknown ids are skipped)."""
+
+        if not episode_ids:
+            return []
+        marks = ",".join("?" * len(episode_ids))
+        with self.state.open() as connection:
+            found = {
+                str(row["episode_id"]): dict(row)
+                for row in connection.execute(
+                    f"SELECT * FROM episodes WHERE episode_id IN ({marks})", list(episode_ids)
+                )
+            }
+        return [found[item] for item in episode_ids if item in found]
+
+    def reclaim(self, before: str) -> int:
+        """Return claims taken before ``before`` (a crashed consumer's) to pending."""
+
+        with self.state.open() as connection:
+            cursor = connection.execute(
+                "UPDATE episodes SET status = 'pending', claimed_by = '', claimed_at = ''"
+                " WHERE status = 'claimed' AND claimed_at < ?",
+                (before,),
+            )
+        return int(cursor.rowcount)
+
+    def consumed(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Episodes already acked, newest first (consumers that look across runs)."""
+
+        with self.state.open() as connection:
+            rows = connection.execute(
+                "SELECT * FROM episodes WHERE status = 'done' ORDER BY created_at DESC LIMIT ?",
+                (max(1, int(limit)),),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
 
 @contextmanager

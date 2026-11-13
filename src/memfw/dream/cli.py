@@ -130,6 +130,13 @@ def dream_skills(
     ] = None,
     refresh: Annotated[bool, typer.Option("--refresh/--no-refresh")] = True,
     now: Annotated[str | None, typer.Option("--now", help="Inject an ISO-8601 UTC time")] = None,
+    from_queue: Annotated[
+        bool,
+        typer.Option(
+            "--from-queue",
+            help="Read the conversation worker's episode queue instead of the transcript index",
+        ),
+    ] = False,
 ) -> None:
     """Stage skill candidates from repeated procedures under _candidates/skills/."""
 
@@ -143,6 +150,7 @@ def dream_skills(
         until=until,
         refresh=refresh,
         drafter=drafter,
+        from_queue=from_queue,
     )
     try:
         result = run_skills(root, now=_now(now), dry_run=dry_run, options=options)

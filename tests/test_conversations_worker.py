@@ -418,46 +418,64 @@ def test_local_inference_backend_wraps_injected_inference() -> None:
 
 
 def test_ingestor_drives_the_store_module(tmp_path: Path, monkeypatch: Any) -> None:
-    calls: list[tuple[str, list[Any]]] = []
-    seen_optout: list[Any] = []
+    """The adapter runs the real store's ingest; opt-out (config or skip) forgets rows."""
 
-    class Counts:
-        def as_dict(self) -> dict[str, Any]:
-            return {"records_new": 2, "agents": {"codex": 2}, "flag": True}
+    from memfw.history.conversations import ConversationStore
+    from memfw.history.sources.base import ConversationRecord, SessionLocator
 
-    class OptOut:
-        @classmethod
-        def from_config(cls, config: dict[str, Any]) -> Any:
-            return ("optout", tuple(config.get("conversation_optout", {}).get("agents", [])))
+    class Reader:
+        parser_version = "1"
+        append_only = True
 
-    class Store:
-        def __init__(self, db: Path, *, optout: Any = None) -> None:
-            seen_optout.append(optout)
+        def __init__(self, agent: str) -> None:
+            self.agent = agent
 
-        def ingest(self, reader: Any, roots: list[Any]) -> Counts:
-            if reader.agent == "kimi":
-                raise OSError(f"cannot read {tmp_path}/secret-place")
-            calls.append((reader.agent, roots))
-            return Counts()
+        def sessions(self, root: Path) -> Any:
+            yield SessionLocator(self.agent, root / "s.jsonl", "s.jsonl", "s1")
 
-    readers = {name: types.SimpleNamespace(agent=name) for name in ("codex", "claude", "kimi")}
-    store_module = types.ModuleType("fake_conv_store")
-    store_module.ConversationStore = Store  # type: ignore[attr-defined]
-    store_module.OptOut = OptOut  # type: ignore[attr-defined]
+        def read(self, locator: Any, after: int = -1) -> Any:
+            for offset in range(2):
+                yield ConversationRecord(
+                    self.agent, "s1", offset, offset, "user", f"turn {offset}", "2026-01-01"
+                )
+
+    roots_seen: list[str] = []
+
+    def store_roots(reader: Any) -> list[Path]:
+        if reader.agent == "kimi":
+            raise OSError(f"cannot read {tmp_path}/secret-place")
+        roots_seen.append(reader.agent)
+        root = tmp_path / "roots" / reader.agent
+        if not root.is_dir():
+            root.mkdir(parents=True)
+            (root / "s.jsonl").write_text("{}\n")
+        return [root]
+
+    readers = {name: Reader(name) for name in ("codex", "claude", "kimi", "grok")}
     sources_module = types.ModuleType("fake_conv_sources")
     sources_module.READERS = readers  # type: ignore[attr-defined]
-    sources_module.store_roots = lambda reader: [f"root-of-{reader.agent}"]  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "fake_conv_store", store_module)
+    sources_module.store_roots = store_roots  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "fake_conv_sources", sources_module)
-    monkeypatch.setattr(adapter_module, "STORE_MODULE", "fake_conv_store")
     monkeypatch.setattr(adapter_module, "SOURCES_MODULE", "fake_conv_sources")
+    db = tmp_path / "data" / "c.sqlite"
+    first = store_ingestor({}, db)()
+    assert first["agents"]["claude"]["records_new"] == 2
+    assert ConversationStore(db).stats()["grok"]["turns"] == 2
+
+    roots_seen.clear()
     config = {"conversation_optout": {"agents": ["claude"]}}
-    report = store_ingestor(config, tmp_path / "c.sqlite", skip_apps=["CLAUDE"])()
-    assert seen_optout == [("optout", ("claude",))]  # the store's own opt-out is passed on
-    assert report["agents"]["codex"] == {"status": "ok", "roots": 1, "records_new": 2}
-    assert report["agents"]["claude"] == {"status": "opted_out"}
+    report = store_ingestor(config, db, skip_apps=["GROK"])()
+    assert report["agents"]["codex"]["status"] == "ok"
+    assert report["agents"]["codex"]["roots"] == 1
+    assert report["agents"]["codex"]["sessions_unchanged"] == 1
+    # Opted out by config or by skip: the store itself forgets the earlier rows.
+    assert report["agents"]["claude"]["status"] == "opted_out"
+    assert report["agents"]["claude"]["records_dropped"] == 2
+    assert report["agents"]["grok"]["status"] == "opted_out"
     assert report["agents"]["kimi"] == {"status": "error", "error": "OSError"}
-    assert calls == [("codex", ["root-of-codex"])]
+    assert roots_seen == ["codex"]  # opted-out readers never even look for roots
+    stats = ConversationStore(db).stats()
+    assert "claude" not in stats and "grok" not in stats and stats["codex"]["turns"] == 2
     assert str(tmp_path) not in json.dumps(report)
 
 

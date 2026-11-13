@@ -170,7 +170,16 @@ transcript index.
 ```sh
 memfw dream skills --root /path/to/vault --dry-run
 memfw dream skills --root /path/to/vault --min-sessions 3 --since 2026-01-01
+memfw dream skills --root /path/to/vault --from-queue
 ```
+
+`--from-queue` reads the conversation worker's episode queue instead of the
+transcript index (see `docs/conversations-share.md`): the newly queued
+episodes plus the newest consumed ones (up to `--max-sessions` sessions), with
+turns read through the conversation store adapter. Apps the share policy does
+not let the worker process are skipped. A dry run only peeks at the queue; a
+real run acks the episodes after staging, or releases them when it fails.
+Refs then read `conv:APP:SESSION@OFFSET` (`memfw conversations get`).
 
 1. **Episodes.** Each session is split into tasks: a user turn opens an
    episode, except a user turn that answers a tool call (a tool result).

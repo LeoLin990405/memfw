@@ -38,6 +38,7 @@ from .draft import (
 )
 from .episodes import Episode, segment
 from .private import PrivateTerms
+from .queue import QueueBatch, collect_queue, settle
 
 SKILLS_DIR = Path("_candidates") / "skills"
 MAX_SESSIONS = 200
@@ -57,6 +58,8 @@ class SkillOptions:
     until: str | None = None
     refresh: bool = True
     drafter: str | None = None
+    from_queue: bool = False
+    """Read the conversation worker's episode queue instead of the transcript index."""
 
     def check(self) -> None:
         if self.min_sessions < 2:
@@ -376,7 +379,11 @@ def run_skills(
     now: datetime,
     dry_run: bool = False,
     options: SkillOptions | None = None,
+    queue_parts: dict[str, Any] | None = None,
 ) -> SkillResult:
+    """``queue_parts`` (tests): ``state`` and ``source`` overrides for ``--from-queue``."""
+
+    queue_parts = dict(queue_parts or {})
     options = options or SkillOptions()
     options.check()
     repository = Repository(root)
@@ -386,37 +393,54 @@ def run_skills(
     private = PrivateTerms.from_config(config, repository.root)
     drafter = load_drafter(options.drafter)
     created_at = now.isoformat().replace("+00:00", "Z")
-    index, history_info = _history(repository, config, options.refresh, dry_run=dry_run)
     episodes: list[Episode] = []
-    counts = {"sessions_read": 0, "entries_read": 0}
-    if index is not None:
-        episodes, counts = collect(index, options)
-    procedures = distill(
-        episodes,
-        min_sessions=options.min_sessions,
-        min_steps=options.min_steps,
-        threshold=options.similarity,
-    )
-    candidates: list[SkillCandidate] = []
-    unsafe = 0
-    for procedure in procedures:
-        candidate = build(procedure, options, drafter, created_at, private)
-        if candidate is None:
-            unsafe += 1
-            continue
-        candidates.append(candidate)
-    errors = 0
-    if not dry_run:
-        for candidate in candidates:
-            # One failure must not hide what was already staged: report each.
-            try:
-                candidate.status, staged_id = stage_candidate(repository.root, candidate)
-            except (DreamStageError, OSError) as exc:
-                candidate.status = "error"
-                candidate.error = str(exc)
-                errors += 1
+    counts: dict[str, int] = {"sessions_read": 0, "entries_read": 0}
+    batch: QueueBatch | None = None
+    if options.from_queue:
+        # The conversation worker's episode queue instead of the transcript index.
+        batch = collect_queue(
+            config, repository.root, dry_run=dry_run, limit=options.max_sessions, **queue_parts
+        )
+        episodes, counts, history_info = batch.episodes, batch.counts, batch.info
+    else:
+        index, history_info = _history(repository, config, options.refresh, dry_run=dry_run)
+        if index is not None:
+            episodes, counts = collect(index, options)
+    state = queue_parts.get("state")
+    try:
+        procedures = distill(
+            episodes,
+            min_sessions=options.min_sessions,
+            min_steps=options.min_steps,
+            threshold=options.similarity,
+        )
+        candidates: list[SkillCandidate] = []
+        unsafe = 0
+        for procedure in procedures:
+            candidate = build(procedure, options, drafter, created_at, private)
+            if candidate is None:
+                unsafe += 1
                 continue
-            candidate.path = (SKILLS_DIR / staged_id).as_posix()
+            candidates.append(candidate)
+        errors = 0
+        if not dry_run:
+            for candidate in candidates:
+                # One failure must not hide what was already staged: report each.
+                try:
+                    candidate.status, staged_id = stage_candidate(repository.root, candidate)
+                except (DreamStageError, OSError) as exc:
+                    candidate.status = "error"
+                    candidate.error = str(exc)
+                    errors += 1
+                    continue
+                candidate.path = (SKILLS_DIR / staged_id).as_posix()
+    except BaseException:
+        if batch is not None:
+            settle(batch, ok=False, config=config, vault=repository.root, state=state)
+        raise
+    if batch is not None:
+        settled = settle(batch, ok=errors == 0, config=config, vault=repository.root, state=state)
+        counts = {**counts, ("episodes_acked" if errors == 0 else "episodes_released"): settled}
     report = {
         "created_at": created_at,
         "authority": False,

@@ -271,6 +271,7 @@ class ConversationShare:
         truncated = False
         for position, turn in enumerate(turns, start=start):
             text, withheld = safe_text(turn.text, TURN_CHARS)
+            withheld = withheld or turn.withheld
             item: dict[str, Any] = {
                 "index": position,
                 "ref": turn.ref,
@@ -337,13 +338,14 @@ class ConversationShare:
         turns = self.source.turns(info.app, info.session_id, start=0, limit=HANDOFF_MAX_TURNS)
         goal = ""
         for turn in turns:
-            if turn.role == "user" and turn.text.strip():
+            if turn.role == "user" and not turn.withheld and turn.text.strip():
                 goal, _ = safe_text(turn.text, GOAL_CHARS)
                 break
         talk = [turn for turn in turns if turn.role in {"user", "assistant"}]
         recent_turns = []
         for turn in talk[-recent:]:
             text, withheld = safe_text(turn.text, RECENT_CHARS)
+            withheld = withheld or turn.withheld
             recent_turns.append(
                 {
                     "ref": turn.ref,
@@ -401,7 +403,7 @@ class ConversationShare:
         found: list[str] = []
         for turn in turns:
             text, withheld = safe_text(turn.text)
-            if withheld:
+            if withheld or turn.withheld:
                 continue
             for sentence in _SENTENCE.findall(text):
                 if pattern.search(sentence):
@@ -415,7 +417,7 @@ class ConversationShare:
         found: list[str] = []
         for turn in turns:
             text, withheld = safe_text(turn.text)
-            if withheld:
+            if withheld or turn.withheld:
                 continue
             for sentence in _SENTENCE.findall(text):
                 item = sentence.strip()

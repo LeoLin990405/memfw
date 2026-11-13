@@ -1,17 +1,26 @@
 """The one file that knows the unified store's schema and ingest entry point.
 
 The store (tables, readers, write-time redaction) belongs to
-:mod:`memfw.history.conversations`. This module reads its
-``conversation_turns`` table read-only and drives its ingest; when the store
+:mod:`memfw.history.conversations` (schema version ``SCHEMA_VERSION``). This
+module reads its ``conversation_turns`` table read-only and drives its ingest
+(``ConversationStore.ingest`` with the store's own ``OptOut``); when the store
 module changes shape, only this file changes.
 
+Store schema used here: ``conversation_turns(agent, session_id, offset, turn,
+role, ts, text, tool_calls, cwd, project, model, origin, withheld, ...)``.
+``withheld = 1`` marks a turn the store refused to keep (secret-shaped): its
+text and tool calls are empty and it is reported as withheld, never as text.
+
 Store location: ``conversation_store.path`` in ``vault.yaml``, else
-``~/.local/share/memfw/conversations.sqlite``. It is refused inside a git work
-tree, the vault or a synced folder.
+``~/.local/share/memfw/conversations.sqlite`` (the store module's own
+default). It is refused inside a git work tree, the vault or a synced folder:
+both this package's rules and the store module's
+(:func:`memfw.history.store_location.check_store_path`) apply.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import importlib
 import json
 import sqlite3
@@ -21,16 +30,28 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from memfw.history.index import HistoryError
+from memfw.history.store_location import (
+    DEFAULT_RELATIVE,
+    check_store_path,
+    store_path_from_config,
+)
+
 from .store import (
+    WITHHELD,
     ConversationError,
     SessionInfo,
     Turn,
     check_private_location,
 )
 
-DATA_DIR = Path(".local") / "share" / "memfw"
-STORE_NAME = "conversations.sqlite"
+DATA_DIR = DEFAULT_RELATIVE.parent
+STORE_NAME = DEFAULT_RELATIVE.name
 TURNS_TABLE = "conversation_turns"
+REQUIRED_COLUMNS = frozenset(
+    {"agent", "session_id", "offset", "turn", "role", "ts", "text", "tool_calls"}
+    | {"cwd", "project", "origin", "withheld"}
+)
 MAX_TERMS = 8
 _SINCE_CHARS = "0123456789-:TZ.+ "
 
@@ -45,9 +66,23 @@ def store_path(config: Mapping[str, Any] | None, *, vault: Path | None = None) -
     section = (config or {}).get("conversation_store") or {}
     if not isinstance(section, Mapping):
         raise ConversationError("conversation_store must be a mapping")
-    raw = section.get("path")
-    path = Path(str(raw)).expanduser() if raw else data_dir() / STORE_NAME
-    return check_private_location(path, vault=vault, extra_synced=synced_dirs(config))
+    try:
+        path = store_path_from_config(dict(config or {}))
+    except HistoryError as exc:
+        raise ConversationError(str(exc)) from exc
+    return checked_location(path, config, vault=vault)
+
+
+def checked_location(
+    path: Path, config: Mapping[str, Any] | None, *, vault: Path | None = None
+) -> Path:
+    """``path`` resolved, or :class:`ConversationError` when either rule set refuses it."""
+
+    resolved = check_private_location(path, vault=vault, extra_synced=synced_dirs(config))
+    try:
+        return check_store_path(resolved, vault_root=vault)
+    except HistoryError as exc:
+        raise ConversationError(str(exc)) from exc
 
 
 def synced_dirs(config: Mapping[str, Any] | None) -> list[Path]:
@@ -83,7 +118,7 @@ class SqliteStoreSource:
             return False
         try:
             with self._open() as connection:
-                return self._columns(connection) != set()
+                return REQUIRED_COLUMNS <= self._columns(connection)
         except sqlite3.Error:
             return False
 
@@ -122,13 +157,11 @@ class SqliteStoreSource:
         self, where: str, params: list[Any], having: str, limit: int, offset: int
     ) -> list[SessionInfo]:
         with self._open() as connection:
-            columns = self._columns(connection)
-            origin = "MAX(origin)" if "origin" in columns else "''"
             rows = connection.execute(
                 "SELECT agent, session_id, COUNT(*) AS turns, MIN(offset) AS first_offset,"
                 " MAX(offset) AS last_offset, MIN(NULLIF(ts, '')) AS started_at,"
                 " MAX(NULLIF(ts, '')) AS updated_at, MAX(cwd) AS cwd, MAX(project) AS project,"
-                f" {origin} AS origin FROM {TURNS_TABLE} WHERE {where}"
+                f" MAX(origin) AS origin FROM {TURNS_TABLE} WHERE {where}"
                 f" GROUP BY agent, session_id {having}"
                 " ORDER BY updated_at DESC, agent, session_id LIMIT ? OFFSET ?",
                 [*params, limit, offset],
@@ -184,6 +217,18 @@ class SqliteStoreSource:
 
     @staticmethod
     def _turn(row: sqlite3.Row) -> Turn:
+        if int(row["withheld"] or 0):
+            # The store kept no text for it: report the turn, never its content.
+            return Turn(
+                app=str(row["agent"]),
+                session_id=str(row["session_id"]),
+                offset=int(row["offset"]),
+                turn=int(row["turn"]),
+                role=str(row["role"] or ""),
+                ts=str(row["ts"] or ""),
+                text=WITHHELD,
+                withheld=True,
+            )
         try:
             calls_raw = json.loads(row["tool_calls"] or "[]")
         except ValueError:
@@ -207,7 +252,7 @@ class SqliteStoreSource:
     def turns(self, app: str, session_id: str, *, start: int = 0, limit: int = 200) -> list[Turn]:
         with self._open() as connection:
             rows = connection.execute(
-                "SELECT agent, session_id, offset, turn, role, ts, text, tool_calls"
+                "SELECT agent, session_id, offset, turn, role, ts, text, tool_calls, withheld"
                 f" FROM {TURNS_TABLE} WHERE agent = ? AND session_id = ?"
                 " ORDER BY offset LIMIT ? OFFSET ?",
                 (app, session_id, max(0, limit), max(0, start)),
@@ -231,17 +276,20 @@ class SqliteStoreSource:
         if scope is None:
             return []
         where, params = scope
-        clauses = [where, "text != ''", *(r"text LIKE ? ESCAPE '\'" for _ in terms)]
+        clauses = [
+            where,
+            "withheld = 0",
+            "text != ''",
+            *(r"text LIKE ? ESCAPE '\'" for _ in terms),
+        ]
         params = [*params, *(_like(term) for term in terms)]
         since_value = _since(since)
         if since_value:
             clauses.append("ts >= ?")
             params.append(since_value)
         with self._open() as connection:
-            if "withheld" in self._columns(connection):
-                clauses.append("withheld = 0")
             rows = connection.execute(
-                "SELECT agent, session_id, offset, turn, role, ts, text, tool_calls"
+                "SELECT agent, session_id, offset, turn, role, ts, text, tool_calls, withheld"
                 f" FROM {TURNS_TABLE} WHERE {' AND '.join(clauses)}"
                 " ORDER BY ts DESC, agent, session_id, offset LIMIT ? OFFSET ?",
                 [*params, limit, offset],
@@ -264,10 +312,12 @@ def store_ingestor(
     """An ingestor that drives the store module the way ``memfw history ingest`` does.
 
     Every registered reader is ingested from its existing roots (the
-    interactive home plus every Worker home, ``store_roots``), with the
-    store's own opt-out (``conversation_optout``: agents, cwd globs, marker
-    files) applied. ``skip_apps`` are compared with each reader's canonical
-    name, so an alias cannot bypass them. Nothing is hard-coded here.
+    interactive home plus every Worker home, ``store_roots``) through
+    ``ConversationStore.ingest``, with the store's own opt-out
+    (``conversation_optout``: agents, cwd globs, marker files) applied.
+    ``skip_apps`` are added to that opt-out: the store then also forgets what
+    it held for them, exactly as for a configured opt-out. Names are compared
+    with each reader's canonical name, so an alias cannot bypass them.
     """
 
     def run() -> dict[str, Any]:
@@ -278,38 +328,44 @@ def store_ingestor(
             return {"status": "unavailable", "reason": "store_module_missing"}
         readers = getattr(sources_module, "READERS", None)
         store_roots = getattr(sources_module, "store_roots", None)
-        if not isinstance(readers, Mapping) or not callable(store_roots):
-            return {"status": "unavailable", "reason": "store_api_mismatch"}
+        store_type = getattr(store_module, "ConversationStore", None)
         optout_type = getattr(store_module, "OptOut", None)
-        if optout_type is not None:
-            store = store_module.ConversationStore(
-                db, optout=optout_type.from_config(dict(config or {}))
-            )
-        else:
-            store = store_module.ConversationStore(db)
-        skip = {str(app).strip().lower() for app in skip_apps}
+        if (
+            not isinstance(readers, Mapping)
+            or not callable(store_roots)
+            or store_type is None
+            or optout_type is None
+        ):
+            return {"status": "unavailable", "reason": "store_api_mismatch"}
+        skip = {str(app).strip().lower() for app in skip_apps if str(app).strip()}
+        try:
+            optout = optout_type.from_config(dict(config or {}))
+        except Exception as exc:  # a bad opt-out section: report the kind only
+            return {"status": "error", "error": type(exc).__name__}
+        if skip:
+            optout = dataclasses.replace(optout, agents=frozenset(optout.agents) | skip)
+        store = store_type(db, optout=optout)
         report: dict[str, Any] = {"status": "ok", "agents": {}}
         for reader in readers.values():
             agent = str(getattr(reader, "agent", "") or "")[:64]
-            if not agent or agent in skip:
-                report["agents"][agent or "?"] = {"status": "opted_out"}
+            if not agent:
                 continue
             try:
-                roots = list(store_roots(reader))
+                roots = [] if agent in optout.agents else list(store_roots(reader))
                 counts = store.ingest(reader, roots)
             except Exception as exc:  # report the kind only: messages may hold paths
                 report["agents"][agent] = {"status": "error", "error": type(exc).__name__}
                 continue
             as_dict = counts.as_dict() if hasattr(counts, "as_dict") else {}
-            report["agents"][agent] = {
-                "status": "ok",
-                "roots": len(roots),
-                **{
-                    key: value
-                    for key, value in as_dict.items()
-                    if isinstance(value, int) and not isinstance(value, bool)
-                },
+            numbers = {
+                key: value
+                for key, value in as_dict.items()
+                if isinstance(value, int) and not isinstance(value, bool)
             }
+            if agent in optout.agents or as_dict.get("opted_out") is True:
+                report["agents"][agent] = {"status": "opted_out", **numbers}
+                continue
+            report["agents"][agent] = {"status": "ok", "roots": len(roots), **numbers}
         return report
 
     return run
