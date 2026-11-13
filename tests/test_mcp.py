@@ -30,6 +30,10 @@ def test_mcp_tool_list() -> None:
         "history_list",
         "history_search",
         "history_read",
+        "conversations_search",
+        "conversations_list",
+        "conversations_get",
+        "conversations_handoff",
     }
 
 

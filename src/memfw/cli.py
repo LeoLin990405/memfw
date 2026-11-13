@@ -17,6 +17,7 @@ from .capture.cli import app as capture_app
 from .capture.confirm import confirm_command
 from .capture.review import list_staged_candidates
 from .code_retrieval import CodeIndex, index_code
+from .conversations.cli import app as conversations_app
 from .core.errors import IntegrityError, MemfwError
 from .core.models import Layer, Tier
 from .core.repository import Repository
@@ -88,6 +89,7 @@ app.add_typer(capture_app, name="capture")
 app.add_typer(concepts_app, name="concepts")
 app.add_typer(history_app, name="history")
 app.add_typer(dream_app, name="dream")
+app.add_typer(conversations_app, name="conversations")
 capture_app.command(name="confirm")(confirm_command)
 
 
