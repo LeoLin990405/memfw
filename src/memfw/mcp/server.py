@@ -40,7 +40,7 @@ import yaml
 from yaml.nodes import Node
 
 from memfw.capture.suggestions import suggest_related
-from memfw.conversations import ConversationShare, open_share
+from memfw.conversations import OPERATOR, ConversationShare, open_share
 from memfw.core.errors import NotFoundError
 from memfw.core.models import Layer, Tier
 from memfw.core.repository import Repository
@@ -1140,6 +1140,8 @@ class Gateway:
 
         if not self.app:
             raise ValueError("conversation tools need the calling app: pass --app or MEMFW_APP")
+        if self.app.strip().lower() == OPERATOR:
+            raise ValueError(f"'{OPERATOR}' is reserved for the memfw CLI; name the app instead")
         self._repo()
         return open_share(self.root, self.app)
 

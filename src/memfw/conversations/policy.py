@@ -92,7 +92,10 @@ class SharePolicy:
         return app not in self.optout and self.rule(app).readable
 
     def processable(self, app: str) -> bool:
-        return app not in self.optout and self.rule(app).process
+        """Whether the worker may summarise ``app``. Hidden apps never are: their
+        summaries would reach handoffs, episodes and vault candidates."""
+
+        return self.readable(app) and self.rule(app).process
 
     def hidden(self) -> tuple[str, ...]:
         """Apps whose sessions are never returned or processed for reading."""

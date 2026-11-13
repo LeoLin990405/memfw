@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, TypeVar
 
 from memfw.history.redact import redact_path
 
@@ -32,7 +32,7 @@ SNIPPET_CHARS = 400
 TURN_CHARS = 8 * 1024
 DEFAULT_BYTES = 16 * 1024
 MAX_BYTES = 64 * 1024
-MIN_BYTES = 1024
+MIN_BYTES = 4096
 MAX_RANGE = 200
 HANDOFF_MAX_TURNS = 5000
 GOAL_CHARS = 2048
@@ -78,6 +78,48 @@ def _calls(turn: Turn) -> list[dict[str, str]]:
 
 def _size(value: Any) -> int:
     return len(json.dumps(value, ensure_ascii=False).encode())
+
+
+def _trim_bytes(text: str, limit: int) -> str:
+    """``text`` cut to at most ``limit`` UTF-8 bytes (on a character boundary)."""
+
+    data = text.encode()
+    if len(data) <= limit:
+        return text
+    return data[: max(0, limit - 3)].decode(errors="ignore") + "…"
+
+
+T = TypeVar("T")
+SCAN_FACTOR = 10
+
+
+def _page(
+    fetch: Callable[[int, int], list[T]], keep: Callable[[T], bool], limit: int, offset: int
+) -> tuple[list[T], int | None]:
+    """``limit`` kept items from raw position ``offset`` and the raw offset of the next page.
+
+    Filtering happens before paging, so a dropped row never ends a page early.
+    The scan is bounded; when the bound is hit the next page starts there.
+    """
+
+    kept: list[T] = []
+    raw = offset
+    budget = limit * SCAN_FACTOR + 100
+    batch_size = limit + 1
+    while budget > 0:
+        batch = fetch(min(batch_size, budget), raw)
+        if not batch:
+            return kept, None
+        for item in batch:
+            raw += 1
+            budget -= 1
+            if not keep(item):
+                continue
+            if len(kept) == limit:
+                return kept, raw - 1
+            kept.append(item)
+        batch_size = max(batch_size, 2 * limit)
+    return kept, raw
 
 
 class ConversationShare:
@@ -141,15 +183,18 @@ class ConversationShare:
         limit = _clamp(limit, 1, MAX_LIMIT)
         offset = max(0, int(offset))
         include, exclude = self.policy.narrow(self.caller, self._requested(app, agent))
-        rows = self.source.sessions(
-            apps=include, exclude=exclude, since=since, limit=limit + 1, offset=offset
+        rows, next_offset = _page(
+            lambda count, position: self.source.sessions(
+                apps=include, exclude=exclude, since=since, limit=count, offset=position
+            ),
+            lambda row: self.policy.allowed(self.caller, row.app),
+            limit,
+            offset,
         )
-        rows = [row for row in rows if self.policy.allowed(self.caller, row.app)]
-        more = len(rows) > limit
         return {
             "notice": DATA_NOTICE,
-            "sessions": [row.as_dict() for row in rows[:limit]],
-            "next_offset": offset + limit if more else None,
+            "sessions": [row.as_dict() for row in rows],
+            "next_offset": next_offset,
         }
 
     def search(
@@ -169,14 +214,23 @@ class ConversationShare:
         limit = _clamp(limit, 1, MAX_LIMIT)
         offset = max(0, int(offset))
         include, exclude = self.policy.narrow(self.caller, self._requested(app, agent))
-        hits = self.source.search(
-            query, apps=include, exclude=exclude, since=since, limit=limit + 1, offset=offset
-        )
-        hits = [hit for hit in hits if self.policy.allowed(self.caller, hit.app)]
         terms = query.split()
+
+        def fetch(count: int, position: int) -> list[Turn]:
+            return self.source.search(
+                query, apps=include, exclude=exclude, since=since, limit=count, offset=position
+            )
+
+        def keep(hit: Turn) -> bool:
+            # A turn that would be withheld is not a hit: no probing for its content.
+            return self.policy.allowed(self.caller, hit.app) and not safe_text(hit.text)[1]
+
+        hits, next_offset = _page(fetch, keep, limit, offset)
+        if not hits:
+            next_offset = None  # an empty page never hints at filtered matches
         results = []
-        for hit in hits[:limit]:
-            text, withheld = safe_text(hit.text)
+        for hit in hits:
+            text, _ = safe_text(hit.text)
             results.append(
                 {
                     "ref": hit.ref,
@@ -185,15 +239,10 @@ class ConversationShare:
                     "offset": hit.offset,
                     "role": hit.role,
                     "ts": hit.ts,
-                    "snippet": text if withheld else _snippet(text, terms),
-                    "withheld": withheld,
+                    "snippet": _snippet(text, terms),
                 }
             )
-        return {
-            "notice": DATA_NOTICE,
-            "results": results,
-            "next_offset": offset + limit if len(hits) > limit else None,
-        }
+        return {"notice": DATA_NOTICE, "results": results, "next_offset": next_offset}
 
     def get(
         self,
@@ -211,11 +260,18 @@ class ConversationShare:
         cap = _clamp(max_bytes, MIN_BYTES, MAX_BYTES)
         turns = self.source.turns(info.app, info.session_id, start=start, limit=stop - start)
         out: list[dict[str, Any]] = []
-        used = _size(info.as_dict()) + len(DATA_NOTICE)
+        frame = {
+            "notice": DATA_NOTICE,
+            "session": info.as_dict(),
+            "turns": [],
+            "truncated": True,
+            "next_start": 10**9,
+        }
+        used = _size(frame)
         truncated = False
         for position, turn in enumerate(turns, start=start):
             text, withheld = safe_text(turn.text, TURN_CHARS)
-            item = {
+            item: dict[str, Any] = {
                 "index": position,
                 "ref": turn.ref,
                 "role": turn.role,
@@ -224,15 +280,25 @@ class ConversationShare:
                 "withheld": withheld,
                 "tool_calls": _calls(turn),
             }
-            size = _size(item)
-            if out and used + size > cap:
+            size = _size(item) + 2
+            if used + size > cap:
                 truncated = True
-                break
-            if not out and used + size > cap:
-                item["text"] = text[: max(0, cap - used - 512)] + "…"
-                truncated = True
+                if out:
+                    break
+                # The first turn alone is too big: drop its tool calls, then cut its text.
+                item["tool_calls"] = []
+                item["text"] = ""
+                room = cap - used - _size(item) - 8
+                while room > 0:
+                    item["text"] = _trim_bytes(text, room)
+                    size = _size(item) + 2
+                    if used + size <= cap:
+                        break
+                    room -= max(16, used + size - cap)
+                if room <= 0:
+                    break
             out.append(item)
-            used += _size(item)
+            used += size
             if truncated:
                 break
         next_index = start + len(out)
@@ -242,7 +308,8 @@ class ConversationShare:
             "session": info.as_dict(),
             "turns": out,
             "truncated": truncated,
-            "next_start": next_index if next_index < limit_end else None,
+            # Nothing fitted: no cursor, so a paging client cannot loop on the same start.
+            "next_start": next_index if out and next_index < limit_end else None,
         }
 
     def handoff(
@@ -257,8 +324,14 @@ class ConversationShare:
         self._ready()
         info = self._resolve(session_id, app)
         target = check_app(for_agent) if for_agent else None
-        if target is not None and not self.policy.allowed(target, info.app):
-            raise ConversationError(f"app {target} may not read this session")
+        if target is not None:
+            try:
+                target_allowed = self.policy.allowed(target, info.app)
+            except ConversationError:
+                target_allowed = False
+            if not target_allowed:
+                # Generic on purpose: another app's opt-out status is not disclosed.
+                raise ConversationError(f"app {target} may not read this session")
         cap = _clamp(max_bytes, MIN_BYTES, MAX_BYTES)
         recent = _clamp(recent, 1, 50)
         turns = self.source.turns(info.app, info.session_id, start=0, limit=HANDOFF_MAX_TURNS)
@@ -302,6 +375,7 @@ class ConversationShare:
                     "label": "[model_summarized: not verified]",
                     "summary": text,
                 }
+        pack["truncated"] = True  # sized with the flag present
         pack["truncated"] = self._fit(pack, cap)
         return pack
 

@@ -110,7 +110,9 @@ class RunReport:
     tokens: int = 0
     candidates_staged: int = 0
     episodes_queued: int = 0
-    purged_apps: list[str] = field(default_factory=list)
+    purged_apps: int = 0
+    candidates_to_review: list[str] = field(default_factory=list)
+    """Dream ids staged earlier for apps that are now excluded: review or reject them."""
     stopped: str = ""
     errors: dict[str, int] = field(default_factory=dict)
 
@@ -178,7 +180,7 @@ class WorkState:
                 chunk_start INTEGER NOT NULL, chunk_end INTEGER NOT NULL,
                 status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
                 error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL);
+                updated_at TEXT NOT NULL, tried_run TEXT NOT NULL DEFAULT '');
             CREATE INDEX IF NOT EXISTS jobs_status ON jobs (status, created_at);
             CREATE INDEX IF NOT EXISTS jobs_session ON jobs (app, session_id, fingerprint);
             CREATE TABLE IF NOT EXISTS summaries (
@@ -202,6 +204,10 @@ class WorkState:
                 status TEXT NOT NULL, report TEXT NOT NULL DEFAULT '{}');
             """
         )
+        # Additive migration only: a state file from an earlier build gains new columns.
+        job_columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(jobs)")}
+        if "tried_run" not in job_columns:
+            connection.execute("ALTER TABLE jobs ADD COLUMN tried_run TEXT NOT NULL DEFAULT ''")
         connection.execute(
             "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
             (SCHEMA_VERSION,),
@@ -272,9 +278,9 @@ class EpisodeQueue:
 
     def claim(self, consumer: str, limit: int = 10, *, now: str | None = None) -> list[str]:
         stamp = now or datetime.now(UTC).isoformat()
+        claimed: list[str] = []
         with self.state.open() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            ids = [
+            candidates = [
                 str(row["episode_id"])
                 for row in connection.execute(
                     "SELECT episode_id FROM episodes WHERE status = 'pending'"
@@ -282,12 +288,16 @@ class EpisodeQueue:
                     (max(1, int(limit)),),
                 )
             ]
-            connection.executemany(
-                "UPDATE episodes SET status = 'claimed', claimed_by = ?, claimed_at = ?"
-                " WHERE episode_id = ?",
-                [(consumer[:64], stamp, episode_id) for episode_id in ids],
-            )
-        return ids
+            for episode_id in candidates:
+                # Conditional update: two consumers never claim the same episode.
+                cursor = connection.execute(
+                    "UPDATE episodes SET status = 'claimed', claimed_by = ?, claimed_at = ?"
+                    " WHERE episode_id = ? AND status = 'pending'",
+                    (consumer[:64], stamp, episode_id),
+                )
+                if cursor.rowcount == 1:
+                    claimed.append(episode_id)
+        return claimed
 
     def ack(self, episode_id: str) -> bool:
         with self.state.open() as connection:
@@ -331,6 +341,25 @@ def _chunks(turns: Sequence[Turn]) -> list[list[Turn]]:
     if current:
         chunks.append(current)
     return chunks
+
+
+SESSION_INPUT_CHARS = 24_000
+
+
+def _bounded(chunks: list[str], limit: int = SESSION_INPUT_CHARS) -> list[str]:
+    """Chunk summaries for the session summary: the first and the latest ones that fit."""
+
+    if sum(len(item) for item in chunks) <= limit:
+        return chunks
+    head = [chunks[0]]
+    tail: list[str] = []
+    used = len(chunks[0])
+    for item in reversed(chunks[1:]):
+        if used + len(item) > limit:
+            break
+        tail.insert(0, item)
+        used += len(item)
+    return [*head, "(earlier parts omitted)", *tail]
 
 
 def _shares_verbatim(claim: str, text: str, length: int = VERBATIM_CHARS) -> bool:
@@ -388,11 +417,13 @@ class ConversationWorker:
                     "INSERT INTO runs (run_id, started_at, status) VALUES (?, ?, 'running')",
                     (report.run_id, stamp),
                 )
+                # A run that died mid-job left it running: retry it, unless it keeps dying.
                 connection.execute(
-                    "UPDATE jobs SET status = 'pending', updated_at = ? WHERE status = 'running'",
-                    (stamp,),
+                    "UPDATE jobs SET status = CASE WHEN attempts >= ? THEN 'failed'"
+                    " ELSE 'pending' END, updated_at = ? WHERE status = 'running'",
+                    (MAX_ATTEMPTS, stamp),
                 )
-                report.purged_apps = self._purge(connection)
+                self._purge(connection, report)
             if self.ingestor is not None:
                 try:
                     report.ingest = self.ingestor()
@@ -417,19 +448,34 @@ class ConversationWorker:
 
     # -- opt-out ------------------------------------------------------------------
 
-    def _purge(self, connection: sqlite3.Connection) -> list[str]:
-        """Drop derived data of apps that may no longer be processed."""
+    def _purge(self, connection: sqlite3.Connection, report: RunReport) -> None:
+        """Drop derived data of apps that may no longer be processed.
+
+        Candidates already staged in the vault are not deleted (they are the
+        human's review queue); their dream ids are reported for review.
+        """
 
         apps = {
             str(row["app"])
             for table in ("jobs", "summaries", "episodes", "session_state")
             for row in connection.execute(f"SELECT DISTINCT app FROM {table}")
         }
+        apps |= {
+            str(row["app"]) for row in connection.execute("SELECT DISTINCT app FROM staged_claims")
+        }
         purged = sorted(app for app in apps if not self.policy.processable(app))
+        review: set[str] = set()
         for app in purged:
+            review |= {
+                str(row["dream_id"])
+                for row in connection.execute(
+                    "SELECT DISTINCT dream_id FROM staged_claims WHERE app = ?", (app,)
+                )
+            }
             for table in ("jobs", "summaries", "episodes", "session_state", "staged_claims"):
                 connection.execute(f"DELETE FROM {table} WHERE app = ?", (app,))
-        return purged
+        report.purged_apps = len(purged)
+        report.candidates_to_review = sorted(review)
 
     # -- scan + plan ----------------------------------------------------------------
 
@@ -437,7 +483,7 @@ class ConversationWorker:
         cutoff = self.now() - timedelta(minutes=self.budgets.idle_minutes)
         exclude = tuple(
             sorted(
-                self.policy.optout
+                set(self.policy.hidden())
                 | {app for app, rule in self.policy.apps.items() if not rule.process}
             )
         )
@@ -512,11 +558,17 @@ class ConversationWorker:
                 )
                 # A chunk reused from an older fingerprint belongs to the newest one too.
                 connection.execute("UPDATE jobs SET fingerprint = ? WHERE job_id = ?", (mark, key))
-            # Session-level jobs of an older fingerprint are no longer wanted.
+            # Jobs of an older fingerprint are no longer wanted (an unfinished chunk
+            # whose end moved, session-level jobs); failed chunks get a fresh start.
             connection.execute(
                 "UPDATE jobs SET status = 'superseded', updated_at = ? WHERE app = ?"
-                " AND session_id = ? AND fingerprint != ? AND kind != 'chunk_summary'"
-                " AND status IN ('pending', 'running')",
+                " AND session_id = ? AND fingerprint != ? AND status IN ('pending', 'running')",
+                (stamp, info.app, info.session_id, mark),
+            )
+            connection.execute(
+                "UPDATE jobs SET status = 'pending', attempts = 0, error = '', updated_at = ?"
+                " WHERE app = ? AND session_id = ? AND fingerprint = ? AND kind = 'chunk_summary'"
+                " AND status IN ('failed', 'superseded')",
                 (stamp, info.app, info.session_id, mark),
             )
             connection.execute(
@@ -535,11 +587,13 @@ class ConversationWorker:
                 report.stopped = "max_seconds"
                 return
             with self.state.open() as connection:
+                # A job that errored in this run waits for the next one.
                 rows = connection.execute(
-                    "SELECT * FROM jobs WHERE status = 'pending' ORDER BY created_at, app,"
-                    " session_id, CASE kind WHEN 'chunk_summary' THEN 0"
-                    " WHEN 'session_summary' THEN 1 WHEN 'memory_claims' THEN 2 ELSE 3 END,"
-                    " chunk_start LIMIT 50"
+                    "SELECT * FROM jobs WHERE status = 'pending' AND tried_run != ?"
+                    " ORDER BY created_at, app, session_id, CASE kind"
+                    " WHEN 'chunk_summary' THEN 0 WHEN 'session_summary' THEN 1"
+                    " WHEN 'memory_claims' THEN 2 ELSE 3 END, chunk_start LIMIT 50",
+                    (report.run_id,),
                 ).fetchall()
             states = [(row, self._ready(row)) for row in rows]
             runnable = [row for row, state in states if state == "run"]
@@ -625,10 +679,16 @@ class ConversationWorker:
                     (job["job_id"],),
                 )
                 return "budget"
+            if status == "too_large":
+                status = "failed"
+                report.bump(report.errors, code)
             if status == "error":
                 attempts = int(job["attempts"]) + 1
                 status = "failed" if attempts >= MAX_ATTEMPTS else "pending"
                 report.bump(report.errors, code)
+                connection.execute(
+                    "UPDATE jobs SET tried_run = ? WHERE job_id = ?", (report.run_id, job["job_id"])
+                )
             self._finish(connection, job, status, code)
         report.bump(report.jobs, f"{kind}:{status}")
         return status
@@ -638,9 +698,16 @@ class ConversationWorker:
     def _call(
         self, task: str, data: dict[str, Any], report: RunReport
     ) -> tuple[dict[str, Any] | None, int, int, str]:
-        """``(parsed, tokens_in, tokens_out, code)``; code is ``budget`` when over."""
+        """``(parsed, tokens_in, tokens_out, code)``.
+
+        ``code`` is ``budget`` when this run's token budget is spent (the job
+        waits for the next run) and ``too_large`` when the job alone could never
+        fit (it fails instead of blocking the queue).
+        """
 
         estimate = estimate_tokens(json.dumps(data, ensure_ascii=False))
+        if estimate > self.budgets.max_tokens:
+            return None, 0, 0, "too_large"
         if report.tokens + estimate > self.budgets.max_tokens:
             return None, 0, 0, "budget"
         reply = self.backend.run(task, data, max_tokens=1024)
@@ -694,8 +761,8 @@ class ConversationWorker:
         parsed, tokens_in, tokens_out, code = self._call(
             "chunk_summary", {"turns": data_turns}, report
         )
-        if code == "budget":
-            return "budget", ""
+        if code in {"budget", "too_large"}:
+            return code, code
         if parsed is None:
             return "error", code
         self._store_summary(job, parsed, tokens_in, tokens_out)
@@ -730,10 +797,10 @@ class ConversationWorker:
         first_text = safe_text(first_user.text, 1000)[0] if first_user else ""
         if first_text.startswith("[withheld"):
             first_text = ""
-        data = {"first_user": first_text, "chunks": self._chunk_summaries(job)}
+        data = {"first_user": first_text, "chunks": _bounded(self._chunk_summaries(job))}
         parsed, tokens_in, tokens_out, code = self._call("session_summary", data, report)
-        if code == "budget":
-            return "budget", ""
+        if code in {"budget", "too_large"}:
+            return code, code
         if parsed is None:
             return "error", code
         self._store_summary(job, parsed, tokens_in, tokens_out)
@@ -748,8 +815,8 @@ class ConversationWorker:
         parsed, _tokens_in, _tokens_out, code = self._call(
             "memory_claims", {"summary": str(summary["summary"])}, report
         )
-        if code == "budget":
-            return "budget", ""
+        if code in {"budget", "too_large"}:
+            return code, code
         if parsed is None:
             return "error", code
         turns = self._session_turns(job)
@@ -806,7 +873,9 @@ class ConversationWorker:
                     fresh.append((claim_digest, claim, turn))
         if not fresh:
             return 0
-        dream_id = f"conv-{_digest(app, session_id, job['fingerprint'])[:16]}"
+        # The claims are part of the id: a retry with other claims is a new dream.
+        claim_ids = sorted(claim_digest for claim_digest, _claim, _turn in fresh)
+        dream_id = f"conv-{_digest(app, session_id, job['fingerprint'], claim_ids)[:16]}"
         candidates = [
             Candidate(
                 operation="distill",
@@ -856,6 +925,12 @@ class ConversationWorker:
             return "skipped", "session_gone"
         episode_id = _digest("episode", info.app, info.session_id, job["fingerprint"])
         with self.state.open() as connection:
+            # One pending episode per session: a newer state replaces an unclaimed one.
+            connection.execute(
+                "UPDATE episodes SET status = 'superseded' WHERE app = ? AND session_id = ?"
+                " AND status = 'pending' AND episode_id != ?",
+                (info.app, info.session_id, episode_id),
+            )
             cursor = connection.execute(
                 "INSERT OR IGNORE INTO episodes (episode_id, app, session_id, fingerprint,"
                 " intent, outcome, first_offset, last_offset, created_at)"

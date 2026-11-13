@@ -231,13 +231,15 @@ class SqliteStoreSource:
         if scope is None:
             return []
         where, params = scope
-        clauses = [where, *(r"text LIKE ? ESCAPE '\'" for _ in terms)]
+        clauses = [where, "text != ''", *(r"text LIKE ? ESCAPE '\'" for _ in terms)]
         params = [*params, *(_like(term) for term in terms)]
         since_value = _since(since)
         if since_value:
             clauses.append("ts >= ?")
             params.append(since_value)
         with self._open() as connection:
+            if "withheld" in self._columns(connection):
+                clauses.append("withheld = 0")
             rows = connection.execute(
                 "SELECT agent, session_id, offset, turn, role, ts, text, tool_calls"
                 f" FROM {TURNS_TABLE} WHERE {' AND '.join(clauses)}"
@@ -259,10 +261,13 @@ SOURCES_MODULE = "memfw.history.sources"
 def store_ingestor(
     config: Mapping[str, Any] | None, db: Path, *, skip_apps: Sequence[str] = ()
 ) -> Ingestor:
-    """An ingestor that drives the store module over ``conversation_sources``.
+    """An ingestor that drives the store module the way ``memfw history ingest`` does.
 
-    ``conversation_sources`` is a list of ``{name, agent, path}`` entries (see
-    the store's docs); nothing is discovered or hard-coded here.
+    Every registered reader is ingested from its existing roots (the
+    interactive home plus every Worker home, ``store_roots``), with the
+    store's own opt-out (``conversation_optout``: agents, cwd globs, marker
+    files) applied. ``skip_apps`` are compared with each reader's canonical
+    name, so an alias cannot bypass them. Nothing is hard-coded here.
     """
 
     def run() -> dict[str, Any]:
@@ -271,33 +276,39 @@ def store_ingestor(
             sources_module = importlib.import_module(SOURCES_MODULE)
         except ImportError:
             return {"status": "unavailable", "reason": "store_module_missing"}
-        entries = (config or {}).get("conversation_sources") or []
-        if not isinstance(entries, list) or not entries:
-            return {"status": "skipped", "reason": "no_conversation_sources"}
-        store = store_module.ConversationStore(db)
-        report: dict[str, Any] = {"status": "ok", "sources": {}}
-        for index, entry in enumerate(entries):
-            if not isinstance(entry, Mapping):
-                continue
-            name = str(entry.get("name") or f"source-{index}")[:64]
-            agent = str(entry.get("agent") or "").strip().lower()
-            if not agent or agent in skip_apps:
-                report["sources"][name] = {"status": "opted_out"}
-                continue
-            root = Path(str(entry.get("path") or "")).expanduser()
-            if not root.is_dir() or root.is_symlink():
-                report["sources"][name] = {"status": "missing_root"}
+        readers = getattr(sources_module, "READERS", None)
+        store_roots = getattr(sources_module, "store_roots", None)
+        if not isinstance(readers, Mapping) or not callable(store_roots):
+            return {"status": "unavailable", "reason": "store_api_mismatch"}
+        optout_type = getattr(store_module, "OptOut", None)
+        if optout_type is not None:
+            store = store_module.ConversationStore(
+                db, optout=optout_type.from_config(dict(config or {}))
+            )
+        else:
+            store = store_module.ConversationStore(db)
+        skip = {str(app).strip().lower() for app in skip_apps}
+        report: dict[str, Any] = {"status": "ok", "agents": {}}
+        for reader in readers.values():
+            agent = str(getattr(reader, "agent", "") or "")[:64]
+            if not agent or agent in skip:
+                report["agents"][agent or "?"] = {"status": "opted_out"}
                 continue
             try:
-                reader = sources_module.get_reader(agent)
-                counts = store.ingest(reader, [root])
+                roots = list(store_roots(reader))
+                counts = store.ingest(reader, roots)
             except Exception as exc:  # report the kind only: messages may hold paths
-                report["sources"][name] = {"status": "error", "error": type(exc).__name__}
+                report["agents"][agent] = {"status": "error", "error": type(exc).__name__}
                 continue
             as_dict = counts.as_dict() if hasattr(counts, "as_dict") else {}
-            report["sources"][name] = {
+            report["agents"][agent] = {
                 "status": "ok",
-                **{key: value for key, value in as_dict.items() if isinstance(value, int)},
+                "roots": len(roots),
+                **{
+                    key: value
+                    for key, value in as_dict.items()
+                    if isinstance(value, int) and not isinstance(value, bool)
+                },
             }
         return report
 

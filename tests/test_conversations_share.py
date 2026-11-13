@@ -466,3 +466,73 @@ def test_schedule_prints_but_never_installs(tmp_path: Path, isolated_home: Path)
         render(vault=vault, interval=5)
     escaped = plistlib.loads(render(vault=vault, memfw_bin="/opt/a&b<c>").encode())
     assert escaped["ProgramArguments"][0] == "/opt/a&b<c>"
+
+
+def test_search_never_returns_withheld_turns(tmp_path: Path) -> None:
+    vault = make_vault(tmp_path / "vault", SHARE_ON)
+    rows = [
+        turn("codex", "s1", 0, "user", f"probe {SECRET}", "2026-01-01T00:00:00Z"),
+        {**turn("codex", "s1", 1, "user", "", "2026-01-01T00:01:00Z"), "withheld": 1},
+    ]
+    store = write_store(tmp_path / "data" / "c.sqlite", rows)
+    share = open_share(vault, "claude", store=store)
+    assert share.search("probe")["results"] == []
+    assert share.search("correct-horse")["results"] == []
+
+
+def test_pagination_counts_only_visible_rows(tmp_path: Path) -> None:
+    vault = make_vault(
+        tmp_path / "vault",
+        {"conversation_share": {"enabled": True, "apps": {"kimi": {"can_read": ["codex"]}}}},
+    )
+    rows = [
+        turn(
+            "claude" if i % 2 else "codex",
+            f"s{i}",
+            0,
+            "user",
+            f"needle {i}",
+            f"2026-01-01T00:{i:02d}:00Z",
+        )
+        for i in range(20)
+    ]
+    store = write_store(tmp_path / "data" / "c.sqlite", rows)
+    share = open_share(vault, "kimi", store=store)
+    seen: list[str] = []
+    offset: int | None = 0
+    while offset is not None:
+        page = share.search("needle", limit=3, offset=offset)
+        assert len(page["results"]) == 3 or page["next_offset"] is None
+        seen += [item["session_id"] for item in page["results"]]
+        offset = page["next_offset"]
+    assert len(seen) == 10 == len(set(seen))
+    listed = share.list_sessions(limit=4)
+    assert len(listed["sessions"]) == 4 and listed["next_offset"] is not None
+
+
+def test_get_cap_holds_for_multibyte_text(tmp_path: Path) -> None:
+    vault = make_vault(tmp_path / "vault", SHARE_ON)
+    calls = [("shell", "汉" * 150)] * 20
+    rows = [turn("codex", "cjk", 0, "user", "汉字" * 4000, "2026-01-01T00:00:00Z", calls=calls)]
+    store = write_store(tmp_path / "data" / "c.sqlite", rows)
+    share = open_share(vault, "claude", store=store)
+    for cap in (4096, 8192, 16384):
+        got = share.get("cjk", max_bytes=cap)
+        assert len(json.dumps(got, ensure_ascii=False).encode()) <= cap
+        assert got["truncated"]
+
+
+def test_mcp_rejects_the_operator_name(tmp_path: Path, capsys: Any, monkeypatch: Any) -> None:
+    vault, store = _setup(tmp_path)
+    make_vault(vault, {"conversation_store": {"path": str(store)}, **SHARE_ON})
+    monkeypatch.setenv("MEMFW_APP", "operator")
+    result = _call(Gateway(vault), "conversations_list", {}, capsys)
+    assert result["isError"] and "reserved" in result["content"][0]["text"]
+
+
+def test_handoff_target_status_is_not_disclosed(tmp_path: Path) -> None:
+    vault, store = _setup(tmp_path, {**SHARE_ON, "conversation_optout": {"agents": ["grok"]}})
+    share = open_share(vault, "claude", store=store)
+    with pytest.raises(ConversationError) as caught:
+        share.handoff("s-alpha", for_agent="grok")
+    assert str(caught.value) == "app grok may not read this session"

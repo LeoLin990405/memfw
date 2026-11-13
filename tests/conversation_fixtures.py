@@ -23,7 +23,8 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversation_turns (
     agent TEXT NOT NULL, session_id TEXT NOT NULL, offset INTEGER NOT NULL,
     turn INTEGER NOT NULL, role TEXT NOT NULL, ts TEXT NOT NULL, text TEXT NOT NULL,
-    tool_calls TEXT NOT NULL, cwd TEXT NOT NULL, project TEXT NOT NULL,
+    tool_calls TEXT NOT NULL, cwd TEXT NOT NULL, project TEXT NOT NULL, model TEXT NOT NULL,
+    origin TEXT NOT NULL, withheld INTEGER NOT NULL, parser_version TEXT NOT NULL,
     locator TEXT NOT NULL, digest TEXT NOT NULL, PRIMARY KEY (agent, session_id, offset));
 """
 
@@ -52,6 +53,10 @@ def turn(
         "tool_calls": json.dumps([{"name": n, "summary": s} for n, s in calls]),
         "cwd": "/work/demo",
         "project": "demo",
+        "model": "demo-model",
+        "origin": "interactive",
+        "withheld": 0,
+        "parser_version": "1",
         "locator": f"{agent}/{session}",
         "digest": f"d{offset}",
     }
@@ -63,7 +68,8 @@ def write_store(path: Path, rows: Iterable[dict[str, Any]]) -> Path:
         connection.executescript(SCHEMA)
         connection.executemany(
             "INSERT OR REPLACE INTO conversation_turns VALUES (:agent, :session_id, :offset,"
-            " :turn, :role, :ts, :text, :tool_calls, :cwd, :project, :locator, :digest)",
+            " :turn, :role, :ts, :text, :tool_calls, :cwd, :project, :model, :origin, :withheld,"
+            " :parser_version, :locator, :digest)",
             list(rows),
         )
     os.chmod(path, 0o600)

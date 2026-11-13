@@ -24,7 +24,7 @@ and labelled as data, not instructions. There are no write tools.
 conversation_share:
   enabled: true                      # off by default
   apps:
-    cursor: {readable: false}        # never returned to anyone
+    cursor: {readable: false}        # never returned to anyone, never processed
     grok: {can_read: false}          # may not read
     kimi: {can_read: [claude, codex]}
     stepfun: {process: false}        # the worker skips it
@@ -40,16 +40,23 @@ conversation_worker:
   max_seconds: 120
 ```
 
-The calling app names itself (`memfw-mcp --app NAME` or `MEMFW_APP`). This is
-a visibility setting between cooperating local apps, not authentication. A
-"hidden" session answers exactly like a missing one.
+The calling app names itself (`memfw-mcp --app NAME` or `MEMFW_APP`;
+`operator` is reserved for the CLI). This is a visibility setting between
+cooperating local apps, not authentication. A "hidden" session answers exactly
+like a missing one, and search never returns a turn that would be withheld.
 
 ## Worker
 
-`memfw conversations worker --root VAULT` runs once: lock, ingest, scan idle
-sessions, then `chunk_summary` → `session_summary` → `memory_claims` →
+`memfw conversations worker --root VAULT` runs once: lock, ingest (every
+registered reader over its home and Worker-home roots, with the store's own
+`conversation_optout`), scan idle sessions, then `chunk_summary` → `session_summary` → `memory_claims` →
 `episode` jobs within the budgets. Re-running repeats no finished work; a
-crashed run resumes. State lives in
+crashed run resumes; a job that errors waits for the next run (at most 3
+tries), and a job too large for the token budget fails instead of blocking.
+A failed job is retried only when its session changes.
+When an app is opted out or hidden, its summaries, jobs and episodes are
+deleted; candidates it already staged stay in the vault and are listed in the
+run report (`candidates_to_review`). State lives in
 `~/.local/share/memfw/conversations-work.sqlite` (0600, refused inside a git
 work tree, the vault or a synced folder).
 
