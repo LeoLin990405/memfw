@@ -99,3 +99,7 @@ results/stepG/multiconv/runtime_reuse/
 .memfw-history.sqlite
 .memfw-history.sqlite-*
 .memfw-history.sqlite.lock
+
+# Local conversation store (never commit; the default lives outside the repo)
+.memfw-conversations.sqlite*
+conversations.sqlite*
