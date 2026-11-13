@@ -210,7 +210,30 @@ The candidate id is a hash of the steps, their refs and the sessions: a
 rerun over the same evidence reports `exists` and rewrites nothing. New
 evidence gives a new id with the same `procedure_key`; while a candidate for
 that procedure is staged, the new one is reported as `known` (with the staged
-path) and not staged again. Remove or apply the staged one to restage. Nothing is installed
+path) and not staged again. Its sessions, agents and per-step counts are
+appended once to the staged candidate's `evidence.json` under
+`later_evidence` (SKILL.md is not rewritten), so a reviewer sees the latest
+support. Remove or apply the staged one to restage.
+
+A candidate that cannot be staged (for example, a disk error) is reported
+with `status: error` and its message; the others are still staged and
+reported, `report.staging_errors` counts the failures and the CLI exits 1.
+
+**Private terms.** Words an operator never wants in a candidate are listed in
+`vault.yaml`:
+
+```yaml
+skills_distill:
+  private_terms: [projectname, hostname]
+  private_terms_file: /path/outside/the/repo/private-terms.txt  # optional
+```
+
+The file holds one term per line (blank lines and `#` comments ignored); a
+relative path is resolved against the vault root. Matching is
+case-insensitive and whole-word. Each term becomes `<private>` in every field
+of a candidate (SKILL.md, evidence, record; `private` in the skill name),
+keywords that are private terms are left out, and the drafter only sees
+masked input. The default list is empty. Nothing is installed
 into any skills directory, staging inside a `.<agent>/skills` directory is
 refused, and nothing is approved: a person copies a reviewed SKILL.md into
 place.
@@ -264,7 +287,7 @@ adoption rate stays unknown until a person adopts proposals.
   arguments are not part of a step. Only the first 500 index entries of a
   session are read, and only the newest `--max-sessions` (200) sessions.
 - Request keywords are redacted and digit-free, but a plain-word private term
-  (a project or host name without digits) can still appear in a candidate;
-  candidates stay local and are reviewed before use.
+  (a project or host name without digits) can still appear in a candidate
+  unless it is listed under `skills_distill.private_terms`.
 - Frequency-based scheduling ("often used, long unverified first") is limited
   to ordering by `reference_count`.

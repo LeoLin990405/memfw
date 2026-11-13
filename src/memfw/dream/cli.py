@@ -150,3 +150,7 @@ def dream_skills(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(2) from exc
     typer.echo(json.dumps(result.as_dict(), ensure_ascii=False, indent=2))
+    failed = result.report.get("staging_errors", 0)
+    if failed:
+        typer.echo(f"error: {failed} candidate(s) could not be staged", err=True)
+        raise typer.Exit(1)

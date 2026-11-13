@@ -21,6 +21,7 @@ import yaml
 from memfw.history import has_secret, redact
 
 from .distill import Procedure
+from .private import PrivateTerms
 
 Drafter = Callable[[dict[str, Any]], dict[str, Any]]
 """``drafter(procedure) -> {"name", "description", "when_to_use", "steps"}``.
@@ -139,13 +140,25 @@ def drafter_input(procedure: Procedure, min_sessions: int) -> dict[str, Any]:
 
 
 def apply_drafter(
-    procedure: Procedure, base: Draft, drafter: Drafter, *, min_steps: int, min_sessions: int
+    procedure: Procedure,
+    base: Draft,
+    drafter: Drafter,
+    *,
+    min_steps: int,
+    min_sessions: int,
+    private: PrivateTerms | None = None,
 ) -> Draft:
-    """The drafter's wording where it is safe and cited; the base draft otherwise."""
+    """The drafter's wording where it is safe and cited; the base draft otherwise.
+
+    The drafter never sees a private term: its input is masked first.
+    """
 
     notes: list[str] = []
+    payload = drafter_input(procedure, min_sessions)
+    if private:
+        payload = private.mask_all(payload)
     try:
-        proposed = drafter(drafter_input(procedure, min_sessions))
+        proposed = drafter(payload)
     except Exception as exc:  # noqa: BLE001 - a local hook must not break the run
         base.notes.append(f"drafter failed: {type(exc).__name__}")
         return base

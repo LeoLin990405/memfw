@@ -7,6 +7,7 @@ callable, so there is no model and no network.
 from __future__ import annotations
 
 import json
+import re
 import sys
 import textwrap
 from datetime import UTC, datetime
@@ -342,8 +343,103 @@ def test_new_evidence_for_a_staged_procedure_is_not_staged_twice(tmp_path: Path)
     assert second.candidate_id != first.candidate_id
     assert second.procedure_key == first.procedure_key
     assert second.status == "known"
+    assert second.evidence_appended is True
     assert second.path == (SKILLS_DIR / first.candidate_id).as_posix()
-    assert list(_staged(root)) == [first.candidate_id]
+    staged = _staged(root)
+    assert list(staged) == [first.candidate_id]
+    assert staged[first.candidate_id]["SKILL.md"] == first.skill_md
+    later = json.loads(staged[first.candidate_id]["evidence.json"])["later_evidence"]
+    assert [item["candidate_id"] for item in later] == [second.candidate_id]
+    assert sorted(item["session_id"] for item in later[0]["sessions"]) == [
+        "c1",
+        "c2",
+        "c4",
+        "x1",
+    ]
+    assert all(step["sessions"] == 4 for step in later[0]["steps"])
+    # The same newer evidence is recorded once.
+    third = run_skills(root, now=NOW).candidates[0]
+    assert third.status == "known" and third.evidence_appended is False
+    assert _staged(root) == staged
+
+
+def test_a_staging_failure_is_reported_per_candidate(tmp_path: Path, monkeypatch: Any) -> None:
+    import memfw.dream.skills.run as skills_run
+
+    root = _vault(tmp_path)
+    original = skills_run.stage_candidate
+    calls: list[str] = []
+
+    def flaky(vault: Path, candidate: Any) -> tuple[str, str]:
+        if candidate.candidate_id not in calls:
+            calls.append(candidate.candidate_id)
+        if candidate.candidate_id == calls[-1] and calls.index(candidate.candidate_id) == 1:
+            raise OSError("disk full")
+        return original(vault, candidate)
+
+    monkeypatch.setattr(skills_run, "stage_candidate", flaky)
+    result = run_skills(root, now=NOW, options=SkillOptions(min_sessions=2))
+    assert [item.status for item in result.candidates] == ["staged", "error"]
+    assert result.candidates[1].error == "disk full"
+    assert result.report["staging_errors"] == 1
+    assert list(_staged(root)) == [result.candidates[0].candidate_id]
+    output = CliRunner().invoke(
+        app, ["dream", "skills", "--root", str(root), "--min-sessions", "2"]
+    )
+    assert output.exit_code == 1
+    payload = json.loads(output.stdout)
+    assert [item["status"] for item in payload["candidates"]] == ["exists", "error"]
+
+
+def test_private_terms_are_masked_everywhere(tmp_path: Path) -> None:
+    term = "zorblax"
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    for number in range(3):
+        turns = [
+            ("user", f"sync the {term.capitalize()} mirror and the zorblaxian archive"),
+            ("bash", f"{term}-sync --all"),
+            ("result", "ok"),
+            ("bash", f"uv run {term}"),
+            ("result", "ok"),
+            ("bash", "git push"),
+            ("result", "ok"),
+        ]
+        (logs / f"p{number}.jsonl").write_text(_claude(f"p{number}", turns, number + 1), "utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "terms.txt").write_text("# private\nMIRROR  # trailing comment\n\n", "utf-8")
+    root = tmp_path / "vault"
+    repository = Repository(root)
+    repository.init()
+    config = repository.read_config()
+    config["history_sources"] = {"logs": str(logs)}
+    config["skills_distill"] = {
+        "private_terms": [term.upper()],
+        "private_terms_file": "../outside/terms.txt",
+    }
+    repository.configure(config)
+    result = run_skills(root, now=NOW)
+    assert len(result.candidates) == 1
+    candidate = result.candidates[0]
+    blob = json.dumps(_staged(root)).lower()
+    assert not re.search(rf"\b{term}\b", blob) and "mirror" not in blob
+    assert "zorblaxian" in blob  # whole words only
+    assert "<private>" in candidate.skill_md
+    assert "cmd:<private>-sync" in json.dumps(candidate.evidence)
+    assert candidate.record["name"] == "sync-zorblaxian-archive"
+    assert result.report["private_terms"] == 2
+
+
+def test_private_terms_config_is_validated(tmp_path: Path) -> None:
+    root = _vault(tmp_path)
+    repository = Repository(root)
+    for bad in ({"private_terms": "x"}, {"private_terms_file": "missing.txt"}, ["x"]):
+        config = repository.read_config()
+        config["skills_distill"] = bad
+        repository.configure(config)
+        with pytest.raises(ValueError):
+            run_skills(root, now=NOW, dry_run=True)
 
 
 def test_keywords_leave_out_words_with_digits(tmp_path: Path) -> None:

@@ -37,6 +37,7 @@ from .draft import (
     render_skill,
 )
 from .episodes import Episode, segment
+from .private import PrivateTerms
 
 SKILLS_DIR = Path("_candidates") / "skills"
 MAX_SESSIONS = 200
@@ -78,6 +79,8 @@ class SkillCandidate:
     record: dict[str, Any]
     status: str = "dry-run"
     path: str | None = None
+    error: str | None = None
+    evidence_appended: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -87,6 +90,8 @@ class SkillCandidate:
             "confidence": self.confidence,
             "status": self.status,
             "path": self.path,
+            "error": self.error,
+            "evidence_appended": self.evidence_appended,
             "skill_md": self.skill_md,
             "evidence": self.evidence,
         }
@@ -140,10 +145,21 @@ def _safe(text: str) -> bool:
 
 
 def build(
-    procedure: Procedure, options: SkillOptions, drafter: Any, created_at: str
+    procedure: Procedure,
+    options: SkillOptions,
+    drafter: Any,
+    created_at: str,
+    private: PrivateTerms | None = None,
 ) -> SkillCandidate | None:
-    """One candidate, or None when its text cannot be made safe."""
+    """One candidate, or None when its text cannot be made safe.
 
+    Private terms are masked in every field: SKILL.md, evidence and record.
+    The ids are computed before masking, so they do not depend on the list.
+    """
+
+    private = private or PrivateTerms()
+    # A private keyword says nothing a reviewer may see: leave it out of the name.
+    procedure.keywords = [word for word in procedure.keywords if not private.matches(word)]
     try:
         draft: Draft = deterministic(procedure)
     except UnsafeText:
@@ -155,10 +171,16 @@ def build(
             drafter,
             min_steps=options.min_steps,
             min_sessions=options.min_sessions,
+            private=private,
         )
+    if private:
+        draft.name = private.mask_name(draft.name)
+        draft.description = private.mask(draft.description)
+        draft.when_to_use = private.mask(draft.when_to_use)
+        draft.steps = [{**step, "text": private.mask(step["text"])} for step in draft.steps]
     candidate_id = procedure.candidate_id
     confidence = procedure.confidence(options.min_sessions)
-    skill_md = render_skill(candidate_id, draft, procedure, confidence)
+    skill_md = private.mask(render_skill(candidate_id, draft, procedure, confidence))
     evidence = {
         "candidate_id": candidate_id,
         "procedure_key": procedure.procedure_key,
@@ -184,6 +206,8 @@ def build(
         "drafter_notes": list(draft.notes),
         "created_at": created_at,
     }
+    evidence = private.mask_all(evidence)
+    record = private.mask_all(record)
     blob = skill_md + json.dumps(evidence) + json.dumps(record)
     if not _safe(blob):
         return None
@@ -230,12 +254,66 @@ def _staged_procedure(base: int, procedure_key: str) -> str | None:
     return None
 
 
+def _later_evidence(candidate: SkillCandidate) -> dict[str, Any]:
+    evidence = candidate.evidence
+    return {
+        "candidate_id": candidate.candidate_id,
+        "observed_at": candidate.record.get("created_at"),
+        "confidence": candidate.confidence,
+        "sessions": evidence["sessions"],
+        "agents": evidence["agents"],
+        "steps": [
+            {"signature": step["signature"], "sessions": step["sessions"]}
+            for step in evidence["steps"]
+        ],
+    }
+
+
+def _append_evidence(base: int, staged_id: str, candidate: SkillCandidate) -> bool:
+    """Record newer support in a staged candidate's ``evidence.json``.
+
+    SKILL.md and candidate.json are left alone (a reviewer may be reading
+    them). The same newer evidence is recorded once. The file is replaced
+    atomically; returns whether anything was added.
+    """
+
+    directory = _child_dir(base, staged_id, create=False)
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open("evidence.json", flags, dir_fd=directory)
+        with os.fdopen(descriptor, encoding="utf-8") as handle:
+            data = json.loads(handle.read(10_000_000))
+        if not isinstance(data, dict):
+            raise DreamStageError(f"{staged_id}/evidence.json is not an object")
+        later = data.get("later_evidence")
+        later = later if isinstance(later, list) else []
+        if any(
+            isinstance(item, dict) and item.get("candidate_id") == candidate.candidate_id
+            for item in later
+        ):
+            return False
+        data["later_evidence"] = [*later, _later_evidence(candidate)]
+        temporary = f".tmp-evidence-{os.getpid()}-{os.urandom(4).hex()}.json"
+        _write_new(directory, temporary, json.dumps(data, indent=2, sort_keys=True) + "\n")
+        try:
+            os.replace(temporary, "evidence.json", src_dir_fd=directory, dst_dir_fd=directory)
+        except OSError:
+            os.unlink(temporary, dir_fd=directory)
+            raise
+        return True
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise DreamStageError(f"{staged_id}/evidence.json is not valid JSON") from exc
+    finally:
+        os.close(directory)
+
+
 def stage_candidate(vault: Path, candidate: SkillCandidate) -> tuple[str, str]:
     """Publish one candidate directory with a single rename.
 
     Returns ``(status, candidate id)``: ``staged``; ``exists`` (same id, so
     the same evidence); or ``known`` (the same procedure is already staged
-    under another id, from older evidence; it is left for the reviewer).
+    under another id, from older evidence; its SKILL.md is left for the
+    reviewer and the newer support is appended to its ``evidence.json``).
     """
 
     _refuse_skill_home(Path(vault))
@@ -252,6 +330,7 @@ def stage_candidate(vault: Path, candidate: SkillCandidate) -> tuple[str, str]:
             return "exists", name
         known = _staged_procedure(base, candidate.procedure_key)
         if known is not None:
+            candidate.evidence_appended = _append_evidence(base, known, candidate)
             return "known", known
         temporary = f".tmp-{name}-{os.getpid()}-{os.urandom(4).hex()}"
         os.mkdir(temporary, 0o700, dir_fd=base)
@@ -304,6 +383,7 @@ def run_skills(
     if not repository.config_path.exists():
         raise ValueError(f"not a memfw vault: {root}")
     config = repository.read_config()
+    private = PrivateTerms.from_config(config, repository.root)
     drafter = load_drafter(options.drafter)
     created_at = now.isoformat().replace("+00:00", "Z")
     index, history_info = _history(repository, config, options.refresh, dry_run=dry_run)
@@ -320,14 +400,22 @@ def run_skills(
     candidates: list[SkillCandidate] = []
     unsafe = 0
     for procedure in procedures:
-        candidate = build(procedure, options, drafter, created_at)
+        candidate = build(procedure, options, drafter, created_at, private)
         if candidate is None:
             unsafe += 1
             continue
         candidates.append(candidate)
+    errors = 0
     if not dry_run:
         for candidate in candidates:
-            candidate.status, staged_id = stage_candidate(repository.root, candidate)
+            # One failure must not hide what was already staged: report each.
+            try:
+                candidate.status, staged_id = stage_candidate(repository.root, candidate)
+            except (DreamStageError, OSError) as exc:
+                candidate.status = "error"
+                candidate.error = str(exc)
+                errors += 1
+                continue
             candidate.path = (SKILLS_DIR / staged_id).as_posix()
     report = {
         "created_at": created_at,
@@ -338,6 +426,8 @@ def run_skills(
         "procedures": len(procedures),
         "candidates": len(candidates),
         "dropped_unsafe": unsafe,
+        "staging_errors": errors,
+        "private_terms": len(private.terms),
         "min_sessions": options.min_sessions,
         "min_steps": options.min_steps,
         "similarity": options.similarity,
