@@ -443,10 +443,10 @@ def test_paths_and_generic_tool_aliases_are_not_words_or_steps() -> None:
     assert tool_calls("[tool glob_file_search] pattern: x") == []
     assert tool_calls("[tool edit_file_v2] path: x") == []
     assert [c.signature for c in tool_calls("[tool web_fetch] url: x")] == ["tool:web_fetch"]
-    entries = _entries("fix the widget in /Users/zztester/conductor-wt/proj now", "claude", 1)
+    entries = _entries("fix the widget in /Users/zztester/src-tree/proj now", "claude", 1)
     (episode,) = segment("src", "s1", entries)
     assert "widget" in episode.words
-    assert not {"users", "zztester", "conductor-wt", "proj"} & set(episode.words)
+    assert not {"users", "zztester", "src-tree", "proj"} & set(episode.words)
 
 
 def test_git_dash_c_is_skipped_and_inspection_only_procedures_are_rejected() -> None:
