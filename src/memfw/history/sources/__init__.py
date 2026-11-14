@@ -10,12 +10,38 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import claude, codex, cursor, deepseek, glm, grok, kimi, minimax, opencode, stepfun
+from . import (
+    antigravity,
+    claude,
+    codex,
+    cursor,
+    deepseek,
+    gemini,
+    glm,
+    grok,
+    kimi,
+    minimax,
+    opencode,
+    stepfun,
+)
 from .base import ConversationRecord, Reader, SessionLocator, StoreRoot, ToolCall
 
 READERS: dict[str, Reader] = {
     module.READER.agent: module.READER
-    for module in (claude, codex, kimi, grok, cursor, deepseek, minimax, glm, stepfun, opencode)
+    for module in (
+        claude,
+        codex,
+        kimi,
+        grok,
+        cursor,
+        deepseek,
+        minimax,
+        glm,
+        stepfun,
+        opencode,
+        gemini,
+        antigravity,
+    )
 }
 ALIASES = {
     "claude-code": "claude",
@@ -26,6 +52,11 @@ ALIASES = {
     "zhipu": "glm",
     "step": "stepfun",
     "stepcode": "stepfun",
+    "gemini-cli": "gemini",
+    "agy": "antigravity",
+    "antigravity-cli": "antigravity",
+    "antigravity-ide": "antigravity",
+    "jetski": "antigravity",
 }
 
 
