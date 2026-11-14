@@ -72,19 +72,22 @@ work tree, the vault or a synced folder).
   transaction time); `created_at` is the worker's clock. The 30-day TTL of
   `memfw candidates-expire` covers `_candidates/remember/` only; dream
   candidates carry the stamp as data and do not expire.
-- Fair scan: sessions are listed newest first, so each run looks at a head
-  window (a quarter of `max_scan`, at most 200 sessions) and then resumes from
-  a cursor saved in the state file, wrapping to the top after the oldest
-  session. A backlog larger than `max_scan` is therefore covered over several
-  runs instead of starving the oldest sessions. The head window may queue at
-  most half of `max_sessions` and never all of them, so at least one session
-  per run always goes to the cursor (with `max_sessions: 1` there is no head
-  window). Sessions updated since the cursor was saved moved to the top, so
-  the saved offset is shifted by their number before resuming. A pass may
-  still skip or repeat a few sessions; the next pass reaches them. The run
-  report adds `scan_cursor_start`, `scan_cursor_end` and `scan_wrapped`.
+- Fair scan: sessions are listed newest first (`updated_at` descending, then
+  app and session id), so each run looks at a head window (a quarter of
+  `max_scan`, at most 200 sessions) and then resumes from a keyset cursor
+  saved in the state file: the last session the previous run visited. The
+  walk continues at the first session strictly after it in that order. An
+  updated session rises into the head window and nothing after the cursor
+  moves, so the cursor walk neither skips nor repeats sessions; past the
+  oldest session it wraps to the newest. A backlog larger than `max_scan` is
+  therefore covered over several runs instead of starving the oldest
+  sessions. The head window may queue at most half of `max_sessions` and
+  never all of them, so at least one session per run always goes to the
+  cursor (with `max_sessions: 1` there is no head window). The run report
+  adds `scan_cursor_start`, `scan_cursor_end` and `scan_wrapped`.
 - State upgrades are additive: the cursor is a new `scan_cursor` table
-  (`CREATE TABLE IF NOT EXISTS`, `schema_version` stays 1). An older worker on
+  (`CREATE TABLE IF NOT EXISTS`; its keyset columns are added with `ALTER
+  TABLE ADD COLUMN` when missing; `schema_version` stays 1). An older worker on
   the same state file ignores the table and scans from the top as before, so
   workers can be upgraded in any order; the cursor only helps once the new
   worker runs.

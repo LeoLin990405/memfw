@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from memfw.conversations import SharePolicy
 from memfw.conversations.backends import ExtractiveBackend
@@ -35,6 +38,11 @@ class FakeSource:
                 updated_at=updated.isoformat(),
             )
         )
+        self.sort()
+
+    def sort(self) -> None:
+        # The store's order: updated_at DESC, then app, then session id.
+        self.infos.sort(key=lambda info: (info.app, info.session_id))
         self.infos.sort(key=lambda info: info.updated_at, reverse=True)
 
     def available(self) -> bool:
@@ -174,22 +182,90 @@ def test_max_sessions_one_still_scans_from_the_top(tmp_path: Path) -> None:
     assert _planned(tmp_path) == {info.session_id for info in source.infos}
 
 
-def test_arrivals_are_counted_on_the_real_store(tmp_path: Path) -> None:
+def _touch_busy(source: FakeSource, now: datetime) -> None:
+    source.infos = [
+        replace(info, updated_at=(now - timedelta(minutes=1)).isoformat())
+        if info.session_id.startswith("busy")
+        else info
+        for info in source.infos
+    ]
+    source.sort()
+
+
+@pytest.mark.parametrize("busy", [0, 3, 10])
+def test_busy_sessions_above_the_cursor_do_not_cause_skips(tmp_path: Path, busy: int) -> None:
+    # Review scenario: 200 backlog sessions, active sessions updated every run.
+    # An offset cursor shifted by "sessions updated since" overshot every run and
+    # left the same 33 sessions unplanned for ever (busy=3).
+    source = FakeSource(200)
+    for index in range(busy):
+        source.add(f"busy-{index}", NOW - timedelta(days=1))
+    backlog = {info.session_id for info in source.infos if info.session_id.startswith("s-")}
+    now = NOW
+    # head window 5, so 15 cursor slots per run: 200 sessions need 14 runs.
+    for _ in range(16):
+        now += timedelta(minutes=10)
+        _touch_busy(source, now)
+        _scan(_worker(tmp_path, source, now=now, max_scan=20, max_sessions=100))
+    assert backlog <= _planned(tmp_path)
+
+
+def test_cursor_walk_visits_each_session_once_per_pass(tmp_path: Path) -> None:
+    source = FakeSource(60)
+    visited: list[str] = []
+    original = source.sessions
+
+    def recording(**kwargs: Any) -> list[SessionInfo]:
+        page = original(**kwargs)
+        if kwargs.get("limit", 0) > 1:  # not a keyset probe
+            visited.extend(info.session_id for info in page)
+        return page
+
+    source.sessions = recording  # type: ignore[method-assign]
+    now = NOW
+    for _ in range(4):  # 4 runs x 16 slots past the head window cover one pass
+        now += timedelta(minutes=10)
+        _touch_busy(source, now)
+        _scan(_worker(tmp_path, source, now=now, max_scan=20, max_sessions=100))
+    head = {f"s-{index:04d}" for index in range(55, 60)}  # the newest five
+    beyond = [item for item in visited if item not in head]
+    assert len(beyond) == len(set(beyond)) == 55
+
+
+def test_keyset_order_matches_the_real_store(tmp_path: Path) -> None:
     from conversation_fixtures import turn, write_store
 
     from memfw.conversations.adapter import SqliteStoreSource
 
     store = tmp_path / "data" / "conversations.sqlite"
-    write_store(
-        store,
-        [
-            turn("codex", "s-old", 0, "user", "Old task.", "2026-05-01T10:00:00Z"),
-            turn("codex", "s-new", 0, "user", "New task.", "2026-06-01T11:00:00Z"),
-        ],
-    )
-    worker = _worker(tmp_path, SqliteStoreSource(store), max_scan=40, max_sessions=4)
-    assert worker._arrivals((), "2026-06-01T10:30:00Z", 40) == 1
-    _scan(worker)
-    with sqlite3.connect(tmp_path / "state" / "work.sqlite") as connection:
-        (stamp,) = connection.execute("SELECT updated_at FROM scan_cursor").fetchone()
-    assert stamp == "2026-06-01T12:00:00Z"  # the store's own timestamp format
+    stamp = "2026-05-01T10:00:00Z"
+    rows = [
+        turn(app, f"s-{index}", 0, "user", "Task.", stamp)
+        for app in ("codex", "claude", "cursor")
+        for index in range(4)
+    ]
+    write_store(store, rows)
+    source = SqliteStoreSource(store)
+    infos = source.sessions(limit=50)
+    worker = _worker(tmp_path, source, max_scan=40, max_sessions=4)
+    for index, info in enumerate(infos):
+        key = (info.updated_at, info.app, info.session_id)
+        assert worker._keyset_offset((), key) == index + 1
+
+
+def test_cursor_table_from_the_offset_cursor_upgrades(tmp_path: Path) -> None:
+    path = tmp_path / "state" / "work.sqlite"
+    path.parent.mkdir(parents=True, mode=0o700)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE scan_cursor (name TEXT PRIMARY KEY, position INTEGER NOT NULL"
+            " DEFAULT 0, passes INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL"
+            " DEFAULT '')"
+        )
+        connection.execute("INSERT INTO scan_cursor VALUES ('sessions', 7, 1, '')")
+    path.chmod(0o600)
+    report = _scan(_worker(tmp_path, FakeSource(4), max_scan=8, max_sessions=10))
+    assert report.sessions_queued == 4
+    with sqlite3.connect(path) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(scan_cursor)")}
+    assert {"last_updated_at", "last_app", "last_session_id"} <= columns
