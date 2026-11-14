@@ -249,10 +249,16 @@ All agent-derived draft text (shared intents, request and intent words)
 is scrubbed: redaction, then URLs, absolute and relative paths, bare
 domains, UNC and backslash paths, a folder name with a trailing slash
 (`src/`) and host-like tokens (letters mixed with digits, such as
-`db-node-01`) become `<place>`. The value of any assignment (`NAME=value`,
-`NAME = value`, quoted values, PowerShell `$env:NAME=`) and the value after
-a secret cue (`password`, `token`, `secret`, `key:`; filler such as `is`,
-`to`, `-` or `:` in between is skipped) become `<secret>`. Backticks in agent text get no exemption. Only command text the
+`db-node-01`, or a `host:` in front of a path) become `<place>`. The value
+of an assignment (`NAME=value`, `NAME = value`, quoted values, `$(...)` or
+backticked substitutions, PowerShell `$env:NAME=`) becomes `<secret>`,
+except a plain small number or boolean under a harmless name
+(`retries=3`). After a secret cue (`password`, `passwd`, `token`, `secret`,
+`api key`, `key:`, `pass:`) the value becomes `<secret>` when it follows
+`:`/`=` or a filler (`is`, `to`, `,`, `-`), looks like a credential (a
+digit or symbol, or 8+ characters of mixed case), or follows a password
+cue; plain English (`token count`, `password reset`, `API key before`)
+stays. Backticks in agent text get no exemption. Only command text the
 code generates itself, from the fixed signature vocabulary, is added after
 scrubbing and kept as it is.
 

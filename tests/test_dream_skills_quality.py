@@ -748,7 +748,7 @@ def test_backticked_agent_text_is_scrubbed(intent: str, leaks: tuple[str, ...]) 
     [
         ("Run export FOO=secret before tests", "Run export FOO=<secret> before tests"),
         ("Set FOO=letmein then build", "Set FOO=<secret> then build"),
-        ("use `DEBUG=1 make` here", "use `DEBUG=<secret> make` here"),
+        ("use `DEBUG=verbose make` here", "use `DEBUG=<secret> make` here"),
         ("token=abc then go", "token=<secret> then go"),
     ],
 )
@@ -826,3 +826,40 @@ def test_filler_after_a_cue_does_not_move_the_mask(text: str, expected: str) -> 
 
     assert _shared_clean(text) == expected
     assert scrub(scrub(text)) == scrub(text)  # idempotent: clean() scrubs scrubbed text
+
+
+# -- round 4: substitutions, comma filler, pass:, and no over-scrubbing ---------------
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("export TOKEN=$(cat secret_file) now", "export TOKEN=<secret> now"),
+        ("Run FOO=`whoami` first", "Run FOO=<secret> first"),
+        ("Use the token, hunter, to log in", "Use the token, <secret>, to log in"),
+        ("pass: hunter then", "pass: <secret> then"),
+        ("passwd hunter then", "passwd <secret> then"),
+        ("Set RETRIES=3 but API_TOKEN=3 too", "Set RETRIES=3 but API_TOKEN=<secret> too"),
+    ],
+)
+def test_round4_leaks_are_masked(text: str, expected: str) -> None:
+    from memfw.dream.skills.scrub import scrub
+
+    assert scrub(text) == expected
+    assert scrub(expected) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Run the tests and check the token count",
+        "Rotate the API key before release",
+        "Update the password reset flow tests",
+        "Set retries = 3 and rerun",
+        "Check the secret scanner passes",
+        "Use key bindings for vim",
+        "the test is passing",
+    ],
+)
+def test_plain_english_after_a_cue_is_kept(text: str) -> None:
+    assert _shared_clean(text) == text
