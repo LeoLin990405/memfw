@@ -165,6 +165,7 @@ for a human to review. Memories gain optional `status` (`confirmed|unconfirmed|d
 ```sh
 memfw dream run --root /path/to/vault --dry-run
 memfw dream run --root /path/to/vault --focus "deploy"
+memfw dream skills --root /path/to/vault --dry-run   # SKILL.md drafts from repeated procedures
 ```
 
 See [`docs/dream.md`](docs/dream.md).

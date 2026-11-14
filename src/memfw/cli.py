@@ -17,6 +17,7 @@ from .capture.cli import app as capture_app
 from .capture.confirm import confirm_command
 from .capture.review import list_staged_candidates
 from .code_retrieval import CodeIndex, index_code
+from .conversations.cli import app as conversations_app
 from .core.errors import IntegrityError, MemfwError
 from .core.models import Layer, Tier
 from .core.repository import Repository
@@ -88,6 +89,7 @@ app.add_typer(capture_app, name="capture")
 app.add_typer(concepts_app, name="concepts")
 app.add_typer(history_app, name="history")
 app.add_typer(dream_app, name="dream")
+app.add_typer(conversations_app, name="conversations")
 capture_app.command(name="confirm")(confirm_command)
 
 
@@ -804,14 +806,34 @@ def candidate_apply(
 @app.command("candidates")
 def candidates_list(
     root: Annotated[Path, typer.Option("--root", "-r")] = Path("."),
+    include_expired: Annotated[
+        bool,
+        typer.Option("--include-expired", help="also list candidates past the 30-day TTL"),
+    ] = False,
 ) -> None:
-    """Show staged candidates with tags, related ids, and duplicate/conflict suggestions."""
+    """Show staged candidates with tags, related ids, and duplicate/conflict suggestions.
+
+    Candidates not applied within 30 days of ``recorded_at`` are hidden.
+    """
     typer.echo(
         json.dumps(
-            {"candidates": list_staged_candidates(root)},
+            {"candidates": list_staged_candidates(root, include_expired=include_expired)},
             ensure_ascii=False,
             indent=2,
         )
+    )
+
+
+@app.command("candidates-expire")
+def candidates_expire(
+    root: Annotated[Path, typer.Option("--root", "-r")] = Path("."),
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+) -> None:
+    """Mark staged candidates past the 30-day TTL as expired. Never deletes a file."""
+    from .capture.lifecycle import mark_expired_candidates
+
+    typer.echo(
+        json.dumps(mark_expired_candidates(root, dry_run=dry_run), ensure_ascii=False, indent=2)
     )
 
 

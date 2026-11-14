@@ -4,6 +4,10 @@ One file per concept (``<oid>.md``), plus ``report.json``. A dream's files
 are written into a private temporary directory and published with a single
 rename, so concurrent dreams never overwrite each other and a half-written
 dream is never visible. The authoritative vault is never touched.
+
+Every concept file and ``report.json`` carry ``recorded_at``: the server-clock
+instant memfw wrote them (transaction time, as for staged memory candidates).
+``created_at`` stays the caller's (possibly injected) clock.
 """
 
 from __future__ import annotations
@@ -12,6 +16,7 @@ import json
 import os
 import re
 from collections import defaultdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -40,13 +45,23 @@ def group_by_concept(candidates: list[Candidate]) -> dict[str, list[Candidate]]:
     return dict(sorted(grouped.items()))
 
 
-def render_concept(dream_id: str, oid: str, candidates: list[Candidate], created_at: str) -> str:
+def render_concept(
+    dream_id: str,
+    oid: str,
+    candidates: list[Candidate],
+    created_at: str,
+    recorded_at: str | None = None,
+) -> str:
     """Markdown for one concept: YAML frontmatter with the candidates, then a summary."""
 
-    front = {
+    front: dict[str, Any] = {
         "dream_id": dream_id,
         "oid": oid,
         "created_at": created_at,
+    }
+    if recorded_at:
+        front["recorded_at"] = recorded_at
+    front |= {
         "authority": False,
         "candidates": [candidate.as_dict() for candidate in candidates],
     }
@@ -124,6 +139,8 @@ def stage(
     """
 
     check_dream_id(dream_id)
+    # Transaction time: the server clock, never the caller's injected one.
+    recorded_at = datetime.now(UTC).isoformat()
     opened: list[int] = []
     try:
         root = os.open(Path(vault), _DIR_FLAGS & ~getattr(os, "O_NOFOLLOW", 0))
@@ -153,9 +170,11 @@ def stage(
                         counter += 1
                     name = f"{stem}-{counter}.md"
                 names[oid] = name
-                _write_new(work, name, render_concept(dream_id, oid, items, created_at))
+                _write_new(
+                    work, name, render_concept(dream_id, oid, items, created_at, recorded_at)
+                )
                 written.append(name)
-            full_report = {**report, "files": names}
+            full_report = {**report, "files": names, "recorded_at": recorded_at}
             _write_new(
                 work,
                 "report.json",

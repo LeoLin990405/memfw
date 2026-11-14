@@ -12,6 +12,8 @@ import typer
 from ..core.errors import MemfwError
 from ..history import HistoryError
 from .run import MAX_SESSIONS, DreamOptions, run_dream
+from .skills.run import MAX_SESSIONS as SKILL_MAX_SESSIONS
+from .skills.run import SkillOptions, run_skills
 from .stage import DreamExistsError, DreamStageError
 
 app = typer.Typer(
@@ -101,3 +103,62 @@ def dream_run(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(2) from exc
     typer.echo(json.dumps(result.as_dict(), ensure_ascii=False, indent=2))
+
+
+@app.command("skills")
+def dream_skills(
+    root: Annotated[Path, typer.Option("--root", "-r", help="memfw vault root")] = Path("."),
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Print the candidates; write nothing")
+    ] = False,
+    min_sessions: Annotated[
+        int, typer.Option("--min-sessions", help="Distinct sessions a procedure must repeat in")
+    ] = 3,
+    min_steps: Annotated[int, typer.Option("--min-steps", help="Fewest verified steps")] = 2,
+    similarity: Annotated[
+        float, typer.Option("--similarity", help="Episode clustering threshold (0-1]")
+    ] = 0.4,
+    max_sessions: Annotated[
+        int, typer.Option("--max-sessions", help="Most transcript sessions to read")
+    ] = SKILL_MAX_SESSIONS,
+    source: Annotated[str | None, typer.Option("--source-name")] = None,
+    since: Annotated[str | None, typer.Option("--since")] = None,
+    until: Annotated[str | None, typer.Option("--until")] = None,
+    drafter: Annotated[
+        str | None,
+        typer.Option("--drafter", help="Optional local drafter module:function (off by default)"),
+    ] = None,
+    refresh: Annotated[bool, typer.Option("--refresh/--no-refresh")] = True,
+    now: Annotated[str | None, typer.Option("--now", help="Inject an ISO-8601 UTC time")] = None,
+    from_queue: Annotated[
+        bool,
+        typer.Option(
+            "--from-queue",
+            help="Read the conversation worker's episode queue instead of the transcript index",
+        ),
+    ] = False,
+) -> None:
+    """Stage skill candidates from repeated procedures under _candidates/skills/."""
+
+    options = SkillOptions(
+        min_sessions=min_sessions,
+        min_steps=min_steps,
+        similarity=similarity,
+        max_sessions=max_sessions,
+        source=source,
+        since=since,
+        until=until,
+        refresh=refresh,
+        drafter=drafter,
+        from_queue=from_queue,
+    )
+    try:
+        result = run_skills(root, now=_now(now), dry_run=dry_run, options=options)
+    except (DreamStageError, HistoryError, MemfwError, ValueError, ImportError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(2) from exc
+    typer.echo(json.dumps(result.as_dict(), ensure_ascii=False, indent=2))
+    failed = result.report.get("staging_errors", 0)
+    if failed:
+        typer.echo(f"error: {failed} candidate(s) could not be staged", err=True)
+        raise typer.Exit(1)

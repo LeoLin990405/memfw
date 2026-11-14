@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template for a per-user launchd agent that runs the memfw conversation worker.
+  memfw never installs this. Render it with the print flag of the memfw
+  conversations schedule command, review it, then install it yourself
+  (see docs/conversations-share.md).
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.memfw.conversations-worker</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__MEMFW_BIN__</string>
+    <string>conversations</string>
+    <string>worker</string>
+    <string>--root</string>
+    <string>__VAULT_ROOT__</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>__INTERVAL__</integer>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/conversations-worker.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/conversations-worker.log</string>
+</dict>
+</plist>

@@ -77,6 +77,7 @@ class MemoryOperationsMixin:
             tags=tags or [],
             created_at=now,
             updated_at=now,
+            recorded_at=now,
         )
         markdown = self.render(document)
         digest = self._write_version(identifier, markdown)

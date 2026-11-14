@@ -38,7 +38,8 @@ In priority order:
      unreferenced, unconfirmed memory not updated for `--stale-days` (180).
      Nothing is deleted.
 3. **Distill** (Lesson / Procedure from at least two independent events):
-   proposal-only stub in v1; reported as not implemented.
+   proposal-only stub inside `dream run`; procedures are distilled into skill
+   candidates by `memfw dream skills` (below).
 4. **Promote / demote:** proposal-only. In v1 this is the injected-layer
    budget check below.
 
@@ -160,6 +161,107 @@ Options: `--all`, `--limit`, `--focus` (steers the search only), `--max-sessions
 `--source-name`, `--since`, `--until`, `--tenant`, `--stale-days`, `--dream-id`,
 `--judge`, `--allow-config-judge`, `--no-refresh`, `--now` (inject the clock).
 
+## Skill candidates
+
+`memfw dream skills` distills procedures that repeat across sessions (and
+agents) into SKILL.md drafts. It reads only the redacted snippets of the
+transcript index.
+
+```sh
+memfw dream skills --root /path/to/vault --dry-run
+memfw dream skills --root /path/to/vault --min-sessions 3 --since 2026-01-01
+memfw dream skills --root /path/to/vault --from-queue
+```
+
+`--from-queue` reads the conversation worker's episode queue instead of the
+transcript index (see `docs/conversations-share.md`): the newly queued
+episodes plus the newest consumed ones (up to `--max-sessions` sessions), with
+turns read through the conversation store adapter. Apps the share policy does
+not let the worker process are skipped. A dry run only peeks at the queue; a
+real run acks the episodes after staging, or releases them when it fails.
+Refs then read `conv:APP:SESSION@OFFSET` (`memfw conversations get`).
+
+1. **Episodes.** Each session is split into tasks: a user turn opens an
+   episode, except a user turn that answers a tool call (a tool result).
+2. **Steps.** Each tool call becomes a signature: a shell command keeps its
+   program and up to two following words from a fixed sub-command vocabulary
+   or known-program list (`cd repo && uv run pytest -q` -> `cmd:uv run
+   pytest`, `git push origin my-branch` -> `cmd:git push`, `ssh host7 uptime`
+   -> `cmd:ssh`). Free arguments (hosts, users, branches, paths, versions)
+   are never kept, and an unknown program whose name has digits is not a
+   step. Another tool becomes `tool:<name>`. Generic file tools (read, edit,
+   grep, ...) are not steps. Parallel tool calls are matched to their results,
+   so a tool result never opens an episode.
+3. **Procedures.** Episodes are clustered in a fixed order by half request
+   words, half step signatures (`--similarity`, 0.4; no shared step, no
+   match). A cluster must span `--min-sessions` (3) distinct sessions.
+4. **Verify-first.** A step is kept only when evidence turns for it exist in
+   at least `--min-sessions` of those sessions; other steps are dropped and
+   listed as `dropped_steps`. Fewer than `--min-steps` (2) kept steps, no
+   candidate.
+
+Each candidate is staged under `_candidates/skills/<candidate_id>/`:
+
+- `SKILL.md`: frontmatter `name` (lower-case, hyphenated, at most 64
+  characters) and `description`, then *When to use*, *Steps* (each citing its
+  step ids and session count) and *Evidence*;
+- `evidence.json`: sessions (source, session id, agent), agent counts, and
+  per-step signatures, session counts and refs (`memfw history read REF`);
+- `candidate.json`: the proposal record: `status: proposed`,
+  `approved: false`, `installed: false`, `confidence` (0..1, from step
+  support, repetition, agent breadth and the share of steps kept).
+
+Keywords (for the name and *When to use*) are request words found in at
+least half of the episodes; filler words and anything with digits (host or
+ticket names) are left out.
+
+The candidate id is a hash of the steps, their refs and the sessions: a
+rerun over the same evidence reports `exists` and rewrites nothing. New
+evidence gives a new id with the same `procedure_key`; while a candidate for
+that procedure is staged, the new one is reported as `known` (with the staged
+path) and not staged again. Its sessions, agents and per-step counts are
+appended once to the staged candidate's `evidence.json` under
+`later_evidence` (SKILL.md is not rewritten), so a reviewer sees the latest
+support. Remove or apply the staged one to restage.
+
+A candidate that cannot be staged (for example, a disk error) is reported
+with `status: error` and its message; the others are still staged and
+reported, `report.staging_errors` counts the failures and the CLI exits 1.
+
+**Private terms.** Words an operator never wants in a candidate are listed in
+`vault.yaml`:
+
+```yaml
+skills_distill:
+  private_terms: [projectname, hostname]
+  private_terms_file: /path/outside/the/repo/private-terms.txt  # optional
+```
+
+The file holds one term per line (blank lines and `#` comments ignored); a
+relative path is resolved against the vault root. Matching is
+case-insensitive and whole-word. Each term becomes `<private>` in every field
+of a candidate (SKILL.md, evidence, record; `private` in the skill name),
+keywords that are private terms are left out, and the drafter only sees
+masked input. The default list is empty. Nothing is installed
+into any skills directory, staging inside a `.<agent>/skills` directory is
+refused, and nothing is approved: a person copies a reviewed SKILL.md into
+place.
+
+All candidate text goes through the history redactor, URLs and paths become
+`<url>` / `<path>`, and a candidate that still carries a secret or a home path
+is dropped (`dropped_unsafe`).
+
+**Optional drafter.** `--drafter module:function` names a local hook (for
+example a model wrapper) that rewords the draft. It receives keywords, the
+verified steps (`id`, `signature`, `sessions`) and counts, never transcript
+text, and returns `name`, `description`, `when_to_use` and `steps`
+(`{"text", "evidence": [step ids]}`). Its output is verified like evidence:
+a step that cites no verified step id, does not name a program or tool of a
+step it cites, only repeats evidence already cited, or whose text is unsafe,
+is dropped;
+with fewer than `--min-steps` steps left, or on any error, the deterministic
+draft is kept. memfw ships no drafter and makes no network calls.
+
 ## Applying
 
 v1 only stages. Review a candidate file and make the change through the normal
@@ -187,6 +289,14 @@ adoption rate stays unknown until a person adopts proposals.
   a correction is only proposed for a memory that states exactly one value.
 - Curate matches words, not meanings: synonyms ("deploys" / "deployments are
   scheduled") are not recognised as duplicates.
-- Distill (③) is a stub; promote/demote (④) covers the budget check only.
+- Distill (③) is a stub in `dream run`; `dream skills` covers repeated
+  procedures only (no lessons). Promote/demote (④) covers the budget check only.
+- `dream skills` matches steps by command signature: the same procedure done
+  with different tools, or a step hidden in prose, is not recognised, and
+  arguments are not part of a step. Only the first 500 index entries of a
+  session are read, and only the newest `--max-sessions` (200) sessions.
+- Request keywords are redacted and digit-free, but a plain-word private term
+  (a project or host name without digits) can still appear in a candidate
+  unless it is listed under `skills_distill.private_terms`.
 - Frequency-based scheduling ("often used, long unverified first") is limited
   to ordering by `reference_count`.
