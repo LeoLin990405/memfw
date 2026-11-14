@@ -29,15 +29,30 @@ _DOMAIN = re.compile(
     r"info|me|sh|cloud|local|internal|lan|xyz|tech|site)\b(?::\d+)?(?:/(?:" + _VALUE + r")?)?"
 )
 _ABSOLUTE = re.compile(r"(?:^|(?<=[\s=:'\"(`,]))(?:~|\.{1,2})?/[^\s'\"`;,)]*|[A-Za-z]:\\\S*")
-_RELATIVE = re.compile(r"(?<![\w<])[\w.-]+(?:/[\w.-]+)+/?")
+_UNC = re.compile(r"\\\\[^\s\\`'\"]+(?:\\[^\s\\`'\"]*)*")
+"""``\\host\share\dir``."""
+_RELATIVE = re.compile(
+    r"(?<![\w<])[\w.-]+(?:[/\\][\w.-]+)+[/\\]?"  # dir/file, dir\file
+    r"|(?<![\w<])[\w.-]*\w[/\\](?=$|[\s`'\",;:)\w])"  # dir/ or dir\ on its own
+)
 _HOSTLIKE = re.compile(r"(?i)\b(?=[a-z0-9_-]*[a-z])(?=[a-z0-9_-]*\d)[a-z0-9]+(?:[-_][a-z0-9]+)*\b")
-_ASSIGN = re.compile(r"(?<![\w<])([A-Za-z_][A-Za-z0-9_]*)=(?!<secret>)[^\s`'\";,)]+")
-"""``NAME=value``: the value is never kept, whatever the name."""
+_QUOTED = r"'[^'\n]*'?|\"[^\"\n]*\"?"
+_ASSIGN = re.compile(
+    r"(?<![\w<$])((?i:\$env:)?[A-Za-z_][A-Za-z0-9_]*)\s*(?<![=!<>])=(?!=)\s*"
+    r"(?:" + _QUOTED + r"|(?!<secret>)[^\s`'\";,)]+)"
+)
+"""``NAME=value`` (also ``NAME = value``, quoted values and PowerShell
+``$env:NAME=``): the value is never kept, whatever the name."""
+_FILLER = r"(?>(?:\s*(?:[:=\-\u2013\u2014]|\b(?:is|was|to|as|of|be|set\s+to)\b))*\s*)"
+"""Words that sit between a cue and its value: ``token to x``, ``Password - x``.
+
+Atomic, so the value is the first token after them, never a filler word."""
+_SECRET_VALUE = r"(?!<secret>)(?:" + _QUOTED + r"|(?=[^\s`'\"<>]*\w)" + _VALUE + ")"
 _CUE = re.compile(
     r"(?i)(?<!<)\b(password|passwd|passphrase|pwd|token|secret|credential|credentials|api[_ -]?key|"
-    r"access[_ -]?key|private[_ -]?key)\b(?!=)(\s*(?::|is|was)?\s*)(" + _VALUE + ")"
+    r"access[_ -]?key|private[_ -]?key)\b(?!=)(" + _FILLER + r")(" + _SECRET_VALUE + ")"
 )
-_KEY_CUE = re.compile(r"(?i)(?<!<)\b(key)(\s*[:=]\s*)(" + _VALUE + ")")
+_KEY_CUE = re.compile(r"(?i)(?<!<)\b(key)(\s*[:=]\s*)(" + _SECRET_VALUE + ")")
 PLACE = "<place>"
 SECRET = "<secret>"
 
@@ -52,6 +67,7 @@ def scrub(text: str) -> str:
     """
 
     value = str(text or "")
+    value = _UNC.sub(PLACE, value)
     value = _ASSIGN.sub(lambda match: f"{match.group(1)}={SECRET}", value)
     value = _CUE.sub(lambda match: f"{match.group(1)}{match.group(2) or ' '}{SECRET}", value)
     value = _KEY_CUE.sub(lambda match: f"{match.group(1)}{match.group(2)}{SECRET}", value)

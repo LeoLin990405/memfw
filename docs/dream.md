@@ -247,10 +247,12 @@ the report without the candidates.
 
 All agent-derived draft text (shared intents, request and intent words)
 is scrubbed: redaction, then URLs, absolute and relative paths, bare
-domains and host-like tokens (letters mixed with digits, such as
-`db-node-01`) become `<place>`, and the value of any `NAME=value` and the
-word after a secret cue (`password`, `token`, `secret`, `key:`) become
-`<secret>`. Backticks in agent text get no exemption. Only command text the
+domains, UNC and backslash paths, a folder name with a trailing slash
+(`src/`) and host-like tokens (letters mixed with digits, such as
+`db-node-01`) become `<place>`. The value of any assignment (`NAME=value`,
+`NAME = value`, quoted values, PowerShell `$env:NAME=`) and the value after
+a secret cue (`password`, `token`, `secret`, `key:`; filler such as `is`,
+`to`, `-` or `:` in between is skipped) become `<secret>`. Backticks in agent text get no exemption. Only command text the
 code generates itself, from the fixed signature vocabulary, is added after
 scrubbing and kept as it is.
 
@@ -261,7 +263,8 @@ out (`alice at acme dot com`). Such words reach a draft only when they
 recur in at least half of the independent sessions (keywords) or inside an
 intent shared by two of them, but they can. List them under
 `skills_distill.private_terms` (below): they are then masked everywhere in a
-candidate, and a private keyword is left out of the name.
+candidate (SKILL.md, evidence and record), a private keyword is dropped
+from the keywords, and the skill name is masked too.
 
 Each candidate is staged under `_candidates/skills/<candidate_id>/`:
 

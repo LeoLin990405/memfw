@@ -774,3 +774,55 @@ def test_shared_backticked_intent_end_to_end() -> None:
     blob = candidate.skill_md + json.dumps(candidate.evidence)
     assert "secret_project" not in blob and "letmein" not in blob
     assert "Edit `<place>` and set FOO=<secret> before the run" in candidate.skill_md
+
+
+# -- round 3: quoted assignments, backslash paths, trailing slashes, cue fillers ------
+
+
+def _shared_clean(text: str) -> str:
+    from memfw.dream.skills.distill import _representative_intent
+    from memfw.dream.skills.draft import clean
+
+    return clean(_representative_intent({0: [text], 1: [text]}), 160)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Run `export FOO='hunter two'` first", "Run `export FOO=<secret>` first"),
+        ('Set FOO="hunter two" now', "Set FOO=<secret> now"),
+        ("Use $env:FOO='x' here", "Use $env:FOO=<secret> here"),
+        ("Set FOO = hunter then", "Set FOO=<secret> then"),
+    ],
+)
+def test_quoted_and_spaced_assignments_lose_their_value(text: str, expected: str) -> None:
+    assert _shared_clean(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Copy \\\\nas\\share\\x over", "Copy <place> over"),
+        ("Open secret_project\\plan.py now", "Open <place> now"),
+        ("Edit `secret_project/`plan.py now", "Edit `<place>`plan.py now"),
+        ("Run the tests in src/ first", "Run the tests in <place> first"),
+    ],
+)
+def test_backslash_and_trailing_slash_paths_are_places(text: str, expected: str) -> None:
+    assert _shared_clean(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Password - hunter ok", "Password - <secret> ok"),
+        ("set the token to hunter now", "set the token to <secret> now"),
+        ("token: abc then", "token: <secret> then"),
+        ("the secret is hunter here", "the secret is <secret> here"),
+    ],
+)
+def test_filler_after_a_cue_does_not_move_the_mask(text: str, expected: str) -> None:
+    from memfw.dream.skills.scrub import scrub
+
+    assert _shared_clean(text) == expected
+    assert scrub(scrub(text)) == scrub(text)  # idempotent: clean() scrubs scrubbed text
