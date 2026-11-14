@@ -338,16 +338,17 @@ def test_unreadable_pending_wal_is_unavailable_not_stale(tmp_path: Path) -> None
     )
     # A refresh that dies before checkpointing leaves committed rows in the WAL.
     child = (
-        "import os, sys\n"
+        "import contextlib, os, sys\n"
         "from pathlib import Path\n"
         "import memfw.history.index as index\n"
         "keep = []\n"
-        "original = index.TranscriptIndex._connect\n"
+        "@contextlib.contextmanager\n"
         "def hold(self):\n"
-        "    connection = original(self)\n"
+        "    connection = self._connect()\n"
         "    keep.append(connection)\n"
-        "    return connection\n"
-        "index.TranscriptIndex._connect = hold\n"
+        "    with connection:\n"
+        "        yield connection\n"
+        "index.TranscriptIndex._open = hold\n"
         "index.TranscriptIndex(Path(sys.argv[1]),"
         " [index.SourceRoot.create('logs', Path(sys.argv[2]))]).refresh()\n"
         "os._exit(0)\n"

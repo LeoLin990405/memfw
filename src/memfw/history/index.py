@@ -430,6 +430,19 @@ class TranscriptIndex:
             raise HistoryError("transcript index has an old layout; refresh it first")
         return connection
 
+    @contextlib.contextmanager
+    def _open(self) -> Iterator[sqlite3.Connection]:
+        """A connection that commits on success and is always closed on exit.
+
+        ``with connection:`` alone only commits; the connection would stay open
+        until garbage collection, keeping ``-wal``/``-shm`` next to the index.
+        Closing the last connection checkpoints the WAL and removes both, so a
+        later read-only open sees a quiet file it can open ``immutable=1``.
+        """
+
+        with contextlib.closing(self._connect()) as connection, connection:
+            yield connection
+
     def _connect(self) -> sqlite3.Connection:
         if self.read_only:
             return self._connect_read_only()
@@ -614,7 +627,7 @@ class TranscriptIndex:
             if not held:
                 counts["skipped_locked"] = True
                 return counts
-            with self._connect() as connection:
+            with self._open() as connection:
                 row = connection.execute(
                     "SELECT value FROM meta WHERE key = 'last_refresh'"
                 ).fetchone()
@@ -1055,7 +1068,7 @@ class TranscriptIndex:
             connection.execute("PRAGMA busy_timeout = 30000")
 
     def stats(self) -> dict[str, int]:
-        with self._connect() as connection:
+        with self._open() as connection:
             row = connection.execute(
                 "SELECT COUNT(*) AS files, COALESCE(SUM(entries), 0) AS entries,"
                 " COALESCE(SUM(skipped_secret), 0) AS skipped_secret,"
@@ -1081,7 +1094,7 @@ class TranscriptIndex:
 
         bounded = max(1, min(int(limit), 500))
         where, args = self._filters(source, session, since, until)
-        with self._connect() as connection:
+        with self._open() as connection:
             if session:
                 rows = connection.execute(
                     f"{self._SELECT} WHERE {where} ORDER BY e.source, e.path, e.offset LIMIT ?",
@@ -1148,7 +1161,7 @@ class TranscriptIndex:
         bounded = max(1, min(int(limit), 100))
         where, args = self._filters(source, session, since, until)
         fallback = False
-        with self._connect() as connection:
+        with self._open() as connection:
             match = fts_match(text, self._tokenizer(connection))
             rows: list[sqlite3.Row] = []
             if match is not None:
@@ -1220,7 +1233,7 @@ class TranscriptIndex:
         cap = max(256, min(int(max_bytes), MAX_READ_BYTES))
         before = max(0, min(int(before), MAX_CONTEXT))
         after = max(0, min(int(after), MAX_CONTEXT))
-        with self._connect() as connection:
+        with self._open() as connection:
             file_row = self._file_row(connection, name, file)
             relative = str(file_row["path"])
             parts = _check_relative(relative)
