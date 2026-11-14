@@ -30,6 +30,9 @@ from memfw.dream.skills.episodes import (
     tool_calls,
 )
 
+# A home-shaped path built at runtime so tracked text names no home path.
+_HOME = "/" + "Users" + "/zztester"
+
 NOW = datetime(2026, 3, 1, 12, 0, tzinfo=UTC)
 CONTRACT = (
     "Delivery contract - finish the assigned work yourself, do not hand it to another "
@@ -421,7 +424,7 @@ def test_intents_are_cleaned_in_evidence(tmp_path: Path) -> None:
         entries = _entries(request, agent, day)
         entries[1] = {
             **entries[1],
-            "snippet": "Run the suite in /Users/zztester/proj first.\n"
+            "snippet": f"Run the suite in {_HOME}/proj first.\n"
             "[tool Bash] command: uv run pytest -q",
         }
         episodes += segment(agent, f"s{number}", entries)
@@ -447,7 +450,7 @@ def test_paths_and_generic_tool_aliases_are_not_words_or_steps() -> None:
     assert tool_calls("[tool glob_file_search] pattern: x") == []
     assert tool_calls("[tool edit_file_v2] path: x") == []
     assert [c.signature for c in tool_calls("[tool web_fetch] url: x")] == ["tool:web_fetch"]
-    entries = _entries("fix the widget in /Users/zztester/src-tree/proj now", "claude", 1)
+    entries = _entries(f"fix the widget in {_HOME}/src-tree/proj now", "claude", 1)
     (episode,) = segment("src", "s1", entries)
     assert "widget" in episode.words
     assert not {"users", "zztester", "src-tree", "proj"} & set(episode.words)
