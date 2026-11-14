@@ -1,11 +1,13 @@
 """Draft a SKILL.md for a verified procedure; optionally let a model word it.
 
-The default draft is deterministic: the name comes from the request keywords
-and each step from its signature. An operator may name a *drafter*
-(``module:function``, typically a wrapper around a model) that rewords the
-draft. Its output is checked like transcript text, verify-first: every step
-it returns must cite at least one verified step id, uncited or unsafe steps
-are dropped, and if too little survives the deterministic draft is kept.
+The default draft is deterministic and extractive: the name comes from the
+request keywords, each step from the agent's most representative stated
+intent plus its command, inputs and checks, and preconditions from the
+programs used. An operator may name a *drafter* (``module:function``,
+typically a wrapper around a model) that rewords the draft. Its output is
+checked like transcript text, verify-first: every step it returns must cite
+at least one verified step id, uncited or unsafe steps are dropped, and if
+too little survives the deterministic draft is kept.
 """
 
 from __future__ import annotations
@@ -20,8 +22,9 @@ import yaml
 
 from memfw.history import has_secret, redact
 
-from .distill import Procedure
+from .distill import Procedure, VerifiedStep
 from .private import PrivateTerms
+from .scrub import scrub
 
 Drafter = Callable[[dict[str, Any]], dict[str, Any]]
 """``drafter(procedure) -> {"name", "description", "when_to_use", "steps"}``.
@@ -34,6 +37,7 @@ Drafter = Callable[[dict[str, Any]], dict[str, Any]]
 NAME_CHARS = 64
 DESCRIPTION_CHARS = 1024
 TEXT_CHARS = 400
+INTENT_CHARS = 160
 _SLUG = re.compile(r"[^a-z0-9]+")
 _NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _URL = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://\S+")
@@ -47,13 +51,35 @@ class UnsafeText(ValueError):
 
 
 def clean(text: str, limit: int = TEXT_CHARS) -> str:
-    """Redacted, path-free, single-line text; raises :class:`UnsafeText`."""
+    """Redacted, single-line text with no place or credential; raises :class:`UnsafeText`.
+
+    For agent (or drafter) text. Paths (absolute and relative), URLs, bare
+    domains and host-like tokens become placeholders, and assignment values
+    and the word after a secret cue become ``<secret>`` (:func:`.scrub.scrub`),
+    inside backticks too. Text that holds generated command text goes
+    through :func:`checked` instead, after its agent parts were cleaned.
+    """
 
     value = _CONTROL.sub(" ", str(text))
     value = redact(value)
     value = _URL.sub("<url>", value)
     value = _PATH.sub("<path>", value)
+    value = scrub(value)
     value = " ".join(value.split())[:limit].strip()
+    if has_secret(value) or _HOME.search(value) or "REDACTED" in value or "withheld" in value:
+        raise UnsafeText("text still carries a secret or a home path")
+    return value
+
+
+def checked(text: str, limit: int = TEXT_CHARS) -> str:
+    """Single-line text assembled from cleaned parts and generated commands.
+
+    Nothing is rewritten (generated command text such as ``python3 -m
+    pytest`` must stay as it is); it is only refused, like :func:`clean`,
+    when a secret or home path is still there.
+    """
+
+    value = " ".join(_CONTROL.sub(" ", str(text)).split())[:limit].strip()
     if has_secret(value) or _HOME.search(value) or "REDACTED" in value or "withheld" in value:
         raise UnsafeText("text still carries a secret or a home path")
     return value
@@ -75,31 +101,92 @@ class Draft:
     notes: list[str] = field(default_factory=list)
 
 
-def _step_text(signature: str) -> str:
-    kind, _, value = signature.partition(":")
+def _command_text(step: VerifiedStep) -> str:
+    kind, _, value = step.signature.partition(":")
     if kind == "cmd":
-        return f"Run `{value}`"
+        return f"Run `{step.command}`"
     return f"Use the `{value}` tool"
+
+
+GENERATED_INTENTS: tuple[tuple[frozenset[str], str], ...] = (
+    (frozenset({"pytest", "test", "jest", "vitest", "tox", "nox"}), "Run the tests"),
+    (frozenset({"mypy", "tsc"}), "Type-check the code"),
+    (frozenset({"lint", "eslint", "check"}), "Run the linters"),
+    (frozenset({"format", "fmt", "black", "prettier", "isort"}), "Format the code"),
+    (frozenset({"commit"}), "Commit the change"),
+    (frozenset({"push"}), "Push the branch"),
+    (frozenset({"tag", "release"}), "Tag the release"),
+    (frozenset({"publish", "deploy", "apply"}), "Publish or deploy"),
+    (frozenset({"build"}), "Build the project"),
+    (frozenset({"sync", "install", "lock", "venv", "add"}), "Install the dependencies"),
+    (frozenset({"checkout", "switch", "worktree", "branch"}), "Switch to the working branch"),
+    (frozenset({"merge", "rebase", "cherry-pick"}), "Integrate the branch"),
+    (frozenset({"pr"}), "Work with the pull request"),
+    (frozenset({"migrate", "upgrade", "downgrade", "alembic"}), "Migrate the database"),
+    (frozenset({"diff", "status", "log", "show"}), "Review the changes"),
+    (frozenset({"ssh", "scp", "rsync"}), "Work on the remote host"),
+    (frozenset({"docker", "podman", "compose", "kubectl", "helm"}), "Run the containers"),
+)
+"""Signature word -> generated intent class, first match wins."""
+
+
+def generated_intent(step: VerifiedStep) -> str:
+    """A description from the command and its intent class: never transcript text."""
+
+    kind, _, value = step.signature.partition(":")
+    words = set(value.split())
+    if kind == "cmd":
+        for keys, text in GENERATED_INTENTS:
+            if words & keys:
+                return text
+    return ""
+
+
+def step_headline(step: VerifiedStep, *, shared_intent: bool = True) -> str:
+    """``Intent: run `command```; the intent is shared wording, else generated.
+
+    The agent's intent is cleaned (fully scrubbed, backticks included) before
+    the generated command text is added, so only code-made spans skip it.
+    """
+
+    intent = ""
+    if shared_intent and step.intent:
+        try:
+            intent = clean(step.intent, INTENT_CHARS).rstrip(" .:;")
+        except UnsafeText:
+            intent = ""
+    intent = intent or generated_intent(step)
+    command = _command_text(step)
+    if not intent:
+        return command
+    return f"{intent[:1].upper()}{intent[1:]}: {command[:1].lower()}{command[1:]}"
+
+
+def _step_text(step: VerifiedStep) -> str:
+    return step_headline(step)
 
 
 def deterministic(procedure: Procedure) -> Draft:
     words = [word for word in procedure.keywords if _SLUG.sub("", word.lower())][:3]
-    tool_words = [step.signature.partition(":")[2].split()[0] for step in procedure.steps]
-    name = slug(words or tool_words[:2]) or "procedure"
-    sessions = len(procedure.sessions)
+    tool_words: list[str] = []
+    for step in procedure.steps:
+        for word in step.signature.partition(":")[2].split():
+            if word not in tool_words and word not in {"run", "exec", "x", "-m"}:
+                tool_words.append(word)
+    name = slug(words) or slug(tool_words[:3]) or "procedure"
+    sessions = procedure.independent or len(procedure.sessions)
     agents = ", ".join(procedure.agents) or "unknown"
-    summary = "; ".join(_step_text(step.signature) for step in procedure.steps)
+    summary = "; ".join(_command_text(step) for step in procedure.steps)
     topic = ", ".join(procedure.keywords) or "the same steps"
     return Draft(
         name=name,
-        description=clean(
-            f"Repeated procedure seen in {sessions} sessions (agents: {agents}): {summary}.",
+        description=checked(
+            f"Procedure repeated in {sessions} independent sessions (agents: {agents}): {summary}.",
             DESCRIPTION_CHARS,
         ),
         when_to_use=clean(f"When a task is about {topic}.", DESCRIPTION_CHARS),
         steps=[
-            {"text": clean(_step_text(step.signature)), "evidence": [step.key]}
-            for step in procedure.steps
+            {"text": checked(_step_text(step)), "evidence": [step.key]} for step in procedure.steps
         ],
     )
 
@@ -225,38 +312,56 @@ def apply_drafter(
     return draft
 
 
+def _detail_lines(step: VerifiedStep) -> list[str]:
+    lines = []
+    kind = step.signature.partition(":")[0]
+    if kind == "cmd":
+        lines.append(f"   - Command: `{step.command}`")
+    else:
+        lines.append(f"   - Tool: `{step.signature.partition(':')[2]}`")
+    if step.inputs:
+        lines.append("   - Inputs: " + ", ".join(f"`{item}`" for item in step.inputs))
+    if step.checks:
+        lines.append("   - Check: " + "; ".join(step.checks))
+    if step.session_ids:
+        lines.append("   - Seen in: " + ", ".join(f"`{item}`" for item in step.session_ids))
+    return lines
+
+
 def render_skill(candidate_id: str, draft: Draft, procedure: Procedure, confidence: float) -> str:
-    """SKILL.md: ``name`` / ``description`` frontmatter, then when-to-use and steps."""
+    """SKILL.md: ``name`` / ``description`` frontmatter, then when-to-use and the procedure."""
 
     front = {"name": draft.name, "description": draft.description}
     dumped = yaml.safe_dump(front, allow_unicode=True, sort_keys=False, width=1000).rstrip()
-    steps = procedure.steps
-    by_id = {step.key: step for step in steps}
-    lines = [
-        f"# {draft.name}",
-        "",
-        "## When to use",
-        "",
-        draft.when_to_use,
-        "",
-        "## Steps",
-        "",
-    ]
+    by_id = {step.key: step for step in procedure.steps}
+    lines = ["# " + draft.name, "", "## When to use", "", draft.when_to_use, ""]
+    if procedure.preconditions:
+        lines += ["## Preconditions", ""]
+        lines += [f"- {item}" for item in procedure.preconditions]
+        lines.append("")
+    lines += ["## Steps", ""]
     for number, step in enumerate(draft.steps, start=1):
-        support = max(by_id[key].sessions for key in step["evidence"])
+        cited = [by_id[key] for key in step["evidence"]]
+        support = max(item.sessions for item in cited)
         lines.append(
             f"{number}. {step['text']} (evidence: {', '.join(step['evidence'])}; "
-            f"{support} sessions)"
+            f"{support} independent sessions)"
         )
+        for item in cited:
+            lines += _detail_lines(item)
+    outcomes = ", ".join(f"{key} {value}" for key, value in procedure.outcomes.items())
     lines += [
         "",
         "## Evidence",
         "",
         f"- Candidate `{candidate_id}`, confidence {confidence:.2f}: proposal only, not "
         "installed or approved.",
-        f"- {len(procedure.sessions)} sessions; agents: "
+        f"- {procedure.independent or len(procedure.sessions)} independent sessions "
+        f"({len(procedure.sessions)} in all) over {len(procedure.days)} day(s); agents: "
         + ", ".join(f"{agent} ({count})" for agent, count in procedure.agents.items())
         + ".",
-        "- Per-step refs are in `evidence.json` (`memfw history read REF`).",
     ]
+    if outcomes:
+        lines.append(f"- Outcomes per independent session: {outcomes}.")
+    lines.append("- Per-step refs are in `evidence.json` (`memfw history read REF`).")
     return f"---\n{dumped}\n---\n\n" + "\n".join(lines) + "\n"
