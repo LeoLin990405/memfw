@@ -437,3 +437,13 @@ def test_representative_intent_skips_empty_intents() -> None:
     intents = ["", "Build the release wheel", "", "Build the wheel for release", "x"]
     assert _representative_intent(intents) == "Build the release wheel"
     assert _representative_intent(["", ""]) == ""
+
+
+def test_paths_and_generic_tool_aliases_are_not_words_or_steps() -> None:
+    assert tool_calls("[tool glob_file_search] pattern: x") == []
+    assert tool_calls("[tool edit_file_v2] path: x") == []
+    assert [c.signature for c in tool_calls("[tool web_fetch] url: x")] == ["tool:web_fetch"]
+    entries = _entries("fix the widget in /Users/zztester/conductor-wt/proj now", "claude", 1)
+    (episode,) = segment("src", "s1", entries)
+    assert "widget" in episode.words
+    assert not {"users", "zztester", "conductor-wt", "proj"} & set(episode.words)

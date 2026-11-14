@@ -49,6 +49,15 @@ _SEGMENT = re.compile(r"\s*(?:&&|\|\||;|\||\n)\s*")
 _ENV = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _PROGRAM = re.compile(r"^[a-z][a-z_.+-]{0,31}$")
 _FLAG = re.compile(r"^(--?[a-z][a-z0-9-]{0,24})(?:=.*)?$")
+_PLACES = re.compile(
+    r"(?i)\b[a-z][a-z0-9+.-]*://\S+|(?:~|\.{1,2})?/[^\s'\"`;,)]+|\[REDACTED:[^\]]*\]"
+)
+"""URLs, paths and redaction markers: never request words."""
+_GENERIC_NAME = re.compile(
+    r"^(?:read|write|edit|glob|grep|ls|list|view|search|find|delete|create|move|copy|open)"
+    r"(?:_[a-z0-9]+)*$"
+)
+"""File and navigation tools under other names (``glob_file_search``, ``edit_file_v2``)."""
 _EXTENSION = re.compile(r"\.([a-z]{1,5})$")
 _SKIP_PROGRAMS = frozenset({"cd", "pushd", "popd", "echo", "true", "export", "set", "source"})
 READ_PROGRAMS = frozenset(
@@ -386,7 +395,7 @@ def tool_calls(text: str) -> list[Call]:
     if command is not None or name in _SHELL_TOOLS:
         calls = command_calls(command if command is not None else rest)
         return [Call(f"cmd:{call.signature}", call.flags, call.inputs) for call in calls]
-    if name in GENERIC_TOOLS or name in ORCHESTRATION_TOOLS:
+    if name in GENERIC_TOOLS or name in ORCHESTRATION_TOOLS or _GENERIC_NAME.match(name):
         return []
     return [Call(f"tool:{name}")]
 
@@ -512,7 +521,7 @@ def segment(
                 ref=str(entry.get("ref") or ""),
                 timestamp=str(entry.get("timestamp") or ""),
                 request=request,
-                words=frozenset(context_words(request)),
+                words=frozenset(context_words(_PLACES.sub(" ", request))),
             )
             continue
         if role == "user":

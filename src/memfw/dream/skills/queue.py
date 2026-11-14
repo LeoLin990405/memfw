@@ -147,9 +147,11 @@ def collect_queue(
             readable.append((app, session_id, max(1, info.turns)))
         if boilerplate is not None:
             for app, session_id, total in readable:
-                for entry in _entries(store.turns(app, session_id, start=0, limit=total)):
-                    if entry["role"] in {"user", "system"}:
-                        boilerplate.observe((app, session_id), app, entry["snippet"])
+                turns = store.turns(app, session_id, start=0, limit=total)
+                # Only user and system text is counted: skip redacting the rest twice.
+                asked = [turn for turn in turns if turn.role in {"user", "system"}]
+                for entry in _entries(asked):
+                    boilerplate.observe((app, session_id), app, entry["snippet"])
         for app, session_id, total in readable:
             entries = _entries(store.turns(app, session_id, start=0, limit=total))
             counts["sessions_read"] += 1

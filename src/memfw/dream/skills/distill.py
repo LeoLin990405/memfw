@@ -42,7 +42,7 @@ _FILLER = frozenset(
     "can run make sure check use using used task tasks work done first then next file "
     "files code look see read write update fix add new all any one two some more this that "
     "with from into for and the you your our will should must just like same each only "
-    "step steps 继续 请 一下 这个 那个 我们 你 我".split()
+    "step steps objective goal round 继续 请 一下 这个 那个 我们 你 我".split()
 )
 """Request words that say nothing about the task."""
 _KEYWORD = re.compile(r"^(?:[a-z][a-z-]{2,23}|[一-鿿]{2,8})$")
