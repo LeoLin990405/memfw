@@ -10,16 +10,41 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import claude, codex, cursor, deepseek, glm, grok, kimi, minimax, opencode, stepfun
+from . import (
+    claude,
+    codex,
+    cursor,
+    deepseek,
+    glm,
+    grok,
+    kimi,
+    kimi_desktop,
+    minimax,
+    opencode,
+    stepfun,
+)
 from .base import ConversationRecord, Reader, SessionLocator, StoreRoot, ToolCall
 
 READERS: dict[str, Reader] = {
     module.READER.agent: module.READER
-    for module in (claude, codex, kimi, grok, cursor, deepseek, minimax, glm, stepfun, opencode)
+    for module in (
+        claude,
+        codex,
+        kimi,
+        kimi_desktop,
+        grok,
+        cursor,
+        deepseek,
+        minimax,
+        glm,
+        stepfun,
+        opencode,
+    )
 }
 ALIASES = {
     "claude-code": "claude",
     "cursor-agent": "cursor",
+    "kimi-app": "kimi-desktop",
     "dsh": "deepseek",
     "mmx": "minimax",
     "zcode": "glm",
