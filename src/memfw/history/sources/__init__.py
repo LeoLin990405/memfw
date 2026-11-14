@@ -3,29 +3,67 @@
 Each module in this package reads one worker CLI's local session store and
 exposes ``READER`` (see :class:`base.Reader`). The registry maps agent names
 to readers; :func:`get_reader` accepts the CLI's other common names too
-(``zcode`` for ``glm``, ``dsh`` for ``deepseek`` ...).
+(``zcode`` for ``glm``, ``dsh`` for ``deepseek`` ...). ``cursor`` is the
+``cursor-agent`` CLI; ``cursor-ide`` (``cursor-app``) is the Cursor desktop app.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from . import claude, codex, cursor, deepseek, glm, grok, kimi, minimax, opencode, stepfun
+from . import (
+    antigravity,
+    claude,
+    codex,
+    cursor,
+    cursor_ide,
+    deepseek,
+    gemini,
+    glm,
+    grok,
+    kimi,
+    kimi_desktop,
+    minimax,
+    opencode,
+    stepfun,
+)
 from .base import ConversationRecord, Reader, SessionLocator, StoreRoot, ToolCall
 
 READERS: dict[str, Reader] = {
     module.READER.agent: module.READER
-    for module in (claude, codex, kimi, grok, cursor, deepseek, minimax, glm, stepfun, opencode)
+    for module in (
+        claude,
+        codex,
+        kimi,
+        kimi_desktop,
+        grok,
+        cursor,
+        cursor_ide,
+        deepseek,
+        minimax,
+        glm,
+        stepfun,
+        opencode,
+        gemini,
+        antigravity,
+    )
 }
 ALIASES = {
     "claude-code": "claude",
     "cursor-agent": "cursor",
+    "cursor-app": "cursor-ide",
+    "kimi-app": "kimi-desktop",
     "dsh": "deepseek",
     "mmx": "minimax",
     "zcode": "glm",
     "zhipu": "glm",
     "step": "stepfun",
     "stepcode": "stepfun",
+    "gemini-cli": "gemini",
+    "agy": "antigravity",
+    "antigravity-cli": "antigravity",
+    "antigravity-ide": "antigravity",
+    "jetski": "antigravity",
 }
 
 

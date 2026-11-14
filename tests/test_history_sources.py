@@ -127,13 +127,17 @@ def test_registry_covers_every_worker_cli() -> None:
         "claude",
         "codex",
         "kimi",
+        "kimi-desktop",
         "grok",
         "cursor",
+        "cursor-ide",
         "deepseek",
         "minimax",
         "glm",
         "stepfun",
         "opencode",
+        "gemini",
+        "antigravity",
     }
     assert set(agent_names()) == expected
     for name, reader in READERS.items():
@@ -142,6 +146,7 @@ def test_registry_covers_every_worker_cli() -> None:
         assert all(not root.startswith("/") for root in reader.default_roots)
     assert get_reader("zcode") is READERS["glm"]
     assert get_reader("DSH") is READERS["deepseek"]
+    assert get_reader("kimi-app") is READERS["kimi-desktop"]
     with pytest.raises(UnknownAgent):
         get_reader("nope")
 
@@ -509,3 +514,54 @@ def test_locators_are_opaque_and_mirrored_roots_dedupe(tmp_path: Path) -> None:
         locators = [r[0] for r in connection.execute("SELECT locator FROM conversation_cursors")]
     assert len(locators) == 2
     assert not any("secret-project-name" in item for item in locators)
+
+
+def _wal_database(directory: Path) -> Path:
+    directory.mkdir(parents=True)
+    database = directory / "store.db"
+    writer = sqlite3.connect(database)
+    assert writer.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+    writer.execute("CREATE TABLE t (x TEXT)")
+    writer.execute("INSERT INTO t VALUES ('kept')")
+    writer.commit()
+    writer.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    writer.close()
+    # A clean close removes the sidecars; make sure, whatever the platform does.
+    for suffix in ("-wal", "-shm"):
+        Path(f"{database}{suffix}").unlink(missing_ok=True)
+    return database
+
+
+def test_open_sqlite_readonly_leaves_a_quiet_wal_store_untouched(tmp_path: Path) -> None:
+    from memfw.history.sources.base import open_sqlite_readonly
+
+    database = _wal_database(tmp_path / "app")
+    before = sorted(p.name for p in database.parent.iterdir())
+    stamp = database.stat().st_mtime_ns, database.stat().st_size
+    connection = open_sqlite_readonly(database)
+    assert connection is not None
+    try:
+        assert [row[0] for row in connection.execute("SELECT x FROM t")] == ["kept"]
+        assert sorted(p.name for p in database.parent.iterdir()) == before
+    finally:
+        connection.close()
+    assert sorted(p.name for p in database.parent.iterdir()) == before == ["store.db"]
+    assert (database.stat().st_mtime_ns, database.stat().st_size) == stamp
+
+
+def test_open_sqlite_readonly_sees_a_live_wal(tmp_path: Path) -> None:
+    from memfw.history.sources.base import open_sqlite_readonly
+
+    database = _wal_database(tmp_path / "app")
+    writer = sqlite3.connect(database)
+    writer.execute("PRAGMA wal_autocheckpoint=0")
+    writer.execute("INSERT INTO t VALUES ('in the wal')")
+    writer.commit()
+    try:
+        connection = open_sqlite_readonly(database)
+        assert connection is not None
+        rows = [row[0] for row in connection.execute("SELECT x FROM t ORDER BY rowid")]
+        connection.close()
+        assert rows == ["kept", "in the wal"]
+    finally:
+        writer.close()

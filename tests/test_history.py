@@ -545,3 +545,37 @@ def test_cli_source_option_and_missing_sources(tmp_path: Path, roots: dict[str, 
     missing = runner.invoke(app, ["history", "list", "--root", str(empty)])
     assert missing.exit_code == 2
     assert "no history sources" in missing.stderr
+
+
+def test_index_connections_are_closed_on_return(tmp_path: Path, roots: dict[str, Path]) -> None:
+    # Without an explicit close the connection lingers until garbage collection and
+    # keeps -wal/-shm next to the index; a later read-only open then has to use them.
+    import gc
+    import sqlite3
+
+    index = _index(tmp_path, roots)
+    db = index.db
+
+    def sidecars() -> list[str]:
+        return sorted(p.name for p in db.parent.iterdir() if p.name.endswith(("-wal", "-shm")))
+
+    enabled = gc.isenabled()
+    gc.disable()
+    try:
+        assert index.refresh()["entries_indexed"] > 0
+        assert sidecars() == []
+        for call in (index.stats, lambda: index.search("humidity"), index.list):
+            call()
+            assert sidecars() == []
+        reader = TranscriptIndex(db, list(index.sources.values()), read_only=True)
+        assert reader.search("humidity")
+        assert sidecars() == []
+    finally:
+        if enabled:
+            gc.enable()
+    # A fresh immutable open sees everything the write path committed.
+    snapshot = sqlite3.connect(f"{db.resolve().as_uri()}?mode=ro&immutable=1", uri=True)
+    try:
+        assert snapshot.execute("SELECT count(*) FROM entries").fetchone()[0] > 0
+    finally:
+        snapshot.close()

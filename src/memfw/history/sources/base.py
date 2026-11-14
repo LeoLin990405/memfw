@@ -73,6 +73,11 @@ class SessionLocator:
     key: str
     session_id: str = ""
     extra: dict[str, Any] = field(default_factory=dict, compare=False, hash=False)
+    fingerprint: str | None = field(default=None, compare=False, hash=False)
+    """Optional change marker of this one session. When set, ingest compares it
+    instead of the file's size/mtime/inode, so a store holding many sessions
+    (one SQLite file) re-reads only the sessions whose marker changed. ``None``
+    (the default) keeps the file-stat check."""
 
 
 @dataclass(frozen=True)
@@ -101,7 +106,9 @@ class Reader(Protocol):
     append_only: bool
     """True when offsets are byte offsets of an append-only log. False (SQLite,
     message positions in a rewritten snapshot) makes ingest re-read the whole
-    session on every change and drop offsets no longer present."""
+    session on every change and drop offsets no longer present. What counts
+    as a change is the file's stat, or :attr:`SessionLocator.fingerprint`
+    when the reader sets one."""
 
     def sessions(self, root: Path) -> Iterator[SessionLocator]:
         """Every session under ``root``; nothing when the layout is not recognised."""
@@ -270,13 +277,21 @@ def open_sqlite_readonly(path: Path) -> sqlite3.Connection | None:
     """Read-only connection to a SQLite store, or ``None`` when it cannot be opened.
 
     ``mode=ro`` never creates or migrates the database. A store that is
-    being written to is read as of its last commit.
+    being written to is read as of its last commit. A WAL database whose
+    ``-wal``/``-shm`` sidecars are gone (the App closed cleanly) would still
+    get them created next to it by a ``mode=ro`` open, so when no sidecar
+    (nor a rollback ``-journal``) exists it is opened ``immutable=1``, which
+    touches nothing on disk.
     """
 
     if not regular_file(path):
         return None
+    resolved = path.resolve()
+    sidecars = ("-wal", "-shm", "-journal")
+    quiet = not any(os.path.lexists(f"{resolved}{suffix}") for suffix in sidecars)
+    query = "mode=ro&immutable=1" if quiet else "mode=ro"
     try:
-        connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=5)
+        connection = sqlite3.connect(f"{resolved.as_uri()}?{query}", uri=True, timeout=5)
         connection.row_factory = sqlite3.Row
         connection.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchall()
     except sqlite3.Error:
