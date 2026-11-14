@@ -61,6 +61,10 @@ _PROSE_ATTRIBUTE = re.compile(
     r"^(?:the\s+)?(?P<key>[a-z][a-z0-9 _-]{1,47}?)\s+(?:is|are|was|were)\s+"
     r"(?:now\s+|still\s+)?(?P<value>[^\s].{0,79}?)\s*$"
 )
+_TIME_ADVERB = re.compile(
+    r"^(?:(?:now|still|currently)\s+)+|(?:\s+(?:now|still|currently|today|again|already|anymore|any\s+more))+$"
+)
+"""Time adverbs around a value ("enabled now", "currently 3") are not part of it."""
 _SENTENCE = re.compile(r"[.!?;\n]+")
 # Clauses inside a sentence: "the host is db1 and the port is 5432",
 # "18 bar, set by the night shift".
@@ -133,7 +137,7 @@ def _prose_attributes(body: str) -> dict[str, tuple[str, bool]]:
         if match is None:
             continue
         key = _KEY_SEPARATORS.sub("_", match.group("key").strip()).strip("_")
-        value = _SPACE.sub(" ", match.group("value")).strip()
+        value = _TIME_ADVERB.sub("", _SPACE.sub(" ", match.group("value")).strip()).strip()
         if key and value and key not in found:
             found[key] = _polar_value(value, negated)
     return found
@@ -290,6 +294,7 @@ class _Features:
         "polarity",
         "values",
         "clauses",
+        "tokens",
         "stems",
         "signature",
         "numeric",
@@ -318,6 +323,8 @@ class _Features:
             for key, values in _value_signatures(positive_body).items()
             if key not in self.attributes
         }
+        # Canonical tokens in order (values included), to read prose qualifiers.
+        self.tokens = _canonical_text(positive_body).split()
         # Each clause's content stems and whether that clause is negated.
         self.clauses = [
             (stems, negated)
@@ -358,6 +365,8 @@ def _same_subject(left: _Features, right: _Features) -> bool:
 
     if not (left.subject <= right.subject or right.subject <= left.subject):
         return False
+    if _prose_identity_differs(left, right) or _prose_identity_differs(right, left):
+        return False
     shared = left.attributes.keys() & right.attributes.keys()
     for key in shared:
         if key.split("_")[-1] in _IDENTITY_KEYS and (
@@ -366,6 +375,43 @@ def _same_subject(left: _Features, right: _Features) -> bool:
         ):
             return False
     return True
+
+
+_QUALIFIER_SKIP = _LINK_WORDS | _FILLER | _DO_WORDS | frozenset({"our", "this", "that"})
+
+
+def _qualifiers(tokens: list[str], noun: str) -> set[str]:
+    """Words right next to ``noun`` in prose: "the staging environment" -> {staging}."""
+
+    found: set[str] = set()
+    for position, token in enumerate(tokens):
+        if token != noun:
+            continue
+        for neighbour in (position - 1, position + 1):
+            if 0 <= neighbour < len(tokens):
+                word = tokens[neighbour]
+                if word not in _QUALIFIER_SKIP and not _NUMERIC.match(word):
+                    found.add(word)
+    return found
+
+
+def _prose_identity_differs(stated: _Features, other: _Features) -> bool:
+    """An identity attribute in one memory vs a different one named in the other's prose.
+
+    ``env: prod`` vs "The staging environment has 3 replicas": the prose names
+    the environment ``staging``, so the two are about different things. With no
+    word next to the noun ("The service has 3 replicas") nothing is decided.
+    """
+
+    for key, value in stated.attributes.items():
+        noun = key.split("_")[-1]
+        if noun not in _IDENTITY_KEYS or key in other.attributes:
+            continue
+        qualifiers = _qualifiers(other.tokens, _canonical(noun))
+        wanted = set(value.split())
+        if qualifiers and not wanted & set(other.tokens):
+            return True
+    return False
 
 
 def _opposed_clauses(left: _Features, right: _Features) -> list[str]:

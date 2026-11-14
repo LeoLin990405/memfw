@@ -97,6 +97,51 @@ CASES = [
         "env: prod\nreplicas: 3",
         "environment: production\nreplicas: 5",
     ),
+    # an identity attribute vs a different identity named in prose (review fix 1)
+    (
+        "identity-prose-env",
+        "none",
+        "- env: prod\n- replicas: 3",
+        "The staging environment has 3 replicas.",
+    ),
+    (
+        "identity-prose-service",
+        "none",
+        "- service: api\n- replicas: 3",
+        "The worker service has 3 replicas.",
+    ),
+    (
+        "identity-prose-cluster",
+        "none",
+        "- cluster: eu1\n- nodes: 4",
+        "The us2 cluster has 4 nodes.",
+    ),
+    (
+        "identity-prose-same-env",
+        "merge",
+        "- env: prod\n- replicas: 3",
+        "The production environment has 3 replicas.",
+    ),
+    (
+        "identity-prose-same-service",
+        "merge",
+        "- service: api\n- replicas: 3",
+        "The api service has 3 replicas.",
+    ),
+    # trailing time adverbs are not part of a value (review fix 4)
+    (
+        "adverb-trailing-now",
+        "merge",
+        "Notifications are enabled.",
+        "Notifications are enabled now.",
+    ),
+    ("adverb-trailing-still", "merge", "The gateway is healthy.", "The gateway is healthy still."),
+    (
+        "adverb-real-change",
+        "supersede",
+        "Notifications are enabled.",
+        "Notifications are disabled now.",
+    ),
     # synonyms
     ("syn-deploys", "merge", "Deploys happen on Fridays.", "Deployments are scheduled on Friday."),
     (
