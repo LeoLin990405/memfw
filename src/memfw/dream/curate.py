@@ -67,31 +67,86 @@ _SENTENCE = re.compile(r"[.!?;\n]+")
 _CLAUSE = re.compile(r",\s*(?:and\s+)?|\s+and\s+")
 
 
-def _prose_attributes(body: str) -> dict[str, str]:
-    """``The <thing> <attribute> is <value>.`` sentences, keyed by the subject phrase."""
+_APOSTROPHE = re.compile(r"[\u2019\u2018`]")
+_CONTRACTION = re.compile(
+    r"\b(?P<stem>is|are|was|were|do|does|did|has|have|had|should|could|would|must)n't\b"
+)
+_NEGATION_WORDS = re.compile(r"\b(?:no\s+longer|not|never|cannot|can't|won't|no|none|without)\b")
+_ANTONYMS = {
+    "enabled": "disabled",
+    "disabled": "enabled",
+    "active": "inactive",
+    "inactive": "active",
+    "available": "unavailable",
+    "unavailable": "available",
+    "allowed": "forbidden",
+    "forbidden": "allowed",
+    "true": "false",
+    "false": "true",
+    "required": "optional",
+    "optional": "required",
+}
+"""Words whose negation is another word: "not enabled" states "disabled"."""
 
-    found: dict[str, str] = {}
-    clauses = (
-        clause for sentence in _SENTENCE.split(body.lower()) for clause in _CLAUSE.split(sentence)
+
+def _positive(clause: str) -> tuple[str, bool]:
+    """A clause without its negation words, and whether it was negated.
+
+    ``The cache isn't enabled`` -> (``The cache is enabled``, True). Negation is
+    judged per clause, so a "not" in one clause never flips another clause.
+    """
+
+    text = _APOSTROPHE.sub("'", clause.lower())
+    text, contractions = _CONTRACTION.subn(lambda match: match.group("stem"), text)
+    text = (
+        text.replace("can't", "can not").replace("won't", "will not").replace("cannot", "can not")
     )
-    for clause in clauses:
-        match = _PROSE_ATTRIBUTE.match(clause.strip())
+    text, negations = _NEGATION_WORDS.subn(" ", text)
+    return _SPACE.sub(" ", text).strip(), bool(contractions or negations)
+
+
+def _clauses(body: str) -> list[tuple[str, bool]]:
+    """Every clause of ``body`` as ``(positive text, negated)``."""
+
+    found: list[tuple[str, bool]] = []
+    for sentence in _SENTENCE.split(body):
+        for clause in _CLAUSE.split(sentence):
+            if clause.strip():
+                found.append(_positive(clause))
+    return found
+
+
+def _polar_value(value: str, negated: bool) -> tuple[str, bool]:
+    """Fold "not enabled" into "disabled"; other negated values keep the flag."""
+
+    if negated and value in _ANTONYMS:
+        return _ANTONYMS[value], False
+    return value, negated
+
+
+def _prose_attributes(body: str) -> dict[str, tuple[str, bool]]:
+    """``The <thing> <attribute> is [not] <value>.`` clauses: key -> (value, negated)."""
+
+    found: dict[str, tuple[str, bool]] = {}
+    for clause, negated in _clauses(body):
+        match = _PROSE_ATTRIBUTE.match(clause)
         if match is None:
             continue
         key = _KEY_SEPARATORS.sub("_", match.group("key").strip()).strip("_")
         value = _SPACE.sub(" ", match.group("value")).strip()
         if key and value and key not in found:
-            found[key] = value
+            found[key] = _polar_value(value, negated)
     return found
 
 
-def _attributes(body: str) -> dict[str, str]:
-    """``key: value`` / ``key = value`` lines, then ``X is Y`` prose sentences.
+def _attributes(body: str) -> dict[str, tuple[str, bool]]:
+    """``key: value`` / ``key = value`` lines, then ``X is Y`` prose clauses.
 
-    The first occurrence of a key wins.
+    Values map to ``(value, negated)``; ``cache: not enabled`` is
+    ``("disabled", False)``. A line overrides a prose clause for the same key.
     """
 
-    found: dict[str, str] = {}
+    found: dict[str, tuple[str, bool]] = {}
     for key, value in _prose_attributes(body).items():
         found.setdefault(key, value)
     for line in body.splitlines():
@@ -102,9 +157,10 @@ def _attributes(body: str) -> dict[str, str]:
         if raw_value.startswith("//"):  # a URL such as ``https://...`` is not an attribute
             continue
         key = _KEY_SEPARATORS.sub("_", match.group(1).strip().lower()).strip("_")
-        value = _SPACE.sub(" ", raw_value).strip().lower()
-        if key and value:
-            found[key] = value
+        positive, negated = _positive(raw_value)
+        text = _SPACE.sub(" ", positive).strip()
+        if key and text:
+            found[key] = _polar_value(text, negated)
     return found
 
 
@@ -117,6 +173,27 @@ def _effective(document: MemoryDocument) -> datetime:
 
 
 _SPELLING = {"colour": "color", "behaviour": "behavior", "centre": "center", "grey": "gray"}
+_SYNONYM_GROUPS = {
+    "deploy": "deploys deployed deploying deployment deployments",
+    "database": "db dbs databases",
+    "configuration": "config configs configurations",
+    "repository": "repo repos repositories",
+    "production": "prod",
+    "kubernetes": "k8s",
+    "environment": "env envs environments",
+    "application": "app apps applications",
+    "directory": "dir dirs directories folder folders",
+    "documentation": "docs",
+    "begin": "begins began start starts started",
+    "happen": "happens happened occur occurs occurred scheduled",
+    "stop": "stops stopped halt halts halted",
+}
+"""A small fixed synonym table. Opposites (enabled/disabled) are never folded."""
+_SYNONYMS = {
+    variant: canonical
+    for canonical, variants in _SYNONYM_GROUPS.items()
+    for variant in variants.split()
+}
 _NUMBER_WORDS = {
     word: str(value)
     for value, word in enumerate(
@@ -131,22 +208,76 @@ _NEGATIONS = frozenset(
 # Keys that name *which* thing a memory is about. host, region, owner, team and
 # the like are attributes of a thing and may change (a move, a hand-over).
 _IDENTITY_KEYS = frozenset(
-    "service name env environment project repo cluster account tenant app application".split()
+    "service name env environment project repo repository cluster account tenant app "
+    "application".split()
 )
 PARAPHRASE_CONTEXT = 0.3
 """Shared-word Jaccard two memories need, besides equal values, to be paraphrases."""
+CLAUSE_MATCH = 0.6
+"""Stem Jaccard two clauses need to state the same thing (one negating the other)."""
+
+_VALUE_TOKEN = re.compile(r"[a-z][a-z0-9_]*|v?\d+(?:[.,]\d+)*[a-z%]*")
+_NUMERIC = re.compile(r"^v?\d")
+_LINK_WORDS = frozenset(
+    "the a an is are was were be been on in of for at to by from with as now still set "
+    "uses use using runs run listens listen has have holds".split()
+)
+_DO_WORDS = frozenset({"do", "doe", "does", "did"})
 
 
 def _canonical(word: str) -> str:
     word = _SPELLING.get(word, word)
     word = _NUMBER_WORDS.get(word, word)
+    if word in _SYNONYMS:
+        return _SYNONYMS[word]
     if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
         word = word[:-1]
-    return word
+    return _SYNONYMS.get(word, word)
 
 
 def _canonical_text(text: str) -> str:
     return " ".join(_canonical(token) for token in _WORD.findall(text.lower()))
+
+
+def _clause_stems(text: str) -> frozenset[str]:
+    return frozenset(
+        token
+        for token in _canonical_text(text).split()
+        if token not in _FILLER
+        and token not in _DO_WORDS
+        and token not in _NEGATIONS
+        and not _NUMERIC.match(token)
+    )
+
+
+def _value_signatures(text: str) -> dict[str, frozenset[str]]:
+    """Values tied to the noun before (or else after) them: ``port 8000``, ``45s timeout``.
+
+    ``The api runs on port 8000`` -> ``{"port": {"8000"}}``. Link words (``on``,
+    ``of``, ``is``, ``uses``...) between the noun and the value are skipped.
+    """
+
+    tokens = _VALUE_TOKEN.findall(text)
+    found: dict[str, set[str]] = defaultdict(set)
+    for position, token in enumerate(tokens):
+        if not _NUMERIC.match(token):
+            continue
+        key = ""
+        for back in range(position - 1, max(-1, position - 4), -1):
+            word = tokens[back]
+            if _NUMERIC.match(word):
+                break
+            if word in _LINK_WORDS:
+                continue
+            key = word
+            break
+        if not key and position + 1 < len(tokens):
+            following = tokens[position + 1]
+            if not _NUMERIC.match(following) and following not in _LINK_WORDS:
+                key = following
+        if key and key not in _NEGATIONS:
+            found[_canonical(key)].add(token.lstrip("v").replace(",", "."))
+    return {key: frozenset(values) for key, values in found.items()}
 
 
 class _Features:
@@ -156,8 +287,12 @@ class _Features:
         "numbers",
         "body",
         "attributes",
+        "polarity",
+        "values",
+        "clauses",
         "stems",
         "signature",
+        "numeric",
         "subject",
         "negated",
     )
@@ -168,47 +303,92 @@ class _Features:
         self.context = {word for word in self.words if not _DIGITS_ONLY.match(word)}
         self.numbers = set(_NUMBER.findall(document.body))
         self.body = _normalised_body(document.body)
-        canonical_body = _canonical_text(document.body)
-        self.attributes = {
-            _canonical_text(key).replace(" ", "_"): _canonical_text(value)
-            for key, value in _attributes(document.body).items()
+        clauses = _clauses(document.body)
+        positive_body = " ".join(clause for clause, _negated in clauses)
+        canonical_body = _canonical_text(positive_body)
+        self.attributes: dict[str, str] = {}
+        self.polarity: dict[str, bool] = {}
+        for key, (value, negated) in _attributes(document.body).items():
+            name = _canonical_text(key).replace(" ", "_")
+            self.attributes[name] = _canonical_text(value)
+            self.polarity[name] = negated
+        # Values tied to a noun (``port 8000``); attribute keys take precedence.
+        self.values = {
+            key: values
+            for key, values in _value_signatures(positive_body).items()
+            if key not in self.attributes
         }
+        # Each clause's content stems and whether that clause is negated.
+        self.clauses = [
+            (stems, negated)
+            for stems, negated in ((_clause_stems(clause), neg) for clause, neg in clauses)
+            if stems
+        ]
         tokens = canonical_body.split()
         self.stems = {
-            token for token in tokens if token not in _FILLER and not _DIGITS_ONLY.match(token)
+            token for token in tokens if token not in _FILLER and not _NUMERIC.match(token)
         }
         # What a memory asserts: its numbers (number words included), or else
-        # the non-numeric values of its attributes. Equal signatures plus shared
-        # context make two differently worded memories duplicates.
+        # the non-numeric values of its attributes (a negated one as "not X").
+        # Equal signatures plus shared context make two differently worded
+        # memories duplicates.
         numbers = {token for token in tokens if _DIGITS_ONLY.match(token)}
-        values = {value for value in self.attributes.values() if not _NUMBER.search(value)}
+        values = {
+            ("not " if self.polarity[key] else "") + value
+            for key, value in self.attributes.items()
+            if not _NUMBER.search(value)
+        }
         self.signature = frozenset(numbers or values)
+        self.numeric = frozenset(numbers)
         # What a memory is about: its content words without the values it states
         # and without negation words. Two memories describe the same subject only
         # when one subject is contained in the other (staging vs production, Alice
         # vs Bob are different subjects).
         value_words = {word for value in self.attributes.values() for word in value.split()}
-        self.negated = bool(_NEGATIONS & set(tokens))
-        self.subject = self.stems - value_words - _NEGATIONS - {"do", "doe", "did"}
+        self.negated = any(negated for _stems, negated in clauses)
+        self.subject = self.stems - value_words - _NEGATIONS - _DO_WORDS
 
 
 def _same_subject(left: _Features, right: _Features) -> bool:
-    """Whether two memories talk about the same thing (see ``_Features.subject``)."""
+    """Whether two memories talk about the same thing (see ``_Features.subject``).
+
+    A differing identity key (``service: api`` vs ``service: worker``) always
+    means two different things, however many other attributes agree.
+    """
 
     if not (left.subject <= right.subject or right.subject <= left.subject):
         return False
     shared = left.attributes.keys() & right.attributes.keys()
-    agreeing = [key for key in shared if left.attributes[key] == right.attributes[key]]
     for key in shared:
-        if (
-            key.split("_")[-1] in _IDENTITY_KEYS
-            and left.attributes[key] != right.attributes[key]
-            and not agreeing
+        if key.split("_")[-1] in _IDENTITY_KEYS and (
+            left.attributes[key] != right.attributes[key]
+            or left.polarity[key] != right.polarity[key]
         ):
-            # service: api vs service: worker with nothing else in common. With an
-            # agreeing key (same service, new owner) it is the same thing.
             return False
     return True
+
+
+def _opposed_clauses(left: _Features, right: _Features) -> list[str]:
+    """Clauses that state the same thing, negated in exactly one memory."""
+
+    opposed: list[str] = []
+    for left_stems, left_negated in left.clauses:
+        for right_stems, right_negated in right.clauses:
+            if left_negated == right_negated:
+                continue
+            shared = left_stems & right_stems
+            if not shared:
+                continue
+            if (
+                left_stems == right_stems
+                or (
+                    min(len(left_stems), len(right_stems)) >= 2
+                    and (left_stems <= right_stems or right_stems <= left_stems)
+                )
+                or _jaccard(set(left_stems), set(right_stems)) >= CLAUSE_MATCH
+            ):
+                opposed.append(" ".join(sorted(shared)))
+    return sorted(set(opposed))
 
 
 def _conflict(left: _Features, right: _Features) -> list[str]:
@@ -221,10 +401,24 @@ def _conflict(left: _Features, right: _Features) -> list[str]:
         return []
     reasons: list[str] = []
     shared = sorted(left.attributes.keys() & right.attributes.keys())
-    differing = [key for key in shared if left.attributes[key] != right.attributes[key]]
-    reasons.extend(f"attribute '{key}' differs" for key in differing)
-    if not reasons and left.negated != right.negated:
-        reasons.append("one memory negates the other")
+    for key in shared:
+        same_value = left.attributes[key] == right.attributes[key]
+        same_polarity = left.polarity[key] == right.polarity[key]
+        if same_value and not same_polarity:
+            reasons.append(f"attribute '{key}' is negated in one memory")
+        elif not same_value and same_polarity and not left.polarity[key]:
+            reasons.append(f"attribute '{key}' differs")
+        # "owner is not alice" vs "owner is bob" does not disagree.
+    if not reasons:
+        reasons.extend(
+            f"value of '{key}' differs"
+            for key in sorted(left.values.keys() & right.values.keys())
+            if not left.values[key] & right.values[key]
+        )
+    if not reasons:
+        reasons.extend(
+            f"one memory negates the other ({clause})" for clause in _opposed_clauses(left, right)
+        )
     if (
         not reasons
         and left.numbers
@@ -273,19 +467,28 @@ def _merge_candidates(
             a, b = features[left.id], features[right.id]
             identical = a.body == b.body
             paraphrase = (
-                bool(a.signature)
-                and a.signature == b.signature
-                and _jaccard(a.stems, b.stems) >= PARAPHRASE_CONTEXT
-            ) or (
-                # Same subject words and the same (possibly no) values: a reworded
-                # duplicate such as "Do not deploy on Fridays" / "Never deploy on
-                # a Friday".
-                len(a.subject) >= 2 and a.subject == b.subject and a.signature == b.signature
+                (
+                    bool(a.signature)
+                    and a.signature == b.signature
+                    and _jaccard(a.stems, b.stems) >= PARAPHRASE_CONTEXT
+                )
+                or (
+                    # Same subject words and the same (possibly no) values: a reworded
+                    # duplicate such as "Do not deploy on Fridays" / "Never deploy on
+                    # a Friday".
+                    len(a.subject) >= 2 and a.subject == b.subject and a.signature == b.signature
+                )
+                or (
+                    # The same content words once synonyms are folded, stated as an
+                    # attribute in one and as prose in the other: "Deploys happen on
+                    # Fridays" / "Deployments are scheduled on Friday".
+                    len(a.stems) >= 2 and a.stems == b.stems and a.numeric == b.numeric
+                )
             )
             if not identical and not paraphrase and _jaccard(a.words, b.words) < MERGE_THRESHOLD:
                 continue
-            if not identical and (not _same_subject(a, b) or a.negated != b.negated):
-                continue  # different subjects, or one says "not": never a duplicate
+            if not identical and (not _same_subject(a, b) or _opposed_clauses(a, b)):
+                continue  # different subjects, or one clause says "not": never a duplicate
             if not identical and _conflict(a, b):
                 continue  # near-identical but disagreeing: that is a conflict, not a duplicate
             finder.union(left.id, right.id)
