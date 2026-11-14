@@ -31,6 +31,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from .boilerplate import BoilerplateFilter
 from .episodes import Episode, segment
 
 CONSUMER = "dream-skills"
@@ -84,6 +85,7 @@ def collect_queue(
     state: Any = None,
     source: Any = None,
     now: datetime | None = None,
+    boilerplate: BoilerplateFilter | None = None,
 ) -> QueueBatch:
     """Episodes of the pending (or, unless ``dry_run``, newly claimed) queue entries.
 
@@ -92,6 +94,10 @@ def collect_queue(
     episodes are still settled. If reading fails after the claim, the claims
     are released before the error propagates. Claims older than
     ``STALE_CLAIM`` (a crashed consumer's) are returned to pending first.
+
+    With ``boilerplate``, the sessions are read twice: pass 1 counts the user
+    and system texts repeated across sessions, pass 2 segments with them
+    stripped, so the whole corpus is never held in memory.
     """
 
     from memfw.conversations.adapter import SqliteStoreSource, store_path
@@ -129,6 +135,7 @@ def collect_queue(
             if key not in sessions:
                 sessions.add(key)
                 rows.append(row)
+        readable: list[tuple[str, str, int]] = []
         for row in rows:
             app, session_id = str(row["app"]), str(row["session_id"])
             if not policy.processable(app):
@@ -137,11 +144,17 @@ def collect_queue(
             info = store.session(app, session_id)
             if info is None:
                 continue
-            turns = store.turns(app, session_id, start=0, limit=max(1, info.turns))
-            entries = _entries(turns)
+            readable.append((app, session_id, max(1, info.turns)))
+        if boilerplate is not None:
+            for app, session_id, total in readable:
+                for entry in _entries(store.turns(app, session_id, start=0, limit=total)):
+                    if entry["role"] in {"user", "system"}:
+                        boilerplate.observe((app, session_id), app, entry["snippet"])
+        for app, session_id, total in readable:
+            entries = _entries(store.turns(app, session_id, start=0, limit=total))
             counts["sessions_read"] += 1
             counts["entries_read"] += len(entries)
-            batch.episodes.extend(segment(app, session_id, entries))
+            batch.episodes.extend(segment(app, session_id, entries, boilerplate))
     except BaseException:
         settle(batch, ok=False, config=config, vault=vault, state=work)
         raise

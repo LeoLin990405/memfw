@@ -207,7 +207,7 @@ def _staged(root: Path) -> dict[str, dict[str, str]]:
         ("[tool Bash] command: docker exec prod-db psql", "cmd:docker exec"),
         ("[tool Bash] command: sudo -u someone make", None),
         ("[tool Bash] command: ./deploy-host7.sh", None),
-        ("[tool Bash] command: /usr/bin/python3 -m pytest", "cmd:python3"),
+        ("[tool Bash] command: /usr/bin/python3 -m pytest", "cmd:python3 -m pytest"),
         ("[tool Read] file_path: /x/y.md", None),
         ("[tool WebFetch] url: https://example.invalid", "tool:webfetch"),
         ("plain prose", None),
@@ -300,7 +300,8 @@ def test_repeated_procedure_across_agents_becomes_a_candidate(tmp_path: Path) ->
     assert meta["name"] == candidate.record["name"]
     assert "widget" in meta["name"] and "release" in meta["name"]
     assert "## When to use" in body and "## Steps" in body
-    assert "1. Run `uv run pytest`" in body and "3. Run `git tag`" in body
+    assert "1. Run `uv run pytest -q`" in body and "3. Run `git tag`" in body
+    assert "## Preconditions" in body and "Check: tests pass" in body
     record = json.loads(files["candidate.json"])
     assert record["status"] == "proposed"
     assert record["approved"] is False and record["installed"] is False

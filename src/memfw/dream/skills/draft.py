@@ -1,11 +1,13 @@
 """Draft a SKILL.md for a verified procedure; optionally let a model word it.
 
-The default draft is deterministic: the name comes from the request keywords
-and each step from its signature. An operator may name a *drafter*
-(``module:function``, typically a wrapper around a model) that rewords the
-draft. Its output is checked like transcript text, verify-first: every step
-it returns must cite at least one verified step id, uncited or unsafe steps
-are dropped, and if too little survives the deterministic draft is kept.
+The default draft is deterministic and extractive: the name comes from the
+request keywords, each step from the agent's most representative stated
+intent plus its command, inputs and checks, and preconditions from the
+programs used. An operator may name a *drafter* (``module:function``,
+typically a wrapper around a model) that rewords the draft. Its output is
+checked like transcript text, verify-first: every step it returns must cite
+at least one verified step id, uncited or unsafe steps are dropped, and if
+too little survives the deterministic draft is kept.
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ import yaml
 
 from memfw.history import has_secret, redact
 
-from .distill import Procedure
+from .distill import Procedure, VerifiedStep
 from .private import PrivateTerms
 
 Drafter = Callable[[dict[str, Any]], dict[str, Any]]
@@ -34,6 +36,7 @@ Drafter = Callable[[dict[str, Any]], dict[str, Any]]
 NAME_CHARS = 64
 DESCRIPTION_CHARS = 1024
 TEXT_CHARS = 400
+INTENT_CHARS = 160
 _SLUG = re.compile(r"[^a-z0-9]+")
 _NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _URL = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://\S+")
@@ -75,31 +78,48 @@ class Draft:
     notes: list[str] = field(default_factory=list)
 
 
-def _step_text(signature: str) -> str:
-    kind, _, value = signature.partition(":")
+def _command_text(step: VerifiedStep) -> str:
+    kind, _, value = step.signature.partition(":")
     if kind == "cmd":
-        return f"Run `{value}`"
+        return f"Run `{step.command}`"
     return f"Use the `{value}` tool"
+
+
+def _step_text(step: VerifiedStep) -> str:
+    """The step headline: the agent's stated intent, else the command."""
+
+    if step.intent:
+        try:
+            intent = clean(step.intent, INTENT_CHARS).rstrip(" .:;")
+        except UnsafeText:
+            intent = ""
+        if intent:
+            command = _command_text(step)
+            return f"{intent[:1].upper()}{intent[1:]}: {command[:1].lower()}{command[1:]}"
+    return _command_text(step)
 
 
 def deterministic(procedure: Procedure) -> Draft:
     words = [word for word in procedure.keywords if _SLUG.sub("", word.lower())][:3]
-    tool_words = [step.signature.partition(":")[2].split()[0] for step in procedure.steps]
-    name = slug(words or tool_words[:2]) or "procedure"
-    sessions = len(procedure.sessions)
+    tool_words: list[str] = []
+    for step in procedure.steps:
+        for word in step.signature.partition(":")[2].split():
+            if word not in tool_words and word not in {"run", "exec", "x", "-m"}:
+                tool_words.append(word)
+    name = slug(words) or slug(tool_words[:3]) or "procedure"
+    sessions = procedure.independent or len(procedure.sessions)
     agents = ", ".join(procedure.agents) or "unknown"
-    summary = "; ".join(_step_text(step.signature) for step in procedure.steps)
+    summary = "; ".join(_command_text(step) for step in procedure.steps)
     topic = ", ".join(procedure.keywords) or "the same steps"
     return Draft(
         name=name,
         description=clean(
-            f"Repeated procedure seen in {sessions} sessions (agents: {agents}): {summary}.",
+            f"Procedure repeated in {sessions} independent sessions (agents: {agents}): {summary}.",
             DESCRIPTION_CHARS,
         ),
         when_to_use=clean(f"When a task is about {topic}.", DESCRIPTION_CHARS),
         steps=[
-            {"text": clean(_step_text(step.signature)), "evidence": [step.key]}
-            for step in procedure.steps
+            {"text": clean(_step_text(step)), "evidence": [step.key]} for step in procedure.steps
         ],
     )
 
@@ -225,38 +245,56 @@ def apply_drafter(
     return draft
 
 
+def _detail_lines(step: VerifiedStep) -> list[str]:
+    lines = []
+    kind = step.signature.partition(":")[0]
+    if kind == "cmd":
+        lines.append(f"   - Command: `{step.command}`")
+    else:
+        lines.append(f"   - Tool: `{step.signature.partition(':')[2]}`")
+    if step.inputs:
+        lines.append("   - Inputs: " + ", ".join(f"`{item}`" for item in step.inputs))
+    if step.checks:
+        lines.append("   - Check: " + "; ".join(step.checks))
+    if step.session_ids:
+        lines.append("   - Seen in: " + ", ".join(f"`{item}`" for item in step.session_ids))
+    return lines
+
+
 def render_skill(candidate_id: str, draft: Draft, procedure: Procedure, confidence: float) -> str:
-    """SKILL.md: ``name`` / ``description`` frontmatter, then when-to-use and steps."""
+    """SKILL.md: ``name`` / ``description`` frontmatter, then when-to-use and the procedure."""
 
     front = {"name": draft.name, "description": draft.description}
     dumped = yaml.safe_dump(front, allow_unicode=True, sort_keys=False, width=1000).rstrip()
-    steps = procedure.steps
-    by_id = {step.key: step for step in steps}
-    lines = [
-        f"# {draft.name}",
-        "",
-        "## When to use",
-        "",
-        draft.when_to_use,
-        "",
-        "## Steps",
-        "",
-    ]
+    by_id = {step.key: step for step in procedure.steps}
+    lines = ["# " + draft.name, "", "## When to use", "", draft.when_to_use, ""]
+    if procedure.preconditions:
+        lines += ["## Preconditions", ""]
+        lines += [f"- {item}" for item in procedure.preconditions]
+        lines.append("")
+    lines += ["## Steps", ""]
     for number, step in enumerate(draft.steps, start=1):
-        support = max(by_id[key].sessions for key in step["evidence"])
+        cited = [by_id[key] for key in step["evidence"]]
+        support = max(item.sessions for item in cited)
         lines.append(
             f"{number}. {step['text']} (evidence: {', '.join(step['evidence'])}; "
-            f"{support} sessions)"
+            f"{support} independent sessions)"
         )
+        for item in cited:
+            lines += _detail_lines(item)
+    outcomes = ", ".join(f"{key} {value}" for key, value in procedure.outcomes.items())
     lines += [
         "",
         "## Evidence",
         "",
         f"- Candidate `{candidate_id}`, confidence {confidence:.2f}: proposal only, not "
         "installed or approved.",
-        f"- {len(procedure.sessions)} sessions; agents: "
+        f"- {procedure.independent or len(procedure.sessions)} independent sessions "
+        f"({len(procedure.sessions)} in all) over {len(procedure.days)} day(s); agents: "
         + ", ".join(f"{agent} ({count})" for agent, count in procedure.agents.items())
         + ".",
-        "- Per-step refs are in `evidence.json` (`memfw history read REF`).",
     ]
+    if outcomes:
+        lines.append(f"- Outcomes per independent session: {outcomes}.")
+    lines.append("- Per-step refs are in `evidence.json` (`memfw history read REF`).")
     return f"---\n{dumped}\n---\n\n" + "\n".join(lines) + "\n"

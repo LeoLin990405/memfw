@@ -27,11 +27,14 @@ from memfw.history import HistoryError, has_secret
 
 from ..run import _history
 from ..stage import _DIR_FLAGS, DreamStageError, _child_dir, _exists, _write_new
+from .boilerplate import BoilerplateFilter
 from .distill import Procedure, distill
 from .draft import (
+    INTENT_CHARS,
     Draft,
     UnsafeText,
     apply_drafter,
+    clean,
     deterministic,
     load_drafter,
     render_skill,
@@ -60,6 +63,9 @@ class SkillOptions:
     drafter: str | None = None
     from_queue: bool = False
     """Read the conversation worker's episode queue instead of the transcript index."""
+    boilerplate_min_sessions: int = 5
+    """Text repeated verbatim in this many sessions (and two agents, or three times as
+    many sessions) is injected boilerplate; 0 keeps only the static harness markers."""
 
     def check(self) -> None:
         if self.min_sessions < 2:
@@ -70,6 +76,16 @@ class SkillOptions:
             raise ValueError("similarity must be in (0, 1]")
         if self.max_sessions < 1:
             raise ValueError("max_sessions must be at least 1")
+        if self.boilerplate_min_sessions != 0 and self.boilerplate_min_sessions < 2:
+            raise ValueError("boilerplate_min_sessions must be 0 (off) or at least 2")
+
+    def boilerplate(self) -> BoilerplateFilter | None:
+        if not self.boilerplate_min_sessions:
+            return None
+        return BoilerplateFilter(
+            min_sessions=self.boilerplate_min_sessions,
+            solo_sessions=3 * self.boilerplate_min_sessions,
+        )
 
 
 @dataclass
@@ -115,8 +131,15 @@ class SkillResult:
         }
 
 
-def collect(index: Any, options: SkillOptions) -> tuple[list[Episode], dict[str, int]]:
-    """Episodes from the newest ``max_sessions`` sessions of the index."""
+def collect(
+    index: Any, options: SkillOptions, boilerplate: BoilerplateFilter | None = None
+) -> tuple[list[Episode], dict[str, int]]:
+    """Episodes from the newest ``max_sessions`` sessions of the index.
+
+    With ``boilerplate``, user and system texts of all read sessions are
+    counted first, then every session is segmented with the repeated text
+    stripped.
+    """
 
     listed = index.list(
         source=options.source,
@@ -124,8 +147,8 @@ def collect(index: Any, options: SkillOptions) -> tuple[list[Episode], dict[str,
         until=options.until,
         limit=min(options.max_sessions, 500),
     )["sessions"]
-    episodes: list[Episode] = []
     counts = {"sessions_read": 0, "entries_read": 0}
+    read: list[tuple[str, str, list[dict[str, Any]]]] = []
     for session in sorted(listed, key=lambda item: (item["source"], item["session_id"])):
         try:
             entries = index.list(
@@ -139,7 +162,18 @@ def collect(index: Any, options: SkillOptions) -> tuple[list[Episode], dict[str,
             continue
         counts["sessions_read"] += 1
         counts["entries_read"] += len(entries)
-        episodes.extend(segment(session["source"], session["session_id"], entries))
+        read.append((session["source"], session["session_id"], entries))
+    if boilerplate is not None:
+        for source, session_id, entries in read:
+            for entry in entries:
+                if str(entry.get("role") or "") in {"user", "system"}:
+                    agent = str(entry.get("agent") or source)
+                    boilerplate.observe(
+                        (source, session_id), agent, str(entry.get("snippet") or "")
+                    )
+    episodes: list[Episode] = []
+    for source, session_id, entries in read:
+        episodes.extend(segment(source, session_id, entries, boilerplate))
     return episodes, counts
 
 
@@ -163,6 +197,12 @@ def build(
     private = private or PrivateTerms()
     # A private keyword says nothing a reviewer may see: leave it out of the name.
     procedure.keywords = [word for word in procedure.keywords if not private.matches(word)]
+    # Intents are the agents' own sentences: redacted and path-free, or left out.
+    for step in procedure.steps:
+        try:
+            step.intent = private.mask(clean(step.intent, INTENT_CHARS)) if step.intent else ""
+        except UnsafeText:
+            step.intent = ""
     try:
         draft: Draft = deterministic(procedure)
     except UnsafeText:
@@ -191,6 +231,10 @@ def build(
         "sessions": procedure.sessions,
         "agents": procedure.agents,
         "episodes": len(procedure.episodes),
+        "independent_sessions": procedure.independent,
+        "days": len(procedure.days),
+        "outcomes": procedure.outcomes,
+        "preconditions": list(procedure.preconditions),
         "steps": [step.as_dict() for step in procedure.steps],
         "dropped_steps": list(procedure.dropped),
         "transcript_text_is_data": True,
@@ -222,6 +266,44 @@ def build(
         evidence=evidence,
         record=record,
     )
+
+
+def quality_report(
+    candidates: list[SkillCandidate],
+    boilerplate: BoilerplateFilter | None,
+    distill_stats: dict[str, int],
+    episodes: int,
+) -> dict[str, Any]:
+    """How much was filtered and why, plus one example: for a reviewer, not a gate."""
+
+    filtered = boilerplate.report() if boilerplate is not None else {"corpus_filter": 0}
+    best = max(candidates, key=lambda item: (item.confidence, item.candidate_id), default=None)
+    example = None
+    if best is not None:
+        example = {
+            "candidate_id": best.candidate_id,
+            "name": best.record["name"],
+            "confidence": best.confidence,
+            "independent_sessions": best.evidence.get("independent_sessions"),
+            "agents": sorted(best.evidence.get("agents") or {}),
+            "steps": [
+                line.split(" (evidence:", 1)[0]
+                for line in best.skill_md.split("## Steps", 1)[-1].splitlines()
+                if line[:1].isdigit()
+            ][:5],
+        }
+    return {
+        "candidates": len(candidates),
+        "episodes": episodes,
+        "clusters": distill_stats.get("clusters", 0),
+        "boilerplate_filtered": filtered,
+        "rejected": {
+            key.removeprefix("rejected_"): value
+            for key, value in sorted(distill_stats.items())
+            if key.startswith("rejected_")
+        },
+        "example": example,
+    }
 
 
 def _refuse_skill_home(path: Path) -> None:
@@ -265,6 +347,7 @@ def _later_evidence(candidate: SkillCandidate) -> dict[str, Any]:
         "confidence": candidate.confidence,
         "sessions": evidence["sessions"],
         "agents": evidence["agents"],
+        "independent_sessions": evidence.get("independent_sessions"),
         "steps": [
             {"signature": step["signature"], "sessions": step["sessions"]}
             for step in evidence["steps"]
@@ -396,23 +479,31 @@ def run_skills(
     episodes: list[Episode] = []
     counts: dict[str, int] = {"sessions_read": 0, "entries_read": 0}
     batch: QueueBatch | None = None
+    boilerplate = options.boilerplate()
     if options.from_queue:
         # The conversation worker's episode queue instead of the transcript index.
         batch = collect_queue(
-            config, repository.root, dry_run=dry_run, limit=options.max_sessions, **queue_parts
+            config,
+            repository.root,
+            dry_run=dry_run,
+            limit=options.max_sessions,
+            boilerplate=boilerplate,
+            **queue_parts,
         )
         episodes, counts, history_info = batch.episodes, batch.counts, batch.info
     else:
         index, history_info = _history(repository, config, options.refresh, dry_run=dry_run)
         if index is not None:
-            episodes, counts = collect(index, options)
+            episodes, counts = collect(index, options, boilerplate)
     state = queue_parts.get("state")
+    distill_stats: dict[str, int] = {}
     try:
         procedures = distill(
             episodes,
             min_sessions=options.min_sessions,
             min_steps=options.min_steps,
             threshold=options.similarity,
+            stats=distill_stats,
         )
         candidates: list[SkillCandidate] = []
         unsafe = 0
@@ -453,11 +544,14 @@ def run_skills(
         "staging_errors": errors,
         "private_terms": len(private.terms),
         "min_sessions": options.min_sessions,
+        "independence": "same request text counts once; >= 2 agents or >= 2 days",
+        "boilerplate_min_sessions": options.boilerplate_min_sessions,
         "min_steps": options.min_steps,
         "similarity": options.similarity,
         "drafter": "local hook" if drafter is not None else "none (deterministic)",
         "staged_under": SKILLS_DIR.as_posix(),
         "installed": False,
         "transcript_text_is_data": True,
+        "quality": quality_report(candidates, boilerplate, distill_stats, len(episodes)),
     }
     return SkillResult(dry_run=dry_run, candidates=candidates, report=report)
