@@ -498,3 +498,10 @@ def test_script_text_and_plumbing_tools_are_not_steps() -> None:
     for name in ("get_goal", "update_goal", "team_task_update", "get_mcp_tools", "spawn_agent"):
         assert tool_calls(f"[tool {name}] x") == [], name
     assert tool_calls("[tool update_current_step] x") == []
+
+
+def test_prose_words_are_not_programs() -> None:
+    assert command_calls("se") == []
+    assert command_calls("s x") == []
+    assert [c.signature for c in command_calls("pre-commit run")] == ["pre-commit run"]
+    assert [c.signature for c in command_calls("./release-notes.sh")] == ["release-notes.sh"]

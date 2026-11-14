@@ -333,6 +333,9 @@ def _segment_call(segment: str) -> Call | None:
         raise ValueError("not a plain program name")
     if program in READ_PROGRAMS:
         return None
+    if program not in KNOWN_PROGRAMS and len(program) < 3:
+        # ``se``, ``s``: a stray word of prose or config, not a program.
+        raise ValueError("not a program")
     words = [program]
     rest = tokens[1:]
     while program == "git" and len(rest) >= 2 and rest[0] in {"-C", "-c"}:
