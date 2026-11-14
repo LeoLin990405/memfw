@@ -270,13 +270,21 @@ def open_sqlite_readonly(path: Path) -> sqlite3.Connection | None:
     """Read-only connection to a SQLite store, or ``None`` when it cannot be opened.
 
     ``mode=ro`` never creates or migrates the database. A store that is
-    being written to is read as of its last commit.
+    being written to is read as of its last commit. A WAL database whose
+    ``-wal``/``-shm`` sidecars are gone (the App closed cleanly) would still
+    get them created next to it by a ``mode=ro`` open, so when no sidecar
+    (nor a rollback ``-journal``) exists it is opened ``immutable=1``, which
+    touches nothing on disk.
     """
 
     if not regular_file(path):
         return None
+    resolved = path.resolve()
+    sidecars = ("-wal", "-shm", "-journal")
+    quiet = not any(os.path.lexists(f"{resolved}{suffix}") for suffix in sidecars)
+    query = "mode=ro&immutable=1" if quiet else "mode=ro"
     try:
-        connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=5)
+        connection = sqlite3.connect(f"{resolved.as_uri()}?{query}", uri=True, timeout=5)
         connection.row_factory = sqlite3.Row
         connection.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchall()
     except sqlite3.Error:
