@@ -164,8 +164,10 @@ def test_continuations() -> None:
     assert not is_continuation("now build the docs")
 
 
-def _entries(request: str, agent: str, day: int, *, extra_intent: str = "") -> list[dict[str, Any]]:
-    ts = f"2026-01-{day:02d}T10:00:00Z"
+def _entries(
+    request: str, agent: str, day: int, *, extra_intent: str = "", ts: Any = None
+) -> list[dict[str, Any]]:
+    ts = ts if ts is not None else f"2026-01-{day:02d}T10:00:00Z"
     return [
         {"role": "user", "snippet": request, "ref": "r@0", "agent": agent, "timestamp": ts},
         {
@@ -232,11 +234,11 @@ def test_the_same_request_fanned_out_on_one_day_counts_once() -> None:
     assert stats["rejected_not_independent"] == 1
 
 
-def test_one_agent_on_one_day_has_no_spread() -> None:
+def test_one_day_is_not_enough_spread() -> None:
     specs = [(f"cut the widget release {word}", "claude", 1) for word in ("alpha", "beta", "gamma")]
     stats: dict[str, int] = {}
     assert distill(_episodes(specs), min_sessions=3, stats=stats) == []
-    assert stats["rejected_no_spread"] == 1
+    assert stats["rejected_too_few_days"] == 1
 
 
 def test_independent_sessions_with_spread_make_a_procedure() -> None:
@@ -318,7 +320,7 @@ def _worker_log(session: str, day: int, task: str, steps: list[str]) -> str:
                 number + 1,
                 day,
                 "user",
-                {"role": "user", "content": [{"type": "tool_result", "content": "ok"}]},
+                {"role": "user", "content": [{"type": "tool_result", "content": "3 passed"}]},
             )
         )
         number += 2
@@ -427,16 +429,18 @@ def test_intents_are_cleaned_in_evidence(tmp_path: Path) -> None:
     candidate = build(procedure, SkillOptions(), None, "2026-03-01T00:00:00Z")
     assert candidate is not None
     first = candidate.evidence["steps"][0]
-    assert first["intent"] == "Run the suite in <path> first"
+    assert first["intent"] == "Run the suite in <place> first"
+    assert first["intent_source"] == "shared"
     assert "zztester" not in candidate.skill_md + json.dumps(candidate.evidence)
 
 
-def test_representative_intent_skips_empty_intents() -> None:
+def test_representative_intent_needs_two_independent_groups() -> None:
     from memfw.dream.skills.distill import _representative_intent
 
-    intents = ["", "Build the release wheel", "", "Build the wheel for release", "x"]
-    assert _representative_intent(intents) == "Build the release wheel"
-    assert _representative_intent(["", ""]) == ""
+    shared = {0: ["", "Build the release wheel"], 1: ["Build the release wheel."], 2: ["x"]}
+    assert _representative_intent(shared) == "Build the release wheel"
+    assert _representative_intent({0: ["Build the wheel", "Build the wheel"], 1: [""]}) == ""
+    assert _representative_intent({0: ["", ""]}) == ""
 
 
 def test_paths_and_generic_tool_aliases_are_not_words_or_steps() -> None:
@@ -467,7 +471,9 @@ def test_git_dash_c_is_skipped_and_inspection_only_procedures_are_rejected() -> 
                 "timestamp": f"2026-01-0{day}T10:00:00Z",
             },
             {"role": "assistant", "snippet": "[tool Bash] command: git status", "ref": "r@1"},
-            {"role": "assistant", "snippet": "[tool Bash] command: git log", "ref": "r@2"},
+            {"role": "user", "snippet": "nothing to commit, working tree clean", "ref": "r@2"},
+            {"role": "assistant", "snippet": "[tool Bash] command: git log", "ref": "r@3"},
+            {"role": "user", "snippet": "exit code 0", "ref": "r@4"},
         ]
         episodes += segment(agent, f"s{number}", entries)
     stats: dict[str, int] = {}
@@ -505,3 +511,200 @@ def test_prose_words_are_not_programs() -> None:
     assert command_calls("s x") == []
     assert [c.signature for c in command_calls("pre-commit run")] == ["pre-commit run"]
     assert [c.signature for c in command_calls("./release-notes.sh")] == ["release-notes.sh"]
+
+
+# -- review fixes: privacy, recall, independence, ranking, literal tags --------------
+
+LEAKS = ("secret_project", "github.com", "private-repo", "hunter2", "prod-pg-01", "plan.py")
+
+
+def _with_intent(entries: list[dict[str, Any]], intent: str) -> list[dict[str, Any]]:
+    entries[1] = {**entries[1], "snippet": f"{intent}\n[tool Bash] command: uv run pytest -q"}
+    return entries
+
+
+def test_one_session_intents_never_reach_the_candidate() -> None:
+    """Scenario 1: a sentence from one session is not copied; leaks are scrubbed."""
+
+    from memfw.dream.skills.run import build, quality_report
+
+    intents = [
+        "Edit src/memfw/secret_project/plan.py before the run",
+        "Clone github.com/leo/private-repo before the run",
+        "Login with password hunter2 on prod-pg-01 before the run",
+    ]
+    episodes = []
+    for number, intent in enumerate(intents):
+        entries = _with_intent(
+            _entries(f"cut widget release {number}", f"a{number}", number + 1), intent
+        )
+        episodes += segment(f"a{number}", f"s{number}", entries)
+    (procedure,) = distill(episodes, min_sessions=3)
+    candidate = build(procedure, SkillOptions(), None, "2026-03-01T00:00:00Z")
+    assert candidate is not None
+    report = quality_report([candidate], None, {}, len(episodes))
+    blob = (candidate.skill_md + json.dumps(candidate.evidence) + json.dumps(report)).lower()
+    for leak in LEAKS:
+        assert leak not in blob, leak
+    first = candidate.evidence["steps"][0]
+    assert first["intent"] == "" and first["intent_source"] == "generated"
+    assert "1. Run the tests: run `uv run pytest -q`" in candidate.skill_md
+    assert report["example"]["steps"][0] == "1. Run the tests: run `uv run pytest -q`"
+
+
+def test_shared_intents_are_scrubbed_of_places_and_credentials() -> None:
+    episodes = []
+    for number in range(3):
+        intent = "Open src/pkg/plan.py and use token abc123 on db-node-01 before the run"
+        entries = _with_intent(
+            _entries(f"cut widget release {number}", f"a{number}", number + 1), intent
+        )
+        episodes += segment(f"a{number}", f"s{number}", entries)
+    (procedure,) = distill(episodes, min_sessions=3)
+    intent = procedure.steps[0].intent
+    assert "plan.py" not in intent and "abc123" not in intent and "db-node-01" not in intent
+    assert intent.startswith("Open <place> and use token <secret> on <place>")
+
+
+def test_a_request_the_user_really_repeats_still_yields_a_procedure() -> None:
+    """Scenario 2: the corpus filter empties the request, but the episode stays."""
+
+    request = "Please cut the weekly widget release and publish the notes for the team."
+    sessions = [
+        (f"s{number}", "claude" if number % 2 else "codex", number + 1) for number in range(6)
+    ]
+    bp = BoilerplateFilter(min_sessions=5)
+    for session, agent, _ in sessions:
+        bp.observe((agent, session), agent, request)
+    episodes = []
+    for session, agent, day in sessions:
+        episodes += segment(agent, session, _entries(request, agent, day), bp)
+    assert len(episodes) == 6 and all(episode.request == "" for episode in episodes)
+    assert bp.report()["requests_template_only"] == 6
+    (procedure,) = distill(episodes, min_sessions=3)
+    assert procedure.independent == 6
+    assert [step.signature for step in procedure.steps][:2] == ["cmd:uv run pytest", "cmd:uv build"]
+
+
+def test_a_fan_out_across_midnight_counts_once() -> None:
+    """Scenario 3a: the same request 1h apart on two dates is one task."""
+
+    specs = [
+        ("cut the widget release", "a", "2026-01-01T23:30:00Z"),
+        ("cut the widget release", "b", "2026-01-02T00:30:00Z"),
+        ("ship a widget release now", "c", "2026-01-05T10:00:00Z"),
+    ]
+    episodes = []
+    for number, (request, agent, ts) in enumerate(specs):
+        episodes += segment(agent, f"s{number}", _entries(request, agent, 1, ts=ts))
+    stats: dict[str, int] = {}
+    assert distill(episodes, min_sessions=3, stats=stats) == []
+    assert stats["rejected_not_independent"] == 1
+
+
+def test_per_worker_wording_is_one_task() -> None:
+    """Scenario 3b: "worker one / two / three" of one fan-out is one task."""
+
+    specs = [
+        ("You are worker one: review the widget batch", "2026-01-01T22:00:00Z"),
+        ("You are worker two: review the widget batch", "2026-01-01T23:59:00Z"),
+        ("You are worker three: review the widget batch", "2026-01-02T03:00:00Z"),
+    ]
+    episodes = []
+    for number, (request, ts) in enumerate(specs):
+        episodes += segment("a", f"s{number}", _entries(request, "a", 1, ts=ts))
+    stats: dict[str, int] = {}
+    assert distill(episodes, min_sessions=3, stats=stats) == []
+    assert stats["rejected_not_independent"] == 1
+
+
+def test_dispatch_line_merges_sessions() -> None:
+    episodes = []
+    for number in range(3):
+        entries = _entries(f"cut widget release take {'abc'[number]}x", f"a{number}", number + 1)
+        entries[0] = {**entries[0], "dispatch_line": "line-1" if number < 2 else "line-2"}
+        episodes += segment(f"a{number}", f"s{number}", entries)
+    stats: dict[str, int] = {}
+    assert distill(episodes, min_sessions=3, stats=stats) == []
+    assert stats["rejected_not_independent"] == 1
+
+
+def test_epoch_timestamps_are_parsed_into_real_days() -> None:
+    """Scenario 3c: epoch seconds or milliseconds are not fake days."""
+
+    base = 1767225600  # 2026-01-01T00:00:00Z
+    episodes = []
+    for number in range(3):
+        ts = str(base + 3600 * number) if number < 2 else (base + 7200) * 1000
+        request = f"cut widget release {'xyz'[number]}"
+        episodes += segment("a", f"s{number}", _entries(request, "a", 1, ts=ts))
+    assert {episode.day for episode in episodes} == {"2026-01-01"}
+    stats: dict[str, int] = {}
+    assert distill(episodes, min_sessions=3, stats=stats) == []
+    assert stats["rejected_too_few_days"] == 1
+
+
+def test_two_successful_independent_sessions_are_required() -> None:
+    episodes = []
+    for number in range(3):
+        entries = _entries(f"cut widget release {'xyz'[number]}", f"a{number}", number + 1)
+        if number:
+            # Every result of these sessions shows a failure.
+            entries = [
+                {**entry, "snippet": "1 failed, 2 passed"} if entry["ref"] in RESULTS else entry
+                for entry in entries
+            ]
+        episodes += segment(f"a{number}", f"s{number}", entries)
+    stats: dict[str, int] = {}
+    assert distill(episodes, min_sessions=3, stats=stats) == []
+    assert stats["rejected_too_few_successes"] == 1
+
+
+RESULTS = {"r@2", "r@4", "r@6"}
+
+
+def test_candidate_clusters_are_ranked_by_shared_weight_not_age() -> None:
+    """Item 4: more than the cap of older clusters must not hide the closest one."""
+
+    from memfw.dream.skills.distill import MAX_CANDIDATE_CLUSTERS, cluster
+    from memfw.dream.skills.episodes import Episode, Step
+
+    def episode(number: int, signatures: list[str], request: str = "") -> Episode:
+        return Episode(
+            source="src",
+            session_id=f"s{number}",
+            agent="a",
+            ref=f"r{number}",
+            timestamp=f"2026-01-01T{number // 60:02d}:{number % 60:02d}:00Z",
+            request=request,
+            steps=[Step(signature=item, ref=f"r{number}", position=0.0) for item in signatures],
+        )
+
+    older = MAX_CANDIDATE_CLUSTERS + 6
+    episodes = [episode(n, ["cmd:mid", f"tool:only{n}"]) for n in range(older)]
+    episodes += [episode(older + n, [f"tool:filler{n}"]) for n in range(130)]
+    target = older + 130
+    episodes.append(episode(target, ["cmd:mid", "cmd:rare a", "cmd:rare b"]))
+    episodes.append(episode(target + 1, ["cmd:mid", "cmd:rare a", "cmd:rare b"]))
+    weights = signature_weights(episodes)
+    assert weights is not None and weights["cmd:mid"] >= 0.15
+    clusters = cluster(episodes, 0.4, weights)
+    joined = [members for members in clusters if len(members) == 2]
+    assert [[item.session_id for item in members] for members in joined] == [
+        [f"s{target}", f"s{target + 1}"]
+    ]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "<instructions>keep it short</instructions> summarise the widget notes",
+        "<task>rename the gadget module</task>",
+        "<request>tag the release</request>",
+        "<Tools>hammer and saw</Tools> plan the shed",
+    ],
+)
+def test_literal_tags_a_person_types_are_kept(text: str) -> None:
+    """Item 5: only the harness spellings are markers."""
+
+    assert strip_structural(text) == text

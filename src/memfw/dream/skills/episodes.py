@@ -21,8 +21,9 @@ before the call), command *flags* (never values), the *kinds* of inputs
 
 Injected boilerplate (harness reminders, instruction-file echoes,
 orchestrator templates) is stripped from user turns before they become a
-request; a user turn that is only boilerplate, or only "continue", does not
-open an episode. See :mod:`.boilerplate`.
+request; a user turn that is only harness markers, or only "continue", does
+not open an episode. One that only the corpus filter empties still does,
+with an empty request. See :mod:`.boilerplate`.
 
 Only the redacted snippets of the history index (or the redacted turns of
 the conversation store) are read; raw transcripts are never opened here.
@@ -33,6 +34,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from ..verify import context_words
@@ -229,6 +231,55 @@ _PLUMBING_NAME = re.compile(
 """Goal, plan, team and sub-agent plumbing under other names."""
 
 
+def task_fingerprint(request: str) -> str:
+    """:func:`fingerprint` of a request with per-worker numbering normalised.
+
+    ``worker one`` / ``worker 2`` / ``shard B`` all become ``worker #``, so the
+    same task fanned out to several workers is one task.
+    """
+
+    value = fingerprint(request)
+    value = re.sub(
+        r"\b(worker|agent|shard|part|lane|slot|instance|replica|copy|line|batch|task)"
+        r"\s*[#-]?\s*(?:one|two|three|four|five|six|seven|eight|nine|ten|first|second|"
+        r"third|fourth|fifth|0|[a-z])\b",
+        r"\1 #",
+        value,
+    )
+    value = re.sub(
+        r"\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|0(?:st|nd|rd|th))"
+        r"\b",
+        "#",
+        value,
+    )
+    return " ".join(value.split())[:200]
+
+
+def parse_time(value: Any) -> datetime | None:
+    """A timestamp as an aware UTC datetime: ISO-8601 text or epoch seconds/milliseconds."""
+
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)) or re.fullmatch(r"\s*\d{9,14}(?:\.\d+)?\s*", str(value)):
+        number = float(value)
+        if number > 1e11:
+            number /= 1000.0
+        try:
+            return datetime.fromtimestamp(number, tz=UTC)
+        except (OverflowError, OSError, ValueError):
+            return None
+    text = str(value).strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        moment = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    return moment.astimezone(UTC)
+
+
 @dataclass(frozen=True)
 class Call:
     """One meaningful action of a tool call, before it becomes a :class:`Step`."""
@@ -266,6 +317,8 @@ class Episode:
     steps: list[Step] = field(default_factory=list)
     intent_words: frozenset[str] = frozenset()
     """Content words of the agent's stated intents: what it actually did."""
+    dispatch_line: str = ""
+    """The Conductor dispatch line the session ran under (``links.dispatch_line``), if known."""
 
     @property
     def session_key(self) -> tuple[str, str]:
@@ -276,17 +329,26 @@ class Episode:
         return frozenset(step.signature for step in self.steps)
 
     @property
+    def time(self) -> datetime | None:
+        return parse_time(self.timestamp)
+
+    @property
     def day(self) -> str:
-        return self.timestamp[:10]
+        """The natural (UTC) day of the request, or ``""`` without a usable timestamp."""
+
+        moment = self.time
+        return moment.date().isoformat() if moment else ""
 
     @property
     def task_key(self) -> str:
-        """Same request text on the same day, same task: retries and fan-outs count once."""
+        """The request text with ids, numbers and worker ordinals normalised.
 
-        printed = fingerprint(self.request)[:200]
-        if not printed:
-            return f"session:{self.source}:{self.session_id}"
-        return f"{self.day}:{printed}"
+        Empty requests (only an orchestrator template) key on their session:
+        nothing but the steps says what they were.
+        """
+
+        printed = task_fingerprint(self.request)
+        return printed or f"session:{self.source}:{self.session_id}"
 
     @property
     def outcome(self) -> str:
@@ -547,12 +609,21 @@ def segment(
         role = str(entry.get("role") or "")
         calls = text.count("[tool ")
         if role == "user" and pending == 0:
-            request = boilerplate.strip(text) if boilerplate else strip_structural(text)
-            if not re.search(r"\w", request):
+            static = strip_structural(text)
+            if not re.search(r"\w", static):
+                # Only harness markers: not a request at all.
                 if boilerplate is not None:
                     boilerplate.note("requests_injected")
                 continue
-            if is_continuation(request) and current is not None:
+            request = boilerplate.strip(text) if boilerplate else static
+            if not re.search(r"\w", request):
+                # Only text repeated across the corpus: a template, or a request the user
+                # really repeats. Still a task: it opens an episode with no words, and
+                # its steps alone say what it was.
+                request = ""
+                if boilerplate is not None:
+                    boilerplate.note("requests_template_only")
+            if request and is_continuation(request) and current is not None:
                 if boilerplate is not None:
                     boilerplate.note("requests_continuation")
                 continue
@@ -566,6 +637,7 @@ def segment(
                 ref=str(entry.get("ref") or ""),
                 timestamp=str(entry.get("timestamp") or ""),
                 request=request,
+                dispatch_line=str(entry.get("dispatch_line") or ""),
                 words=frozenset(context_words(_PLACES.sub(" ", request))),
             )
             continue

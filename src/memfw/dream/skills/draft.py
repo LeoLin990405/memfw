@@ -24,6 +24,7 @@ from memfw.history import has_secret, redact
 
 from .distill import Procedure, VerifiedStep
 from .private import PrivateTerms
+from .scrub import scrub
 
 Drafter = Callable[[dict[str, Any]], dict[str, Any]]
 """``drafter(procedure) -> {"name", "description", "when_to_use", "steps"}``.
@@ -50,12 +51,18 @@ class UnsafeText(ValueError):
 
 
 def clean(text: str, limit: int = TEXT_CHARS) -> str:
-    """Redacted, path-free, single-line text; raises :class:`UnsafeText`."""
+    """Redacted, single-line text with no place or credential; raises :class:`UnsafeText`.
+
+    Paths (absolute and relative), URLs, bare domains and host-like tokens
+    become placeholders, and the word after a secret cue becomes
+    ``<secret>`` (:func:`.scrub.scrub`); backticked command text is kept.
+    """
 
     value = _CONTROL.sub(" ", str(text))
     value = redact(value)
     value = _URL.sub("<url>", value)
     value = _PATH.sub("<path>", value)
+    value = scrub(value)
     value = " ".join(value.split())[:limit].strip()
     if has_secret(value) or _HOME.search(value) or "REDACTED" in value or "withheld" in value:
         raise UnsafeText("text still carries a secret or a home path")
@@ -85,18 +92,58 @@ def _command_text(step: VerifiedStep) -> str:
     return f"Use the `{value}` tool"
 
 
-def _step_text(step: VerifiedStep) -> str:
-    """The step headline: the agent's stated intent, else the command."""
+GENERATED_INTENTS: tuple[tuple[frozenset[str], str], ...] = (
+    (frozenset({"pytest", "test", "jest", "vitest", "tox", "nox"}), "Run the tests"),
+    (frozenset({"mypy", "tsc"}), "Type-check the code"),
+    (frozenset({"lint", "eslint", "check"}), "Run the linters"),
+    (frozenset({"format", "fmt", "black", "prettier", "isort"}), "Format the code"),
+    (frozenset({"commit"}), "Commit the change"),
+    (frozenset({"push"}), "Push the branch"),
+    (frozenset({"tag", "release"}), "Tag the release"),
+    (frozenset({"publish", "deploy", "apply"}), "Publish or deploy"),
+    (frozenset({"build"}), "Build the project"),
+    (frozenset({"sync", "install", "lock", "venv", "add"}), "Install the dependencies"),
+    (frozenset({"checkout", "switch", "worktree", "branch"}), "Switch to the working branch"),
+    (frozenset({"merge", "rebase", "cherry-pick"}), "Integrate the branch"),
+    (frozenset({"pr"}), "Work with the pull request"),
+    (frozenset({"migrate", "upgrade", "downgrade", "alembic"}), "Migrate the database"),
+    (frozenset({"diff", "status", "log", "show"}), "Review the changes"),
+    (frozenset({"ssh", "scp", "rsync"}), "Work on the remote host"),
+    (frozenset({"docker", "podman", "compose", "kubectl", "helm"}), "Run the containers"),
+)
+"""Signature word -> generated intent class, first match wins."""
 
-    if step.intent:
+
+def generated_intent(step: VerifiedStep) -> str:
+    """A description from the command and its intent class: never transcript text."""
+
+    kind, _, value = step.signature.partition(":")
+    words = set(value.split())
+    if kind == "cmd":
+        for keys, text in GENERATED_INTENTS:
+            if words & keys:
+                return text
+    return ""
+
+
+def step_headline(step: VerifiedStep, *, shared_intent: bool = True) -> str:
+    """``Intent: run `command```; the intent is shared wording, else generated."""
+
+    intent = ""
+    if shared_intent and step.intent:
         try:
             intent = clean(step.intent, INTENT_CHARS).rstrip(" .:;")
         except UnsafeText:
             intent = ""
-        if intent:
-            command = _command_text(step)
-            return f"{intent[:1].upper()}{intent[1:]}: {command[:1].lower()}{command[1:]}"
-    return _command_text(step)
+    intent = intent or generated_intent(step)
+    command = _command_text(step)
+    if not intent:
+        return command
+    return f"{intent[:1].upper()}{intent[1:]}: {command[:1].lower()}{command[1:]}"
+
+
+def _step_text(step: VerifiedStep) -> str:
+    return step_headline(step)
 
 
 def deterministic(procedure: Procedure) -> Draft:

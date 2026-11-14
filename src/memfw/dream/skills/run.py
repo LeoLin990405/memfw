@@ -28,7 +28,7 @@ from memfw.history import HistoryError, has_secret
 from ..run import _history
 from ..stage import _DIR_FLAGS, DreamStageError, _child_dir, _exists, _write_new
 from .boilerplate import BoilerplateFilter
-from .distill import Procedure, distill
+from .distill import Procedure, VerifiedStep, distill
 from .draft import (
     INTENT_CHARS,
     Draft,
@@ -38,6 +38,7 @@ from .draft import (
     deterministic,
     load_drafter,
     render_skill,
+    step_headline,
 )
 from .episodes import Episode, segment
 from .private import PrivateTerms
@@ -268,6 +269,20 @@ def build(
     )
 
 
+def generated_step(step: dict[str, Any]) -> str:
+    """One evidence step as generated text: intent class plus command."""
+
+    verified = VerifiedStep(
+        key=str(step.get("id") or ""),
+        signature=str(step.get("signature") or ""),
+        sessions=int(step.get("sessions") or 0),
+        refs=[],
+        position=0.0,
+        flags=list(step.get("flags") or []),
+    )
+    return step_headline(verified, shared_intent=False)
+
+
 def quality_report(
     candidates: list[SkillCandidate],
     boilerplate: BoilerplateFilter | None,
@@ -286,10 +301,10 @@ def quality_report(
             "confidence": best.confidence,
             "independent_sessions": best.evidence.get("independent_sessions"),
             "agents": sorted(best.evidence.get("agents") or {}),
+            # Generated text only: the command and its intent class, never an intent.
             "steps": [
-                line.split(" (evidence:", 1)[0]
-                for line in best.skill_md.split("## Steps", 1)[-1].splitlines()
-                if line[:1].isdigit()
+                f"{number}. {generated_step(step)}"
+                for number, step in enumerate(best.evidence.get("steps") or [], start=1)
             ][:5],
         }
     return {

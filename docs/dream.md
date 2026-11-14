@@ -185,7 +185,8 @@ Refs then read `conv:APP:SESSION@OFFSET` (`memfw conversations get`).
    become a request. Static rules remove generic harness markers (reminder
    and environment tag blocks, AGENTS.md / CLAUDE.md echoes, background-task
    notifications, tool schemas) and unwrap request wrappers such as
-   `<user_query>`. A corpus pass then counts every paragraph, line and
+   `<user_query>`. They match the exact spelling harnesses emit, so a
+   person's own `<instructions>` or `<task>` text is kept. A corpus pass then counts every paragraph, line and
    sentence of the user and system turns: text repeated verbatim (ids, paths
    and numbers normalised) in `--boilerplate-min-sessions` (5) sessions from
    two agents, or in three times as many sessions from one agent, is an
@@ -193,7 +194,10 @@ Refs then read `conv:APP:SESSION@OFFSET` (`memfw conversations get`).
    rules).
 2. **Episodes.** Each session is split into tasks: a user turn opens an
    episode, except a user turn that answers a tool call (a tool result), one
-   that is only boilerplate, or one that only says "continue".
+   that is only harness markers, or one that only says "continue". A turn
+   that only the corpus pass empties (an orchestrator template, or a request
+   the user really repeats) still opens an episode, with no request words:
+   its steps alone say what it was.
 3. **Steps.** Each tool call becomes one or more signatures: every
    meaningful segment of a shell command keeps its program and up to two
    following words from a fixed sub-command vocabulary or known-program list
@@ -205,25 +209,32 @@ Refs then read `conv:APP:SESSION@OFFSET` (`memfw conversations get`).
    (read, edit, grep, ...) and harness plumbing (sub-agents, tool search,
    waiting) are not steps; another tool becomes `tool:<name>`. Each step also
    keeps, extracted locally: the stated intent (the call's description, or
-   the sentence just before it), flag names (never values), input kinds
+   the sentence before the first call of a batch), flag names (never values), input kinds
    (`<file>.py`), and the check its result showed (`tests pass`, `lint
    clean`, `commit created`, `exit 0`, ... from a fixed vocabulary).
 4. **Procedures.** Episodes are clustered in a fixed order on what was done:
    half step signatures (weighted by rarity once the corpus has 50 sessions,
    so a step every session runs cannot link two tasks), then request words
    and stated-intent words (`--similarity`, 0.4).
-5. **Independence and spread.** Sessions that carry the same request text on
-   the same day (a retried or fanned-out dispatch) count as one. A cluster
-   needs `--min-sessions` (3, at least 2) independent sessions, from at least
-   two agents or on at least two days.
+5. **Independence and spread.** Sessions under the same dispatch line, or
+   with the same request text within six hours of each other (a retry or a
+   fan-out, also across midnight; ids, numbers and worker ordinals such as
+   "worker two" are normalised), count as one. A cluster needs
+   `--min-sessions` (3, at least 2) independent sessions over at least two
+   natural (UTC) days, and a passing check in at least two of them.
+   Timestamps are parsed (ISO-8601, epoch seconds or milliseconds). Several
+   agents raise the confidence but are not required.
 6. **Verify-first.** A step is kept only when it appears in at least
    `--min-sessions` independent sessions; other steps are dropped and listed
    as `dropped_steps`. Fewer than `--min-steps` (2) kept steps, or only
    steps that look around (`git status`, `git log`, `gh pr view`, web
    search ...), no candidate.
-   A kept step is drafted with its most representative intent, the flags and
-   input kinds most of its sessions used, the checks seen in two or more,
-   and the sessions it was seen in. Preconditions come from the programs
+   A kept step is drafted with the flags and input kinds most of its
+   sessions used, the checks seen in two or more, and the sessions it was
+   seen in. One session's sentence is never copied: a stated intent is used
+   only when the same scrubbed wording recurs in two independent sessions
+   (`intent_source: shared`); otherwise the headline is generated from the
+   command's class ("Run the tests", "Tag the release", ...). Preconditions come from the programs
    used (and early setup steps). No model is called unless `--drafter` names
    a local hook.
 
@@ -231,8 +242,15 @@ Refs then read `conv:APP:SESSION@OFFSET` (`memfw conversations get`).
 boilerplate filter removed (`boilerplate_filtered`: texts stripped or
 emptied, paragraphs and pieces removed, requests skipped as injected or
 "continue"), why clusters were rejected (`rejected`), and one example
-candidate (name and first steps). `--summary` prints the report without the
-candidates.
+candidate (name and first steps, generated text only). `--summary` prints
+the report without the candidates.
+
+All draft text passes `clean()`: redaction, then URLs, absolute and
+relative paths, bare domains and host-like tokens (letters mixed with
+digits, such as `db-node-01`) become placeholders, and the word after a
+secret cue (`password`, `token`, `secret`, `key:`) becomes `<secret>`.
+Backticked command text, built from the fixed signature vocabulary, is
+kept.
 
 Each candidate is staged under `_candidates/skills/<candidate_id>/`:
 
@@ -247,7 +265,8 @@ Each candidate is staged under `_candidates/skills/<candidate_id>/`:
 - `candidate.json`: the proposal record: `status: proposed`,
   `approved: false`, `installed: false`, `confidence` (0..1, from step
   support, repetition, agent or day spread, the share of steps kept and the
-  share of independent sessions whose checks passed).
+  share of independent sessions whose checks passed; agent spread counts as
+  a bonus).
 
 Keywords (for the name and *When to use*) are request and intent words
 (request words first) found in at least half of the independent sessions; filler words and anything with digits (host or
@@ -331,9 +350,12 @@ adoption rate stays unknown until a person adopts proposals.
   procedures only (no lessons). Promote/demote (④) covers the budget check only.
 - `dream skills` matches steps by command signature: the same procedure done
   with different tools, or a step hidden in prose, is not recognised, and
-  arguments are not part of a step. Step intents are extractive (the
-  agent's own redacted, path-free sentence), so their wording can be terse;
-  a local `--drafter` may reword them. Boilerplate detection is statistical:
+  arguments are not part of a step. Shared intents are the agents' own
+  scrubbed wording; most steps get a generated headline instead, and a
+  local `--drafter` may reword them. A host name without digits
+  (`proddb`) is not recognised as a place: list it under
+  `skills_distill.private_terms`. The conversation store has no dispatch
+  links yet, so `--from-queue` merges retries by text and time only. Boilerplate detection is statistical:
   a template injected into fewer sessions than the threshold survives, and a
   person who pastes the same long request into many sessions has it treated
   as a template. Only the first 500 index entries of a

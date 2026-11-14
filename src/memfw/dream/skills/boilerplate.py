@@ -34,11 +34,9 @@ _BLOCK_TAGS = (
     "system_reminder",
     "environment_context",
     "user_instructions",
-    "instructions",
+    "INSTRUCTIONS",
     "permissions instructions",
     "functions",
-    "function",
-    "tools",
     "background-task-finished",
     "task-notification",
     "local-command-stdout",
@@ -47,25 +45,28 @@ _BLOCK_TAGS = (
     "turn_aborted",
     "persisted-output",
 )
+"""Harness blocks, matched case-sensitively in the exact spelling harnesses emit.
+
+A person's own ``<instructions>`` or ``<tools>`` text is not one of them.
+"""
 _UNWRAP_TAGS = (
     "user_query",
     "user_request",
     "goal_round",
-    "task",
-    "request",
     "command-args",
     "command-name",
 )
+"""Request wrappers: the tags go, the request inside stays. Generic words such
+as ``<task>`` or ``<request>`` are left alone: a person may type them."""
 _BLOCKS = [
     re.compile(
         rf"<{re.escape(tag)}(?:\s[^>]*)?>.*?(?:</{re.escape(tag)}\s*>|\Z)",
-        re.IGNORECASE | re.DOTALL,
+        re.DOTALL,
     )
     for tag in _BLOCK_TAGS
 ]
 _UNWRAP = re.compile(
-    r"</?(?:" + "|".join(re.escape(tag) for tag in _UNWRAP_TAGS) + r")(?:\s[^>]*)?>",
-    re.IGNORECASE,
+    r"</?(?:" + "|".join(re.escape(tag) for tag in _UNWRAP_TAGS) + r")(?:\s[^>]*)?>"
 )
 _INJECTED_PREFIX = re.compile(
     r"^\s*(?:"
@@ -77,7 +78,7 @@ _INJECTED_PREFIX = re.compile(
     r")",
     re.IGNORECASE,
 )
-_INSTRUCTIONS_END = re.compile(r"</INSTRUCTIONS\s*>", re.IGNORECASE)
+_INSTRUCTIONS_END = re.compile(r"</INSTRUCTIONS\s*>")
 _INJECTED_EXACT = frozenset(
     {
         "tool loaded.",
@@ -230,6 +231,7 @@ class BoilerplateFilter:
             "repeated_fingerprints": 0,
             "requests_injected": 0,
             "requests_continuation": 0,
+            "requests_template_only": 0,
         }
 
     # -- pass 1 -------------------------------------------------------------

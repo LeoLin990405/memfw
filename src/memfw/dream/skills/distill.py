@@ -6,16 +6,19 @@ was actually done: mostly the step signatures, weighted by how rare they are
 tag`` says a lot), then the request words and the agent's stated intents.
 
 A cluster becomes a *procedure* only when it repeats in at least
-``min_sessions`` *independent* sessions with a spread: sessions that carry
-the same request text on the same day (a retried or fanned-out dispatch)
-count once, and the
-independent sessions must come from at least two agents or two days.
+``min_sessions`` *independent* sessions: sessions under the same dispatch
+line, or with the same request text (worker ordinals normalised) within six
+hours, count once. It must also span at least two natural days and succeed
+(a passing check, see :data:`.episodes.CHECKS`) in at least two independent
+sessions. Several agents raise the confidence but are not required.
 Verify-first: a step is kept only when it appears in at least
 ``min_sessions`` of those independent sessions; every other step is dropped.
 
-Each kept step is drafted extractively: its most representative stated
-intent, the flags and input kinds most sessions used, the checks its results
-showed, and the sessions it was seen in. No model is called.
+Each kept step is drafted from the evidence: the flags and input kinds most
+sessions used, the checks its results showed, the sessions it was seen in,
+and a stated intent only when the same scrubbed wording recurs in two
+independent sessions (one session's sentence is never copied). No model is
+called.
 """
 
 from __future__ import annotations
@@ -26,17 +29,23 @@ import re
 from collections import Counter, defaultdict
 from collections.abc import MutableMapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Any
 
-from ..verify import _WORD, context_words
-from .boilerplate import has_content
+from ..verify import _WORD
+from .boilerplate import fingerprint, has_content
 from .episodes import INSPECTION, Episode, Step
+from .scrub import scrub
 
 MAX_REFS_PER_STEP = 5
 MAX_SESSION_IDS = 10
 MAX_KEYWORDS = 8
 MAX_CANDIDATE_CLUSTERS = 64
-"""Clusters compared per episode (found through its rarest signatures)."""
+"""Clusters compared per episode: the ones sharing the most signature weight with it."""
+SAME_TASK_WINDOW = timedelta(hours=6)
+"""The same request text within this window is one task (a retry or a fan-out)."""
+MIN_DAYS = 2
+MIN_SUCCESSES = 2
 _FILLER = frozenset(
     "please now let lets let's need want help thanks thank again also okay could would "
     "can run make sure check use using used task tasks work done first then next file "
@@ -119,6 +128,7 @@ class VerifiedStep:
     refs: list[str]
     position: float
     intent: str = ""
+    """Stated-intent wording seen in two or more independent sessions, else ``""``."""
     flags: list[str] = field(default_factory=list)
     inputs: list[str] = field(default_factory=list)
     checks: list[str] = field(default_factory=list)
@@ -141,6 +151,7 @@ class VerifiedStep:
             "sessions": self.sessions,
             "refs": list(self.refs),
             "intent": self.intent,
+            "intent_source": "shared" if self.intent else "generated",
             "command": self.command,
             "flags": list(self.flags),
             "inputs": list(self.inputs),
@@ -186,8 +197,8 @@ class Procedure:
         total = max(1, self.independent or len(self.sessions))
         support = sum(step.sessions for step in self.steps) / (len(self.steps) * total)
         repeat = min(1.0, total / (2 * max(1, min_sessions)))
-        spread = max(len(self.agents), len(self.days))
-        breadth = min(1.0, (spread - 1) / 2) if spread else 0.0
+        # Agent spread is a bonus, not a gate: the same procedure in several agents.
+        breadth = min(1.0, (len(self.agents) - 1) / 2) if self.agents else 0.0
         kept = len(self.steps) / max(1, len(self.steps) + len(self.dropped))
         success = self.outcomes.get("success", 0) / total
         return round(
@@ -201,7 +212,15 @@ def cluster(
     threshold: float,
     weights: dict[str, float] | None = None,
 ) -> list[list[Episode]]:
-    """Greedy clusters in timestamp order; each episode joins the first close seed."""
+    """Greedy clusters in timestamp order.
+
+    Each episode is compared with the seeds (first members) of the clusters
+    it shares an informative signature with, closest first by the summed
+    weight of the shared signatures, at most ``MAX_CANDIDATE_CLUSTERS`` of
+    them; it joins the first seed at or above ``threshold``, else starts a
+    cluster. Without weights (a small corpus) every seed is compared, oldest
+    first.
+    """
 
     ordered = sorted(episodes, key=lambda item: (item.timestamp, item.source, item.ref))
     clusters: list[list[Episode]] = []
@@ -214,10 +233,16 @@ def cluster(
                 (item for item in episode.signatures if weights.get(item, 1.0) >= MIN_WEIGHT),
                 key=lambda item: (-weights.get(item, 1.0), item),
             )
-            found: set[int] = set()
+            # Rank the clusters sharing a signature by the summed weight of what they
+            # share with this episode, so the cap keeps the closest, not the oldest.
+            shared: dict[int, float] = defaultdict(float)
             for signature in informative:
-                found.update(by_signature.get(signature, ()))
-            candidates = sorted(found)[:MAX_CANDIDATE_CLUSTERS]
+                weight = weights.get(signature, 1.0)
+                for number in by_signature.get(signature, ()):
+                    shared[number] += weight
+            candidates = sorted(shared, key=lambda number: (-shared[number], number))[
+                :MAX_CANDIDATE_CLUSTERS
+            ]
         for number in candidates:
             if similarity(clusters[number][0], episode, weights) >= threshold:
                 clusters[number].append(episode)
@@ -229,8 +254,17 @@ def cluster(
     return clusters
 
 
-def _components(members: Sequence[Episode]) -> dict[tuple[str, str], int]:
-    """Session -> independent group: sessions that share a request text are one group."""
+def _components(
+    members: Sequence[Episode], window: timedelta = SAME_TASK_WINDOW
+) -> dict[tuple[str, str], int]:
+    """Session -> independent group.
+
+    Sessions are one group when they ran under the same dispatch line, or
+    carry the same request text (worker ordinals normalised) within
+    ``window`` of each other: a retry or a fan-out, even across midnight. A
+    session whose time is unknown joins the same-text group (the cautious
+    reading).
+    """
 
     parent: dict[tuple[str, str], tuple[str, str]] = {}
 
@@ -240,36 +274,63 @@ def _components(members: Sequence[Episode]) -> dict[tuple[str, str], int]:
             key = parent[key]
         return key
 
-    first: dict[str, tuple[str, str]] = {}
+    def union(left: tuple[str, str], right: tuple[str, str]) -> None:
+        one, two = find(left), find(right)
+        if one != two:
+            parent[max(one, two)] = min(one, two)
+
+    lines: dict[str, tuple[str, str]] = {}
+    texts: dict[str, list[tuple[datetime | None, tuple[str, str]]]] = defaultdict(list)
     for episode in members:
         key = episode.session_key
         parent.setdefault(key, key)
-        task = episode.task_key
-        if task in first:
-            left, right = find(first[task]), find(key)
-            if left != right:
-                parent[max(left, right)] = min(left, right)
-        else:
-            first[task] = key
+        if episode.dispatch_line:
+            if episode.dispatch_line in lines:
+                union(lines[episode.dispatch_line], key)
+            else:
+                lines[episode.dispatch_line] = key
+        if not episode.task_key.startswith("session:"):
+            texts[episode.task_key].append((episode.time, key))
+    for found in texts.values():
+        unknown = [key for moment, key in found if moment is None]
+        timed = sorted((moment, key) for moment, key in found if moment is not None)
+        for first, second in zip(timed, timed[1:], strict=False):
+            if second[0] - first[0] <= window:
+                union(first[1], second[1])
+        anchor = timed[0][1] if timed else (unknown[0] if unknown else None)
+        for key in unknown:
+            if anchor is not None:
+                union(anchor, key)
     roots = sorted({find(key) for key in parent})
     number = {root: index for index, root in enumerate(roots)}
     return {key: number[find(key)] for key in parent}
 
 
-def _representative_intent(intents: Sequence[str]) -> str:
-    """The stated intent sharing most words with the others (ties: shorter, then sorted)."""
+def _representative_intent(per_group: dict[int, list[str]]) -> str:
+    """A stated intent only when the same wording recurs in two independent groups.
 
-    options = sorted({item for item in intents if has_content(item)})
-    if not options:
+    One session's sentence is never copied into a draft (it may name a
+    private place or value): the intent is used only when its scrubbed
+    fingerprint is seen in at least two groups; the most widespread wins
+    (ties: shorter, then sorted). Otherwise ``""`` and the draft generates a
+    description from the command.
+    """
+
+    groups: dict[str, set[int]] = defaultdict(set)
+    texts: dict[str, set[str]] = defaultdict(set)
+    for number, intents in per_group.items():
+        for intent in intents:
+            text = scrub(intent)
+            if not has_content(text):
+                continue
+            key = fingerprint(text)
+            groups[key].add(number)
+            texts[key].add(text)
+    shared = [key for key, found in groups.items() if len(found) >= 2]
+    if not shared:
         return ""
-    words = {item: context_words(item) for item in options}
-    usable = [item for item in intents if item in words]
-
-    def score(item: str) -> tuple[float, int, str]:
-        overlap = sum(jaccard(frozenset(words[item]), frozenset(words[other])) for other in usable)
-        return (-overlap, len(item), item)
-
-    return min(options, key=score)
+    best = min(shared, key=lambda key: (-len(groups[key]), len(key), key))
+    return min(texts[best], key=lambda text: (len(text), text))
 
 
 def _shared(values: dict[int, set[str]], need: int) -> list[str]:
@@ -312,6 +373,8 @@ def verify_steps(
     min_sessions: int,
     min_steps: int,
     stats: MutableMapping[str, int] | None = None,
+    min_days: int = MIN_DAYS,
+    min_successes: int = MIN_SUCCESSES,
 ) -> Procedure | None:
     """The procedure a cluster supports, or None when it repeats too rarely.
 
@@ -330,15 +393,23 @@ def verify_steps(
         _reject(stats, "rejected_not_independent")
         return None
     group_agents: dict[int, set[str]] = defaultdict(set)
-    group_days: dict[int, set[str]] = defaultdict(set)
+    days_seen: set[str] = set()
+    group_outcomes: dict[int, list[str]] = defaultdict(list)
     for episode in members:
-        group_agents[group[episode.session_key]].add(episode.agent or "unknown")
+        number = group[episode.session_key]
+        group_agents[number].add(episode.agent or "unknown")
+        group_outcomes[number].append(episode.outcome)
         if episode.day:
-            group_days[group[episode.session_key]].add(episode.day)
-    agents_seen = set().union(*group_agents.values())
-    days_seen = set().union(*group_days.values()) if group_days else set()
-    if len(agents_seen) < 2 and len(days_seen) < 2:
-        _reject(stats, "rejected_no_spread")
+            days_seen.add(episode.day)
+    if len(days_seen) < min_days:
+        _reject(stats, "rejected_too_few_days")
+        return None
+    outcomes: Counter[str] = Counter(
+        "success" if "success" in found else "failed" if "failed" in found else "unknown"
+        for found in group_outcomes.values()
+    )
+    if outcomes["success"] < min_successes:
+        _reject(stats, "rejected_too_few_successes")
         return None
 
     hits: dict[str, dict[int, list[tuple[Episode, Step]]]] = defaultdict(lambda: defaultdict(list))
@@ -383,7 +454,7 @@ def verify_steps(
                 refs=refs,
                 position=position,
                 intent=_representative_intent(
-                    [s.intent for found in per_group.values() for _, s in found]
+                    {number: [s.intent for _, s in found] for number, found in per_group.items()}
                 ),
                 flags=_shared(flags, need),
                 inputs=_shared(inputs, need),
@@ -420,12 +491,6 @@ def verify_steps(
         key=lambda word: (word not in request_words, -words[word], order[word], word),
     )[:MAX_KEYWORDS]
 
-    outcomes: Counter[str] = Counter()
-    for number in sorted(set(group.values())):
-        found = [episode.outcome for episode in members if group[episode.session_key] == number]
-        outcomes[
-            "success" if "success" in found else "failed" if "failed" in found else "unknown"
-        ] += 1
     agents: Counter[str] = Counter(agent or "unknown" for agent in sessions.values())
     return Procedure(
         episodes=list(members),
@@ -451,6 +516,8 @@ def distill(
     min_steps: int = 2,
     threshold: float = 0.4,
     stats: MutableMapping[str, int] | None = None,
+    min_days: int = MIN_DAYS,
+    min_successes: int = MIN_SUCCESSES,
 ) -> list[Procedure]:
     weights = signature_weights(episodes)
     clusters = cluster(episodes, threshold, weights)
@@ -461,7 +528,12 @@ def distill(
         for members in clusters
         if (
             procedure := verify_steps(
-                members, min_sessions=min_sessions, min_steps=min_steps, stats=stats
+                members,
+                min_sessions=min_sessions,
+                min_steps=min_steps,
+                stats=stats,
+                min_days=min_days,
+                min_successes=min_successes,
             )
         )
         is not None
