@@ -377,30 +377,53 @@ def _same_subject(left: _Features, right: _Features) -> bool:
     return True
 
 
-_QUALIFIER_SKIP = _LINK_WORDS | _FILLER | _DO_WORDS | frozenset({"our", "this", "that"})
+_QUALIFIER_SKIP = (
+    _LINK_WORDS
+    | _FILLER
+    | _DO_WORDS
+    | frozenset("our this that its their for of called named".split())
+)
+_QUALIFIER_REACH = 3
+"""How many words a qualifier may sit from its noun ("the service for the worker")."""
 
 
 def _qualifiers(tokens: list[str], noun: str) -> set[str]:
-    """Words right next to ``noun`` in prose: "the staging environment" -> {staging}."""
+    """The nearest content word on each side of ``noun`` in prose.
+
+    "the staging environment" -> {staging}; "the service for the worker" ->
+    {worker}; "the service called api" -> {api}. Link words (for, of, the,
+    called, ...) and one-letter tokens ("api's") are skipped; a number ends
+    the search on that side ("the service has 3 replicas" -> nothing).
+    """
 
     found: set[str] = set()
     for position, token in enumerate(tokens):
         if token != noun:
             continue
-        for neighbour in (position - 1, position + 1):
-            if 0 <= neighbour < len(tokens):
+        for step in (-1, 1):
+            neighbour = position + step
+            for _ in range(_QUALIFIER_REACH):
+                if not 0 <= neighbour < len(tokens):
+                    break
                 word = tokens[neighbour]
-                if word not in _QUALIFIER_SKIP and not _NUMERIC.match(word):
-                    found.add(word)
+                if _NUMERIC.match(word) or word == noun:
+                    break
+                if word in _QUALIFIER_SKIP or len(word) < 2:
+                    neighbour += step
+                    continue
+                found.add(word)
+                break
     return found
 
 
 def _prose_identity_differs(stated: _Features, other: _Features) -> bool:
     """An identity attribute in one memory vs a different one named in the other's prose.
 
-    ``env: prod`` vs "The staging environment has 3 replicas": the prose names
-    the environment ``staging``, so the two are about different things. With no
-    word next to the noun ("The service has 3 replicas") nothing is decided.
+    ``env: prod`` vs "The staging environment has 3 replicas": the word next to
+    the noun names the environment ``staging``, so the two are about different
+    things. Only the noun's own qualifiers count: "Prod and staging environment"
+    names staging, however often "prod" appears elsewhere. With no word next to
+    the noun ("The service has 3 replicas") nothing is decided.
     """
 
     for key, value in stated.attributes.items():
@@ -408,8 +431,7 @@ def _prose_identity_differs(stated: _Features, other: _Features) -> bool:
         if noun not in _IDENTITY_KEYS or key in other.attributes:
             continue
         qualifiers = _qualifiers(other.tokens, _canonical(noun))
-        wanted = set(value.split())
-        if qualifiers and not wanted & set(other.tokens):
+        if qualifiers and not set(value.split()) & qualifiers:
             return True
     return False
 

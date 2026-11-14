@@ -128,6 +128,80 @@ CASES = [
         "- service: api\n- replicas: 3",
         "The api service has 3 replicas.",
     ),
+    # qualifiers past link words; only the noun's own qualifiers count (re-review)
+    (
+        "identity-prose-link-words",
+        "none",
+        "- service: api\n- replicas: 3",
+        "The service for the worker has 3 replicas.",
+    ),
+    (
+        "identity-prose-value-elsewhere",
+        "none",
+        "- env: prod\n- replicas: 3",
+        "Prod and staging environment both differ; staging has 3 replicas.",
+    ),
+    (
+        "identity-prose-called",
+        "merge",
+        "- service: api\n- replicas: 3",
+        "The service called api has 3 replicas.",
+    ),
+    (
+        "identity-prose-possessive",
+        "merge",
+        "- service: api\n- replicas: 3",
+        "The api's service has 3 replicas.",
+    ),
+    (
+        "identity-prose-after-noun",
+        "merge",
+        "- service: api\n- replicas: 3",
+        "The service api has 3 replicas.",
+    ),
+    (
+        "identity-prose-no-qualifier",
+        "merge",
+        "- service: api\n- replicas: 3",
+        "The service has 3 replicas.",
+    ),
+    (
+        "identity-prose-runs",
+        "merge",
+        "- service: api\n- replicas: 3",
+        "The api service runs 3 replicas.",
+    ),
+    (
+        "identity-prose-two-words",
+        "merge",
+        "- service: billing api\n- replicas: 3",
+        "The billing api service has 3 replicas.",
+    ),
+    (
+        "identity-prose-prod-env",
+        "merge",
+        "- env: prod\n- replicas: 3",
+        "The prod environment has 3 replicas.",
+    ),
+    (
+        "identity-prose-production",
+        "merge",
+        "- env: production\n- replicas: 3",
+        "The production environment has 3 replicas.",
+    ),
+    ("identity-prose-eu1", "merge", "- cluster: eu1\n- nodes: 4", "The eu1 cluster has 4 nodes."),
+    (
+        "identity-prose-env-trailer",
+        "merge",
+        "- env: staging\n- replicas: 3",
+        "The staging env has 3 replicas, same as last week.",
+    ),
+    (
+        "adverb-leading-currently",
+        "merge",
+        "Notifications are enabled.",
+        "Notifications are currently enabled.",
+    ),
     # trailing time adverbs are not part of a value (review fix 4)
     (
         "adverb-trailing-now",

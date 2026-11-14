@@ -60,8 +60,12 @@ In priority order:
      things, however many other attributes agree (`service: api, owner: alice`
      vs `service: worker, owner: alice` gives no candidate). The same holds
      when the other memory names the thing in prose: `env: prod` vs "The
-     staging environment has 3 replicas" are different subjects (the word next
-     to the noun, synonyms folded, is compared with the attribute value). Keys such as
+     staging environment has 3 replicas" are different subjects. The nearest
+     word on each side of the noun (past link words such as `for`, `of`,
+     `the`, `called`; synonyms folded) is compared with the attribute value,
+     and only those words count, so "Prod and staging environment" names
+     staging. With no such word ("The service has 3 replicas") nothing is
+     decided. Keys such as
      `owner`, `host` and `region` may change and give `supersede`.
    - **Synonyms.** A small fixed table folds wording: deploy / deploys /
      deployments, db / database, prod / production, config / configuration,
