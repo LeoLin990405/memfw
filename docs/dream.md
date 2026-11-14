@@ -218,7 +218,9 @@ Refs then read `conv:APP:SESSION@OFFSET` (`memfw conversations get`).
    two agents or on at least two days.
 6. **Verify-first.** A step is kept only when it appears in at least
    `--min-sessions` independent sessions; other steps are dropped and listed
-   as `dropped_steps`. Fewer than `--min-steps` (2) kept steps, no candidate.
+   as `dropped_steps`. Fewer than `--min-steps` (2) kept steps, or only
+   steps that look around (`git status`, `git log`, `gh pr view`, web
+   search ...), no candidate.
    A kept step is drafted with its most representative intent, the flags and
    input kinds most of its sessions used, the checks seen in two or more,
    and the sessions it was seen in. Preconditions come from the programs

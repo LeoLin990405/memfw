@@ -447,3 +447,43 @@ def test_paths_and_generic_tool_aliases_are_not_words_or_steps() -> None:
     (episode,) = segment("src", "s1", entries)
     assert "widget" in episode.words
     assert not {"users", "zztester", "conductor-wt", "proj"} & set(episode.words)
+
+
+def test_git_dash_c_is_skipped_and_inspection_only_procedures_are_rejected() -> None:
+    assert [c.signature for c in command_calls("git -C /x/y status --short")] == [
+        "cmd:git status"[4:]
+    ]
+    specs = [
+        ("look around the widget repo", agent, day) for agent, day in (("a", 1), ("b", 2), ("c", 3))
+    ]
+    episodes = []
+    for number, (request, agent, day) in enumerate(specs):
+        entries = [
+            {
+                "role": "user",
+                "snippet": request,
+                "ref": "r@0",
+                "agent": agent,
+                "timestamp": f"2026-01-0{day}T10:00:00Z",
+            },
+            {"role": "assistant", "snippet": "[tool Bash] command: git status", "ref": "r@1"},
+            {"role": "assistant", "snippet": "[tool Bash] command: git log", "ref": "r@2"},
+        ]
+        episodes += segment(agent, f"s{number}", entries)
+    stats: dict[str, int] = {}
+    assert distill(episodes, min_sessions=3, stats=stats) == []
+    assert stats["rejected_inspection_only"] == 1
+
+
+def test_batch_prose_states_the_intent_of_the_first_call_only() -> None:
+    entries = [
+        {"role": "user", "snippet": "ship the widget", "ref": "r@0", "agent": "a"},
+        {
+            "role": "assistant",
+            "snippet": "Build and tag it.\n[tool Bash] command: uv build\n"
+            "[tool Bash] command: git tag x",
+            "ref": "r@1",
+        },
+    ]
+    (episode,) = segment("src", "s", entries)
+    assert [step.intent for step in episode.steps] == ["Build and tag it", ""]

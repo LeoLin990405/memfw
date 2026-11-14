@@ -30,7 +30,7 @@ from typing import Any
 
 from ..verify import _WORD, context_words
 from .boilerplate import has_content
-from .episodes import Episode, Step
+from .episodes import INSPECTION, Episode, Step
 
 MAX_REFS_PER_STEP = 5
 MAX_SESSION_IDS = 10
@@ -393,6 +393,9 @@ def verify_steps(
         )
     if len(kept) < min_steps:
         _reject(stats, "rejected_too_few_steps")
+        return None
+    if all(step.signature in INSPECTION for step in kept):
+        _reject(stats, "rejected_inspection_only")
         return None
     kept.sort(key=lambda step: (step.position, step.signature))
     for number, verified in enumerate(kept, start=1):

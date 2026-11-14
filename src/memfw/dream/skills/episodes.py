@@ -204,6 +204,16 @@ CHECKS: tuple[tuple[str, str, re.Pattern[str]], ...] = (
 """``(check, outcome, pattern)`` in priority order; the first match names the check."""
 
 
+INSPECTION = frozenset(
+    "cmd:git status|cmd:git log|cmd:git diff|cmd:git show|cmd:git branch|cmd:git remote|"
+    "cmd:git rev-parse|cmd:git fetch|cmd:git ls-files|cmd:git worktree list|cmd:git stash list|"
+    "cmd:gh pr view|cmd:gh pr list|cmd:gh pr status|cmd:gh pr diff|cmd:gh pr checks|"
+    "cmd:gh issue view|cmd:gh issue list|cmd:gh run list|cmd:gh run view|cmd:git|cmd:gh|"
+    "tool:web_search|tool:websearch|tool:web_fetch|tool:webfetch".split("|")
+)
+"""Steps that only look around: a procedure needs at least one step that does something."""
+
+
 @dataclass(frozen=True)
 class Call:
     """One meaningful action of a tool call, before it becomes a :class:`Step`."""
@@ -310,6 +320,8 @@ def _segment_call(segment: str) -> Call | None:
         return None
     words = [program]
     rest = tokens[1:]
+    while program == "git" and len(rest) >= 2 and rest[0] in {"-C", "-c"}:
+        rest = rest[2:]
     if program in SCRIPT_RUNNERS:
         if len(rest) >= 2 and rest[0] == "-m" and _PROGRAM.match(rest[1]):
             words += ["-m", rest[1]]
@@ -540,10 +552,11 @@ def segment(
             continue
         pieces = text.split("[tool ")
         prose = pieces[0]
-        for line in pieces[1:]:
+        for number, line in enumerate(pieces[1:]):
             match = _TOOL.search("[tool " + line)
             rest = match.group(2) if match else ""
-            intent = _description(rest) or _intent(prose)
+            # The prose before a batch of calls states the intent of the first one only.
+            intent = _description(rest) or (_intent(prose) if number == 0 else "")
             found = tool_calls("[tool " + line)
             for call in found:
                 if actions and actions[-1].signature == call.signature:
