@@ -245,12 +245,23 @@ emptied, paragraphs and pieces removed, requests skipped as injected or
 candidate (name and first steps, generated text only). `--summary` prints
 the report without the candidates.
 
-All draft text passes `clean()`: redaction, then URLs, absolute and
-relative paths, bare domains and host-like tokens (letters mixed with
-digits, such as `db-node-01`) become placeholders, and the word after a
-secret cue (`password`, `token`, `secret`, `key:`) becomes `<secret>`.
-Backticked command text, built from the fixed signature vocabulary, is
-kept.
+All agent-derived draft text (shared intents, request and intent words)
+is scrubbed: redaction, then URLs, absolute and relative paths, bare
+domains and host-like tokens (letters mixed with digits, such as
+`db-node-01`) become `<place>`, and the value of any `NAME=value` and the
+word after a secret cue (`password`, `token`, `secret`, `key:`) become
+`<secret>`. Backticks in agent text get no exemption. Only command text the
+code generates itself, from the fixed signature vocabulary, is added after
+scrubbing and kept as it is.
+
+**Privacy limits (accepted risk).** The scrub is pattern-based. It does not
+recognise host names without digits (`bastion`, `prod-db`), repository or
+project names in prose (`acme-billing-portal`), or e-mail addresses spelled
+out (`alice at acme dot com`). Such words reach a draft only when they
+recur in at least half of the independent sessions (keywords) or inside an
+intent shared by two of them, but they can. List them under
+`skills_distill.private_terms` (below): they are then masked everywhere in a
+candidate, and a private keyword is left out of the name.
 
 Each candidate is staged under `_candidates/skills/<candidate_id>/`:
 
@@ -354,8 +365,11 @@ adoption rate stays unknown until a person adopts proposals.
   scrubbed wording; most steps get a generated headline instead, and a
   local `--drafter` may reword them. A host name without digits
   (`proddb`) is not recognised as a place: list it under
-  `skills_distill.private_terms`. The conversation store has no dispatch
-  links yet, so `--from-queue` merges retries by text and time only. Boilerplate detection is statistical:
+  `skills_distill.private_terms` (see *Privacy limits*).
+- The dispatch-line merge reads an entry's `dispatch_line`, but neither the
+  history index nor the conversation-queue adapter supplies one yet (the
+  store has no `links` table), so today it only takes effect in tests; real
+  runs merge retries and fan-outs by request text and time only. Boilerplate detection is statistical:
   a template injected into fewer sessions than the threshold survives, and a
   person who pastes the same long request into many sessions has it treated
   as a template. Only the first 500 index entries of a

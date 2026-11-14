@@ -53,9 +53,11 @@ class UnsafeText(ValueError):
 def clean(text: str, limit: int = TEXT_CHARS) -> str:
     """Redacted, single-line text with no place or credential; raises :class:`UnsafeText`.
 
-    Paths (absolute and relative), URLs, bare domains and host-like tokens
-    become placeholders, and the word after a secret cue becomes
-    ``<secret>`` (:func:`.scrub.scrub`); backticked command text is kept.
+    For agent (or drafter) text. Paths (absolute and relative), URLs, bare
+    domains and host-like tokens become placeholders, and assignment values
+    and the word after a secret cue become ``<secret>`` (:func:`.scrub.scrub`),
+    inside backticks too. Text that holds generated command text goes
+    through :func:`checked` instead, after its agent parts were cleaned.
     """
 
     value = _CONTROL.sub(" ", str(text))
@@ -64,6 +66,20 @@ def clean(text: str, limit: int = TEXT_CHARS) -> str:
     value = _PATH.sub("<path>", value)
     value = scrub(value)
     value = " ".join(value.split())[:limit].strip()
+    if has_secret(value) or _HOME.search(value) or "REDACTED" in value or "withheld" in value:
+        raise UnsafeText("text still carries a secret or a home path")
+    return value
+
+
+def checked(text: str, limit: int = TEXT_CHARS) -> str:
+    """Single-line text assembled from cleaned parts and generated commands.
+
+    Nothing is rewritten (generated command text such as ``python3 -m
+    pytest`` must stay as it is); it is only refused, like :func:`clean`,
+    when a secret or home path is still there.
+    """
+
+    value = " ".join(_CONTROL.sub(" ", str(text)).split())[:limit].strip()
     if has_secret(value) or _HOME.search(value) or "REDACTED" in value or "withheld" in value:
         raise UnsafeText("text still carries a secret or a home path")
     return value
@@ -127,7 +143,11 @@ def generated_intent(step: VerifiedStep) -> str:
 
 
 def step_headline(step: VerifiedStep, *, shared_intent: bool = True) -> str:
-    """``Intent: run `command```; the intent is shared wording, else generated."""
+    """``Intent: run `command```; the intent is shared wording, else generated.
+
+    The agent's intent is cleaned (fully scrubbed, backticks included) before
+    the generated command text is added, so only code-made spans skip it.
+    """
 
     intent = ""
     if shared_intent and step.intent:
@@ -160,13 +180,13 @@ def deterministic(procedure: Procedure) -> Draft:
     topic = ", ".join(procedure.keywords) or "the same steps"
     return Draft(
         name=name,
-        description=clean(
+        description=checked(
             f"Procedure repeated in {sessions} independent sessions (agents: {agents}): {summary}.",
             DESCRIPTION_CHARS,
         ),
         when_to_use=clean(f"When a task is about {topic}.", DESCRIPTION_CHARS),
         steps=[
-            {"text": clean(_step_text(step)), "evidence": [step.key]} for step in procedure.steps
+            {"text": checked(_step_text(step)), "evidence": [step.key]} for step in procedure.steps
         ],
     )
 

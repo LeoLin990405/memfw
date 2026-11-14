@@ -39,6 +39,7 @@ from typing import Any
 
 from ..verify import context_words
 from .boilerplate import BoilerplateFilter, fingerprint, has_content, strip_structural
+from .scrub import scrub
 
 _TOOL = re.compile(r"\[tool ([A-Za-z0-9_.:-]{1,64})\]\s?(.*)", re.DOTALL)
 _COMMAND_KEY = re.compile(r"(?:^|;\s)(?:command|cmd|script):\s")
@@ -536,6 +537,12 @@ def _intent(prose: str) -> str:
     return value[:INTENT_CHARS].rstrip(" :.")
 
 
+def _words(text: str) -> set[str]:
+    """Content words of scrubbed text: places, credentials and placeholders never count."""
+
+    return context_words(re.sub(r"<(?:place|secret)>", " ", scrub(text)))
+
+
 def is_continuation(text: str) -> bool:
     value = re.sub(r"[\s.!。！,，~]+", " ", text.lower()).strip()
     return bool(value) and (value in CONTINUATIONS or len(value) <= 3 and not has_content(value))
@@ -570,7 +577,7 @@ def _finish(episode: Episode | None, actions: list[_Pending], out: list[Episode]
                 outcome=action.outcome,
             )
         )
-        intent_words.update(context_words(action.intent))
+        intent_words.update(_words(action.intent))
     episode.intent_words = frozenset(intent_words)
     if episode.steps:
         out.append(episode)
@@ -638,7 +645,7 @@ def segment(
                 timestamp=str(entry.get("timestamp") or ""),
                 request=request,
                 dispatch_line=str(entry.get("dispatch_line") or ""),
-                words=frozenset(context_words(_PLACES.sub(" ", request))),
+                words=frozenset(_words(_PLACES.sub(" ", request))),
             )
             continue
         if role == "user":

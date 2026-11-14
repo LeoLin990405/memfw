@@ -708,3 +708,69 @@ def test_literal_tags_a_person_types_are_kept(text: str) -> None:
     """Item 5: only the harness spellings are markers."""
 
     assert strip_structural(text) == text
+
+
+# -- re-review: backticked agent text and assignments ---------------------------------
+
+
+@pytest.mark.parametrize(
+    ("intent", "leaks"),
+    [
+        ("Edit `secret_project/plan.py` now", ("secret_project", "plan.py")),
+        ("Push to `github.com/zz-team/private-repo`", ("github.com", "private-repo")),
+        ("Use `password hunter` to log in", ("hunter",)),
+        ("Open `db-node-01` first", ("db-node-01",)),
+    ],
+)
+def test_backticked_agent_text_is_scrubbed(intent: str, leaks: tuple[str, ...]) -> None:
+    from memfw.dream.skills.distill import VerifiedStep, _representative_intent
+    from memfw.dream.skills.draft import clean, step_headline
+
+    shared = _representative_intent({0: [intent], 1: [intent]})
+    step = VerifiedStep(
+        key="s1",
+        signature="cmd:python3 -m pytest",
+        sessions=2,
+        refs=[],
+        position=0.0,
+        intent=clean(shared, 160),
+        flags=["-q"],
+    )
+    headline = step_headline(step)
+    for leak in leaks:
+        assert leak not in headline, leak
+    # Generated command text keeps its own spelling (python3 is not a host).
+    assert headline.endswith(": run `python3 -m pytest -q`")
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Run export FOO=secret before tests", "Run export FOO=<secret> before tests"),
+        ("Set FOO=letmein then build", "Set FOO=<secret> then build"),
+        ("use `DEBUG=1 make` here", "use `DEBUG=<secret> make` here"),
+        ("token=abc then go", "token=<secret> then go"),
+    ],
+)
+def test_assignment_values_are_never_kept(text: str, expected: str) -> None:
+    from memfw.dream.skills.scrub import scrub
+
+    assert scrub(text) == expected
+
+
+def test_shared_backticked_intent_end_to_end() -> None:
+    from memfw.dream.skills.run import build
+
+    episodes = []
+    for number in range(3):
+        intent = "Edit `secret_project/plan.py` and set FOO=letmein before the run"
+        entries = _with_intent(
+            _entries(f"cut widget release {number}", f"a{number}", number + 1), intent
+        )
+        episodes += segment(f"a{number}", f"s{number}", entries)
+    (procedure,) = distill(episodes, min_sessions=3)
+    candidate = build(procedure, SkillOptions(), None, "2026-03-01T00:00:00Z")
+    assert candidate is not None
+    blob = candidate.skill_md + json.dumps(candidate.evidence)
+    assert "secret_project" not in blob and "letmein" not in blob
+    assert "Edit `<place>` and set FOO=<secret> before the run" in candidate.skill_md
