@@ -132,6 +132,9 @@ GENERIC_TOOLS = frozenset(
         "find",
         "search",
         "think",
+        "codegraph",
+        "codegraph_explore",
+        "codegraph_search",
         "write_stdin",
         "view_image",
     }
@@ -212,6 +215,18 @@ INSPECTION = frozenset(
     "tool:web_search|tool:websearch|tool:web_fetch|tool:webfetch".split("|")
 )
 """Steps that only look around: a procedure needs at least one step that does something."""
+
+
+CODE_WORDS = frozenset(
+    "const let var import from def class function return if then fi else elif for while do "
+    "done case esac print async await try except with lambda".split()
+)
+"""First words of source code, not of a shell command."""
+_PLUMBING_NAME = re.compile(
+    r"^(?:(?:get|update|create|list|set|claim|complete)_(?:goal|plan|step|current_step|todo|"
+    r"todos|mcp_tools|tools|task|tasks)|team_[a-z_]+|[a-z_]*_agents?|interrupt_[a-z_]+)$"
+)
+"""Goal, plan, team and sub-agent plumbing under other names."""
 
 
 @dataclass(frozen=True)
@@ -379,7 +394,17 @@ def command_calls(command: str) -> list[Call]:
             if not calls:
                 return []
             break
-        if call and call.signature not in {item.signature for item in calls}:
+        if call is None:
+            continue
+        program = call.signature.split()[0]
+        if program in CODE_WORDS:
+            # Source code passed as a command (a script body), not shell.
+            break
+        if calls and program not in KNOWN_PROGRAMS:
+            # Later segments must name a known program: free words there are
+            # usually script text split on a newline, not commands.
+            continue
+        if call.signature not in {item.signature for item in calls}:
             calls.append(call)
         if len(calls) >= MAX_SIGNATURES_PER_CALL:
             break
@@ -407,7 +432,12 @@ def tool_calls(text: str) -> list[Call]:
     if command is not None or name in _SHELL_TOOLS:
         calls = command_calls(command if command is not None else rest)
         return [Call(f"cmd:{call.signature}", call.flags, call.inputs) for call in calls]
-    if name in GENERIC_TOOLS or name in ORCHESTRATION_TOOLS or _GENERIC_NAME.match(name):
+    if (
+        name in GENERIC_TOOLS
+        or name in ORCHESTRATION_TOOLS
+        or _GENERIC_NAME.match(name)
+        or _PLUMBING_NAME.match(name)
+    ):
         return []
     return [Call(f"tool:{name}")]
 

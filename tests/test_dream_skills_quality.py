@@ -487,3 +487,14 @@ def test_batch_prose_states_the_intent_of_the_first_call_only() -> None:
     ]
     (episode,) = segment("src", "s", entries)
     assert [step.intent for step in episode.steps] == ["Build and tag it", ""]
+
+
+def test_script_text_and_plumbing_tools_are_not_steps() -> None:
+    assert [c.signature for c in command_calls("uv build\nsecret = 1\ngit tag v1")] == [
+        "uv build",
+        "git tag",
+    ]
+    assert command_calls("const x = require('y')") == []
+    for name in ("get_goal", "update_goal", "team_task_update", "get_mcp_tools", "spawn_agent"):
+        assert tool_calls(f"[tool {name}] x") == [], name
+    assert tool_calls("[tool update_current_step] x") == []
