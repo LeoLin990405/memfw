@@ -10,12 +10,14 @@ model part (:mod:`.summarize`) is built only when a spec is given.
 Every text is redacted again on the way out (a value that still looks like a
 secret is withheld). The pack is cut to ``max_bytes`` of its rendered form,
 dropping the oldest recent turns first, then files touched (and git state),
-then the model part, then the goal's tail.
+then the model part, then the goal's tail, the lineage and the source cwd
+and project; a pack that still does not fit is refused (``pack_too_large``).
 """
 
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -232,7 +234,12 @@ def build_pack(
 
 
 def fit(pack: dict[str, Any], cap: int, measure: Callable[[dict[str, Any]], int]) -> None:
-    """Cut ``pack`` in place until ``measure(pack) <= cap``, recording what was cut."""
+    """Cut ``pack`` in place until ``measure(pack) <= cap``, recording what was cut.
+
+    Order: oldest recent turns, files touched, git state, model part, goal,
+    lineage, then the source cwd and project. :class:`HandoffError`
+    (``pack_too_large``) when even that is not enough.
+    """
 
     system = pack["system"]
     parts: list[str] = pack["truncated_parts"]
@@ -260,17 +267,23 @@ def fit(pack: dict[str, Any], cap: int, measure: Callable[[dict[str, Any]], int]
     if over() and "model_summarized" in pack:
         del pack["model_summarized"]
         mark("model_summarized")
-    while over() and system["goal"]:
-        excess = measure(pack) - cap
-        system["goal"] = trim_bytes(
-            system["goal"], max(0, len(system["goal"].encode()) - excess - 8)
-        )
-        if len(system["goal"]) <= 1:
-            system["goal"] = ""
-        mark("goal")
+
+    def shorten(holder: dict[str, Any], key: str, part: str) -> None:
+        while over() and holder[key]:
+            excess = measure(pack) - cap
+            value = trim_bytes(holder[key], max(0, len(holder[key].encode()) - excess - 8))
+            holder[key] = "" if len(value) <= 1 else value
+            mark(part)
+
+    shorten(system, "goal", "goal")
     while over() and system["lineage"]["previous_handoffs"]:
         system["lineage"]["previous_handoffs"].pop(0)
         mark("lineage")
+    shorten(pack["source"], "cwd", "cwd")
+    shorten(pack["source"], "project", "project")
+    if over():
+        # Only fixed fields are left (ids, labels, file name): the cap is too small.
+        raise HandoffError(EXIT_USAGE, "pack_too_large", f"the pack does not fit in {cap} bytes")
 
 
 # -- rendering -------------------------------------------------------------------
@@ -280,43 +293,85 @@ def render_json(pack: dict[str, Any]) -> str:
     return json.dumps(pack, ensure_ascii=False, indent=2) + "\n"
 
 
+_LINE_BREAK = re.compile(r"\s*[\r\n\u2028\u2029]+\s*")
+_HEADING = re.compile(r"^(\s*)#", flags=re.M)
+_BACKTICKS = re.compile(r"`+")
+
+
+def _inline(value: Any) -> str:
+    """One line of untrusted text: line breaks folded, so it cannot start a new block."""
+
+    return _LINE_BREAK.sub(" ⏎ ", str(value or "")).strip()
+
+
+def _quote(text: str) -> list[str]:
+    """Untrusted multi-line text as a ``>`` quote, with line-leading ``#`` escaped.
+
+    Every line of it starts with ``> ``, so it can never pose as a heading, a
+    label or another part of the pack.
+    """
+
+    escaped = _HEADING.sub(lambda m: f"{m.group(1)}\\#", text)
+    return [f"> {line}".rstrip() for line in escaped.splitlines() or [""]]
+
+
+def _fence(lines: list[str]) -> list[str]:
+    """``lines`` in a code fence longer than any backtick run inside them."""
+
+    longest = max((len(m.group(0)) for line in lines for m in _BACKTICKS.finditer(line)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return [fence, *lines, fence]
+
+
 def render_markdown(pack: dict[str, Any]) -> str:
-    """The pack as Markdown to paste into another agent."""
+    """The pack as Markdown to paste into another agent.
+
+    Values from the session (goal, turn text, tool calls, paths, git output,
+    model items) are untrusted: multi-line text is quoted, single-line values
+    are folded to one line, git output sits in a fence sized to its content.
+    """
 
     source = pack["source"]
     system = pack["system"]
     lines = [
         f"> {pack['notice']}",
         "",
-        f"# Handoff: {source['agent']} session {source['session_id']}",
+        f"# Handoff: {_inline(source['agent'])} session {_inline(source['session_id'])}",
         "",
     ]
     if pack.get("for_agent"):
-        lines += [f"For: {pack['for_agent']}", ""]
+        lines += [f"For: {_inline(pack['for_agent'])}", ""]
     lines += [
         system["label"],
         "",
-        f"- origin: {source['origin'] or 'unknown'}; turns: {source['turns']}"
-        f" (withheld {source['withheld']}); parser {source['parser_version'] or '?'}",
-        f"- time: {source['started_at'] or '?'} .. {source['updated_at'] or '?'}",
+        f"- origin: {_inline(source['origin']) or 'unknown'}; turns: {source['turns']}"
+        f" (withheld {source['withheld']}); parser {_inline(source['parser_version']) or '?'}",
+        f"- time: {_inline(source['started_at']) or '?'} .. {_inline(source['updated_at']) or '?'}",
     ]
     if source.get("cwd"):
-        lines.append(f"- cwd: {source['cwd']}")
+        lines.append(f"- cwd: {_inline(source['cwd'])}")
     goal_title = "Goal (task text)" if system["goal_source"] == "task_file" else "Goal"
-    lines += ["", f"## {goal_title}", "", system["goal"] or "(no user message)", ""]
+    lines += ["", f"## {goal_title}", "", *_quote(system["goal"] or "(no user message)"), ""]
     if system["files_touched"]:
-        lines += ["## Files touched", "", *(f"- {item}" for item in system["files_touched"]), ""]
+        lines += [
+            "## Files touched",
+            "",
+            *(f"- {_inline(item)}" for item in system["files_touched"]),
+            "",
+        ]
     git = system.get("git")
     if git:
-        lines += ["## Git (read-only)", "", "```", *git["status"], "", *git["diff_stat"], "```", ""]
+        body = [_inline(line) for line in (*git["status"], "", *git["diff_stat"])]
+        lines += ["## Git (read-only)", "", *_fence(body), ""]
     lineage = system["lineage"]
     if lineage["previous_handoffs"] or lineage["parent_session_id"]:
         lines += ["## Lineage", ""]
         if lineage["parent_session_id"]:
-            lines.append(f"- parent session: {lineage['parent_session_id']}")
+            lines.append(f"- parent session: {_inline(lineage['parent_session_id'])}")
         for item in lineage["previous_handoffs"]:
             lines.append(
-                f"- handoff #{item['n']} for {item['for_agent'] or 'any'} at {item['created_at']}"
+                f"- handoff #{item['n']} for {_inline(item['for_agent']) or 'any'}"
+                f" at {_inline(item['created_at'])}"
             )
         lines.append("")
     model = pack.get("model_summarized")
@@ -328,19 +383,22 @@ def render_markdown(pack: dict[str, Any]) -> str:
                     lines += [
                         f"### {key.replace('_', ' ')}",
                         "",
-                        *(f"- {i}" for i in model[key]),
+                        *(f"- {_inline(i)}" for i in model[key]),
                         "",
                     ]
         else:
-            lines += [f"(dropped: {model.get('reason', 'invalid')})", ""]
+            lines += [f"(dropped: {_inline(model.get('reason', 'invalid'))})", ""]
     lines += ["## Recent turns", ""]
     for turn in system["recent_turns"]:
-        lines.append(f"**{turn['role']}** @{turn['offset']} {turn['ts']}".rstrip())
+        lines.append(
+            f"**{_inline(turn['role'])}** @{turn['offset']} {_inline(turn['ts'])}".rstrip()
+        )
         lines.append("")
         if turn["text"]:
-            lines += [turn["text"], ""]
+            lines += [*_quote(turn["text"]), ""]
         for call in turn["tool_calls"]:
-            lines.append(f"- tool `{call['name']}`: {call['summary']}".rstrip(": "))
+            name = _inline(call["name"]).replace("`", "'")
+            lines.append(f"- tool `{name}`: {_inline(call['summary'])}".rstrip(": "))
         if turn["tool_calls"]:
             lines.append("")
     if pack.get("truncated"):

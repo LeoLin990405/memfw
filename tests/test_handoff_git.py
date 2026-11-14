@@ -86,32 +86,106 @@ def test_timeout_and_failure_give_none(tmp_path: Path) -> None:
     assert git_snapshot(tmp_path, runner=failing) is None
 
 
-def test_commands_are_read_only(tmp_path: Path) -> None:
+def _fake(argv: list[str], out: str = "") -> Any:
+    if "--is-inside-work-tree" in argv:
+        return subprocess.CompletedProcess(argv, 0, "true\n", "")
+    if "--get-regexp" in argv:
+        return subprocess.CompletedProcess(argv, 1, "", "")  # no filter.* key
+    return subprocess.CompletedProcess(argv, 0, out, "")
+
+
+def test_commands_are_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[tuple[list[str], dict[str, Any]]] = []
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "elsewhere"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(tmp_path / "elsewhere"))
+    monkeypatch.setenv("GIT_CONFIG_PARAMETERS", "'filter.x.clean'='touch y'")
 
     def runner(argv: list[str], **kwargs: Any) -> Any:
         seen.append((argv, kwargs))
-        out = "true\n" if "--is-inside-work-tree" in argv else ""
-        return subprocess.CompletedProcess(argv, 0, out, "")
+        return _fake(argv)
 
     assert git_snapshot(tmp_path, runner=runner) == {"status": [], "diff_stat": []}
     verbs = {argv[argv.index("color.ui=false") + 1] for argv, _ in seen}
-    assert verbs <= {"rev-parse", "status", "diff"}
+    assert verbs <= {"rev-parse", "config", "status", "diff"}
     for argv, kwargs in seen:
-        assert "core.fsmonitor=false" in argv
+        assert "core.fsmonitor=false" in argv and "core.hooksPath=/dev/null" in argv
         assert not {"fetch", "pull", "push", "commit", "checkout"} & set(argv)
-        assert kwargs["env"]["GIT_OPTIONAL_LOCKS"] == "0"
-        assert kwargs["env"]["GIT_TERMINAL_PROMPT"] == "0"
+        env = kwargs["env"]
+        assert env["GIT_OPTIONAL_LOCKS"] == "0" and env["GIT_TERMINAL_PROMPT"] == "0"
+        assert {key for key in env if key.startswith("GIT_")} == {
+            "GIT_OPTIONAL_LOCKS",
+            "GIT_TERMINAL_PROMPT",
+        }
         assert kwargs["stdin"] == subprocess.DEVNULL and kwargs["timeout"] == 5.0
+    diff = next(argv for argv, _ in seen if "diff" in argv)
+    assert {"--no-ext-diff", "--no-textconv"} <= set(diff)
+
+
+def test_a_configured_filter_or_a_failed_check_skips_the_snapshot(tmp_path: Path) -> None:
+    def found(argv: list[str], **kwargs: Any) -> Any:
+        if "--get-regexp" in argv:
+            return subprocess.CompletedProcess(argv, 0, "filter.x.clean cmd\n", "")
+        assert "status" not in argv and "diff" not in argv
+        return _fake(argv)
+
+    assert git_snapshot(tmp_path, runner=found) is None
+
+    def broken(argv: list[str], **kwargs: Any) -> Any:
+        if "--get-regexp" in argv:
+            return subprocess.CompletedProcess(argv, 128, "", "bad config")
+        return _fake(argv)
+
+    assert git_snapshot(tmp_path, runner=broken) is None
+
+
+@needs_git
+@pytest.mark.parametrize("command", ["clean", "smudge", "process"])
+def test_filter_in_repo_config_never_runs(repo: Path, tmp_path: Path, command: str) -> None:
+    marker = tmp_path / f"marker-{command}"
+    script = tmp_path / "filter.sh"
+    script.write_text(f"#!/bin/sh\ntouch '{marker}'\ncat\n")
+    script.chmod(0o755)
+    (repo / ".gitattributes").write_text("*.py filter=evil diff=evil\n")
+    _git(repo, "config", f"filter.evil.{command}", str(script))
+    _git(repo, "config", "diff.evil.textconv", str(script))
+    _git(repo, "config", "diff.external", str(script))
+    (repo / "app.py").write_text("print('changed again')\n")
+    assert git_snapshot(repo) is None
+    assert not marker.exists()
+
+
+@needs_git
+def test_textconv_and_external_diff_never_run(repo: Path, tmp_path: Path) -> None:
+    marker = tmp_path / "marker-diff"
+    script = tmp_path / "diff.sh"
+    script.write_text(f"#!/bin/sh\ntouch '{marker}'\ncat \"$1\"\n")
+    script.chmod(0o755)
+    (repo / ".gitattributes").write_text("*.py diff=evil\n")
+    _git(repo, "config", "diff.evil.textconv", str(script))
+    _git(repo, "config", "diff.external", str(script))
+    snapshot = git_snapshot(repo)
+    assert snapshot is not None and any("app.py" in line for line in snapshot["diff_stat"])
+    assert not marker.exists()
+
+
+@needs_git
+def test_inherited_git_dir_does_not_redirect(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    other = tmp_path / "other"
+    other.mkdir()
+    _git(other, "init", "-q")
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(other))
+    snapshot = git_snapshot(repo)
+    assert snapshot is not None and " M app.py" in snapshot["status"]
 
 
 def test_secret_lines_are_dropped(tmp_path: Path) -> None:
     secret = "pass" + "word=correct-horse-battery-9"
 
     def runner(argv: list[str], **kwargs: Any) -> Any:
-        if "--is-inside-work-tree" in argv:
-            return subprocess.CompletedProcess(argv, 0, "true\n", "")
-        return subprocess.CompletedProcess(argv, 0, f"?? {secret}.txt\n M ok.py\n", "")
+        return _fake(argv, f"?? {secret}.txt\n M ok.py\n")
 
     snapshot = git_snapshot(tmp_path, runner=runner)
     assert snapshot is not None and snapshot["status"] == [" M ok.py"]

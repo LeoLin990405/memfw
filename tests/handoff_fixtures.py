@@ -76,6 +76,7 @@ def record(
     *,
     calls: Sequence[tuple[str, Any]] = (),
     cwd: str = "/work/demo",
+    project: str = "demo",
     minute: int | None = None,
 ) -> ConversationRecord:
     stamp = f"2026-01-02T10:{(offset if minute is None else minute) % 60:02d}:00Z"
@@ -89,7 +90,7 @@ def record(
         timestamp=stamp,
         tool_calls=tuple(tool_call(name, args) for name, args in calls),
         cwd=cwd,
-        project="demo",
+        project=project,
     )
 
 

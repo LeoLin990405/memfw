@@ -27,7 +27,7 @@ precedence.
 | `source` | agent, session id, origin (`interactive` / `worker`), first and last timestamp, turn count, withheld count, `parser_version`, redacted cwd and project |
 | `goal` | the first user message (redacted, at most 2 KiB), or the text of `--task-file` when the caller passes one (`goal_source` says which) |
 | `files_touched` | paths from the arguments of edit, write and patch tools, using each agent's tool names (`memfw.handoff.tools_map`), deduplicated, at most 50 |
-| `git` | `git status --porcelain` and `git diff --stat` of the work tree, when `--cwd` names one (or the stored cwd exists). Read-only: no fetch, no optional locks, 5 s timeout. Redacted |
+| `git` | `git status --porcelain` and `git diff --stat` of the work tree, when `--cwd` names one (or the stored cwd exists). Read-only: no fetch, no optional locks, no hooks, no fsmonitor, no external diff or textconv, no submodules, no inherited `GIT_*` variable, 5 s timeout. Redacted. Skipped (`null`) whenever any config scope defines a `filter.*` driver, because `status` and `diff` would run its clean/smudge command |
 | `recent_turns` | the last `--recent` (default 12) user and assistant turns, each at most 1 KiB, with their tool-call summaries. Tool turns in that window keep only their call summaries, never their output |
 | `lineage` | earlier packs of the same session (`previous_handoffs`: number, target agent, time). `parent_session_id` is `null`: store schema v1 does not record it |
 
@@ -57,8 +57,17 @@ backend_error`). The `[system]` part does not change either way.
 - `--max-bytes` (default 16 KiB, range 2 KiB to 64 KiB) caps the printed
   output in the chosen format. When a pack is too big, parts are cut in this
   order: the oldest recent turns, then files touched (and the git state),
-  then the model part, then the tail of the goal. `truncated` and
-  `truncated_parts` record what was cut. The notice and labels are never cut.
+  then the model part, then the tail of the goal, then the lineage, and
+  last the source cwd and project. `truncated` and `truncated_parts` record
+  what was cut. The notice and labels are never cut. If the pack still does
+  not fit, it is refused (`pack_too_large`, exit 2) rather than printed over
+  the cap.
+- In Markdown, everything that comes from the session is untrusted. The
+  goal and each turn's text are rendered as `>` quotes, with a `#` at the
+  start of a line escaped. Single-line values (paths, tool calls, model
+  items) have their line breaks folded (`⏎`). Git output sits in a fence
+  longer than any backtick run inside it. Session text therefore cannot pose
+  as a heading, a `[system]` label or another part of the pack.
 - Sessions of an app that `conversation_optout` excludes, or that
   `conversation_share.apps.<app>.readable: false` hides, answer exactly like
   missing sessions. When sharing is enabled and `--for` names an app that
@@ -70,7 +79,17 @@ Each pack is saved next to the store, in `handoffs/` (directory 0700, files
 0600). The file name is `<agent>-<session>-<n>.md` (or `.json` with
 `--format json`). `handoffs/handoffs.sqlite` records one row per pack:
 source agent and session, sequence number, target agent, time, size and
-sha256. This row is the store's `handoff_from` link, and it feeds `lineage`.
+sha256. This row stands in for the store's `handoff_from` link, and it
+feeds `lineage`.
+
+**Deviation from the PRD (§4.3):** the PRD says each pack writes a row to
+`links(kind=handoff_from)` in the conversation store. The store as merged
+(M2a, schema version 1) has no `links` table, and this package only ever
+opens the store read-only. Adding the table would have meant a schema change
+and a writer inside another line's module. So the link lives in its own
+ledger next to the store, with the same content (source agent and session,
+sequence number, target agent, time). If the store gains `links` later, the
+ledger rows can be copied there without changing the pack format.
 The folder is refused inside a git work tree, the vault or a synced folder,
 the same as the store. `--no-save` only prints the pack.
 
@@ -94,7 +113,7 @@ memfw handoff <old-agent> <old-session> --format json --max-bytes 16384 \
 
 | Exit | `reason` | Meaning |
 |---|---|---|
-| 2 | `bad_request` | bad arguments, bad `vault.yaml`, or a bad `--summarize` spec |
+| 2 | `bad_request` / `pack_too_large` | bad arguments, bad `vault.yaml`, a bad `--summarize` spec, or a pack that does not fit in `--max-bytes` |
 | 3 | `session_not_indexed` | the store has no such session, or it is hidden or opted out |
 | 4 | `store_unavailable` / `handoff_dir_unwritable` | the store is missing, unreadable, locked or of an unknown schema |
 | 5 | `location_refused` / `not_readable` | the store or `handoffs/` lies in a refused place, or the target app may not read the source |

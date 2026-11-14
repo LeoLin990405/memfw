@@ -1,8 +1,13 @@
 """Read-only git state of a session's working directory for the handoff pack.
 
-Only ``git rev-parse``, ``git status --porcelain`` and ``git diff --stat``
-run: no fetch, no optional locks (``GIT_OPTIONAL_LOCKS=0``), no fsmonitor,
-no prompt, a timeout per command. Every line is redacted; a line that still
+Only ``git rev-parse``, ``git config --get-regexp``, ``git status
+--porcelain`` and ``git diff --stat`` run: no fetch, no optional locks
+(``GIT_OPTIONAL_LOCKS=0``), no fsmonitor, no hooks, no external diff or
+textconv, no submodules, no prompt, a timeout per command, and no inherited
+``GIT_*`` variable. A repository (or user config) that defines any
+``filter.*`` driver gets no snapshot: clean/smudge filters are commands.
+
+Every line is redacted; a line that still
 looks like it holds a secret is dropped.
 """
 
@@ -20,26 +25,34 @@ LINE_CHARS = 300
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
 
-def _git(cwd: Path, *args: str, timeout: float, runner: Runner) -> str | None:
-    argv = [
-        "git",
-        "-C",
-        str(cwd),
-        "-c",
-        "core.fsmonitor=false",
-        "-c",
-        "core.untrackedCache=false",
-        "-c",
-        "color.ui=false",
-        *args,
-    ]
-    env = dict(os.environ)
+_SAFE_CONFIG = (
+    "core.fsmonitor=false",
+    "core.untrackedCache=false",
+    "core.hooksPath=/dev/null",
+    "color.ui=false",
+)
+
+
+def _env() -> dict[str, str]:
+    """The environment without any ``GIT_*`` variable (they would override ``-C``)."""
+
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     env.update({"GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"})
+    return env
+
+
+def _run(cwd: Path, *args: str, timeout: float, runner: Runner) -> tuple[int, str] | None:
+    """``(exit code, stdout)``, or ``None`` when git could not run or timed out."""
+
+    argv = ["git", "-C", str(cwd)]
+    for setting in _SAFE_CONFIG:
+        argv += ["-c", setting]
+    argv += list(args)
     try:
         result: Any = runner(
             argv,
             cwd=str(cwd),
-            env=env,
+            env=_env(),
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
@@ -48,9 +61,27 @@ def _git(cwd: Path, *args: str, timeout: float, runner: Runner) -> str | None:
         )
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
-    if getattr(result, "returncode", 1) != 0:
+    return int(getattr(result, "returncode", 1)), str(result.stdout or "")
+
+
+def _git(cwd: Path, *args: str, timeout: float, runner: Runner) -> str | None:
+    outcome = _run(cwd, *args, timeout=timeout, runner=runner)
+    if outcome is None or outcome[0] != 0:
         return None
-    return str(result.stdout or "")
+    return outcome[1]
+
+
+def _has_filters(cwd: Path, *, timeout: float, runner: Runner) -> bool:
+    """True when any config scope defines a ``filter.*`` driver (or the check fails).
+
+    ``status`` and ``diff`` run clean/smudge filters (git-lfs and the like)
+    named by the repository: commands chosen by whoever wrote the repo's
+    config. With one configured, no snapshot is taken at all.
+    """
+
+    outcome = _run(cwd, "config", "--get-regexp", r"^filter\.", timeout=timeout, runner=runner)
+    # Exit 1 means "no such key"; anything else (0 = found, errors) is unsafe.
+    return outcome is None or outcome[0] != 1
 
 
 def _lines(output: str, max_lines: int) -> list[str]:
@@ -92,11 +123,14 @@ def git_snapshot(
     inside = _git(directory, "rev-parse", "--is-inside-work-tree", timeout=timeout, runner=runner)
     if inside is None or inside.strip() != "true":
         return None
+    if _has_filters(directory, timeout=timeout, runner=runner):
+        return None
     status = _git(
         directory,
         "status",
         "--porcelain=v1",
         "--untracked-files=normal",
+        "--ignore-submodules=all",
         timeout=timeout,
         runner=runner,
     )
@@ -106,7 +140,15 @@ def git_snapshot(
         _git(directory, "rev-parse", "--verify", "--quiet", "HEAD", timeout=timeout, runner=runner)
         is not None
     )
-    diff_args = ("diff", "--stat", "--no-color", *(("HEAD",) if has_head else ()))
+    diff_args = (
+        "diff",
+        "--stat",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--ignore-submodules=all",
+        *(("HEAD",) if has_head else ()),
+    )
     diff = _git(directory, *diff_args, timeout=timeout, runner=runner)
     if diff is None:
         return None
