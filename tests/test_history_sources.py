@@ -129,6 +129,7 @@ def test_registry_covers_every_worker_cli() -> None:
         "kimi",
         "grok",
         "cursor",
+        "cursor-ide",
         "deepseek",
         "minimax",
         "glm",
