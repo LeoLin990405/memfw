@@ -206,7 +206,7 @@ def test_run_stages_one_file_per_concept_and_never_writes_the_vault(tmp_path: Pa
         assert str(tmp_path) not in text and ".jsonl" not in text
     report = json.loads((directory / "report.json").read_text("utf-8"))
     assert report["authority"] is False
-    assert report["operations"]["distill"].startswith("stub")
+    assert report["operations"]["distill"].startswith("run: lessons")  # was a stub before M1-3
     assert TRANSCRIPT_ONLY not in json.dumps(report)
 
 

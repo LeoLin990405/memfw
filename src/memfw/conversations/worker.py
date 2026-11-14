@@ -105,6 +105,12 @@ class RunReport:
     sessions_scanned: int = 0
     sessions_queued: int = 0
     sessions_waiting_idle: int = 0
+    scan_cursor_start: int = 0
+    """Where this run resumed scanning (after the newest-first head window)."""
+    scan_cursor_end: int = 0
+    """Where the next run resumes."""
+    scan_wrapped: bool = False
+    """This run reached the oldest session and wrapped to the top."""
     jobs: dict[str, int] = field(default_factory=dict)
     tokens: int = 0
     candidates_staged: int = 0
@@ -198,6 +204,11 @@ class WorkState:
             CREATE TABLE IF NOT EXISTS staged_claims (
                 claim_digest TEXT PRIMARY KEY, app TEXT NOT NULL, session_id TEXT NOT NULL,
                 dream_id TEXT NOT NULL, created_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS scan_cursor (
+                name TEXT PRIMARY KEY, position INTEGER NOT NULL DEFAULT 0,
+                passes INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT '',
+                last_updated_at TEXT NOT NULL DEFAULT '', last_app TEXT NOT NULL DEFAULT '',
+                last_session_id TEXT NOT NULL DEFAULT '');
             CREATE TABLE IF NOT EXISTS runs (
                 run_id TEXT PRIMARY KEY, started_at TEXT NOT NULL, finished_at TEXT,
                 status TEXT NOT NULL, report TEXT NOT NULL DEFAULT '{}');
@@ -207,6 +218,14 @@ class WorkState:
         job_columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(jobs)")}
         if "tried_run" not in job_columns:
             connection.execute("ALTER TABLE jobs ADD COLUMN tried_run TEXT NOT NULL DEFAULT ''")
+        cursor_columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(scan_cursor)")
+        }
+        for column in ("last_updated_at", "last_app", "last_session_id"):
+            if column not in cursor_columns:
+                connection.execute(
+                    f"ALTER TABLE scan_cursor ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"
+                )
         connection.execute(
             "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
             (SCHEMA_VERSION,),
@@ -526,6 +545,20 @@ class ConversationWorker:
     # -- scan + plan ----------------------------------------------------------------
 
     def _scan(self, report: RunReport) -> None:
+        """Queue changed, idle sessions, fairly across runs.
+
+        ``source.sessions`` lists newest first, ordered by ``(updated_at DESC,
+        app, session_id)``. Scanning only from the top would starve older
+        sessions whenever the backlog exceeds ``max_scan`` (or ``max_sessions``
+        is reached first). So each run scans a short head window (fresh sessions
+        are picked up promptly) and then resumes from a **keyset cursor**: the
+        last session the previous run visited. The walk continues at the first
+        session strictly after it in that order. A session that is updated
+        rises to the top (into the head window), and nothing after the cursor
+        moves, so the cursor walk neither skips nor repeats sessions. Past the
+        oldest session it wraps to the newest.
+        """
+
         cutoff = self.now() - timedelta(minutes=self.budgets.idle_minutes)
         exclude = tuple(
             sorted(
@@ -533,30 +566,145 @@ class ConversationWorker:
                 | {app for app, rule in self.policy.apps.items() if not rule.process}
             )
         )
-        offset = 0
-        queued = 0
-        while offset < self.budgets.max_scan and queued < self.budgets.max_sessions:
-            page = self.source.sessions(
-                exclude=exclude,
-                limit=min(SCAN_PAGE, self.budgets.max_scan - offset),
-                offset=offset,
+        budget = int(self.budgets.max_scan)
+        # The head window may queue at most half the sessions, and never all of
+        # them: at least one is always left for the cursor walk, so a busy top of
+        # the list cannot stall the cursor. With max_sessions 1 there is no head
+        # window and the one session goes to the cursor walk.
+        sessions = int(self.budgets.max_sessions)
+        head_quota = min(sessions - 1, max(1, sessions // 2)) if sessions >= 2 else 0
+        head = min(SCAN_PAGE, budget // 4) if head_quota else 0
+        if sessions <= 0 or budget <= 0:
+            return
+        key, passes = self._scan_cursor()
+        start = self._keyset_offset(exclude, key) if key else 0
+        seen: set[tuple[str, str]] = set()
+        state = {"queued": 0, "scanned": 0}
+        last: list[SessionInfo] = []
+
+        def visit(info: SessionInfo, quota: int) -> bool:
+            """Handle one session; True when ``quota`` sessions have been queued."""
+
+            key = (info.app, info.session_id)
+            if key in seen:
+                return state["queued"] >= quota
+            seen.add(key)
+            report.sessions_scanned += 1
+            if not self.policy.processable(info.app):
+                return False
+            updated = _parse_ts(info.updated_at)
+            if updated is not None and updated > cutoff:
+                report.sessions_waiting_idle += 1
+                return False
+            if self._plan(info):
+                state["queued"] += 1
+                report.sessions_queued += 1
+            return state["queued"] >= quota
+
+        def walk(
+            offset: int, stop: int | None, quota: int, *, track: bool
+        ) -> tuple[int, bool, bool]:
+            """Scan from ``offset``; returns (next offset, reached end, quota used)."""
+
+            while state["scanned"] < budget and (stop is None or offset < stop):
+                want = min(SCAN_PAGE, budget - state["scanned"])
+                if stop is not None:
+                    want = min(want, stop - offset)
+                page = self.source.sessions(exclude=exclude, limit=want, offset=offset)
+                for index, info in enumerate(page):
+                    state["scanned"] += 1
+                    if track:
+                        last[:] = [info]
+                    if visit(info, quota):
+                        return offset + index + 1, False, True
+                offset += len(page)
+                if len(page) < want:
+                    return offset, True, False
+            return offset, False, False
+
+        if head_quota > 0:
+            # The head window only: a full quota here just ends it. When the whole
+            # window was seen, the cursor walk need not see it again.
+            _offset, _end, head_full = walk(0, head, head_quota, track=False)
+            if not head_full:
+                start = max(start, head)
+        report.scan_cursor_start = start
+        offset, end, full = walk(start, None, sessions, track=True)
+        if end and not full:
+            # Past the oldest session: wrap to the newest and use what is left of
+            # this run's budget, up to where this run's cursor walk began.
+            passes += 1
+            report.scan_wrapped = True
+            last.clear()
+            offset, _end, _full = walk(0, start, sessions, track=True)
+            if not last or offset >= start:
+                # A whole pass is done: the next run starts again at the top.
+                report.scan_cursor_end = 0
+                self._save_scan_cursor(None, 0, passes)
+                return
+        report.scan_cursor_end = offset
+        self._save_scan_cursor(last[0] if last else None, offset, passes)
+
+    @staticmethod
+    def _comes_after(info: SessionInfo, key: tuple[str, str, str]) -> bool:
+        """Whether ``info`` lies strictly after ``key`` in newest-first order."""
+
+        updated_at, app, session_id = key
+        if info.updated_at != updated_at:
+            return info.updated_at < updated_at
+        return (info.app, info.session_id) > (app, session_id)
+
+    def _keyset_offset(self, exclude: tuple[str, ...], key: tuple[str, str, str]) -> int:
+        """Offset of the first session strictly after ``key`` (binary search, O(log n))."""
+
+        def after(offset: int) -> bool:
+            page = self.source.sessions(exclude=exclude, limit=1, offset=offset)
+            return not page or self._comes_after(page[0], key)
+
+        if after(0):
+            return 0
+        low, high = 0, 1
+        while not after(high):
+            low, high = high, high * 2
+        while high - low > 1:
+            middle = (low + high) // 2
+            if after(middle):
+                high = middle
+            else:
+                low = middle
+        return high
+
+    def _scan_cursor(self) -> tuple[tuple[str, str, str] | None, int]:
+        with self.state.open() as connection:
+            row = connection.execute(
+                "SELECT passes, last_updated_at, last_app, last_session_id FROM scan_cursor"
+                " WHERE name = 'sessions'"
+            ).fetchone()
+        if row is None:
+            return None, 0
+        passes = max(0, int(row["passes"]))
+        if not row["last_app"] and not row["last_session_id"]:
+            return None, passes
+        return (
+            str(row["last_updated_at"]),
+            str(row["last_app"]),
+            str(row["last_session_id"]),
+        ), passes
+
+    def _save_scan_cursor(self, last: SessionInfo | None, position: int, passes: int) -> None:
+        """Remember the last session visited (``None``: start at the top next run)."""
+
+        values = (last.updated_at, last.app, last.session_id) if last else ("", "", "")
+        with self.state.open() as connection:
+            connection.execute(
+                "INSERT INTO scan_cursor (name, position, passes, updated_at, last_updated_at,"
+                " last_app, last_session_id) VALUES ('sessions', ?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT (name) DO UPDATE SET position = excluded.position,"
+                " passes = excluded.passes, updated_at = excluded.updated_at,"
+                " last_updated_at = excluded.last_updated_at, last_app = excluded.last_app,"
+                " last_session_id = excluded.last_session_id",
+                (position, passes, self.now().isoformat(), *values),
             )
-            if not page:
-                break
-            offset += len(page)
-            for info in page:
-                report.sessions_scanned += 1
-                if not self.policy.processable(info.app):
-                    continue
-                updated = _parse_ts(info.updated_at)
-                if updated is not None and updated > cutoff:
-                    report.sessions_waiting_idle += 1
-                    continue
-                if self._plan(info):
-                    queued += 1
-                    report.sessions_queued += 1
-                    if queued >= self.budgets.max_sessions:
-                        break
 
     def _plan(self, info: SessionInfo) -> bool:
         """Queue jobs for ``info`` if its fingerprint is new. Returns whether it queued."""

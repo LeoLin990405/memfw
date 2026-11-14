@@ -1019,7 +1019,22 @@ def init(
 ) -> None:
     """Initialize a vault."""
     if dry_run:
-        typer.echo(json.dumps({"path": str(path), "would_initialize": not path.exists()}))
+        # A vault is initialized when vault.yaml exists; an existing but empty (or
+        # partly created) directory is not, and ``init`` would set it up.
+        target = path.expanduser()
+        if target.exists() and not target.is_dir():
+            raise typer.BadParameter(f"not a directory: {path}")
+        initialized = (target / "vault.yaml").is_file()
+        typer.echo(
+            json.dumps(
+                {
+                    "path": str(path),
+                    "exists": target.exists(),
+                    "initialized": initialized,
+                    "would_initialize": not initialized,
+                }
+            )
+        )
         return
     Repository(path, clock=lambda: _NOW or datetime.now(UTC), id_factory=_id_factory(path)).init()
     typer.echo(f"Initialized {path.expanduser().resolve()}")

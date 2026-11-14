@@ -154,7 +154,9 @@ memfw history read 'codex:3f9c2a71d04e8b65@18342' --root /path/to/vault
 ## 🌙 做梦（dream，先核对）
 
 `memfw dream run` 拿被引用的记忆去会话记录索引里核对，并暂存候选：确认 / 改正 / 标记存疑（证据只用
-history 的不透明引用），合并 / 取代 / 标记过期，以及 injected 层预算（200 行 / 25 KB）的下沉提案。
+history 的不透明引用），合并 / 取代 / 标记过期（按子句判断否定、值签名、同义词），从至少两个独立事件
+提炼 Lesson，以及 injected 层预算（200 行 / 25 KB）的下沉提案。MCP 服务提供 `dream_run`（默认只演练）
+和 `dream_list`。
 它是确定性的、纯本地的，从不写入 vault：候选落在 `_candidates/dream/<dream_id>/<oid>.md`，由人审核。
 记忆条目新增可选字段 `status`（`confirmed|unconfirmed|disputed`）和 `evidence`；旧文件照常解析。
 
@@ -195,7 +197,7 @@ OKF bundle 是可重建的派生投影；Markdown 仍是权威。字段映射与
 - **Day 7 报告（LoCoMo）：** [`reports/day7_report.md`](reports/day7_report.md)
 - **Day 10 零结果分析：** [`reports/day10_null_result_analysis.md`](reports/day10_null_result_analysis.md)
 - **Day 11 Mem0 基线：** [`reports/day11_baseline_comparison.md`](reports/day11_baseline_comparison.md)
-- **“做梦”评测数据：** 合成的重复、冲突、过期用例，以及合并准确率、冲突检出率、误合并率等指标（[`eval/dreams/`](eval/dreams)）。`memfw dream` 本身尚未实现。
+- **“做梦”评测数据：** 合成的重复、冲突、过期用例，以及合并准确率、冲突检出率、误合并率等指标（[`eval/dreams/`](eval/dreams)）。用真实的 `memfw dream` 整理步骤打分（`python -m eval.dreams`）。
 - **Step G 实验：** [`results/stepG/REPORT.md`](results/stepG/REPORT.md)
 
 ## 📁 仓库结构

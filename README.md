@@ -157,10 +157,12 @@ See [`docs/history.md`](docs/history.md) for formats, lineage, redaction and lim
 
 `memfw dream run` checks cited memories against the transcript index and stages candidates:
 confirm / correct / mark-disputed (with opaque history refs as evidence), merge / supersede /
-mark-stale, and injected-layer budget demotions (200 lines / 25 KB). It is deterministic and
+mark-stale (clause-level negation, value signatures, synonyms), lessons from at least two
+independent events, and injected-layer budget demotions (200 lines / 25 KB). It is deterministic and
 local, and it never writes the vault: candidates land in `_candidates/dream/<dream_id>/<oid>.md`
 for a human to review. Memories gain optional `status` (`confirmed|unconfirmed|disputed`) and
-`evidence` fields; older files parse unchanged.
+`evidence` fields; older files parse unchanged. The MCP server exposes `dream_run` (dry run by
+default) and `dream_list`.
 
 ```sh
 memfw dream run --root /path/to/vault --dry-run
@@ -203,8 +205,8 @@ logical retention projection rather than a physical-vault capacity test.
 - **Day 11 Mem0 baseline:** [`reports/day11_baseline_comparison.md`](reports/day11_baseline_comparison.md)
 - **Step G experiment:** [`results/stepG/REPORT.md`](results/stepG/REPORT.md)
 - **Dream evaluation data:** synthetic duplicate, conflict and stale cases, plus merge-accuracy,
-  conflict-detection and false-merge metrics ([`eval/dreams/`](eval/dreams)). `memfw dream` itself is
-  not implemented yet.
+  conflict-detection and false-merge metrics ([`eval/dreams/`](eval/dreams)), scored against the
+  real `memfw dream` curate step (`python -m eval.dreams`).
 
 ## 📁 Repository layout
 

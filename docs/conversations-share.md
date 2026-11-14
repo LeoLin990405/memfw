@@ -38,6 +38,7 @@ conversation_worker:
   max_sessions: 20
   max_tokens: 200000
   max_seconds: 120
+  max_scan: 2000       # sessions looked at per run
 ```
 
 The calling app names itself (`memfw-mcp --app NAME` or `MEMFW_APP`;
@@ -71,6 +72,25 @@ work tree, the vault or a synced folder).
   transaction time); `created_at` is the worker's clock. The 30-day TTL of
   `memfw candidates-expire` covers `_candidates/remember/` only; dream
   candidates carry the stamp as data and do not expire.
+- Fair scan: sessions are listed newest first (`updated_at` descending, then
+  app and session id), so each run looks at a head window (a quarter of
+  `max_scan`, at most 200 sessions) and then resumes from a keyset cursor
+  saved in the state file: the last session the previous run visited. The
+  walk continues at the first session strictly after it in that order. An
+  updated session rises into the head window and nothing after the cursor
+  moves, so the cursor walk neither skips nor repeats sessions; past the
+  oldest session it wraps to the newest. A backlog larger than `max_scan` is
+  therefore covered over several runs instead of starving the oldest
+  sessions. The head window may queue at most half of `max_sessions` and
+  never all of them, so at least one session per run always goes to the
+  cursor (with `max_sessions: 1` there is no head window). The run report
+  adds `scan_cursor_start`, `scan_cursor_end` and `scan_wrapped`.
+- State upgrades are additive: the cursor is a new `scan_cursor` table
+  (`CREATE TABLE IF NOT EXISTS`; its keyset columns are added with `ALTER
+  TABLE ADD COLUMN` when missing; `schema_version` stays 1). An older worker on
+  the same state file ignores the table and scans from the top as before, so
+  workers can be upgraded in any order; the cursor only helps once the new
+  worker runs.
 - Skill candidates: the worker only queues `episodes` (ids, offsets, intent,
   outcome). `memfw dream skills --from-queue` consumes them (`EpisodeQueue`
   claim, then ack after staging or release on failure; claims older than six

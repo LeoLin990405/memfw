@@ -20,7 +20,7 @@ from eval.dreams.cases import Case, Conflict, Memory
 from memfw.core.models import MemoryDocument
 from memfw.dream.curate import curate
 
-_ATTRIBUTE = re.compile(r"attribute '([^']+)' differs")
+_ATTRIBUTE = re.compile(r"(?:attribute|value of) '([^']+)' (?:differs|is negated)")
 NOW = datetime(2026, 8, 1, tzinfo=UTC)
 
 

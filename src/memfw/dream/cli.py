@@ -57,6 +57,10 @@ def dream_run(
     until: Annotated[str | None, typer.Option("--until")] = None,
     tenant: Annotated[str, typer.Option("--tenant")] = "",
     stale_days: Annotated[int, typer.Option("--stale-days")] = 180,
+    min_events: Annotated[
+        int,
+        typer.Option("--min-events", help="Independent events a distilled lesson needs (>= 2)"),
+    ] = 2,
     dream_id: Annotated[str | None, typer.Option("--dream-id")] = None,
     judge: Annotated[
         str | None,
@@ -85,6 +89,7 @@ def dream_run(
         until=until,
         refresh=refresh,
         stale_days=stale_days,
+        min_events=min_events,
         dream_id=dream_id,
         judge=judge,
         allow_config_judge=allow_config_judge,
