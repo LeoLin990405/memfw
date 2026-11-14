@@ -14,7 +14,7 @@ USER_ROOT = Path("Library/Application Support/Cursor/User")
 CHAT = "c0ffee00-0000-4000-8000-000000000001"
 PAGED = "c0ffee00-0000-4000-8000-000000000002"
 LEGACY = "c0ffee00-0000-4000-8000-000000000003"
-CWD = "/home/zztester/work/demo-app"
+CWD = "/work/zztester/work/demo-app"
 
 
 class Kv:
@@ -131,7 +131,7 @@ def _build(home: Path) -> Path:
     ws2 = root / "workspaceStorage" / "ws2"
     ws2.mkdir(parents=True)
     (ws2 / "workspace.json").write_text(
-        json.dumps({"folder": "file:///home/zztester/work/other%20app"})
+        json.dumps({"folder": "file:///work/zztester/work/other%20app"})
     )
     return root
 
@@ -192,7 +192,7 @@ def test_paged_headers_and_workspace_mapping(tmp_path: Path) -> None:
         (2, "assistant", "second"),
         (4, "user", "third"),
     ]
-    assert records[0].cwd == "/home/zztester/work/other app"
+    assert records[0].cwd == "/work/zztester/work/other app"
     assert records[0].project == "other app"
     assert records[0].model == ""
 
