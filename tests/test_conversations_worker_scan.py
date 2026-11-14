@@ -49,21 +49,27 @@ class FakeSource:
         limit: int = 50,
         offset: int = 0,
     ) -> list[SessionInfo]:
-        visible = [info for info in self.infos if info.app not in exclude]
+        visible = [
+            info
+            for info in self.infos
+            if info.app not in exclude and (since is None or info.updated_at >= since)
+        ]
         return visible[offset : offset + limit]
 
     def turns(self, app: str, session_id: str, *, start: int = 0, limit: int = 200) -> list[Turn]:
         return []
 
 
-def _worker(tmp_path: Path, source: Any, **budgets: Any) -> ConversationWorker:
+def _worker(
+    tmp_path: Path, source: Any, *, now: datetime = NOW, **budgets: Any
+) -> ConversationWorker:
     return ConversationWorker(
         source,
         WorkState(tmp_path / "state" / "work.sqlite"),
         backend=ExtractiveBackend(),
         policy=SharePolicy.from_config({}),
         budgets=Budgets(**budgets),
-        now=lambda: NOW,
+        now=lambda: now,
     )
 
 
@@ -144,3 +150,46 @@ def test_report_keeps_existing_keys(tmp_path: Path) -> None:
     for key in ("sessions_scanned", "sessions_queued", "sessions_waiting_idle", "jobs"):
         assert key in data
     assert {"scan_cursor_start", "scan_cursor_end", "scan_wrapped"} <= data.keys()
+
+
+def test_busy_head_window_does_not_stall_the_cursor(tmp_path: Path) -> None:
+    # Hourly runs. Before each one, as many fresh (idle) sessions arrive at the
+    # top as max_sessions: the old scan spent every run on them and never moved
+    # its cursor, and offsets shift by the arrivals, so an offset-only cursor
+    # never reaches the old backlog either.
+    source = FakeSource(40)
+    old = {info.session_id for info in source.infos}
+    for run in range(40):
+        clock = NOW + timedelta(hours=run + 1)
+        for extra in range(4):
+            source.add(f"n-{run:02d}-{extra}", clock - timedelta(minutes=45, seconds=extra))
+        _scan(_worker(tmp_path, source, now=clock, max_scan=40, max_sessions=4))
+    assert old <= _planned(tmp_path)
+
+
+def test_max_sessions_one_still_scans_from_the_top(tmp_path: Path) -> None:
+    source = FakeSource(3)
+    for _ in range(3):
+        assert _scan(_worker(tmp_path, source, max_scan=2000, max_sessions=1)).sessions_queued == 1
+    assert _planned(tmp_path) == {info.session_id for info in source.infos}
+
+
+def test_arrivals_are_counted_on_the_real_store(tmp_path: Path) -> None:
+    from conversation_fixtures import turn, write_store
+
+    from memfw.conversations.adapter import SqliteStoreSource
+
+    store = tmp_path / "data" / "conversations.sqlite"
+    write_store(
+        store,
+        [
+            turn("codex", "s-old", 0, "user", "Old task.", "2026-05-01T10:00:00Z"),
+            turn("codex", "s-new", 0, "user", "New task.", "2026-06-01T11:00:00Z"),
+        ],
+    )
+    worker = _worker(tmp_path, SqliteStoreSource(store), max_scan=40, max_sessions=4)
+    assert worker._arrivals((), "2026-06-01T10:30:00Z", 40) == 1
+    _scan(worker)
+    with sqlite3.connect(tmp_path / "state" / "work.sqlite") as connection:
+        (stamp,) = connection.execute("SELECT updated_at FROM scan_cursor").fetchone()
+    assert stamp == "2026-06-01T12:00:00Z"  # the store's own timestamp format

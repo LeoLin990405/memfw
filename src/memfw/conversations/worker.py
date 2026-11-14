@@ -555,15 +555,27 @@ class ConversationWorker:
             )
         )
         budget = int(self.budgets.max_scan)
-        head = min(SCAN_PAGE, budget // 4)
-        position, passes = self._scan_cursor()
+        # The head window may queue at most half the sessions, and never all of
+        # them: at least one is always left for the cursor walk, so a busy top of
+        # the list cannot stall the cursor. With max_sessions 1 there is no head
+        # window and the one session goes to the cursor walk.
+        sessions = int(self.budgets.max_sessions)
+        head_quota = min(sessions - 1, max(1, sessions // 2)) if sessions >= 2 else 0
+        head = min(SCAN_PAGE, budget // 4) if head_quota else 0
+        position, passes, saved_at = self._scan_cursor()
+        if saved_at:
+            # Sessions updated since the cursor was saved moved to the top and
+            # pushed the rest down: follow them, so a busy top of the list cannot
+            # hold the cursor in place. Counting one that was already above the
+            # cursor over-shifts by one; the wrap-around catches what is skipped.
+            position += self._arrivals(exclude, saved_at, budget)
         position = max(position, head)
         report.scan_cursor_start = position
         seen: set[tuple[str, str]] = set()
         state = {"queued": 0, "scanned": 0}
 
-        def visit(info: SessionInfo) -> bool:
-            """Handle one session; True when the session budget is used up."""
+        def visit(info: SessionInfo, quota: int) -> bool:
+            """Handle one session; True when ``quota`` sessions have been queued."""
 
             key = (info.app, info.session_id)
             if key in seen:
@@ -579,10 +591,10 @@ class ConversationWorker:
             if self._plan(info):
                 state["queued"] += 1
                 report.sessions_queued += 1
-            return state["queued"] >= self.budgets.max_sessions
+            return state["queued"] >= quota
 
-        def walk(offset: int, stop: int | None) -> tuple[int, bool, bool]:
-            """Scan from ``offset``; returns (next offset, reached end, session budget used)."""
+        def walk(offset: int, stop: int | None, quota: int) -> tuple[int, bool, bool]:
+            """Scan from ``offset``; returns (next offset, reached end, quota used)."""
 
             while state["scanned"] < budget and (stop is None or offset < stop):
                 want = min(SCAN_PAGE, budget - state["scanned"])
@@ -591,7 +603,7 @@ class ConversationWorker:
                 page = self.source.sessions(exclude=exclude, limit=want, offset=offset)
                 for index, info in enumerate(page):
                     state["scanned"] += 1
-                    if visit(info):
+                    if visit(info, quota):
                         return offset + index + 1, False, True
                 offset += len(page)
                 if len(page) < want:
@@ -600,36 +612,52 @@ class ConversationWorker:
 
         if self.budgets.max_sessions <= 0 or budget <= 0:
             return
-        _offset, end, full = walk(0, head)
-        if full:
-            report.scan_cursor_end = position  # unchanged: resume there next run
-            return
+        end = False
+        if head_quota > 0:
+            # A full quota here just ends the head window; the cursor walk follows.
+            _offset, end, _full = walk(0, head, head_quota)
         if end:
             # Fewer sessions than the head window: everything was scanned.
             report.scan_cursor_end = head
             report.scan_wrapped = True
             self._save_scan_cursor(head, passes + 1)
             return
-        offset, end, full = walk(position, None)
+        offset, end, full = walk(position, None, sessions)
         if end and not full:
             # Reached the oldest session: start the next pass below the head
             # window, and use what is left of this run's budget on it.
             passes += 1
             report.scan_wrapped = True
-            offset, shrunk, _full = walk(head, position)
+            offset, shrunk, _full = walk(head, position, sessions)
             if shrunk or offset >= position:
                 offset = head  # a full pass is done: the next one starts at the top
         report.scan_cursor_end = offset
         self._save_scan_cursor(offset, passes)
 
-    def _scan_cursor(self) -> tuple[int, int]:
+    def _arrivals(self, exclude: tuple[str, ...], since: str, cap: int) -> int:
+        """How many sessions were updated at or after ``since`` (at most ``cap``)."""
+
+        count = 0
+        while count < cap:
+            want = min(SCAN_PAGE, cap - count)
+            page = self.source.sessions(exclude=exclude, since=since, limit=want, offset=count)
+            count += len(page)
+            if len(page) < want:
+                break
+        return count
+
+    def _scan_cursor(self) -> tuple[int, int, str]:
         with self.state.open() as connection:
             row = connection.execute(
-                "SELECT position, passes FROM scan_cursor WHERE name = 'sessions'"
+                "SELECT position, passes, updated_at FROM scan_cursor WHERE name = 'sessions'"
             ).fetchone()
         if row is None:
-            return 0, 0
-        return max(0, int(row["position"])), max(0, int(row["passes"]))
+            return 0, 0, ""
+        return (
+            max(0, int(row["position"])),
+            max(0, int(row["passes"])),
+            str(row["updated_at"] or ""),
+        )
 
     def _save_scan_cursor(self, position: int, passes: int) -> None:
         with self.state.open() as connection:
@@ -638,7 +666,7 @@ class ConversationWorker:
                 " VALUES ('sessions', ?, ?, ?) ON CONFLICT (name) DO UPDATE SET"
                 " position = excluded.position, passes = excluded.passes,"
                 " updated_at = excluded.updated_at",
-                (position, passes, self.now().isoformat()),
+                (position, passes, self.now().astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")),
             )
 
     def _plan(self, info: SessionInfo) -> bool:

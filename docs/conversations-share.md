@@ -76,9 +76,13 @@ work tree, the vault or a synced folder).
   window (a quarter of `max_scan`, at most 200 sessions) and then resumes from
   a cursor saved in the state file, wrapping to the top after the oldest
   session. A backlog larger than `max_scan` is therefore covered over several
-  runs instead of starving the oldest sessions. New sessions shift offsets, so
-  a pass may skip or repeat a few; the next pass reaches them. The run report
-  adds `scan_cursor_start`, `scan_cursor_end` and `scan_wrapped`.
+  runs instead of starving the oldest sessions. The head window may queue at
+  most half of `max_sessions` and never all of them, so at least one session
+  per run always goes to the cursor (with `max_sessions: 1` there is no head
+  window). Sessions updated since the cursor was saved moved to the top, so
+  the saved offset is shifted by their number before resuming. A pass may
+  still skip or repeat a few sessions; the next pass reaches them. The run
+  report adds `scan_cursor_start`, `scan_cursor_end` and `scan_wrapped`.
 - State upgrades are additive: the cursor is a new `scan_cursor` table
   (`CREATE TABLE IF NOT EXISTS`, `schema_version` stays 1). An older worker on
   the same state file ignores the table and scans from the top as before, so
