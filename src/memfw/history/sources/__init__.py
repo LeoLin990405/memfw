@@ -12,11 +12,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from . import (
+    antigravity,
     claude,
     codex,
     cursor,
     cursor_ide,
     deepseek,
+    gemini,
     glm,
     grok,
     kimi,
@@ -40,6 +42,8 @@ READERS: dict[str, Reader] = {
         glm,
         stepfun,
         opencode,
+        gemini,
+        antigravity,
     )
 }
 ALIASES = {
@@ -52,6 +56,11 @@ ALIASES = {
     "zhipu": "glm",
     "step": "stepfun",
     "stepcode": "stepfun",
+    "gemini-cli": "gemini",
+    "agy": "antigravity",
+    "antigravity-cli": "antigravity",
+    "antigravity-ide": "antigravity",
+    "jetski": "antigravity",
 }
 
 
