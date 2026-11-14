@@ -11,7 +11,7 @@ from memfw.history.sources.antigravity import READER
 from memfw.history.sources.base import SessionLocator
 
 CONVERSATION = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
-WORKSPACE = "/home/zztester/work/demo"
+WORKSPACE = "/work/zztester/work/demo"
 
 
 def _write(path: Path, rows: list[Any], tail: str = "") -> Path:

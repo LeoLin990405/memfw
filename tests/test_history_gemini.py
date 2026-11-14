@@ -12,7 +12,7 @@ from memfw.history.sources import default_roots, get_reader
 from memfw.history.sources.base import SessionLocator
 from memfw.history.sources.gemini import READER
 
-PROJECT = "/home/zztester/work/demo"
+PROJECT = "/work/zztester/work/demo"
 SESSION = "11111111-2222-4333-8444-555555555555"
 
 
@@ -190,7 +190,7 @@ def test_legacy_json_and_subagent(tmp_path: Path) -> None:
     _write(
         chats / SESSION / "sub-1.jsonl",
         [
-            _header(sessionId="sub-1", kind="subagent", directories=["/home/zztester/sub"]),
+            _header(sessionId="sub-1", kind="subagent", directories=["/work/zztester/sub"]),
             {"id": "m", "timestamp": "t", "type": "user", "content": "sub task"},
         ],
     )
@@ -210,7 +210,7 @@ def test_legacy_json_and_subagent(tmp_path: Path) -> None:
     sub = locators[f"abc123/chats/{SESSION}/sub-1.jsonl"]
     assert sub.extra["parent_id"] == SESSION
     [record] = list(READER.read(sub))
-    assert record.session_id == "sub-1" and record.cwd == "/home/zztester/sub"
+    assert record.session_id == "sub-1" and record.cwd == "/work/zztester/sub"
 
 
 def test_malformed_and_missing(tmp_path: Path) -> None:
