@@ -15,7 +15,7 @@ CONV = "conv-00000000000000000000aaaa"
 TITLE = "ctitle-00000000-0000-0000-0000-00000000bbbb"
 WORKDIR = "wd_00-00-00-00000000_000000000000"
 BASE_MS = 1_700_000_000_000
-CWD = "/home/zztester/Documents/demo-workspace"
+CWD = "/work/zztester-demo"
 
 
 def _message(

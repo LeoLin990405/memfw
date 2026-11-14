@@ -4,7 +4,7 @@ The desktop app's agent conversations run on an embedded copy of the Kimi
 CLI kernel, which keeps its own home inside the app's data directory::
 
     ~/Library/Application Support/kimi-desktop/daimon-share/daimon/
-        runtime/kimi-code/home/sessions/          <- store root
+        runtime/kimi-code/home/sessions           <- store root
             <workdir>/conv-<id>/state.json        id, cwd, custom.sessionKind ...
             <workdir>/conv-<id>/agents/<agent>/wire.jsonl
             <workdir>/ctitle-<id>/...             title-generation side sessions
