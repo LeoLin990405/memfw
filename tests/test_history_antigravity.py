@@ -190,3 +190,37 @@ def test_opaque_stores_never_read(tmp_path: Path, monkeypatch: Any) -> None:
             list(READER.read(locator))
     assert opened
     assert not [p for p in opened if p.endswith(".pb") or "oauth_creds" in p or "task.md" in p]
+
+
+def test_ingest_round_trip_into_store(tmp_path: Path) -> None:
+    from memfw.history.conversations import ConversationStore
+    from memfw.history.sources.base import StoreRoot
+
+    full = _store(tmp_path / "home")
+    [root] = default_roots(READER, tmp_path / "home")
+    store = ConversationStore(tmp_path / "store" / "conversations.sqlite")
+    counts = store.ingest(READER, [StoreRoot(root)])
+    assert counts.sessions_seen == 1 and counts.sessions_failed == 0
+    assert counts.records_new == 7
+    stored = store.turns("antigravity", CONVERSATION)
+    assert [(t["offset"], t["role"]) for t in stored] == [
+        (0, "user"),
+        (2, "assistant"),
+        (3, "tool"),
+        (5, "system"),
+        (6, "system"),
+        (7, "assistant"),
+        (8, "user"),
+    ]
+    assert stored[0]["text"] == "please list the files"
+    assert stored[0]["cwd"] == WORKSPACE
+    again = store.ingest(READER, [StoreRoot(root)])
+    assert again.sessions_unchanged == 1 and again.records_new == 0
+
+    # A rewrite that drops the last step is reconciled on the full re-read.
+    rows = _full_steps()[:-2]
+    _write(full, rows)
+    _write(full.parent / "transcript.jsonl", rows)
+    third = store.ingest(READER, [StoreRoot(root)])
+    assert third.sessions_read == 1
+    assert [t["offset"] for t in store.turns("antigravity", CONVERSATION)] == [0, 2, 3, 5, 6]

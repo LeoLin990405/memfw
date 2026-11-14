@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from memfw.history.conversations import ConversationStore
 from memfw.history.sources import base as base_module
 from memfw.history.sources import default_roots, get_reader
 from memfw.history.sources.base import SessionLocator
@@ -250,3 +251,82 @@ def test_credential_files_never_opened(tmp_path: Path, monkeypatch: pytest.Monke
     bogus = SessionLocator("gemini", gemini / "oauth_creds.json", key="oauth_creds.json")
     assert list(READER.read(bogus)) == []
     assert not [p for p in opened if "oauth_creds" in p]
+
+
+def _ingest(tmp_path: Path, root: Path) -> list[dict[str, Any]]:
+    store = ConversationStore(tmp_path / "store" / "conversations.sqlite")
+    counts = store.ingest(READER, [root])
+    assert counts.sessions_failed == 0
+    return store.turns("gemini", SESSION)
+
+
+def _msg(key: str, kind: str, text: str) -> dict[str, Any]:
+    return {"id": key, "timestamp": "2026-01-02T03:04:05.000Z", "type": kind, "content": text}
+
+
+def test_header_and_set_lists_store_every_message(tmp_path: Path) -> None:
+    # One line can record several messages (a header or ``$set`` list); each needs its
+    # own offset or the store keeps only the last one.
+    header = [_msg("a", "user", "alpha"), _msg("b", "gemini", "beta")]
+    rows: list[Any] = [_header(messages=header)]
+    path = _write(tmp_path / "home" / "p" / "chats" / "session-four.jsonl", rows)
+    [locator] = list(READER.sessions(tmp_path / "home"))
+    before = {r.text: r.offset for r in READER.read(locator)}
+    assert len(set(before.values())) == 2
+
+    # ``$set.messages`` replaces the list; here it re-lists the header's two and adds two.
+    listed = header + [
+        _msg("c", "user", "gamma"),
+        {
+            **_msg("d", "gemini", "delta"),
+            "toolCalls": [{"id": "t", "name": "read_file", "args": {}, "resultDisplay": "ok"}],
+        },
+    ]
+    rows.append({"$set": {"messages": listed}})
+    _write(path, rows)
+    records = list(READER.read(locator))
+    offsets = [r.offset for r in records]
+    assert offsets == sorted(offsets) and len(set(offsets)) == len(offsets)
+    # Messages already recorded keep their offsets as the log grows.
+    assert {r.text: r.offset for r in records if r.text in before} == before
+    stored = _ingest(tmp_path, tmp_path / "home")
+    assert [t["text"] for t in stored] == ["alpha", "beta", "gamma", "delta", "ok"]
+
+
+def test_set_list_without_header_messages(tmp_path: Path) -> None:
+    rows = [
+        _header(),
+        _msg("u1", "user", "dropped by set"),
+        {"$set": {"messages": [_msg("s1", "user", "one"), _msg("s2", "gemini", "two")]}},
+        _msg("u2", "user", "three"),
+    ]
+    _write(tmp_path / "home" / "p" / "chats" / "session-set.jsonl", rows)
+    stored = _ingest(tmp_path, tmp_path / "home")
+    assert [t["text"] for t in stored] == ["one", "two", "three"]
+
+
+def test_order_ids_reorder_is_not_reflected(tmp_path: Path) -> None:
+    rows = [
+        _header(),
+        _msg("u1", "user", "first"),
+        _msg("g1", "gemini", "second"),
+        {"$patch": {"orderIds": ["g1", "u1"]}},
+    ]
+    _write(tmp_path / "p" / "chats" / "session-order.jsonl", rows)
+    [locator] = list(READER.sessions(tmp_path))
+    records = list(READER.read(locator))
+    # Records follow recording (offset) order; the reorder is documented as ignored.
+    assert [r.text for r in records] == ["first", "second"]
+    assert [r.offset for r in records] == sorted(r.offset for r in records)
+
+
+def test_rewind_to_unknown_id_is_a_no_op(tmp_path: Path) -> None:
+    rows = [
+        _header(),
+        _msg("u1", "user", "kept"),
+        _msg("g1", "gemini", "also kept"),
+        {"$rewindTo": "no-such-id"},
+    ]
+    _write(tmp_path / "p" / "chats" / "session-rewind.jsonl", rows)
+    [locator] = list(READER.sessions(tmp_path))
+    assert [r.text for r in READER.read(locator)] == ["kept", "also kept"]

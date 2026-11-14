@@ -22,7 +22,8 @@ A ``.jsonl`` chat is a record log replayed in order, the way the CLI loads it:
   replaces it (tool calls and token counts are added that way);
 * ``{"$set": {...}}`` updates metadata (``messages`` there replaces the list);
 * ``{"$patch": {"id" | "updates" | "removeIds" | "orderIds"}}`` edits messages;
-* ``{"$rewindTo": id}`` drops that message and everything after it.
+* ``{"$rewindTo": id}`` drops that message and everything after it (an id that
+  is not in the log changes nothing).
 
 A message is ``{"id", "timestamp", "type", "content", "displayContent"}`` with
 ``type`` ``user``, ``gemini`` (plus ``model``, ``thoughts``, ``tokens`` and
@@ -31,16 +32,25 @@ A message is ``{"id", "timestamp", "type", "content", "displayContent"}`` with
 ``{"text"}`` parts. The older ``.json`` form is one object with the same
 metadata and a ``messages`` list.
 
-Each surviving message ``i`` maps to offset ``2 * position`` where
-``position`` is the byte offset of the line that first recorded it (the list
-index for a ``.json`` file); the results of its tool calls become a ``tool``
-record at ``2 * position + 1``. The log is replayed in full on every change
-(``append_only`` is false) because later lines rewrite earlier messages.
+Each surviving message maps to offset ``2 * (position + k)`` where
+``position`` is the byte offset of the line that first recorded it and ``k``
+its index among the messages that line carries (a header or ``$set`` with a
+``messages`` list records several; ``k`` is 0 for a message line). A line is
+longer than the number of messages it holds, so offsets never collide. Lines
+already written keep their byte offsets and a message re-listed by a ``$set``
+keeps its earlier position, so offsets stay put as the log grows. For a
+``.json`` file ``position`` is the list index. The results of a message's
+tool calls become a ``tool`` record at ``2 * (position + k) + 1``.
+
+Records come out in offset order, which is recording order: a
+``$patch.orderIds`` reorder is not reflected (removals and rewrites are). The
+log is replayed in full on every change (``append_only`` is false) because
+later lines rewrite earlier messages.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -115,6 +125,25 @@ def _session_file(path: Path, chats: Path) -> bool:
     return path.parent.parent == chats and path.suffix == ".jsonl"
 
 
+def _put_all(
+    put: Callable[[int, dict[str, Any]], None],
+    position: int,
+    listed: list[Any],
+    known: dict[str, int] | None = None,
+) -> None:
+    """Record one line's ``messages`` list: the k-th message at ``position + k``.
+
+    A message already in ``known`` (re-listed by a ``$set``) keeps its earlier
+    position, so its offset does not move when the log grows.
+    """
+
+    k = 0
+    for message in listed:
+        if isinstance(message, dict) and isinstance(message.get("id"), str):
+            put((known or {}).get(message["id"], position + k), message)
+            k += 1
+
+
 def _replay(path: Path) -> tuple[dict[str, Any], list[tuple[int, dict[str, Any]]]]:
     """Session metadata and the surviving ``(position, message)`` pairs, in order."""
 
@@ -155,8 +184,7 @@ def _replay(path: Path) -> tuple[dict[str, Any], list[tuple[int, dict[str, Any]]
                 keys = list(messages)
                 for key in keys[keys.index(rewind) :]:
                     del messages[key]
-            else:
-                messages.clear()
+            # An unknown id is a no-op: never drop the whole log on a bad reference.
             continue
         change = record.get("$patch")
         if isinstance(change, dict):
@@ -167,11 +195,7 @@ def _replay(path: Path) -> tuple[dict[str, Any], list[tuple[int, dict[str, Any]]
             for key in change.get("removeIds") or ():
                 if isinstance(key, str):
                     messages.pop(key, None)
-            order = change.get("orderIds")
-            if isinstance(order, list):
-                wanted = [key for key in order if isinstance(key, str) and key in messages]
-                rest = [key for key in messages if key not in set(wanted)]
-                messages = {key: messages[key] for key in rest + wanted}
+            # ``orderIds`` is ignored: records stay in offset (recording) order.
             continue
         if isinstance(record.get("id"), str):
             put(position, record)
@@ -179,20 +203,16 @@ def _replay(path: Path) -> tuple[dict[str, Any], list[tuple[int, dict[str, Any]]
         update = record.get("$set")
         if isinstance(update, dict):
             if isinstance(update.get("messages"), list):
+                known = {key: first for key, (first, _message) in messages.items()}
                 messages.clear()
-                for message in update["messages"]:
-                    if isinstance(message, dict) and isinstance(message.get("id"), str):
-                        put(position, message)
+                _put_all(put, position, update["messages"], known)
             meta.update({k: v for k, v in update.items() if k != "messages"})
             continue
         if isinstance(record.get("sessionId"), str):
             meta.update({k: v for k, v in record.items() if k != "messages"})
-            for message in record.get("messages") or ():
-                if isinstance(message, dict) and isinstance(message.get("id"), str):
-                    put(position, message)
-    # Several messages can share a position (a ``$set`` list): keep their order.
-    ordered = sorted(enumerate(messages.values()), key=lambda item: (item[1][0], item[0]))
-    return meta, [pair for _index, pair in ordered]
+            listed = record.get("messages")
+            _put_all(put, position, listed if isinstance(listed, list) else [])
+    return meta, sorted(messages.values(), key=lambda pair: pair[0])
 
 
 def _snapshot(path: Path) -> tuple[dict[str, Any], list[tuple[int, dict[str, Any]]]]:
