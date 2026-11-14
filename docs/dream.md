@@ -26,19 +26,63 @@ In priority order:
 2. **Curate.** Inside each concept (`about` oid):
    - `merge`: identical bodies, near-identical wording, or paraphrases that
      state the same values (numbers, number words, attribute values) with
-     shared context; the earliest memory is kept. Never across different
-     subjects (staging vs production, Alice vs Bob, `service: api` vs
-     `service: worker`) or when one memory negates the other;
+     shared context, or the same content words once synonyms are folded
+     ("Deploys happen on Fridays" / "Deployments are scheduled on Friday");
+     the earliest memory is kept. Never across different subjects (staging vs
+     production, Alice vs Bob, `service: api` vs `service: worker`) or when a
+     clause of one memory negates the same clause of the other;
    - `supersede`: the same attribute (`key: value` lines or `The <thing> is
-     <value>` sentences) or the same context with different values; the newer
+     <value>` clauses) or the same context with different values; the newer
      memory is proposed to supersede the older one, which would get
      `valid_to`. Both must be about the same subject, and "X" vs "not X" is
      proposed here rather than merged. Nothing is silently overwritten;
    - `mark-stale`: a memory superseded by another but without `valid_to`, or an
      unreferenced, unconfirmed memory not updated for `--stale-days` (180).
      Nothing is deleted.
-3. **Distill** (Lesson / Procedure from at least two independent events):
-   proposal-only stub inside `dream run`; procedures are distilled into skill
+
+   How curate compares two memories (no model):
+   - **Clauses and negation.** Each clause is read on its own, and a negation
+     (`not`, `never`, `no longer`, contractions such as `isn't` and
+     `doesn't`) applies to its clause only. "The cache is enabled" vs "The
+     cache is not enabled" is a `supersede` ("attribute 'cache' is negated in
+     one memory"); "not enabled" and "disabled" say the same thing. A "do not
+     ..." clause about something else neither blocks a merge nor flags a
+     conflict. "The owner is not alice" vs "The owner is bob" is no conflict.
+   - **Value signatures.** A value is tied to the noun next to it (`port
+     8000`, `timeout 30s`, `Postgres 14`), so "port 8000" vs "port 9000" is a
+     conflict ("value of 'port' differs") even when the rest of the wording
+     differs. Different nouns (`3 members`, `30 days`) are not compared.
+   - **Identity keys.** `service`, `name`, `env`/`environment`, `project`,
+     `repo`, `cluster`, `account`, `tenant` and `app` name *which* thing a
+     memory is about. When they differ the memories are about different
+     things, however many other attributes agree (`service: api, owner: alice`
+     vs `service: worker, owner: alice` gives no candidate). Keys such as
+     `owner`, `host` and `region` may change and give `supersede`.
+   - **Synonyms.** A small fixed table folds wording: deploy / deploys /
+     deployments, db / database, prod / production, config / configuration,
+     repo / repository, env / environment, app / application, k8s /
+     kubernetes, start / begin, happen / occur / scheduled, stop / halt.
+     Opposites (enabled / disabled) are never folded.
+3. **Distill** (Lesson from at least two independent events). Event memories
+   (`type` or a tag of `event`, `incident`, `episode`, `failure`, `fix`,
+   `bug`, `outage`, `postmortem` or `observation`) about one concept that
+   share content words (at least two, Jaccard >= 0.3) form a cluster; events
+   not linked to a concept cluster together. A cluster yields one `distill`
+   candidate only with at least `--min-events` (2, never fewer) independent
+   events: events whose transcript sessions (the `SOURCE:FILE_ID` of their
+   evidence refs, plus refs this run's verify found) do not overlap. Without
+   evidence, an event is identified by its `anchor`, else its creation day and
+   `source`, so two notes from one session or one day count once. The
+   candidate proposes a new memory under `changes.new_memory` (`type:
+   lesson`, a title and draft body from the recurring words and the event
+   titles, `status: unconfirmed`, the evidence refs, `about` the concept) and
+   lists `events`, `independent_events` and `counterexamples`: memories of the
+   concept that share the recurring words but negate them or are disputed, and
+   events this run marked disputed. Counterexamples are named in the reason,
+   never hidden. A cluster an existing lesson already covers is skipped. The
+   draft never contains transcript text, is redacted, and is dropped if it
+   still carries a secret. `report.distill` counts clusters, proposals and
+   the reasons clusters were rejected. Procedures are distilled into skill
    candidates by `memfw dream skills` (below).
 4. **Promote / demote:** proposal-only. In v1 this is the injected-layer
    budget check below.
@@ -108,6 +152,23 @@ agent and service reading the vault has it, applying dream statuses is safe.
 Note that rewriting a memory with a version that does not know a key drops
 that key.
 
+**Reader-upgrade order** (unchanged by the M1-3 follow-ups, which add no
+memory field and no status value: distill proposals use `type: lesson`,
+`status: unconfirmed` and `evidence`, all of which exist):
+
+1. Upgrade every reader first: each memfw install, the MCP server
+   (`memfw-mcp`) and fleet-memory's reader, so that unknown keys are ignored
+   rather than rejected.
+2. Then upgrade the writers (the `memfw` CLI that applies candidates and the
+   conversation worker).
+3. Only then apply `status` / `evidence` from dream candidates.
+
+Candidate files and `report.json` only gain keys (`report.distill`,
+`changes.new_memory`, `candidates_truncated` in MCP responses), so a reader
+that ignores unknown keys keeps working. The conversation worker's state file
+gains a `scan_cursor` table; an older worker ignores it (see
+`docs/conversations-share.md`).
+
 ## Injected-layer budget
 
 Files loaded at the start of every session must stay small: at most 200 lines
@@ -158,8 +219,25 @@ _candidates/dream/<dream_id>/
 file says `authority: false`.
 
 Options: `--all`, `--limit`, `--focus` (steers the search only), `--max-sessions`,
-`--source-name`, `--since`, `--until`, `--tenant`, `--stale-days`, `--dream-id`,
+`--source-name`, `--since`, `--until`, `--tenant`, `--stale-days`, `--min-events`, `--dream-id`,
 `--judge`, `--allow-config-judge`, `--no-refresh`, `--now` (inject the clock).
+
+## MCP tools
+
+The memfw MCP server (`memfw-mcp`) has two dream tools:
+
+- `dream_run(dry_run=true, focus, all, limit, max_sessions, source, since,
+  until, stale_days, min_events)`: runs one dream as the server's tenant. It
+  is a dry run unless `dry_run` is `false`; then it stages candidates under
+  `_candidates/dream/<dream_id>/` and nothing else. It always uses the
+  deterministic rules: no judge can be named, and `dream_judge` in
+  `vault.yaml` is ignored, because a judge is code that reads transcripts.
+  `limit` is at most 1000 and `max_sessions` 1 to 100. The response returns
+  at most 200 candidates (`candidates_truncated` counts the rest; a staged
+  dream has them all).
+- `dream_list(limit=20)`: this tenant's staged dreams, newest first (id,
+  `created_at`, candidate counts). A symlinked dream directory or report is
+  skipped and named in `skipped`, never followed.
 
 ## Skill candidates
 
@@ -287,10 +365,13 @@ adoption rate stays unknown until a person adopts proposals.
 
 - Lexical matching: paraphrased evidence without shared words is missed, and
   a correction is only proposed for a memory that states exactly one value.
-- Curate matches words, not meanings: synonyms ("deploys" / "deployments are
-  scheduled") are not recognised as duplicates.
-- Distill (③) is a stub in `dream run`; `dream skills` covers repeated
-  procedures only (no lessons). Promote/demote (④) covers the budget check only.
+- Curate matches words, not meanings: only the fixed synonym table is folded,
+  and a value is tied to its neighbouring noun only (a value stated far from
+  its noun is compared as a plain number).
+- Distill drafts a lesson from recurring words and event titles; a person
+  writes the actual lesson sentence. Independence is judged by transcript
+  sessions (or anchor / day), not by content. Promote/demote (④) covers the
+  budget check only.
 - `dream skills` matches steps by command signature: the same procedure done
   with different tools, or a step hidden in prose, is not recognised, and
   arguments are not part of a step. Only the first 500 index entries of a
