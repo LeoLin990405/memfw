@@ -24,6 +24,7 @@ from .core.repository import Repository
 from .curation.engine import enforce_budget, plan_forget, run_forget
 from .curation.review_cli import review_command as run_review
 from .dream.cli import app as dream_app
+from .handoff.cli import handoff as handoff_command
 from .history.cli import app as history_app
 from .index import MemoryIndex
 from .notes import (
@@ -90,6 +91,7 @@ app.add_typer(concepts_app, name="concepts")
 app.add_typer(history_app, name="history")
 app.add_typer(dream_app, name="dream")
 app.add_typer(conversations_app, name="conversations")
+app.command("handoff")(handoff_command)
 capture_app.command(name="confirm")(confirm_command)
 
 
