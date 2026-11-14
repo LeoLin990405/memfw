@@ -86,8 +86,48 @@ def test_two_notes_from_one_session_are_one_event() -> None:
 
 def test_uncited_notes_from_the_same_day_are_one_event() -> None:
     docs = [doc.model_copy(update={"evidence": [], "created_at": NOW}) for doc in _two_sessions()]
-    assert event_key(docs[0]) == event_key(docs[1])
+    assert event_key(docs[0]) == event_key(docs[1]) == frozenset()
     assert distill(docs)[0] == []
+
+
+def _same_text(memory_id: str, **fields: Any) -> MemoryDocument:
+    return _event(
+        memory_id,
+        "Migration timeout on deploy",
+        "The deploy migration hit the lock timeout again.",
+        **fields,
+    )
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        # one session: one note cites it, the other cites nothing
+        ({"evidence": ["conv:claude:S1@10"]}, {"evidence": []}),
+        # one session under different spellings of its id
+        ({"evidence": ["conv:claude:S1@10"]}, {"evidence": ["conv:Claude:S1@20"]}),
+        ({"evidence": ["conv:claude:S1@10"]}, {"evidence": ["claude:S1@20"]}),
+        ({"evidence": ["conv:claude:S1@10"]}, {"evidence": ["conv:claude:S1#turn3"]}),
+        ({"evidence": ["conv:claude:S1@10"]}, {"evidence": ["conv:claude:S1/@30"]}),
+        # uncited notes, different anchors or days: nothing shows independence
+        ({"anchor": "a1"}, {"anchor": "a2"}),
+        ({"created_at": NOW}, {"created_at": NOW - timedelta(days=1)}),
+    ],
+    ids=["cited-uncited", "case", "conv-prefix", "hash-turn", "slash", "anchors", "days"],
+)
+def test_independence_cannot_be_faked(first: dict[str, Any], second: dict[str, Any]) -> None:
+    candidates, stats = distill([_same_text("e1", **first), _same_text("e2", **second)])
+    assert candidates == []
+    assert stats.rejected_dependent == 1
+
+
+def test_two_cited_sessions_still_count() -> None:
+    docs = [
+        _same_text("e1", evidence=["conv:claude:S1@10"]),
+        _same_text("e2", evidence=["conv:claude:S2#turn4"]),
+    ]
+    (candidate,) = distill(docs)[0]
+    assert candidate.changes["independent_events"] == 2
 
 
 def test_three_events_two_sessions_count_two() -> None:

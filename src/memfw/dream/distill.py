@@ -3,8 +3,9 @@
 Event memories (``type`` or a tag such as ``incident``, ``failure``, ``fix``)
 about the same concept that share content words form a cluster. A cluster
 yields one **proposal** for a new ``lesson`` memory only when it holds at least
-``min_events`` (2) *independent* events: events whose transcript sessions do
-not overlap. Two notes written from one session are one event, not two.
+``min_events`` (2) *independent* events: events that cite transcript sessions
+(evidence refs) that do not overlap. Two notes written from one session are one
+event, not two, and an event that cites no session never counts.
 
 Everything is deterministic and local (no model). The proposal lists the
 supporting events, the evidence refs they cite, and a counterexample check:
@@ -58,6 +59,8 @@ class DistillStats:
     rejected_dependent: int = 0
     """Clusters of several event memories but fewer than ``min_events`` independent ones."""
     rejected_no_shared_words: int = 0
+    uncited_events: int = 0
+    """Event memories that cite no transcript session: never counted as independent."""
     covered_by_lesson: int = 0
     dropped_unsafe: int = 0
     min_events: int = MIN_EVENTS
@@ -70,6 +73,7 @@ class DistillStats:
             "rejected_single_event": self.rejected_single_event,
             "rejected_dependent": self.rejected_dependent,
             "rejected_no_shared_words": self.rejected_no_shared_words,
+            "uncited_events": self.uncited_events,
             "covered_by_lesson": self.covered_by_lesson,
             "dropped_unsafe": self.dropped_unsafe,
             "min_events": self.min_events,
@@ -93,25 +97,34 @@ def is_lesson(document: MemoryDocument) -> bool:
 
 
 def session_of(ref: str) -> str:
-    """``SOURCE:FILE_ID@OFFSET`` (or ``conv:APP:SESSION@OFFSET``) -> its session part."""
+    """The session a transcript ref points into, in one canonical form.
 
-    return ref.rsplit("@", 1)[0] if "@" in ref else ref
+    ``SOURCE:FILE_ID@OFFSET``, ``conv:APP:SESSION@OFFSET`` and
+    ``conv:APP:SESSION#turn3`` all lose their position; case, a ``conv:``
+    prefix and trailing slashes are normalised, so ``conv:Claude:S1@20`` and
+    ``claude:s1@10`` name the same session.
+    """
+
+    value = ref.strip().lower()
+    for mark in ("#", "@"):
+        value = value.split(mark, 1)[0]
+    value = value.rstrip("/ ")
+    if value.startswith("conv:"):
+        value = value[len("conv:") :]
+    return value
 
 
 def event_key(document: MemoryDocument, extra_refs: Iterable[str] = ()) -> frozenset[str]:
-    """What makes an event distinct: the transcript sessions it cites.
+    """The transcript sessions an event cites (canonical, see ``session_of``).
 
-    Without evidence, the memory's ``anchor``, else its creation day and
-    ``source``: two uncited notes written the same day from the same source
-    count as one event.
+    Empty for an event that cites no session: such an event cannot show it is
+    independent of another one (two notes from one session look alike), so it
+    never counts towards ``min_events``.
     """
 
-    sessions = {session_of(ref) for ref in (*document.evidence, *extra_refs) if ref}
-    if sessions:
-        return frozenset(f"session:{item}" for item in sessions)
-    if document.anchor:
-        return frozenset({f"anchor:{document.anchor}"})
-    return frozenset({f"day:{document.created_at.date().isoformat()}:{document.source}"})
+    return frozenset(
+        session for ref in (*document.evidence, *extra_refs) if ref and (session := session_of(ref))
+    )
 
 
 def _effective(document: MemoryDocument) -> datetime:
@@ -151,13 +164,13 @@ def _clusters(events: list[MemoryDocument], words: dict[str, set[str]]) -> list[
 def _independent(
     members: list[MemoryDocument], keys: dict[str, frozenset[str]]
 ) -> list[MemoryDocument]:
-    """A greedy maximal set of events with pairwise disjoint keys (oldest first)."""
+    """A greedy maximal set of cited events with pairwise disjoint sessions (oldest first)."""
 
     chosen: list[MemoryDocument] = []
     used: set[str] = set()
     for document in sorted(members, key=lambda item: (_effective(item).timestamp(), item.id)):
         key = keys[document.id]
-        if key & used:
+        if not key or key & used:  # uncited events never count
             continue
         chosen.append(document)
         used |= key
@@ -230,6 +243,7 @@ def distill(
                 doc.id: event_key(doc, [item.ref for item in fresh_refs.get(doc.id, [])])
                 for doc in cluster
             }
+            stats.uncited_events += sum(1 for key in keys.values() if not key)
             independent = _independent(cluster, keys)
             if len(independent) < min_events:
                 stats.rejected_dependent += 1
