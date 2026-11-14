@@ -127,6 +127,7 @@ def test_registry_covers_every_worker_cli() -> None:
         "claude",
         "codex",
         "kimi",
+        "kimi-desktop",
         "grok",
         "cursor",
         "cursor-ide",
@@ -145,6 +146,7 @@ def test_registry_covers_every_worker_cli() -> None:
         assert all(not root.startswith("/") for root in reader.default_roots)
     assert get_reader("zcode") is READERS["glm"]
     assert get_reader("DSH") is READERS["deepseek"]
+    assert get_reader("kimi-app") is READERS["kimi-desktop"]
     with pytest.raises(UnknownAgent):
         get_reader("nope")
 
