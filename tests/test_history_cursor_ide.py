@@ -316,3 +316,77 @@ def test_ingest_into_store(tmp_path: Path) -> None:
     assert counts.records_new == 6 + 3 + 2
     again = store.ingest(READER, [StoreRoot(root)])
     assert again.sessions_unchanged == 3 and again.records_new == 0
+
+
+def _write_values(root: Path, values: dict[str, Any]) -> None:
+    """Write ``values`` into an existing synthetic store, the way the App replaces keys."""
+
+    kv = sqlite3.connect(root / "globalStorage" / "state.vscdb")
+    kv.executemany(
+        "INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)",
+        [(key, json.dumps(value)) for key, value in values.items()],
+    )
+    kv.commit()
+    kv.close()
+
+
+def _rewrite_bubble(root: Path, cid: str, bubble: dict[str, Any]) -> None:
+    _write_values(root, {f"bubbleId:{cid}:{bubble['bubbleId']}": bubble})
+
+
+def test_locators_carry_a_per_chat_fingerprint(tmp_path: Path) -> None:
+    root = _build(tmp_path)
+    first = {cid: loc.fingerprint for cid, loc in _locators(root).items()}
+    assert all(isinstance(value, str) and value for value in first.values())
+    assert len(set(first.values())) == len(first)
+    assert {cid: loc.fingerprint for cid, loc in _locators(root).items()} == first
+    _rewrite_bubble(root, PAGED, _bubble("p2", 2, "second, edited", 2))
+    second = {cid: loc.fingerprint for cid, loc in _locators(root).items()}
+    assert second[PAGED] != first[PAGED]
+    assert second[CHAT] == first[CHAT] and second[LEGACY] == first[LEGACY]
+
+
+def test_only_the_changed_chat_is_re_read(tmp_path: Path) -> None:
+    root = _build(tmp_path)
+    store = ConversationStore(tmp_path / "store" / "conversations.sqlite")
+    assert store.ingest(READER, [StoreRoot(root)]).sessions_read == 3
+
+    # Another chat in the same database changes: the file stat changes for all three.
+    _rewrite_bubble(root, PAGED, _bubble("p2", 2, "second, edited", 2))
+    counts = store.ingest(READER, [StoreRoot(root)])
+    assert counts.sessions_read == 1 and counts.sessions_unchanged == 2
+    assert counts.records_updated == 1 and counts.records_new == 0
+    assert [t["text"] for t in store.turns("cursor-ide", PAGED)] == [
+        "first",
+        "second, edited",
+        "third",
+    ]
+
+    # A new message in an existing chat (header list + bubble) is picked up too.
+    _write_values(
+        root,
+        {
+            f"composerData:{LEGACY}": _composer(LEGACY, [_header("b1", 1), _header("n1", 2)]),
+            f"bubbleId:{LEGACY}:b1": _bubble("b1", 1, "new question", 1),
+            f"bubbleId:{LEGACY}:n1": _bubble("n1", 2, "new answer", 2),
+        },
+    )
+    counts = store.ingest(READER, [StoreRoot(root)])
+    assert counts.sessions_read == 1 and counts.sessions_unchanged == 2
+    assert [t["text"] for t in store.turns("cursor-ide", LEGACY)] == [
+        "new question",
+        "new answer",
+    ]
+    assert store.ingest(READER, [StoreRoot(root)]).sessions_unchanged == 3
+
+
+def test_without_fingerprints_the_file_stat_decides(tmp_path: Path, monkeypatch: Any) -> None:
+    from memfw.history.sources import cursor_ide
+
+    monkeypatch.setattr(cursor_ide, "_fingerprints", lambda connection: {})
+    root = _build(tmp_path)
+    assert all(loc.fingerprint is None for loc in _locators(root).values())
+    store = ConversationStore(tmp_path / "store" / "conversations.sqlite")
+    store.ingest(READER, [StoreRoot(root)])
+    _rewrite_bubble(root, PAGED, _bubble("p2", 2, "second, edited", 2))
+    assert store.ingest(READER, [StoreRoot(root)]).sessions_read == 3

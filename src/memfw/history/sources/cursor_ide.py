@@ -31,6 +31,13 @@ stores under ``~/Library/Application Support/Cursor/User`` on macOS
   ``workspaceIdentifier`` carries only the id. The per-workspace
   ``state.vscdb`` holds no conversation content in current versions.
 
+Every composer in the one database gets its own change marker
+(:attr:`~.base.SessionLocator.fingerprint`): its ``lastUpdatedAt``, the size
+of its ``composerData`` value, its header count and the count, sizes and
+row ids of its header pages and bubbles. All of that comes from key-range
+scans that never load bubble text, so a write to one chat re-reads that chat
+only. When the marker cannot be computed the file stat is used instead.
+
 Each header is one position ``i``: the bubble is reported at ``offset = 2 * i``
 and, when it is a tool call with output, that output (role ``tool``) at
 ``2 * i + 1``. Offsets follow the app's own message order, so they stay put
@@ -80,6 +87,8 @@ _ASSISTANT = 2
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._=+-]{0,199}$")
 
 log = logging.getLogger(__name__)
+_SIZE = "octet_length" if sqlite3.sqlite_version_info >= (3, 43) else "length"
+"""``octet_length`` sizes a value without reading it (``length`` reads TEXT)."""
 
 
 def _obj(value: Any) -> dict[str, Any]:
@@ -127,6 +136,43 @@ def _is_store(connection: sqlite3.Connection) -> bool:
         return False
     columns = {str(row[1]) for row in connection.execute(f"PRAGMA table_info(`{_TABLE}`)")}
     return {"key", "value"} <= columns
+
+
+def _grouped(connection: sqlite3.Connection, prefix: str) -> dict[str, tuple[int, int, int]]:
+    """Per composer id: ``(rows, total value size, sum of rowids)`` of ``prefix<cid>:*`` keys."""
+
+    start = len(prefix) + 1
+    rows = connection.execute(
+        f"SELECT substr(key, ?, instr(substr(key, ?), ':') - 1) AS cid, count(*),"
+        f" total({_SIZE}(value)), total(rowid) FROM {_TABLE}"
+        " WHERE key >= ? AND key < ? GROUP BY cid",
+        (start, start, prefix, _upper(prefix)),
+    ).fetchall()
+    return {str(row[0]): (int(row[1]), int(row[2]), int(row[3])) for row in rows}
+
+
+def _fingerprints(connection: sqlite3.Connection) -> dict[str, str]:
+    """Change marker per composer id; empty when the store cannot provide them."""
+
+    try:
+        composers = connection.execute(
+            f"SELECT substr(key, ?), {_SIZE}(value), rowid,"
+            " CASE WHEN json_valid(value) THEN json_extract(value, '$.lastUpdatedAt') END,"
+            " CASE WHEN json_valid(value)"
+            " THEN json_array_length(value, '$.fullConversationHeadersOnly') END"
+            f" FROM {_TABLE} WHERE key >= ? AND key < ?",
+            (len(_COMPOSER) + 1, _COMPOSER, _upper(_COMPOSER)),
+        ).fetchall()
+        pages = _grouped(connection, _PAGES)
+        bubbles = _grouped(connection, _BUBBLE)
+    except sqlite3.Error as error:
+        log.debug("cursor-ide: per-chat fingerprints unavailable: %s", error)
+        return {}
+    out: dict[str, str] = {}
+    for cid, size, rowid, updated, headers in composers:
+        marker = [size, rowid, updated, headers, pages.get(cid), bubbles.get(cid)]
+        out[str(cid)] = json.dumps(marker, separators=(",", ":"))
+    return out
 
 
 # -- conversation layout ---------------------------------------------------------
@@ -268,9 +314,10 @@ class CursorIdeReader:
             except sqlite3.Error as error:
                 log.debug("cursor-ide: listing composers failed: %s", error)
                 return
+            prints = _fingerprints(connection)
         key = _GLOBAL_DB.as_posix()
         for cid in found:
-            yield SessionLocator(_AGENT, database, f"{key}#{cid}", cid)
+            yield SessionLocator(_AGENT, database, f"{key}#{cid}", cid, fingerprint=prints.get(cid))
 
     def read(self, locator: SessionLocator, *, after: int = -1) -> Iterator[ConversationRecord]:
         cid = _safe_id(locator.session_id)

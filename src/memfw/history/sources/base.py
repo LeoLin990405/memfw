@@ -73,6 +73,11 @@ class SessionLocator:
     key: str
     session_id: str = ""
     extra: dict[str, Any] = field(default_factory=dict, compare=False, hash=False)
+    fingerprint: str | None = field(default=None, compare=False, hash=False)
+    """Optional change marker of this one session. When set, ingest compares it
+    instead of the file's size/mtime/inode, so a store holding many sessions
+    (one SQLite file) re-reads only the sessions whose marker changed. ``None``
+    (the default) keeps the file-stat check."""
 
 
 @dataclass(frozen=True)
@@ -101,7 +106,9 @@ class Reader(Protocol):
     append_only: bool
     """True when offsets are byte offsets of an append-only log. False (SQLite,
     message positions in a rewritten snapshot) makes ingest re-read the whole
-    session on every change and drop offsets no longer present."""
+    session on every change and drop offsets no longer present. What counts
+    as a change is the file's stat, or :attr:`SessionLocator.fingerprint`
+    when the reader sets one."""
 
     def sessions(self, root: Path) -> Iterator[SessionLocator]:
         """Every session under ``root``; nothing when the layout is not recognised."""

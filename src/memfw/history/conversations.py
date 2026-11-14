@@ -101,6 +101,15 @@ def _fingerprint(path: Path) -> dict[str, int]:
     return out
 
 
+def _session_fingerprint(locator: SessionLocator) -> dict[str, Any]:
+    """The reader's per-session marker when it provides one, else the file's stat."""
+
+    marker = getattr(locator, "fingerprint", None)
+    if isinstance(marker, str):
+        return {"session": marker}
+    return _fingerprint(locator.path)
+
+
 @dataclass
 class IngestCounts:
     sessions_seen: int = 0
@@ -289,7 +298,7 @@ class ConversationStore:
         agent = reader.agent
         version = str(getattr(reader, "parser_version", "1"))
         append_only = bool(getattr(reader, "append_only", True))
-        fingerprint = _fingerprint(locator.path)
+        fingerprint = _session_fingerprint(locator)
         cursor = connection.execute(
             "SELECT fingerprint, last_offset, parser_version FROM conversation_cursors"
             " WHERE agent = ? AND locator = ?",
@@ -400,7 +409,7 @@ class ConversationStore:
         connection: sqlite3.Connection,
         agent: str,
         key: str,
-        fingerprint: dict[str, int],
+        fingerprint: dict[str, Any],
         last: int,
         version: str,
     ) -> None:
