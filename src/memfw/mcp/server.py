@@ -63,6 +63,10 @@ DREAM_MAX_SESSIONS = 100
 DREAM_MAX_CANDIDATES = 200
 """Candidates returned by one dream_run call; the rest are counted, and staged in full."""
 DREAM_LIST_MAX = 200
+DREAM_MAX_STAGED = 50
+"""Staged dreams one tenant may have waiting for review before dream_run refuses to stage."""
+DREAM_STAGE_INTERVAL_SECONDS = 60.0
+"""Least time between two staged dream_run calls of one server and tenant."""
 PROTOCOL = "2024-11-05"
 _MAX_CONTENT_BYTES = 64 * 1024
 _CANDIDATE_DIR = Path("_candidates") / "remember"
@@ -768,6 +772,7 @@ class Gateway:
                 )
         self.embedder = embedder
         self.dream_clock: Callable[[], datetime] = lambda: datetime.now(UTC)
+        self._last_staged: float | None = None
         self.history_refresh_seconds = float(
             os.environ.get("MEMFW_HISTORY_REFRESH_SECONDS", "30") or 0
         )
@@ -1300,6 +1305,8 @@ class Gateway:
         if stale_days < 0:
             raise ValueError("stale_days must be >= 0")
         repository = self._repo()
+        if not dry_run:
+            self._check_stage_allowed()
         options = DreamOptions(
             tenant=self.tenant,
             focus=focus,
@@ -1315,28 +1322,45 @@ class Gateway:
             # one. vault.yaml's dream_judge is never honoured here either.
             judge=None,
             allow_config_judge=False,
+            # Never build or refresh the transcript index from MCP: staging writes
+            # only the dream's candidates (the index is the operator's CLI job).
+            refresh=False,
+            read_only_history=True,
         )
         result = run_dream(
             repository.root, now=self.dream_clock(), dry_run=dry_run, options=options
         ).as_dict()
+        if not dry_run:
+            self._last_staged = time.monotonic()
         candidates = result["candidates"]
         result["candidates"] = candidates[:DREAM_MAX_CANDIDATES]
         result["candidates_truncated"] = max(0, len(candidates) - DREAM_MAX_CANDIDATES)
         return result
 
-    def dream_list(self, limit: int = 20) -> dict[str, Any]:
-        """Staged dreams of this tenant, newest first. Symlinks are skipped, never followed."""
+    def _check_stage_allowed(self) -> None:
+        last = self._last_staged
+        if last is not None and time.monotonic() - last < DREAM_STAGE_INTERVAL_SECONDS:
+            raise ValueError(
+                f"a dream was staged less than {DREAM_STAGE_INTERVAL_SECONDS:g}s ago; "
+                "wait, or use dry_run"
+            )
+        staged, _skipped = self._staged_dreams()
+        if len(staged) >= DREAM_MAX_STAGED:
+            raise ValueError(
+                f"{len(staged)} staged dreams are waiting for review (at most "
+                f"{DREAM_MAX_STAGED}); review or remove some, or use dry_run"
+            )
 
-        if not 1 <= limit <= DREAM_LIST_MAX:
-            raise ValueError(f"limit must be between 1 and {DREAM_LIST_MAX}")
-        repository = self._repo()
-        base = repository.root
+    def _staged_dreams(self) -> tuple[list[dict[str, Any]], list[str]]:
+        """This tenant's staged dreams (newest first) and the entries skipped."""
+
+        base = self._repo().root
         for part in DREAM_DIR.parts:
             base = base / part
             if base.is_symlink() or (base.exists() and not base.is_dir()):
-                return {"dreams": [], "skipped": [str(DREAM_DIR)]}
+                return [], [str(DREAM_DIR)]
         if not base.is_dir():
-            return {"dreams": [], "skipped": []}
+            return [], []
         dreams: list[dict[str, Any]] = []
         skipped: list[str] = []
         for entry in sorted(os.scandir(base), key=lambda item: item.name):
@@ -1362,6 +1386,14 @@ class Gateway:
                 }
             )
         dreams.sort(key=lambda item: (item["created_at"], item["dream_id"]), reverse=True)
+        return dreams, skipped
+
+    def dream_list(self, limit: int = 20) -> dict[str, Any]:
+        """Staged dreams of this tenant, newest first. Symlinks are skipped, never followed."""
+
+        if not 1 <= limit <= DREAM_LIST_MAX:
+            raise ValueError(f"limit must be between 1 and {DREAM_LIST_MAX}")
+        dreams, skipped = self._staged_dreams()
         return {"dreams": dreams[:limit], "skipped": skipped, "authority": False}
 
     def handlers(self) -> dict[str, Callable[[dict[str, Any]], Any]]:

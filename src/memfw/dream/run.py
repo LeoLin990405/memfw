@@ -46,6 +46,11 @@ class DreamOptions:
     since: str | None = None
     until: str | None = None
     refresh: bool = True
+    read_only_history: bool = False
+    """Read the transcript index read-only even when staging (never create or refresh it).
+
+    The MCP tool sets this: a dream started by an agent writes only its
+    candidates, never the derived index in the vault root."""
     stale_days: int = 180
     min_events: int = MIN_EVENTS
     """Independent events a distilled lesson needs (never fewer than 2)."""
@@ -115,8 +120,8 @@ def _history(
         if not db.is_file():
             return None, {
                 "available": False,
-                "reason": "no transcript index yet (dry runs never build one); "
-                "run `memfw history index` first",
+                "reason": "no transcript index yet (dry runs and read-only dreams never "
+                "build one); run `memfw history index` first",
             }
         index = TranscriptIndex(
             db, sources, limits=HistoryLimits.from_config(config), read_only=True
@@ -178,7 +183,12 @@ def run_dream(
         if options.all_memories
         else cited(documents)
     )[: max(0, options.limit)]
-    index, history_info = _history(repository, config, options.refresh, dry_run=dry_run)
+    index, history_info = _history(
+        repository,
+        config,
+        options.refresh and not options.read_only_history,
+        dry_run=dry_run or options.read_only_history,
+    )
     verified, stats = verify(
         to_verify,
         index,

@@ -48,6 +48,8 @@ In priority order:
      one memory"); "not enabled" and "disabled" say the same thing. A "do not
      ..." clause about something else neither blocks a merge nor flags a
      conflict. "The owner is not alice" vs "The owner is bob" is no conflict.
+     Time adverbs around a value (`now`, `still`, `currently`, `today`) are
+     not part of it: "enabled" and "enabled now" agree.
    - **Value signatures.** A value is tied to the noun next to it (`port
      8000`, `timeout 30s`, `Postgres 14`), so "port 8000" vs "port 9000" is a
      conflict ("value of 'port' differs") even when the rest of the wording
@@ -56,7 +58,10 @@ In priority order:
      `repo`, `cluster`, `account`, `tenant` and `app` name *which* thing a
      memory is about. When they differ the memories are about different
      things, however many other attributes agree (`service: api, owner: alice`
-     vs `service: worker, owner: alice` gives no candidate). Keys such as
+     vs `service: worker, owner: alice` gives no candidate). The same holds
+     when the other memory names the thing in prose: `env: prod` vs "The
+     staging environment has 3 replicas" are different subjects (the word next
+     to the noun, synonyms folded, is compared with the attribute value). Keys such as
      `owner`, `host` and `region` may change and give `supersede`.
    - **Synonyms.** A small fixed table folds wording: deploy / deploys /
      deployments, db / database, prod / production, config / configuration,
@@ -70,9 +75,11 @@ In priority order:
    not linked to a concept cluster together. A cluster yields one `distill`
    candidate only with at least `--min-events` (2, never fewer) independent
    events: events whose transcript sessions (the `SOURCE:FILE_ID` of their
-   evidence refs, plus refs this run's verify found) do not overlap. Without
-   evidence, an event is identified by its `anchor`, else its creation day and
-   `source`, so two notes from one session or one day count once. The
+   evidence refs, plus refs this run's verify found) do not overlap. Session
+   ids are compared in one form (lowercase, without a `conv:` prefix, an
+   `@offset`, a `#turn` or a trailing slash). An event that cites no session
+   never counts (`report.distill.uncited_events`): nothing shows it is not
+   the same session as another note. The
    candidate proposes a new memory under `changes.new_memory` (`type:
    lesson`, a title and draft body from the recurring words and the event
    titles, `status: unconfirmed`, the evidence refs, `about` the concept) and
@@ -232,6 +239,11 @@ The memfw MCP server (`memfw-mcp`) has two dream tools:
   `_candidates/dream/<dream_id>/` and nothing else. It always uses the
   deterministic rules: no judge can be named, and `dream_judge` in
   `vault.yaml` is ignored, because a judge is code that reads transcripts.
+  It reads the transcript index read-only and never builds or refreshes it
+  (run `memfw history index` from the CLI), so a staged dream writes only its
+  own candidate directory. A tenant may have at most 50 staged dreams waiting
+  for review, and one server stages at most one dream per 60 seconds; dry
+  runs are not limited.
   `limit` is at most 1000 and `max_sessions` 1 to 100. The response returns
   at most 200 candidates (`candidates_truncated` counts the rest; a staged
   dream has them all).
@@ -369,8 +381,8 @@ adoption rate stays unknown until a person adopts proposals.
   and a value is tied to its neighbouring noun only (a value stated far from
   its noun is compared as a plain number).
 - Distill drafts a lesson from recurring words and event titles; a person
-  writes the actual lesson sentence. Independence is judged by transcript
-  sessions (or anchor / day), not by content. Promote/demote (④) covers the
+  writes the actual lesson sentence. Independence is judged by cited
+  transcript sessions, not by content; uncited events never support a lesson. Promote/demote (④) covers the
   budget check only.
 - `dream skills` matches steps by command signature: the same procedure done
   with different tools, or a step hidden in prose, is not recognised, and

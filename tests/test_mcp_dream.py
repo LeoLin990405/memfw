@@ -177,3 +177,71 @@ def test_dream_list_refuses_a_symlinked_dream_dir(tmp_path: Path, capsys: Any) -
     (root / "_candidates" / "dream").symlink_to(outside)
     listed = json.loads(_call(_gateway(root), "dream_list", {}, capsys)["content"][0]["text"])
     assert listed["dreams"] == []
+
+
+def _with_history(tmp_path: Path) -> Path:
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "s1.jsonl").write_text(
+        json.dumps({"session_id": "s1", "ts": "2026-02-01T00:00:00Z", "message": "lamp blue"})
+        + "\n",
+        encoding="utf-8",
+    )
+    return _vault(tmp_path, history_sources={"logs": str(logs)})
+
+
+def test_staging_never_builds_the_transcript_index(tmp_path: Path, capsys: Any) -> None:
+    from memfw.history import default_db
+
+    root = _with_history(tmp_path)
+    db = default_db(root)
+    result = _call(_gateway(root), "dream_run", {"dry_run": False}, capsys)
+    data = json.loads(result["content"][0]["text"])
+    assert data["staged"]
+    assert data["report"]["history"]["available"] is False
+    assert not db.exists()
+    assert not list(db.parent.glob(db.name + "*"))
+
+
+def test_staging_reads_an_existing_index_without_changing_it(tmp_path: Path, capsys: Any) -> None:
+    from memfw.history import TranscriptIndex, default_db, sources_from_config
+
+    root = _with_history(tmp_path)
+    index = TranscriptIndex(default_db(root), sources_from_config(Repository(root).read_config()))
+    index.refresh()
+    db = default_db(root)
+    before = {path.name: path.read_bytes() for path in db.parent.glob(db.name + "*")}
+    (tmp_path / "logs" / "s2.jsonl").write_text(
+        json.dumps({"session_id": "s2", "ts": "2026-02-02T00:00:00Z", "message": "new"}) + "\n",
+        encoding="utf-8",
+    )
+    result = _call(_gateway(root), "dream_run", {"dry_run": False}, capsys)
+    data = json.loads(result["content"][0]["text"])
+    assert data["report"]["history"]["read_only"] is True
+    assert "refresh" not in data["report"]["history"]
+    after = {path.name: path.read_bytes() for path in db.parent.glob(db.name + "*")}
+    assert after == before
+
+
+def test_staging_is_rate_limited(tmp_path: Path, capsys: Any) -> None:
+    root = _vault(tmp_path)
+    gateway = _gateway(root)
+    assert _call(gateway, "dream_run", {"dry_run": False}, capsys)["isError"] is False
+    second = _call(gateway, "dream_run", {"dry_run": False}, capsys)
+    assert second["isError"] is True and "staged less than" in second["content"][0]["text"]
+    assert _call(gateway, "dream_run", {}, capsys)["isError"] is False  # dry runs still work
+    assert len(list((root / "_candidates" / "dream").iterdir())) == 1
+
+
+def test_staged_dreams_per_tenant_are_capped(tmp_path: Path, capsys: Any, monkeypatch: Any) -> None:
+    from memfw.mcp import server
+
+    monkeypatch.setattr(server, "DREAM_MAX_STAGED", 1)
+    monkeypatch.setattr(server, "DREAM_STAGE_INTERVAL_SECONDS", 0.0)
+    root = _vault(tmp_path)
+    assert _call(_gateway(root), "dream_run", {"dry_run": False}, capsys)["isError"] is False
+    refused = _call(_gateway(root), "dream_run", {"dry_run": False}, capsys)
+    assert refused["isError"] is True and "waiting for review" in refused["content"][0]["text"]
+    # another tenant has its own allowance
+    other = _call(_gateway(root, "other-tenant"), "dream_run", {"dry_run": False}, capsys)
+    assert other["isError"] is False
