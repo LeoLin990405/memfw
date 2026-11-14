@@ -530,7 +530,7 @@ def test_one_session_intents_never_reach_the_candidate() -> None:
 
     intents = [
         "Edit src/memfw/secret_project/plan.py before the run",
-        "Clone github.com/leo/private-repo before the run",
+        "Clone github.com/alice/private-repo before the run",
         "Login with password hunter2 on prod-pg-01 before the run",
     ]
     episodes = []
