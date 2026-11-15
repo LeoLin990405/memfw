@@ -13,8 +13,7 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 The first release since the standalone core: notes, concepts, the transcript
 index, the conversation store, handoff packs, dream, OKF export and the
-upgrade fixes found by running this branch against a copy of the live
-2,164-memory vault.
+upgrade fixes found by running this branch against a copy of a real vault.
 
 ### Storage and vault format
 
@@ -27,21 +26,28 @@ upgrade fixes found by running this branch against a copy of the live
   current version drops them (#27).
 - Default values of `type`, `tenant`, `related`, `valid_from`, `valid_to` and
   `superseded_by` no longer reach the file, so parse → render of a legacy
-  memory is byte-identical (#33).
+  memory is byte-identical. A file written on or after 2026-11-06 that already
+  spelled them out keeps them: `parse` records which the source had and
+  `render` writes them back, so a write does not change that file's content
+  hash either (#33).
 
 ### Index, search and retrieval
 
 - Per-term matching instead of one quoted phrase, for FTS5 and the
   `unicode61` fallback (#20).
-- R0 evaluation harness, one shared read path and the MCP multi-hop pilot
-  (#18); short-text expansion measured on the baseline and hybrid FTS
-  restored (#18).
+- R0 evaluation harness, one shared read path, the MCP multi-hop pilot, and
+  short-text expansion measured on the baseline with hybrid FTS restored (#18).
 - Alias-expanded search: a concept alias reaches the memories that mention
   it, inside the same read-path gates (#24, #25).
 - Retrieval traces keep full candidate hashes (#5); opt-in query-coverage
   abstention (#9); retrieval feedback and shadow tooling (#4).
 - A stale index is detected and rebuilt before a search instead of failing
-  with `no such table`; `--dry-run` reports `would_rebuild` (#33).
+  with `no such table`; `--dry-run` reports `would_rebuild`. Detection reads
+  the schema generation (`PRAGMA user_version`), so a later column change is
+  rebuilt too (#33).
+- `supersede` hands over at a single instant: the old record's `valid_to` is
+  the replacement's `created_at`, so an `as_of` query never reports both
+  generations as current (#33).
 
 ### Concepts and ontology
 
@@ -106,6 +112,8 @@ upgrade fixes found by running this branch against a copy of the live
 
 ### CLI and budget
 
+- `memfw --version` prints the installed version, so a release smoke test can
+  check what is on `PATH` without importing the package.
 - `memfw budget configure|show`, `stats`, `forget run --dry-run` and
   `log verify` work on a copied vault end to end (verified in `0.2.0`).
 - `index rebuild --dry-run` reports the count it would index.
@@ -114,15 +122,16 @@ upgrade fixes found by running this branch against a copy of the live
 
 ### Compatibility and upgrade
 
-- Running `0.2.0` against the deployed `0.1.0` vault: parse → render was
-  byte-identical for **2,164 of 2,164** files after #33 (before it, every file
-  gained six default lines on rewrite).
-- `fleet-memfw-sync.py`'s full command surface (`import`, `index rebuild`,
+- Running `0.2.0` against a vault written by the deployed older release:
+  parse → render was byte-identical for **every** file after #33 (before it,
+  every file gained six default lines on rewrite), in both directions — files
+  written after 2026-11-06 keep the default lines they already carry.
+- A read-only sync script's full command surface (`import`, `index rebuild`,
   `budget configure --apply`, `budget show`, `stats`, `forget run --dry-run`
   for decay and consolidate, `log verify`) runs on a copied vault with
   `0.2.0`; `budget configure --apply` produces the same `vault.yaml` bytes.
-- A full sync import of 2,164 files succeeded with zero failures, and a
-  second incremental run skipped all 2,164 (no rewrite churn).
+- A full import of the whole vault succeeded with zero failures, and a second
+  incremental run skipped every file (no rewrite churn).
 - **After upgrading, run `memfw index rebuild` once** (or let the first search
   do it): the index is a disposable projection and is not migrated in place.
 

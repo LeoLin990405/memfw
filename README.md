@@ -75,6 +75,7 @@ uv venv .venv && uv sync --frozen --extra dev   # or: python -m venv .venv && pi
 ```
 
 This installs two commands: `memfw` (CLI) and `memfw-mcp` (stdio MCP server).
+`memfw --version` prints the installed version (`memfw 0.2.0`); the release smoke test checks it.
 
 Create a vault, add a memory and search it:
 
@@ -411,9 +412,12 @@ curate, distill, budget, skills), OKF v0.2 export, and the read-only HTTP servic
 
 **Upgrade boundary.** The vault format did not change in `0.2.0`: `vault.yaml` stays at
 `schema_version: 1`, and a file written by `0.1.x` keeps its bytes — parse → render is
-byte-identical, and a normal write no longer restates default fields. The FTS5 index is a
-disposable projection and is **not** migrated in place, so run `memfw index rebuild` once after
-upgrading (`memfw` also rebuilds a stale index before it searches).
+byte-identical in both directions, and a normal write no longer restates default fields. A file
+written after 2026-11-06 that already spelled those fields out keeps them too, so upgrading does
+not change its content hash. The FTS5 index is a disposable projection and is **not** migrated in
+place: `memfw mcp serve` and `memfw index search` rebuild a stale index before they use it; the
+read-only HTTP service never writes, so run `memfw index rebuild` once before pointing it at an
+upgraded vault.
 
 **Boundaries.** Matching is lexical — a paraphrase with no shared word is missed; dream only
 stages proposals (there is no `dream apply`, apply candidates through `update` / `supersede`);
@@ -452,3 +456,9 @@ Issues and pull requests are welcome. Before opening a PR:
 Licensed under the [Apache License 2.0](LICENSE). The Traditional-to-Simplified character map in
 `src/memfw/ontology/t2s.py` is derived from [OpenCC](https://github.com/BYVoid/OpenCC) (Apache-2.0);
 see [`NOTICE`](NOTICE).
+
+`memfw okf export` writes bundles in
+[Open Knowledge Format v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format)
+(GoogleCloudPlatform). That is a format specification only: memfw is compatible with it and
+contains no OKF code, and `NOTICE` therefore carries no OKF entry. The evaluation table's Mem0
+row is a comparison baseline only — memfw uses no Mem0 code.
