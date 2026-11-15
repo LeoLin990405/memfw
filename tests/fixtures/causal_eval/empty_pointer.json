@@ -1,0 +1,48 @@
+{
+  "name": "empty_pointer",
+  "group": "malformed",
+  "expected_verified": false,
+  "expected_block": "evidence",
+  "query": "does the synthetic assignment raise the outcome with an empty pointer",
+  "note": "The causal record is complete, but the evidence pointer has no payload (data:). An empty prefix is not a pointer, so the gate must refuse verified.",
+  "attempt": {
+    "title": "A complete record with an empty evidence pointer",
+    "body": "The causal record is complete; the evidence string is only the prefix.",
+    "epistemic": "inference",
+    "causal": "verified",
+    "causal_record": {
+      "treatment": "assignment",
+      "outcome": "outcome",
+      "estimand": "ATE",
+      "identification": {
+        "assumptions": [
+          "randomised assignment"
+        ],
+        "untested": []
+      },
+      "robustness": [
+        {
+          "check": "balance",
+          "result": "balanced",
+          "failed": false
+        }
+      ]
+    },
+    "evidence": [
+      "data:"
+    ],
+    "source": "synthetic",
+    "provenance": "human-authored"
+  },
+  "retrieval": {
+    "title": "Synthetic assignment: association only",
+    "body": "A synthetic association with no replayable pointer; not a verified causal claim.",
+    "epistemic": "inference",
+    "causal": "association",
+    "evidence": [
+      "data:synthetic-assignment"
+    ],
+    "source": "synthetic",
+    "provenance": "human-authored"
+  }
+}

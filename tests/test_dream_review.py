@@ -462,3 +462,97 @@ def test_curate_synonym_duplicate_merges() -> None:
         )
         == "merge"
     )
+
+
+# -- an already-verified memory must not freeze the dream --------------------------------
+
+
+VERIFIED_RECORD: dict[str, Any] = {
+    "treatment": "assignment A vs B",
+    "outcome": "synthetic outcome",
+    "selection": "randomised assignment",
+    "temporal_order": "assignment recorded before the outcome",
+    "estimand": "ATE of assignment on the outcome",
+    "identification": {
+        "assumptions": ["randomised assignment"],
+        "untested": [],
+    },
+    "robustness": [{"check": "covariate balance", "result": "balanced", "failed": False}],
+}
+
+
+def _verified_with_transcripts(tmp_path: Path) -> Path:
+    root = _with_transcripts(tmp_path)
+    repository = Repository(root)
+    repository.add(
+        "Verified sensor",
+        "The greenhouse sensor reads 18 degrees.",
+        memory_id="m-verified",
+        epistemic="inference",
+        causal="verified",
+        causal_record=VERIFIED_RECORD,
+        evidence=["data:synthetic-experiment"],
+    )
+    repository.update("m-verified", status="confirmed")
+    TranscriptIndex(default_db(root), sources_from_config(repository.read_config())).refresh()
+    return root
+
+
+def test_dream_confirms_an_already_verified_memory_instead_of_aborting(
+    tmp_path: Path,
+) -> None:
+    root = _verified_with_transcripts(tmp_path)
+    result = run_dream(
+        root, now=NOW, options=DreamOptions(all_memories=True, dream_id="verified-dream")
+    )
+    assert result.staged is not None
+    by_memory = {
+        candidate.memory_ids[0]: candidate
+        for candidate in result.candidates
+        if candidate.operation == "verify"
+    }
+    confirm = by_memory["m-verified"]
+    assert confirm.action == "confirm"
+    # Appended transcript refs never replace the raw-data pointer that made the
+    # claim verified in the first place.
+    assert "data:synthetic-experiment" in confirm.changes["evidence"]
+    assert any(ref.startswith("logs:") for ref in confirm.changes["evidence"])
+    assert result.report["skipped_candidates"] == []
+
+
+def test_one_refused_candidate_does_not_abort_the_dream(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import memfw.dream.run as dream_run
+    from memfw.core.errors import IntegrityError
+
+    root = _verified_with_transcripts(tmp_path)
+    real = dream_run.validate_proposed_write
+
+    def refuse_the_verified_one(
+        current: dict[str, Any] | None, changes: dict[str, Any], *, actor: str
+    ) -> None:
+        if current is not None and current.get("id") == "m-verified":
+            raise IntegrityError("synthetic gate refusal")
+        real(current, changes, actor=actor)
+
+    monkeypatch.setattr(dream_run, "validate_proposed_write", refuse_the_verified_one)
+    result = run_dream(
+        root, now=NOW, options=DreamOptions(all_memories=True, dream_id="skip-dream")
+    )
+    assert result.staged is not None
+    checked = [
+        candidate.memory_ids
+        for candidate in result.candidates
+        if candidate.operation == "verify"
+    ]
+    assert ["m-verified"] not in checked
+    assert any(ids == ["m1"] for ids in checked)
+    assert result.report["skipped_candidates"] == [
+        {
+            "operation": "verify",
+            "action": "confirm",
+            "memory_ids": ["m-verified"],
+            "reason": "synthetic gate refusal",
+        }
+    ]

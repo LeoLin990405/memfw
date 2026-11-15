@@ -60,15 +60,40 @@ def _login(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _reviewers(reviews: Sequence[Any]) -> list[str]:
-    seen: list[str] = []
+def _is_bot(author: Any) -> bool:
+    """Whether a review author is a bot account, not a person."""
+
+    if isinstance(author, dict):
+        if author.get("is_bot") is True or author.get("isBot") is True:
+            return True
+        if str(author.get("type") or "").strip().lower() == "bot":
+            return True
+    return _login(author).lower().endswith("[bot]")
+
+
+def _reviews(reviews: Sequence[Any], *, author: str) -> list[tuple[str, list[str]]]:
+    """Non-bot reviewers other than the PR author, with the states they left.
+
+    A comment is not a review verdict, so the state is kept next to the login
+    instead of being flattened into an anonymous "reviewed by".
+    """
+
+    states: dict[str, list[str]] = {}
     for review in reviews:
         if not isinstance(review, dict):
             continue
-        login = _login(review.get("author"))
-        if login and login not in seen:
-            seen.append(login)
-    return seen
+        reviewer = review.get("author")
+        login = _login(reviewer)
+        if not login or _is_bot(reviewer):
+            continue
+        if login.casefold() == author.casefold():
+            # The author's own comment is not an independent review.
+            continue
+        state = str(review.get("state") or "").strip().upper() or "UNKNOWN"
+        states.setdefault(login, [])
+        if state not in states[login]:
+            states[login].append(state)
+    return list(states.items())
 
 
 def draft_input_from_pull_request(
@@ -91,13 +116,18 @@ def draft_input_from_pull_request(
     url = str(data.get("url") or "").strip() or f"https://github.com/{repo}/pull/{int(pr)}"
     commits = [item for item in (data.get("commits") or []) if isinstance(item, dict)]
     files = [item for item in (data.get("files") or []) if isinstance(item, dict)]
-    reviewer_logins = _reviewers(data.get("reviews") or [])
-    merger = _login(data.get("mergedBy")) or _login(data.get("author"))
+    pr_author = _login(data.get("author"))
+    reviews = _reviews(data.get("reviews") or [], author=pr_author)
+    reviewer_logins = [login for login, _states in reviews]
+    merger = _login(data.get("mergedBy")) or pr_author
     scope_reviewed: list[str] = []
     not_reviewed: list[str] = []
-    if reviewer_logins:
+    if reviews:
         reviewer = ", ".join(reviewer_logins)
-        scope_reviewed.append(f"pull request review by {reviewer}")
+        scope_reviewed.extend(
+            f"pull request review by {login}: {', '.join(states)}"
+            for login, states in reviews
+        )
     else:
         reviewer = merger
         if not reviewer:

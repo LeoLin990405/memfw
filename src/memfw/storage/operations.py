@@ -12,6 +12,7 @@ from ..core.common import sha256_text
 from ..core.context import RepositoryHost
 from ..core.epistemic import (
     EPISTEMIC_FIELDS,
+    EXPERIENCE_POINT_TYPE,
     CausalLevel,
     CausalRecord,
     EpistemicType,
@@ -263,9 +264,12 @@ class MemoryOperationsMixin:
         values = old.model_dump()
         values.update(folded_changes)
         # One gate for every write path. A human approval of an agent proposal
-        # counts as a human decision; a bare agent write cannot pass it.
+        # counts as a human decision; a bare agent write can edit an
+        # already-verified document but cannot turn one into verified.
         if set(folded_changes) & EPISTEMIC_FIELDS:
-            validate_epistemic_write(values, actor=actor, human_decision=approved)
+            validate_epistemic_write(
+                values, actor=actor, human_decision=approved, previous_causal=old.causal
+            )
         config = self.read_config()
         is_anchored = values.get("layer") == Layer.ANCHOR or bool(values.get("anchor"))
         if config.get("anchor_always_hot", True) and old.is_stub and is_anchored and anchor_change:
@@ -335,14 +339,23 @@ class MemoryOperationsMixin:
         old = self.get(memory_id)
         if old.valid_to is not None:
             raise IntegrityError(f"Memory is already superseded: {memory_id}")
+        # A replacement is still the same epistemic object: keep the experience
+        # record (and the causal grade) instead of silently dropping it.
         new = self.add(
             title,
             body,
             memory_id=memory_id_new,
+            memory_type=old.type if old.type == EXPERIENCE_POINT_TYPE else None,
             source=source or old.source,
             provenance=provenance or f"supersedes:{memory_id}",
             tags=tags if tags is not None else old.tags,
             actor="human",
+            epistemic=old.epistemic,
+            causal=old.causal,
+            causal_record=old.causal_record,
+            limitations=old.limitations,
+            experience=old.experience,
+            evidence=old.evidence,
         )
         now = self._now()
         self.update(

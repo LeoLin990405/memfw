@@ -12,16 +12,25 @@
       "treatment": "coffee",
       "outcome": "risk score",
       "confounders": {
-        "known": ["smoking"],
-        "suspected": ["age"],
+        "known": [
+          "smoking"
+        ],
+        "suspected": [
+          "age"
+        ],
         "unobserved": []
       },
       "selection": "volunteer cohort",
       "temporal_order": "coffee habit recorded before the score",
       "estimand": "ATE of coffee on the risk score",
       "identification": {
-        "assumptions": ["no unmeasured confounding", "positivity"],
-        "untested": ["smoking adjustment has not been applied yet"]
+        "assumptions": [
+          "no unmeasured confounding",
+          "positivity"
+        ],
+        "untested": [
+          "smoking adjustment has not been applied yet"
+        ]
       },
       "robustness": [
         {
@@ -31,9 +40,14 @@
         }
       ],
       "proposed_by": "synthetic fixture",
-      "alternatives": ["no causal effect", "reverse causation through health awareness"]
+      "alternatives": [
+        "no causal effect",
+        "reverse causation through health awareness"
+      ]
     },
-    "evidence": ["data:synthetic-cohort-simpson"],
+    "evidence": [
+      "data:synthetic-cohort-simpson"
+    ],
     "source": "synthetic",
     "provenance": "human-authored"
   },
@@ -46,18 +60,30 @@
       "treatment": "coffee",
       "outcome": "risk score",
       "confounders": {
-        "known": ["smoking"],
-        "suspected": ["age"],
+        "known": [
+          "smoking"
+        ],
+        "suspected": [
+          "age"
+        ],
         "unobserved": []
       },
       "estimand": "ATE of coffee on the risk score",
       "identification": {
-        "assumptions": ["no unmeasured confounding"],
-        "untested": ["smoking adjustment has not been applied yet"]
+        "assumptions": [
+          "no unmeasured confounding"
+        ],
+        "untested": [
+          "smoking adjustment has not been applied yet"
+        ]
       }
     },
-    "evidence": ["data:synthetic-cohort-simpson"],
+    "evidence": [
+      "data:synthetic-cohort-simpson"
+    ],
     "source": "synthetic",
     "provenance": "human-authored"
-  }
+  },
+  "group": "confounded",
+  "expected_block": "identification"
 }

@@ -33,6 +33,9 @@ def _emit(payload: dict[str, object]) -> None:
 
 
 def _stage(root: Path, draft_input: ExperienceDraftInput) -> dict[str, object]:
+    # Staging writes ``_candidates/`` under ``root``; refuse a directory that is
+    # not a vault instead of scattering candidate files wherever it was run.
+    _repository(root)
     draft = build_draft(draft_input)
     staged = stage_candidate(root, draft)
     return {

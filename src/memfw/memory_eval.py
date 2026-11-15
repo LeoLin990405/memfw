@@ -259,6 +259,9 @@ class CausalMaterial:
     attempt: dict[str, Any]
     retrieval: dict[str, Any]
     note: str = ""
+    group: str = ""
+    expected_block: str = ""
+    """Which rule should refuse the write: identification, evidence, or empty."""
 
 
 @dataclass(frozen=True)
@@ -382,6 +385,8 @@ def load_causal_materials(directory: Path | str | None = None) -> list[CausalMat
                 attempt=dict(payload["attempt"]),
                 retrieval=dict(payload["retrieval"]),
                 note=str(payload.get("note") or ""),
+                group=str(payload.get("group") or ""),
+                expected_block=str(payload.get("expected_block") or ""),
             )
         )
     if not materials:

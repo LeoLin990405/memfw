@@ -55,31 +55,45 @@ before anything is written, and the error names every missing or contradictory i
 4. at least one `evidence` entry that points **outside the vault** (see below);
 5. `causal_record.robustness` or `limitations`;
 6. no robustness check with `failed: true`;
-7. a human writer, or an agent write covered by a recorded `HUMAN_DECISION`
-   (`decide_proposal` records it; `apply_proposal` requires it).
+7. a human writer, or a write covered by a recorded `HUMAN_DECISION`, when the write
+   *turns* the memory into `verified` (`decide_proposal` records it; `apply_proposal`
+   requires it). A memory that is already `verified` is not frozen: an agent or dream
+   may still correct it, append evidence, or demote it. Only the transition into
+   `verified` needs a human.
 
 A failed robustness check therefore cannot stay `verified`: the same write is rejected
 until the memory is demoted to `hypothesis` with the failure recorded in the record.
 
 ### What counts as evidence
 
-`evidence` entries are opaque pointers; the gate reads the prefix. Rules:
+`evidence` entries are opaque pointers; the gate reads the prefix. Authority, strongest
+first:
 
 | class | prefixes | counts as |
 | --- | --- | --- |
+| human decision | the write-level `HUMAN_DECISION` flag | overrides the pointer rules for chat/LLM sources |
+| raw | `data:`, `dataset:`, `design:`, `experiment:`, `result:`, `test:`, `code:`, `file:`, `sha256:`, `pr:`, `commit:`, `issue:`, `repo:` | replayable raw data or a design |
+| link | `http://`, `https://` | points outside the vault, but cannot be verified by the vault |
 | chat | `chat:`, `conversation:`, `session:`, `transcript:`, `message:`, `turn:` | narrative only |
 | generated | `llm:`, `reflection:`, `reasoning:`, `explanation:`, `dream:`, `distil:`, `summary:` | narrative only |
-| raw | `data:`, `dataset:`, `design:`, `experiment:`, `result:`, `test:`, `code:`, `file:`, `sha256:`, `pr:`, `commit:`, `issue:`, `repo:`, `http://`, `https://` | raw data or a design |
 
-Anything else (including a bare memory id) is not raw evidence. Evidence that only
-points at chat text, only at LLM explanations/reflections, or at no raw source at all
-cannot make a memory `verified`; it stays `hypothesis`. The same cap applies when
-`provenance` is LLM-derived or `source` is a chat source: a raw pointer is still
-required.
+A prefix with nothing after it (`data:`, `https://`) is not a pointer. Anything else
+(including a bare memory id) is not outside-vault evidence. Evidence that only points at
+chat text, only at LLM explanations/reflections, or at no raw source at all cannot make a
+memory `verified`; it stays `hypothesis`.
 
-**Agents and dreams stop at `hypothesis`.** Their proposals are validated with
-`human_decision=False`, so `causal: verified` is refused. Only a human writer, or an
-agent write approved by a recorded `HUMAN_DECISION`, can reach `verified`.
+**A bare web link is not raw data.** When `source` is a chat source or `provenance` is
+LLM-derived, `causal: verified` requires a replayable raw pointer (the `raw` row above)
+or a recorded `HUMAN_DECISION`. A link pasted from a chat therefore cannot promote a
+claim by itself; the gate says so and names both ways forward.
+
+**Agents and dreams may not promote, but they can edit and demote.** Their proposals are
+validated with `human_decision=False`, so a write that turns a memory into
+`causal: verified` is refused. A write on a memory that is already `verified` is allowed
+only if the verified invariants survive (raw evidence, tested identification, no failed
+robustness). A dream confirmation therefore appends its transcript refs to the existing
+evidence instead of replacing it, and a candidate that would break the invariants is
+skipped and reported (`skipped_candidates`) instead of aborting `memfw dream run`.
 
 ## Retrieval and export
 

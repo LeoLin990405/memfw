@@ -135,13 +135,18 @@ claim; read the report's limitations before citing numbers.
 conclusion. It is not a benchmark of causal-inference correctness: it exercises the write
 gate and the retrieval labels on synthetic materials that are known by construction.
 
-Materials live in `tests/fixtures/causal_eval/`, one JSON file each, covering three groups:
+Materials live in `tests/fixtures/causal_eval/`, one JSON file each, in four groups of
+two so that each rule is exercised more than once:
 
-1. a known data-generating process with an unadjusted confounder, plus a Simpson's-paradox
-   pair;
-2. a narrative "because … therefore …" memory with no dataset and no design;
-3. one correct analysis with a complete identification argument, a robustness check, and
-   evidence pointing at the generated dataset.
+1. `identified` — two correct analyses with a complete identification argument, robustness
+   checks, and replayable evidence; the gate must accept both;
+2. `confounded` — an unadjusted confounder and a pure Simpson's-paradox reversal; both are
+   refused because an identification assumption is still untested;
+3. `narrative` — a chat-only "because … therefore …" memory and a structurally complete
+   record whose only evidence is a chat-share URL; both are refused on the evidence rule,
+   not on a structural check;
+4. `malformed` — an empty evidence pointer (`data:`) and a whitespace-only identification
+   assumption; both are refused, and the error names the missing item.
 
 Two layers are reported separately:
 

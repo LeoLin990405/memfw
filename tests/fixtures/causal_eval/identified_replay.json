@@ -1,0 +1,87 @@
+{
+  "name": "identified_replay",
+  "group": "identified",
+  "expected_verified": true,
+  "expected_block": "",
+  "query": "did the staged rollout reduce synthetic rollbacks",
+  "note": "A second complete analysis in a different domain: randomised staged rollout, declared confounder set, named estimand, two robustness checks, and a replayable result pointer. The gate must accept it.",
+  "attempt": {
+    "title": "The synthetic staged rollout reduced synthetic rollbacks",
+    "body": "Synthetic rollout experiment (generated, not observed people). Teams were randomised to staged or immediate rollout. The rollback count after 30 days is lower in the staged arm. Identification assumptions are stated and tested; the dataset and the batch result are the recorded sources.",
+    "epistemic": "inference",
+    "causal": "verified",
+    "causal_record": {
+      "treatment": "staged vs immediate rollout",
+      "outcome": "rollback count in 30 days",
+      "confounders": {
+        "known": [
+          "team size"
+        ],
+        "suspected": [],
+        "unobserved": []
+      },
+      "selection": "randomised at team level, generated",
+      "temporal_order": "rollout arm assigned before the rollback window",
+      "estimand": "ATE of staged rollout on the 30-day rollback count",
+      "identification": {
+        "assumptions": [
+          "randomised assignment",
+          "no differential measurement of rollbacks"
+        ],
+        "untested": []
+      },
+      "robustness": [
+        {
+          "check": "balance by team size",
+          "result": "balanced within tolerance",
+          "failed": false
+        },
+        {
+          "check": "per-batch re-estimate",
+          "result": "same sign",
+          "failed": false
+        }
+      ],
+      "proposed_by": "synthetic fixture",
+      "alternatives": [
+        "no effect",
+        "seasonality"
+      ]
+    },
+    "evidence": [
+      "dataset:synthetic-checklist-rollout",
+      "result:synthetic-batch-42"
+    ],
+    "source": "synthetic",
+    "provenance": "human-authored"
+  },
+  "retrieval": {
+    "title": "Synthetic staged rollout and rollbacks",
+    "body": "Synthetic randomised rollout: staged teams saw fewer rollbacks than immediate teams. Identification assumptions are stated and tested against the generated dataset and the recorded batch result.",
+    "epistemic": "inference",
+    "causal": "verified",
+    "causal_record": {
+      "treatment": "staged vs immediate rollout",
+      "outcome": "rollback count in 30 days",
+      "estimand": "ATE of staged rollout on the 30-day rollback count",
+      "identification": {
+        "assumptions": [
+          "randomised assignment"
+        ],
+        "untested": []
+      },
+      "robustness": [
+        {
+          "check": "balance by team size",
+          "result": "balanced",
+          "failed": false
+        }
+      ]
+    },
+    "evidence": [
+      "dataset:synthetic-checklist-rollout"
+    ],
+    "source": "synthetic",
+    "provenance": "human-authored"
+  }
+}

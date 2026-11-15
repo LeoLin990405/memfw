@@ -23,37 +23,70 @@ def _report() -> Any:
     return run_causal_promotion_eval(CAUSAL_FIXTURE_DIR)
 
 
-def test_fixtures_cover_the_three_material_groups() -> None:
+EXPECTED_NAMES = {
+    "identified_analysis",
+    "identified_replay",
+    "confounded_observational",
+    "simpson_paradox",
+    "narrative_only",
+    "chat_link_only",
+    "empty_pointer",
+    "blank_assumption",
+}
+EXPECTED_GROUPS = {"identified": 2, "confounded": 2, "narrative": 2, "malformed": 2}
+
+
+def test_fixtures_cover_grouped_material_classes() -> None:
     materials = load_causal_materials(CAUSAL_FIXTURE_DIR)
-    names = {material.name for material in materials}
-    assert {"confounded_observational", "narrative_only", "identified_analysis"} == names
-    assert any(material.expected_verified for material in materials)
-    assert any(not material.expected_verified for material in materials)
+    assert {material.name for material in materials} == EXPECTED_NAMES
+    counts: dict[str, int] = {}
+    for material in materials:
+        assert material.group, f"{material.name} has no group"
+        counts[material.group] = counts.get(material.group, 0) + 1
+    assert counts == EXPECTED_GROUPS
+    assert sum(1 for material in materials if material.expected_verified) == 2
+    assert all(
+        material.expected_block
+        for material in materials
+        if not material.expected_verified
+    )
 
 
 def test_write_layer_has_no_false_accepts_or_false_rejects() -> None:
     report = _report()
     payload = report.as_dict()
-    assert payload["materials"] == 3
+    assert payload["materials"] == 8
     assert payload["false_accepts"] == 0
     assert payload["false_rejects"] == 0
     assert payload["spurious_promotions"] == 0
     write = payload["write_layer"]
-    assert write["attempts"] == 3
-    assert write["accepted"] == 1
-    assert write["rejected"] == 2
+    assert write["attempts"] == 8
+    assert write["accepted"] == 2
+    assert write["rejected"] == 6
     by_name = {item["name"]: item for item in write["materials"]}
-    assert by_name["identified_analysis"]["accepted"] is True
-    assert by_name["identified_analysis"]["resulting_causal"] == "verified"
+    for accepted_name in ("identified_analysis", "identified_replay"):
+        assert by_name[accepted_name]["accepted"] is True
+        assert by_name[accepted_name]["resulting_causal"] == "verified"
     assert by_name["confounded_observational"]["accepted"] is False
     assert "untested" in str(by_name["confounded_observational"]["error"])
+    assert by_name["simpson_paradox"]["accepted"] is False
+    assert "untested" in str(by_name["simpson_paradox"]["error"])
+    # The narrative and malformed groups must fail on the rule they were built
+    # for, not early on a structural check.
     assert by_name["narrative_only"]["accepted"] is False
+    assert "chat text" in str(by_name["narrative_only"]["error"])
+    assert by_name["chat_link_only"]["accepted"] is False
+    assert "replayable raw" in str(by_name["chat_link_only"]["error"])
+    assert by_name["empty_pointer"]["accepted"] is False
+    assert "evidence" in str(by_name["empty_pointer"]["error"])
+    assert by_name["blank_assumption"]["accepted"] is False
+    assert "identification" in str(by_name["blank_assumption"]["error"])
 
 
 def test_retrieval_layer_labels_every_hit_and_never_concludes_a_hypothesis() -> None:
     payload = _report().as_dict()
     retrieval = payload["retrieval_layer"]
-    assert retrieval["queries"] == 3
+    assert retrieval["queries"] == 8
     assert retrieval["missing_labels"] == 0
     assert retrieval["hypothesis_as_conclusion"] == 0
     for item in retrieval["materials"]:
@@ -90,7 +123,7 @@ def test_cli_prints_the_three_numbers(tmp_path: Path) -> None:
 def test_cli_human_output_names_the_layers() -> None:
     result = runner.invoke(app, ["eval", "causal"])
     assert result.exit_code == 0, result.output
-    assert "materials: 3" in result.stdout
+    assert "materials: 8" in result.stdout
     assert "spurious_promotions: 0" in result.stdout
     assert "false_accepts: 0" in result.stdout
     assert "false_rejects: 0" in result.stdout

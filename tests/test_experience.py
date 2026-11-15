@@ -30,6 +30,9 @@ MERGED_PR: dict[str, Any] = {
     "reviews": [
         {"author": {"login": "reviewer-one"}, "state": "APPROVED"},
         {"author": {"login": "reviewer-two"}, "state": "COMMENTED"},
+        {"author": {"login": "author"}, "state": "COMMENTED"},
+        {"author": {"login": "dependabot[bot]"}, "state": "APPROVED"},
+        {"author": {"login": "release-bot", "type": "Bot"}, "state": "COMMENTED"},
     ],
     "commits": [{"oid": "a" * 40}, {"oid": "b" * 40}],
     "files": [{"path": "src/exporter.py"}, {"path": "tests/test_exporter.py"}],
@@ -167,7 +170,26 @@ def test_merged_pull_request_becomes_a_draft() -> None:
     assert "pr:example/synthetic#7" in data["evidence"]
     assert f"commit:{'a' * 40}" in data["evidence"]
     assert any("pull request review" in item for item in data["review"]["scope_reviewed"])
+    # The author's own comment and bot reviews are not independent reviewers.
+    assert data["review"]["reviewer"] == "reviewer-one, reviewer-two"
+    assert "pull request review by reviewer-one: APPROVED" in data["review"]["scope_reviewed"]
+    assert "pull request review by reviewer-two: COMMENTED" in data["review"]["scope_reviewed"]
+    assert all("author" not in item for item in data["review"]["scope_reviewed"])
+    assert all("bot" not in item for item in data["review"]["scope_reviewed"])
     ExperienceDraftInput.model_validate(data)
+
+
+def test_pull_request_with_only_author_and_bot_reviews_falls_back_to_the_merger() -> None:
+    data = dict(
+        MERGED_PR,
+        reviews=[
+            {"author": {"login": "author"}, "state": "COMMENTED"},
+            {"author": {"login": "dependabot[bot]"}, "state": "APPROVED"},
+        ],
+    )
+    draft = draft_input_from_pull_request(data, repo="example/synthetic", pr=7)
+    assert draft["review"]["reviewer"] == "merger"
+    assert any("merge decision only" in item for item in draft["review"]["scope_reviewed"])
 
 
 def test_unmerged_pull_request_is_refused() -> None:
@@ -208,6 +230,19 @@ def test_fetch_uses_gh_json_and_reports_failures(monkeypatch: pytest.MonkeyPatch
 
     with pytest.raises(IntegrityError, match="gh pr view failed"):
         fetch_pull_request("example/synthetic", 999, runner=failing_run)
+
+
+def test_draft_apply_refuses_a_non_vault_root(tmp_path: Path) -> None:
+    # ``--apply`` used to create _candidates/ wherever it happened to be run.
+    empty = tmp_path / "not-a-vault"
+    empty.mkdir()
+    result = runner.invoke(
+        experience_app,
+        ["draft", "--from", str(FIXTURE), "--apply", "--root", str(empty)],
+    )
+    assert result.exit_code == 2
+    assert "Not a memfw vault" in result.stdout or "Not a memfw vault" in (result.stderr or "")
+    assert list(empty.iterdir()) == []
 
 
 def test_from_github_cli_stages_without_network(

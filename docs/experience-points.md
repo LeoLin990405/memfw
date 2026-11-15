@@ -76,9 +76,13 @@ memfw experience invalidate MEMORY_ID --reason "the export format changed"
 `experience draft` and `experience from-github` never write `memories/` or the event
 log. `--apply` publishes one candidate file under `_candidates/experience/` with
 `authority: false`; the candidate contains the reviewed record and the exact payload.
+`--apply` first checks that `--root` is an existing memfw vault (`vault.yaml` or an event
+log), so running it from an ordinary directory fails instead of creating a stray
+`_candidates/` tree.
 
+Staged candidates are proposals only: no command reads `_candidates/experience/` yet.
 Promotion is a separate human action (out of scope for this change). A reviewer can
-write an accepted candidate with:
+read the candidate payload and write an accepted candidate with:
 
 ```bash
 memfw add --title "<EXPERIENCE_POINT_TITLE>" --body "<EXPERIENCE_POINT_BODY>" \
@@ -98,8 +102,11 @@ code or database, and tests use recorded synthetic JSON — no network.
 
 * An **unmerged** PR is refused: an experience point needs a finished task and a human
   verdict, and the merge is the recorded verdict this adapter has.
-* `reviewer` comes from the PR review records. With no review records, the reviewer is
-  the merger and `scope_reviewed` says the reviewed scope is the merge decision only
+* `reviewer` comes from the PR review records. The PR author's own comments and bot
+  accounts (`[bot]`, `type: Bot`, `is_bot`) are not independent reviewers and are
+  excluded; each remaining reviewer's review state (`APPROVED`, `COMMENTED`, …) is
+  recorded in `scope_reviewed`. With no usable review records, the reviewer is the
+  merger and `scope_reviewed` says the reviewed scope is the merge decision only
   (`not_reviewed` records that no review covered the change itself).
 * `evidence` contains `pr:<repo>#<n>` and one `commit:<sha>` per commit, which the causal
   gate classifies as raw pointers.

@@ -1,0 +1,78 @@
+{
+  "name": "simpson_paradox",
+  "group": "confounded",
+  "expected_verified": false,
+  "expected_block": "identification",
+  "query": "does the treatment raise the outcome in the synthetic aggregate",
+  "note": "Pure Simpson's paradox: the aggregate direction reverses inside every stratum. The attempted verified write has not applied the stratification, so the identification assumption is untested and the gate must refuse it.",
+  "attempt": {
+    "title": "The synthetic treatment raises the aggregate outcome (Simpson reversal)",
+    "body": "Synthetic data (generated, not observed people). Aggregate: treated mean 6.1 vs control 5.2. Stratified by the recorded group variable the sign reverses in both strata: the aggregate difference is produced by the group mix.",
+    "epistemic": "inference",
+    "causal": "verified",
+    "causal_record": {
+      "treatment": "synthetic treatment",
+      "outcome": "aggregate outcome",
+      "confounders": {
+        "known": [
+          "group mix"
+        ],
+        "suspected": [],
+        "unobserved": []
+      },
+      "selection": "convenience sample, generated",
+      "temporal_order": "treatment recorded before outcome",
+      "estimand": "ATE of the treatment on the outcome",
+      "identification": {
+        "assumptions": [
+          "no unmeasured confounding",
+          "stratification is sufficient"
+        ],
+        "untested": [
+          "the stratified estimate has not been computed"
+        ]
+      },
+      "robustness": [
+        {
+          "check": "stratify by group",
+          "result": "not run",
+          "failed": false
+        }
+      ],
+      "proposed_by": "synthetic fixture",
+      "alternatives": [
+        "no causal effect",
+        "group mix"
+      ]
+    },
+    "evidence": [
+      "data:synthetic-simpson-cohort"
+    ],
+    "source": "synthetic",
+    "provenance": "human-authored"
+  },
+  "retrieval": {
+    "title": "Synthetic Simpson reversal: association only",
+    "body": "Synthetic data: the aggregate association reverses inside every stratum, so the treatment/outcome link is an association and a hypothesis, not a verified causal claim.",
+    "epistemic": "inference",
+    "causal": "hypothesis",
+    "causal_record": {
+      "treatment": "synthetic treatment",
+      "outcome": "aggregate outcome",
+      "estimand": "ATE of the treatment on the outcome",
+      "identification": {
+        "assumptions": [
+          "no unmeasured confounding"
+        ],
+        "untested": [
+          "the stratified estimate has not been computed"
+        ]
+      }
+    },
+    "evidence": [
+      "data:synthetic-simpson-cohort"
+    ],
+    "source": "synthetic",
+    "provenance": "human-authored"
+  }
+}

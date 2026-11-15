@@ -40,9 +40,15 @@
         }
       ],
       "proposed_by": "synthetic fixture",
-      "alternatives": ["no effect", "measurement drift"]
+      "alternatives": [
+        "no effect",
+        "measurement drift"
+      ]
     },
-    "evidence": ["data:synthetic-randomised-experiment", "design:synthetic-ab-assignment"],
+    "evidence": [
+      "data:synthetic-randomised-experiment",
+      "design:synthetic-ab-assignment"
+    ],
     "source": "synthetic",
     "provenance": "human-authored"
   },
@@ -63,7 +69,10 @@
       "temporal_order": "assignment recorded before the outcome",
       "estimand": "ATE of assignment on the outcome",
       "identification": {
-        "assumptions": ["randomised assignment", "stable unit treatment value"],
+        "assumptions": [
+          "randomised assignment",
+          "stable unit treatment value"
+        ],
         "untested": []
       },
       "robustness": [
@@ -74,8 +83,12 @@
         }
       ]
     },
-    "evidence": ["data:synthetic-randomised-experiment"],
+    "evidence": [
+      "data:synthetic-randomised-experiment"
+    ],
     "source": "synthetic",
     "provenance": "human-authored"
-  }
+  },
+  "group": "identified",
+  "expected_block": ""
 }

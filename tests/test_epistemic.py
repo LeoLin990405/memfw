@@ -12,6 +12,7 @@ from memfw.core.epistemic import (
     EXPERIENCE_DISCLAIMER,
     evidence_source_class,
     validate_epistemic_write,
+    validate_proposed_write,
 )
 from memfw.core.errors import IntegrityError
 from memfw.core.models import MemoryDocument
@@ -320,8 +321,144 @@ def test_evidence_source_classification() -> None:
     assert evidence_source_class("chat:abc") == "chat"
     assert evidence_source_class("reflection:x") == "generated"
     assert evidence_source_class("data:x") == "raw"
-    assert evidence_source_class("https://example.test/x") == "raw"
+    assert evidence_source_class("https://example.test/x") == "link"
     assert evidence_source_class("memory-abc") == "other"
+    # A prefix with nothing after it is not a pointer.
+    assert evidence_source_class("data:") == "other"
+    assert evidence_source_class("https://") == "other"
+    assert evidence_source_class("   ") == "other"
+
+
+# --- verified is a transition, not a state that freezes the document ---------
+
+
+def test_agent_may_edit_an_already_verified_document() -> None:
+    # Only the *transition* into verified needs a human. An existing verified
+    # document may be corrected by an agent proposal; the invariants still hold.
+    current = _verified_values()
+    validate_proposed_write(current, {"body": "fixed a typo"}, actor="agent:planner")
+    validate_proposed_write(
+        current,
+        {"evidence": ["data:cohort", "data:second-run"]},
+        actor="mechanism",
+    )
+
+
+def test_agent_still_cannot_turn_an_unverified_document_verified() -> None:
+    hypothesis = _verified_values(causal="hypothesis")
+    with pytest.raises(IntegrityError, match="HUMAN_DECISION"):
+        validate_proposed_write(
+            hypothesis,
+            {"causal": "verified", "causal_record": VERIFIED_RECORD},
+            actor="agent:planner",
+        )
+    with pytest.raises(IntegrityError, match="HUMAN_DECISION"):
+        validate_epistemic_write(_verified_values(), actor="agent:planner")
+
+
+def test_writes_that_break_verified_invariants_are_still_refused() -> None:
+    current = _verified_values()
+    with pytest.raises(IntegrityError, match="evidence"):
+        validate_proposed_write(current, {"evidence": ["chat:thread"]}, actor="mechanism")
+    failed = {
+        **VERIFIED_RECORD,
+        "robustness": [{"check": "placebo", "result": "not null", "failed": True}],
+    }
+    with pytest.raises(IntegrityError, match="demotion"):
+        validate_proposed_write(
+            current, {"causal_record": failed, "causal": "verified"}, actor="mechanism"
+        )
+
+
+def test_agent_can_propose_a_verified_record_be_demoted(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    document = repository.add(
+        "claim",
+        "the assignment raises the outcome",
+        epistemic="inference",
+        causal="verified",
+        causal_record=VERIFIED_RECORD,
+        evidence=["data:experiment"],
+    )
+    demoted = {
+        **VERIFIED_RECORD,
+        "identification": {
+            "assumptions": ["randomised assignment"],
+            "untested": ["attrition"],
+        },
+    }
+    changes = {"causal": "hypothesis", "causal_record": demoted}
+    proposal = repository.record_proposal(
+        memory_id=document.id,
+        operation="update",
+        changes=changes,
+        rationale="attrition is still untested",
+        agent_id="planner",
+        signature="mock:planner",
+    )
+    result = repository.decide_proposal(
+        proposal.event_id,
+        payload={"memory_id": document.id, "operation": "update", "changes": changes},
+    )
+    assert result is not None
+    assert result.causal == "hypothesis"
+    assert result.causal_record is not None
+    assert result.causal_record.identification.untested == ["attrition"]
+
+
+# --- evidence authority: a chat link is not raw data -------------------------
+
+
+def test_chat_link_alone_cannot_reach_verified() -> None:
+    values = _verified_values(
+        source="chat",
+        provenance="llm-generated",
+        evidence=["https://chat.example.com/share/abc"],
+    )
+    with pytest.raises(IntegrityError, match="HUMAN_DECISION"):
+        validate_epistemic_write(values, actor="human")
+
+
+def test_llm_generated_prose_needs_a_replayable_pointer_not_just_a_url() -> None:
+    with pytest.raises(IntegrityError, match="replayable raw"):
+        validate_epistemic_write(
+            _verified_values(provenance="llm", evidence=["https://example.test/write-up"]),
+            actor="human",
+        )
+    # A replayable pointer is enough, whichever provenance wrote the prose.
+    validate_epistemic_write(
+        _verified_values(
+            source="chat", provenance="llm-generated", evidence=["data:cohort"]
+        ),
+        actor="human",
+    )
+
+
+def test_recorded_human_decision_overrides_the_link_rule() -> None:
+    values = _verified_values(
+        source="chat",
+        provenance="llm-generated",
+        evidence=["https://chat.example.com/share/abc"],
+    )
+    validate_epistemic_write(values, actor="agent:planner", human_decision=True)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {
+            "causal_record": {
+                **VERIFIED_RECORD,
+                "identification": {"assumptions": [" "], "untested": []},
+            }
+        },
+        {"evidence": ["data:"]},
+        {"evidence": ["https://"]},
+    ],
+)
+def test_blank_items_do_not_satisfy_verified(overrides: dict[str, Any]) -> None:
+    with pytest.raises(IntegrityError, match="causal=verified requires"):
+        validate_epistemic_write(_verified_values(**overrides), actor="human")
 
 
 # --- repository write paths --------------------------------------------------
@@ -427,6 +564,32 @@ def test_experience_point_requires_its_contract(tmp_path: Path) -> None:
             epistemic="experience",
             experience={"task": "x", "review": {"verdict": "accepted"}},
         )
+
+
+def test_supersede_keeps_an_experience_record(tmp_path: Path) -> None:
+    # A replacement is still an experience point: its review and disclaimer must
+    # survive, and it must still not become a causal claim.
+    repository = _vault(tmp_path)
+    body = EXPERIENCE_DISCLAIMER + "\n\nran the checklist"
+    old = repository.add(
+        "experience",
+        body,
+        memory_type="experience-point",
+        epistemic="experience",
+        experience={
+            "task": "run the checklist",
+            "conditions": ["fixture vault"],
+            "actions": ["run the checklist"],
+            "review": {"reviewer": "reviewer", "verdict": "accepted"},
+        },
+    )
+    new = repository.supersede(old.id, "experience v2", body, memory_id_new="experience-v2")
+    assert new.type == "experience-point"
+    assert new.epistemic == "experience"
+    assert new.causal == "none"
+    assert new.experience is not None
+    assert new.experience.review.reviewer == "reviewer"
+    assert repository.get(old.id).superseded_by == new.id
 
 
 # --- retrieval output --------------------------------------------------------

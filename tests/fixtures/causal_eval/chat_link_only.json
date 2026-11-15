@@ -1,0 +1,62 @@
+{
+  "name": "chat_link_only",
+  "group": "narrative",
+  "expected_verified": false,
+  "expected_block": "evidence",
+  "query": "did the release checklist reduce rollbacks according to the shared chat",
+  "note": "The causal record is complete, so structure is not what blocks it. The only evidence is a link to a chat share, and the prose is LLM-derived: a URL is not a replayable raw pointer, so the gate must refuse verified.",
+  "attempt": {
+    "title": "The release checklist reduced rollbacks, a chat share says so",
+    "body": "An LLM summary of a chat thread says the release checklist reduced rollbacks. The causal record is filled in, but the only evidence is a link to the chat share.",
+    "epistemic": "inference",
+    "causal": "verified",
+    "causal_record": {
+      "treatment": "release checklist",
+      "outcome": "rollback count",
+      "confounders": {
+        "known": [
+          "release size"
+        ],
+        "suspected": [],
+        "unobserved": []
+      },
+      "selection": "release history",
+      "temporal_order": "checklist added before the rollback window",
+      "estimand": "ATE of the checklist on rollbacks",
+      "identification": {
+        "assumptions": [
+          "no other release process changed"
+        ],
+        "untested": []
+      },
+      "robustness": [
+        {
+          "check": "drop the largest release",
+          "result": "same direction",
+          "failed": false
+        }
+      ],
+      "proposed_by": "synthetic fixture",
+      "alternatives": [
+        "seasonality",
+        "no effect"
+      ]
+    },
+    "evidence": [
+      "https://chat.example.com/share/abc"
+    ],
+    "source": "chat",
+    "provenance": "llm-generated"
+  },
+  "retrieval": {
+    "title": "Release checklist and rollbacks: a chat link, association only",
+    "body": "A chat share links the release checklist with fewer rollbacks, but there is no replayable dataset behind the link. Association only.",
+    "epistemic": "judgment",
+    "causal": "association",
+    "evidence": [
+      "https://chat.example.com/share/abc"
+    ],
+    "source": "chat",
+    "provenance": "llm-generated"
+  }
+}

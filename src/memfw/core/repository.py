@@ -242,9 +242,10 @@ class Repository(
     ) -> None:
         """Run the shared epistemic gate against current state plus a proposal.
 
-        Agent, mechanism, and dream writes stop at ``causal=hypothesis``; the
-        gate refuses ``causal=verified`` here because ``human_decision`` is
-        false. A missing target is validated as a create-shaped payload.
+        Agent, mechanism, and dream writes may edit an already-verified
+        document, but only a write that *turns* it into ``causal=verified`` is
+        refused here: ``human_decision`` is false. A missing target is
+        validated as a create-shaped payload.
         """
 
         if not set(changes) & EPISTEMIC_FIELDS:

@@ -1247,7 +1247,7 @@ def update(
             if set(changes) & {"epistemic", "causal", "causal_record", "limitations", "body"}:
                 values = old.model_dump()
                 values.update(changes)
-                validate_epistemic_write(values, actor="human")
+                validate_epistemic_write(values, actor="human", previous_causal=old.causal)
             typer.echo(
                 json.dumps(
                     {

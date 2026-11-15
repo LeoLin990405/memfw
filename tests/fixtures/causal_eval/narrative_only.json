@@ -2,7 +2,7 @@
   "name": "narrative_only",
   "expected_verified": false,
   "query": "did the release checklist reduce rollbacks",
-  "note": "Synthetic narrative memory: only a chat message says 'because we added the checklist, rollbacks dropped'. There is no dataset, no design, no robustness check. The gate must cap it at hypothesis, not verified.",
+  "note": "Synthetic narrative memory: only a chat message says 'because we added the checklist, rollbacks dropped'. The causal record is structurally complete (estimand, tested identification, limitations) so the evidence rule is the only thing that can stop it.",
   "attempt": {
     "title": "The release checklist reduced rollbacks",
     "body": "Because we added the release checklist, rollbacks dropped. That is why the last two releases went smoothly.",
@@ -13,21 +13,32 @@
       "outcome": "rollback count",
       "estimand": "ATE of the checklist on rollbacks",
       "identification": {
-        "assumptions": ["no other release process changed"]
+        "assumptions": [
+          "no other release process changed"
+        ]
       },
       "robustness": []
     },
-    "evidence": ["chat:synthetic-release-thread"],
+    "evidence": [
+      "chat:synthetic-release-thread"
+    ],
     "source": "chat",
-    "provenance": "llm-generated"
+    "provenance": "llm-generated",
+    "limitations": [
+      "one chat thread; no dataset or design"
+    ]
   },
   "retrieval": {
     "title": "Release checklist and rollbacks: narrative association",
     "body": "A synthetic chat message says the release checklist was followed by fewer rollbacks. This is a narrative association only; there is no dataset and no counterfactual.",
     "epistemic": "judgment",
     "causal": "association",
-    "evidence": ["chat:synthetic-release-thread"],
+    "evidence": [
+      "chat:synthetic-release-thread"
+    ],
     "source": "chat",
     "provenance": "llm-generated"
-  }
+  },
+  "group": "narrative",
+  "expected_block": "evidence"
 }

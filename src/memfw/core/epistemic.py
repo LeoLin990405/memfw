@@ -137,17 +137,25 @@ class ExperiencePoint(BaseModel):
 #
 # ``evidence`` entries are opaque pointers. The gate reads only their prefix (or
 # the document's ``source``/``provenance``) to decide whether a claim cites
-# something outside the conversation. Rules, also documented in
-# ``docs/epistemic-and-experience.md``:
+# something outside the conversation. Authority, strongest first, also
+# documented in ``docs/epistemic-and-experience.md``:
 #
-# * a chat pointer is ``chat:``, ``conversation:``, ``session:``,
-#   ``transcript:`` or ``message:``;
-# * a generated pointer is ``llm:``, ``reflection:``, ``reasoning:``,
-#   ``explanation:`` or ``dream:``;
+# * a recorded human decision (``human_decision=True``) overrides the pointer
+#   rules below for a chat-sourced or LLM-derived memory;
 # * a raw pointer is ``data:``, ``dataset:``, ``design:``, ``experiment:``,
 #   ``result:``, ``test:``, ``code:``, ``file:``, ``sha256:``, ``pr:``,
-#   ``commit:``, ``issue:``, ``repo:``, or any ``http(s)://`` URL;
-# * anything else (including a bare memory id) is not raw evidence.
+#   ``commit:``, ``issue:``, or ``repo:`` — something that can be replayed or
+#   checked, not just read;
+# * a link pointer is any ``http(s)://`` URL. It points outside the vault, but
+#   the vault cannot verify what sits behind it; when the memory is chat-sourced
+#   or LLM-derived, a link alone is not enough;
+# * a chat pointer is ``chat:``, ``conversation:``, ``session:``,
+#   ``transcript:``, ``message:`` or ``turn:``;
+# * a generated pointer is ``llm:``, ``reflection:``, ``reasoning:``,
+#   ``explanation:``, ``dream:``, ``distil:`` or ``summary:``;
+# * anything else (including a bare memory id) is not outside-vault evidence.
+#
+# A prefix with nothing after it (``data:``, ``https://``) is not a pointer.
 
 _CHAT_PREFIXES = ("chat:", "conversation:", "session:", "transcript:", "message:", "turn:")
 _GENERATED_PREFIXES = (
@@ -159,6 +167,7 @@ _GENERATED_PREFIXES = (
     "distil:",
     "summary:",
 )
+_LINK_PREFIXES = ("http://", "https://")
 _RAW_PREFIXES = (
     "data:",
     "dataset:",
@@ -173,8 +182,13 @@ _RAW_PREFIXES = (
     "commit:",
     "issue:",
     "repo:",
-    "http://",
-    "https://",
+)
+EvidenceClass = Literal["chat", "generated", "link", "raw", "other"]
+_PREFIX_CLASSES: tuple[tuple[EvidenceClass, tuple[str, ...]], ...] = (
+    ("chat", _CHAT_PREFIXES),
+    ("generated", _GENERATED_PREFIXES),
+    ("link", _LINK_PREFIXES),
+    ("raw", _RAW_PREFIXES),
 )
 _CHAT_SOURCES = frozenset({"chat", "conversation", "transcript", "session", "history", "message"})
 _GENERATED_PROVENANCES = frozenset(
@@ -191,22 +205,35 @@ _GENERATED_PROVENANCES = frozenset(
 )
 
 
-def evidence_source_class(reference: str) -> Literal["chat", "generated", "raw", "other"]:
-    """Classify one evidence pointer. Only ``raw`` proves a source outside memory."""
+def evidence_source_class(reference: str) -> EvidenceClass:
+    """Classify one evidence pointer.
+
+    Only ``raw`` and ``link`` point outside the vault; only ``raw`` points at
+    something the vault can replay or check. A prefix with an empty remainder is
+    ``other``, so ``data:`` and ``https://`` are not evidence.
+    """
 
     value = reference.strip().lower()
     if not value:
         return "other"
-    if value.startswith(_CHAT_PREFIXES):
-        return "chat"
-    if value.startswith(_GENERATED_PREFIXES):
-        return "generated"
-    if value.startswith(_RAW_PREFIXES):
-        return "raw"
+    for label, prefixes in _PREFIX_CLASSES:
+        for prefix in prefixes:
+            if value.startswith(prefix):
+                if not value[len(prefix) :].strip():
+                    return "other"
+                return label
     return "other"
 
 
 def _has_raw_evidence(references: Sequence[str]) -> bool:
+    """Whether some pointer points outside the vault (raw data or a link)."""
+
+    return any(evidence_source_class(item) in {"raw", "link"} for item in references)
+
+
+def _has_controlled_evidence(references: Sequence[str]) -> bool:
+    """Whether some pointer names replayable/checkable raw data, not just a URL."""
+
     return any(evidence_source_class(item) == "raw" for item in references)
 
 
@@ -216,8 +243,8 @@ def _narrative_only_reason(references: Sequence[str]) -> str:
         return "evidence points only at chat text"
     if classes and classes <= {"generated"}:
         return "evidence points only at LLM-generated explanations or reflections"
-    if classes and classes <= {"chat", "generated", "other"}:
-        return "evidence has no pointer to raw data or a design"
+    if classes and classes <= {"link"}:
+        return "evidence points only at web links, not at raw data or a design"
     return "evidence has no pointer to raw data or a design"
 
 
@@ -264,13 +291,21 @@ def validate_epistemic_write(
     *,
     actor: str,
     human_decision: bool = False,
+    previous_causal: str | None = None,
 ) -> None:
     """Reject an inconsistent epistemic/causal state before any write.
 
     ``values`` is the complete prospective document state (for a partial
     update: the old document merged with the changes). ``actor`` is the actor
-    of the write. Only a human actor, or an agent write covered by a recorded
-    ``HUMAN_DECISION`` (``human_decision=True``), may reach ``causal=verified``.
+    of the write. ``previous_causal`` is the document's causal level before this
+    write, or ``None`` when the document does not exist yet.
+
+    Only a write that *turns* a document into ``causal=verified`` needs a human:
+    a human actor, or an agent write covered by a recorded ``HUMAN_DECISION``
+    (``human_decision=True``). A document that is already ``verified`` may still
+    be corrected, annotated, or demoted by an agent or dream; the verified
+    invariants below keep applying, so such a write cannot strip the raw-data
+    evidence or the identification/robustness record.
 
     Raises :class:`IntegrityError` naming every missing or contradictory item.
     """
@@ -318,15 +353,19 @@ def validate_epistemic_write(
 
     # ---- causal=verified: everything below is mandatory -------------------
     missing: list[str] = []
-    if record is None:
-        missing.append("causal_record")
-    else:
+    if record is not None:
         if not _non_empty(record.estimand):
             missing.append("causal_record.estimand")
-        if not (record.identification.assumptions or record.identification.untested):
+        # A blank string is not an assumption; drop it before counting.
+        if not (
+            any(item.strip() for item in record.identification.assumptions)
+            or any(item.strip() for item in record.identification.untested)
+        ):
             missing.append("causal_record.identification")
-        if not (record.robustness or limitations):
+        if not (any(item.check.strip() for item in record.robustness) or limitations):
             missing.append("causal_record.robustness or limitations")
+    else:
+        missing.append("causal_record")
     references = _strings(values.get("evidence"))
     if not references:
         missing.append("evidence (at least one pointer to raw data or a design)")
@@ -334,7 +373,8 @@ def validate_epistemic_write(
         raise IntegrityError("causal=verified requires: " + ", ".join(missing))
 
     assert record is not None  # narrowed by the missing check above
-    if record.identification.untested:
+    untested = [item.strip() for item in record.identification.untested if item.strip()]
+    if untested:
         raise IntegrityError(
             "causal=verified requires tested identification assumptions; "
             "causal_record.identification.untested is non-empty, so record "
@@ -347,17 +387,21 @@ def validate_epistemic_write(
         )
     provenance = str(values.get("provenance") or "").strip().lower()
     source = str(values.get("source") or "").strip().lower()
-    if provenance in _GENERATED_PROVENANCES and not _has_raw_evidence(references):
+    # A URL is a pointer, not a replayable source: it can say anything. When the
+    # prose itself came from a chat or a model, the claim needs either a raw
+    # pointer the vault can check or an explicit recorded HUMAN_DECISION. This is
+    # the rule that stops "someone pasted a chat link" from becoming verified.
+    if (provenance in _GENERATED_PROVENANCES or source in _CHAT_SOURCES) and not (
+        _has_controlled_evidence(references) or human_decision
+    ):
+        attribution = "source=" + (source or "unset") + ", provenance=" + (provenance or "unset")
         raise IntegrityError(
-            "an LLM-derived memory (provenance="
-            + provenance
-            + ") cannot be causal=verified without raw-data evidence"
-        )
-    if source in _CHAT_SOURCES and not _has_raw_evidence(references):
-        raise IntegrityError(
-            "a chat-sourced memory (source="
-            + source
-            + ") cannot be causal=verified without raw-data evidence"
+            "a chat-sourced or LLM-derived memory ("
+            + attribution
+            + ") cannot be causal=verified on a bare web link: cite a replayable raw "
+            "pointer (data:, dataset:, design:, experiment:, result:, test:, code:, "
+            "file:, sha256:, pr:, commit:, issue:, repo:) or carry a recorded "
+            "HUMAN_DECISION"
         )
     failed = [item.check for item in record.robustness if item.failed]
     if failed:
@@ -365,7 +409,10 @@ def validate_epistemic_write(
             "a failed robustness check requires demotion to causal=hypothesis: "
             + ", ".join(failed)
         )
-    if not (actor == "human" or human_decision):
+    # Only the transition into ``verified`` needs a human. An already-verified
+    # document stays writable by agent/dream writes (correction, appended
+    # evidence, demotion); the invariants above still guard its content.
+    if previous_causal != "verified" and not (actor == "human" or human_decision):
         raise IntegrityError(
             "only a human actor or a recorded HUMAN_DECISION may set causal=verified; "
             "agent and dream proposals stop at causal=hypothesis"
@@ -383,16 +430,24 @@ def validate_proposed_write(
     Used by agent proposals and by dream/curation candidate staging, where the
     change is not the whole document. Anything outside :data:`EPISTEMIC_FIELDS`
     is ignored, so a write of unrelated fields is never re-validated.
+
+    ``current`` is the document as stored before the change; its ``causal`` level
+    decides whether the change *turns* the document into ``verified`` (which an
+    agent may not do without a human decision) or merely edits one that already
+    is.
     """
 
     if not set(changes) & EPISTEMIC_FIELDS:
         return
+    previous_causal: str | None = None
+    if current is not None:
+        previous_causal = str(current.get("causal") or "none")
     values: dict[str, Any] = dict(current) if current is not None else {}
     values.setdefault("causal", "none")
     values.update({key: value for key, value in changes.items() if key in EPISTEMIC_FIELDS})
     if values.get("causal") in (None, ""):
         values["causal"] = "none"
-    validate_epistemic_write(values, actor=actor)
+    validate_epistemic_write(values, actor=actor, previous_causal=previous_causal)
 
 
 def _validate_experience_point(
@@ -431,6 +486,7 @@ __all__ = [
     "CausalRecord",
     "Confounders",
     "EpistemicType",
+    "EvidenceClass",
     "ExperiencePoint",
     "ExperienceReview",
     "ExperienceVerdict",
