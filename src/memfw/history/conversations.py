@@ -20,6 +20,13 @@ store's fingerprint and the last offset seen:
   the whole session is re-read first and, only once that read finished,
   offsets that are no longer present are dropped.
 
+Origin is a session label: the root's origin, the reader's
+:attr:`ConversationRecord.origin` and a Conductor dispatch marker in the
+session's first real prompt (:func:`memfw.history.sources.labels.prompt_origin`)
+are merged once per session and written to every turn of it. An incremental
+read keeps the label already stored. When :data:`LABELS_VERSION` changes, the
+next ingest re-reads every session once (the re-label pass).
+
 A re-read that yields nothing although the locator had rows (store locked,
 vanished mid-read) changes nothing and leaves the cursor as it was.
 """
@@ -38,8 +45,10 @@ from pathlib import Path
 from typing import Any
 
 from .index import HistoryError
+from .injected import has_content, strip_structural
 from .redact import has_secret, redact
 from .sources.base import ConversationRecord, Reader, SessionLocator, StoreRoot
+from .sources.labels import merge_origin, prompt_origin
 from .store_location import prepare_store_path
 
 SCHEMA_VERSION = "1"
@@ -49,6 +58,11 @@ SUMMARY_CHARS = 200
 OPTOUT_KEY = "conversation_optout"
 OPTOUT_MARKER = ".memfw-no-history"
 ORIGINS = ("interactive", "worker")
+"""Origins of a store root. A session's stored origin may also be ``automated``
+or ``subagent`` (:data:`memfw.history.sources.labels.SESSION_ORIGINS`)."""
+LABELS_VERSION = "2"
+"""Bumped when session labelling (origin, parent) changes: the next ingest of
+each agent re-reads every session once, so existing stores are re-labelled."""
 
 
 @dataclass(frozen=True)
@@ -170,6 +184,7 @@ class ConversationStore:
                 parser_version TEXT NOT NULL,
                 locator TEXT NOT NULL,
                 digest TEXT NOT NULL,
+                parent_session TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY (agent, session_id, offset)
             );
             CREATE INDEX IF NOT EXISTS conversation_turns_locator
@@ -185,6 +200,14 @@ class ConversationStore:
             );
             """
         )
+        columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(conversation_turns)")
+        }
+        if "parent_session" not in columns:
+            # Additive: stores written before parent links existed get the column.
+            connection.execute(
+                "ALTER TABLE conversation_turns ADD COLUMN parent_session TEXT NOT NULL DEFAULT ''"
+            )
         connection.execute(
             "INSERT OR IGNORE INTO conversation_meta (key, value) VALUES ('schema_version', ?)",
             (SCHEMA_VERSION,),
@@ -224,7 +247,11 @@ class ConversationStore:
         )
         # Origin is not part of the digest: the same turn seen from another root
         # (a Worker home mirroring a session) is a duplicate, not a rewrite.
-        content = [record.turn, *values[:7], *values[8:]]
+        parent = "" if withheld else _clean(record.parent_session)
+        content: list[Any] = [record.turn, *values[:7], *values[8:]]
+        if parent:
+            # Only when set, so turns stored before parent links keep their digest.
+            content.append(parent)
         digest = hashlib.sha256(json.dumps(content).encode()).hexdigest()[:24]
         return (
             agent,
@@ -234,6 +261,7 @@ class ConversationStore:
             *values,
             locator,
             digest,
+            parent,
         )
 
     def ingest(self, reader: Reader, roots: Iterable[StoreRoot | Path]) -> IngestCounts:
@@ -252,6 +280,8 @@ class ConversationStore:
                 counts.extra["opted_out"] = True
                 return counts
             self._force = self._optout_changed(connection, reader.agent)
+            relabel = self._labels_changed(connection, reader.agent)
+            self._force = self._force or relabel
             for item in roots:
                 root = item if isinstance(item, StoreRoot) else StoreRoot(Path(item).resolve())
                 try:
@@ -265,6 +295,11 @@ class ConversationStore:
                 except Exception:
                     connection.rollback()
                     counts.roots_failed += 1
+            if relabel and not counts.roots_failed and not counts.sessions_failed:
+                # Recorded only once every session was re-read, so an interrupted
+                # pass runs again at the next ingest.
+                self._save_labels_version(connection, reader.agent)
+            counts.extra["relabelled"] = relabel
         return counts
 
     def _guarded(
@@ -324,6 +359,8 @@ class ConversationStore:
         last = int(cursor["last_offset"]) if cursor is not None and after >= 0 else -1
         seen: set[tuple[str, int]] = set()
         rows: list[tuple[Any, ...]] = []
+        labels: dict[str, list[str]] = {}
+        prompted: set[str] = set()
         excluded = False
         for record in reader.read(locator, after=after):
             if record.offset <= after:
@@ -334,6 +371,18 @@ class ConversationStore:
             row = self._row(record, agent, root.origin, version, key)
             rows.append(row)
             seen.add((row[1], row[2]))
+            found = labels.setdefault(row[1], [])
+            if record.origin:
+                found.append(record.origin)
+            if (
+                after < 0
+                and row[1] not in prompted
+                and record.role == "user"
+                and has_content(strip_structural(record.text))
+            ):
+                # The session's first real prompt: a dispatch marker labels it.
+                prompted.add(row[1])
+                found.append(prompt_origin(record.text))
         if excluded:
             counts.sessions_opted_out += 1
             counts.records_dropped += connection.execute(
@@ -350,6 +399,13 @@ class ConversationStore:
                 # Nothing readable now although rows exist: likely locked or mid-rewrite.
                 counts.sessions_busy += 1
                 return
+        origins = {
+            session: self._session_origin(
+                connection, agent, key, session, root.origin, found, after >= 0
+            )
+            for session, found in labels.items()
+        }
+        rows = [(*row[:11], origins[row[1]], *row[12:]) for row in rows]
         for row in rows:
             existing = connection.execute(
                 "SELECT digest FROM conversation_turns"
@@ -357,7 +413,7 @@ class ConversationStore:
                 row[:3],
             ).fetchone()
             last = max(last, row[2])
-            if existing is not None and existing["digest"] == row[-1]:
+            if existing is not None and existing["digest"] == row[15]:
                 counts.records_duplicate += 1
                 continue
             if existing is None:
@@ -368,9 +424,17 @@ class ConversationStore:
             connection.execute(
                 "INSERT OR REPLACE INTO conversation_turns (agent, session_id, offset, turn,"
                 " role, ts, text, tool_calls, cwd, project, model, origin, withheld,"
-                " parser_version, locator, digest)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " parser_version, locator, digest, parent_session)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 row,
+            )
+        for session, origin in origins.items():
+            # Origin is not in the digest: unchanged turns and turns from earlier
+            # reads of this session get the session label here.
+            connection.execute(
+                "UPDATE conversation_turns SET origin = ?"
+                " WHERE agent = ? AND locator = ? AND session_id = ? AND origin <> ?",
+                (origin, agent, key, session, origin),
             )
         if after < 0:
             # Full re-read finished: drop this locator's offsets that are gone.
@@ -389,6 +453,45 @@ class ConversationStore:
             )
             counts.records_dropped += len(stale)
         self._save_cursor(connection, agent, key, fingerprint, last, version)
+
+    @staticmethod
+    def _session_origin(
+        connection: sqlite3.Connection,
+        agent: str,
+        key: str,
+        session: str,
+        root_origin: str,
+        found: list[str],
+        incremental: bool,
+    ) -> str:
+        """Merged origin of one session; an incremental read keeps the stored label."""
+
+        previous: list[str] = []
+        if incremental:
+            # The first prompt was not re-read: keep what the full read found.
+            stored = connection.execute(
+                "SELECT origin FROM conversation_turns"
+                " WHERE agent = ? AND locator = ? AND session_id = ? ORDER BY offset LIMIT 1",
+                (agent, key, session),
+            ).fetchone()
+            if stored is not None:
+                previous.append(str(stored["origin"]))
+        return merge_origin(root_origin, *found, *previous)
+
+    def _labels_changed(self, connection: sqlite3.Connection, agent: str) -> bool:
+        """True (once) when :data:`LABELS_VERSION` differs from this agent's last ingest."""
+
+        row = connection.execute(
+            "SELECT value FROM conversation_meta WHERE key = ?", (f"labels_version:{agent}",)
+        ).fetchone()
+        return row is None or row["value"] != LABELS_VERSION
+
+    @staticmethod
+    def _save_labels_version(connection: sqlite3.Connection, agent: str) -> None:
+        connection.execute(
+            "INSERT OR REPLACE INTO conversation_meta (key, value) VALUES (?, ?)",
+            (f"labels_version:{agent}", LABELS_VERSION),
+        )
 
     def _optout_changed(self, connection: sqlite3.Connection, agent: str) -> bool:
         """True (once) when the cwd opt-out rules changed since this agent's last ingest."""
