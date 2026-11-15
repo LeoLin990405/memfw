@@ -19,6 +19,20 @@ from ..core.models import MemoryDocument
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _BODY_MARKERS = (b"\n---\n\n", b"\r\n---\r\n\r\n")
 
+#: Fields whose default carries no information, so a rewrite omits them.
+#: They were added on 2026-11-06; a file written after that date carries them
+#: explicitly, even at the default. ``parse`` records which of these the source
+#: file had so ``render`` writes them back and the bytes survive both
+#: directions: legacy file -> new file, and new file -> rewritten file.
+_OPTIONAL_DEFAULT_FIELDS = (
+    "type",
+    "tenant",
+    "related",
+    "valid_from",
+    "valid_to",
+    "superseded_by",
+)
+
 
 def _split_raw_markdown(raw: bytes) -> tuple[bytes, bytes]:
     for marker in _BODY_MARKERS:
@@ -27,6 +41,20 @@ def _split_raw_markdown(raw: bytes) -> tuple[bytes, bytes]:
             end = offset + len(marker)
             return raw[:end], raw[end:]
     raise IntegrityError("Markdown has no frontmatter/body separator")
+
+
+def _observed_default_fields(document: MemoryDocument) -> tuple[str, ...]:
+    """Optional frontmatter fields the source file spelled out at their default."""
+
+    return document._observed_default_fields
+
+
+def _observed_default_fields_from_metadata(metadata: Any) -> tuple[str, ...]:
+    """Same, for a retained frontmatter mapping that is not a live document."""
+
+    if not isinstance(metadata, dict):
+        return ()
+    return tuple(key for key in _OPTIONAL_DEFAULT_FIELDS if key in metadata)
 
 
 class MarkdownStorageMixin:
@@ -79,6 +107,11 @@ class MarkdownStorageMixin:
                     values = base_doc.model_dump(mode="json", exclude={"body"})
                     values.update(delta["metadata_changes"])
                     doc = MemoryDocument.model_validate({**values, "body": base_doc.body})
+                    # ``model_dump`` above materialises every default, so the
+                    # reconstructed file must inherit which optional fields the
+                    # base version actually carried; otherwise a legacy delta
+                    # re-renders to different bytes than the version it stores.
+                    doc._observed_default_fields = _observed_default_fields(base_doc)
                     raw = self.render(doc).encode("utf-8")
                     if hashlib.sha256(raw).hexdigest() != content_hash:
                         raise IntegrityError(f"Historical version hash mismatch: {content_hash}")
@@ -108,6 +141,9 @@ class MarkdownStorageMixin:
                         cast(Any, self)._body_object_path(body_hash).read_text(encoding="utf-8"),
                     )
                 doc = MemoryDocument.model_validate({**metadata, "body": body})
+                # ``metadata`` is the original frontmatter, so its keys say
+                # exactly which optional defaults that version spelled out.
+                doc._observed_default_fields = _observed_default_fields_from_metadata(metadata)
                 raw = self.render(doc).encode("utf-8")
             except Exception as exc:
                 raise IntegrityError(
@@ -232,8 +268,15 @@ class MarkdownStorageMixin:
         # information, so it stays off the file exactly like ``recorded_at`` and
         # the alias targets. A file re-rendered by this version must not gain
         # lines its own version never wrote.
-        for key in ("type", "tenant", "related", "valid_from", "valid_to", "superseded_by"):
-            if ordered.get(key) in (None, "", []):
+        #
+        # The other direction matters just as much: a file written on or after
+        # 2026-11-06 carries all six lines even at their default, and an
+        # unconditional drop would rewrite such a file and change its
+        # ``content_hash`` for no reason. ``parse`` records which of the six the
+        # source file had, so those come back exactly as they were.
+        observed = set(getattr(document, "_observed_default_fields", ()))
+        for key in _OPTIONAL_DEFAULT_FIELDS:
+            if key not in observed and ordered.get(key) in (None, "", []):
                 ordered.pop(key, None)
         frontmatter = yaml.safe_dump(ordered, allow_unicode=True, sort_keys=False).rstrip()
         body = document.body.rstrip("\n")
@@ -274,8 +317,14 @@ class MarkdownStorageMixin:
         body = body.lstrip("\n")
         if body.endswith("\n"):
             body = body[:-1]
+        # Remember which optional fields the source file carried, so render()
+        # can write them back instead of dropping a default that the file's own
+        # writer chose to spell out.
+        observed = tuple(key for key in _OPTIONAL_DEFAULT_FIELDS if key in metadata)
         try:
-            return MemoryDocument.model_validate({**metadata, "body": body})
+            document = MemoryDocument.model_validate({**metadata, "body": body})
+            document._observed_default_fields = observed
+            return document
         except ValidationError as exc:
             # Forward compatibility: a newer memfw may write frontmatter keys this
             # version does not know. Ignore exactly those keys (the document stays
@@ -292,6 +341,7 @@ class MarkdownStorageMixin:
             try:
                 document = MemoryDocument.model_validate({**known, "body": body})
                 document._ignored_keys = tuple(sorted(unknown))
+                document._observed_default_fields = observed
                 return document
             except Exception as retry:
                 raise IntegrityError(f"Invalid memory document: {retry}") from retry

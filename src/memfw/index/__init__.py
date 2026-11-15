@@ -45,6 +45,15 @@ _TOKENIZER = Literal["trigram", "unicode61"]
 #: disposable projection, so a stale schema is rebuilt, never read in place.
 _INDEX_TABLES = frozenset({"memory_rows", "memory_temporal", "memory_access", "memory_fts"})
 
+#: Schema generation of the disposable index, stored in ``PRAGMA user_version``.
+#: Checking table *names* alone misses a future column change, which would keep
+#: ``schema_is_current`` answering True on an index this version cannot read
+#: correctly. Bump this when a table's columns change: every older file then
+#: reads as stale and is rebuilt on first use. 1 is the first generation that
+#: wrote ``memory_temporal``/``memory_access`` (2026-11), and 0 is what an index
+#: from an even older memfw carries.
+_INDEX_SCHEMA_VERSION = 2
+
 
 def _supports_trigram(connect: Callable[..., Any] | None = None) -> bool:
     """Probe SQLite FTS5 trigram support without touching a vault or index file."""
@@ -130,6 +139,7 @@ def _create_schema(connection: sqlite3.Connection, tokenizer: _TOKENIZER) -> Non
         "CREATE VIRTUAL TABLE memory_fts USING fts5("
         "id UNINDEXED, title, body, summary, tags, tokenize='" + tokenizer + "')"
     )
+    connection.execute(f"PRAGMA user_version = {_INDEX_SCHEMA_VERSION:d}")
 
 
 def _insert_documents(
@@ -192,28 +202,32 @@ class MemoryIndex:
         self.path = Path(path)
 
     def schema_is_current(self) -> bool:
-        """True when the file carries every table this version queries.
+        """True when the file carries the table set and schema generation we write.
 
         The index is disposable, so an index built by an earlier memfw is not
         read in place: it has no ``memory_temporal``/``memory_access``
-        projection and the first query would fail with ``no such table``. A
-        missing file and a stale file both answer ``False``, which is the
-        signal callers rebuild on. Any SQLite error reads as stale: a corrupt
-        projection is rebuilt rather than trusted.
+        projection and the first query would fail with ``no such table``. The
+        table check alone would miss a later column change, so every index also
+        records :data:`_INDEX_SCHEMA_VERSION` in ``PRAGMA user_version``; an
+        index without that generation is rebuilt even when its table names
+        happen to match. A missing file and a stale file both answer ``False``,
+        which is the signal callers rebuild on. Any SQLite error reads as stale:
+        a corrupt projection is rebuilt rather than trusted.
         """
         if not self.path.exists():
             return False
         try:
             with closing(sqlite3.connect(self.path)) as connection:
+                version = int(connection.execute("PRAGMA user_version").fetchone()[0])
                 names = {
                     str(row[0])
                     for row in connection.execute(
                         "SELECT name FROM sqlite_master WHERE type IN ('table','view')"
                     )
                 }
-        except sqlite3.Error:
+        except (sqlite3.Error, TypeError, ValueError):
             return False
-        return _INDEX_TABLES <= names
+        return version == _INDEX_SCHEMA_VERSION and _INDEX_TABLES <= names
 
     def rebuild(self, repository: Repository) -> int:
         """Build a complete replacement under the Repository's shared file lock."""
