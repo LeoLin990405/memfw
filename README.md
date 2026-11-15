@@ -126,7 +126,7 @@ The conversation store and the worker state are kept **outside** the vault, by d
 repository, add `index.sqlite3` and `.memfw-history.sqlite*` to its `.gitignore`.
 
 An index written by an older memfw has no temporal projections. Writers are lazy about it:
-`memfw mcp serve` and `memfw index search` check the schema generation (`PRAGMA user_version`)
+the MCP server (`memfw-mcp`) and `memfw index search` check the schema generation (`PRAGMA user_version`)
 before using the file and rebuild it when it is stale, so an upgrade needs no manual step there.
 The read-only HTTP service (`scripts/memfw_readonly_service.py`) never writes, so it **does not**
 rebuild: it detects the missing tables and degrades instead (no temporal filtering when
@@ -415,7 +415,7 @@ curate, distill, budget, skills), OKF v0.2 export, and the read-only HTTP servic
 byte-identical in both directions, and a normal write no longer restates default fields. A file
 written after 2026-11-06 that already spelled those fields out keeps them too, so upgrading does
 not change its content hash. The FTS5 index is a disposable projection and is **not** migrated in
-place: `memfw mcp serve` and `memfw index search` rebuild a stale index before they use it; the
+place: the MCP server (`memfw-mcp`) and `memfw index search` rebuild a stale index before they use it; the
 read-only HTTP service never writes, so run `memfw index rebuild` once before pointing it at an
 upgraded vault.
 
