@@ -16,12 +16,24 @@ needs_git = pytest.mark.skipif(GIT is None, reason="git not installed")
 
 
 @pytest.fixture(autouse=True)
-def _isolated_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _isolated_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """No runner config leaks in: a temp HOME, a temp global file, no system file."""
+
     home = tmp_path / "home"
     home.mkdir()
+    global_config = home / "gitconfig"
+    global_config.write_text("")
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(home / "gitconfig"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(global_config))
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    return global_config
+
+
+def _script(path: Path, marker: Path) -> Path:
+    path.write_text(f"#!/bin/sh\ntouch '{marker}'\ncat\n")
+    path.chmod(0o755)
+    return path
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -115,8 +127,13 @@ def test_commands_are_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         assert {key for key in env if key.startswith("GIT_")} == {
             "GIT_OPTIONAL_LOCKS",
             "GIT_TERMINAL_PROMPT",
+            "GIT_CONFIG_GLOBAL",  # the user's own files: kept
+            "GIT_CONFIG_NOSYSTEM",
         }
         assert kwargs["stdin"] == subprocess.DEVNULL and kwargs["timeout"] == 5.0
+    checks = [argv for argv, _ in seen if "--get-regexp" in argv]
+    assert [argv[argv.index("config") + 1] for argv in checks] == ["--local", "--worktree"]
+    assert all("--includes" in argv for argv in checks)
     diff = next(argv for argv, _ in seen if "diff" in argv)
     assert {"--no-ext-diff", "--no-textconv"} <= set(diff)
 
@@ -189,3 +206,81 @@ def test_secret_lines_are_dropped(tmp_path: Path) -> None:
 
     snapshot = git_snapshot(tmp_path, runner=runner)
     assert snapshot is not None and snapshot["status"] == [" M ok.py"]
+
+
+@needs_git
+def test_a_global_lfs_style_filter_does_not_disable_the_snapshot(
+    repo: Path, _isolated_git: Path
+) -> None:
+    """Regression: git-lfs puts filter.lfs.* in the user's config on most machines."""
+
+    _isolated_git.write_text(
+        '[filter "lfs"]\n\tclean = git-lfs clean -- %f\n\tsmudge = git-lfs smudge -- %f\n'
+        "\tprocess = git-lfs filter-process\n\trequired = true\n"
+    )
+    snapshot = git_snapshot(repo)
+    assert snapshot is not None and " M app.py" in snapshot["status"]
+
+
+@needs_git
+def test_a_filter_in_the_home_gitconfig_does_not_disable_the_snapshot(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GIT_CONFIG_GLOBAL")
+    (tmp_path / "home" / ".gitconfig").write_text('[filter "lfs"]\n\tclean = git-lfs clean -- %f\n')
+    assert git_snapshot(repo) is not None
+
+
+@needs_git
+def test_a_filter_pulled_in_by_a_local_include_skips_the_snapshot(
+    repo: Path, tmp_path: Path
+) -> None:
+    marker = tmp_path / "marker-include"
+    script = _script(tmp_path / "inc.sh", marker)
+    included = repo / ".git" / "extra.cfg"
+    included.write_text(f'[filter "evil"]\n\tclean = {script}\n')
+    (repo / ".gitattributes").write_text("*.py filter=evil\n")
+    _git(repo, "config", "include.path", str(included))
+    assert git_snapshot(repo) is None
+    assert not marker.exists()
+
+
+@needs_git
+def test_a_filter_pulled_in_by_include_if_skips_the_snapshot(repo: Path, tmp_path: Path) -> None:
+    marker = tmp_path / "marker-includeif"
+    script = _script(tmp_path / "incif.sh", marker)
+    included = tmp_path / "cond.cfg"
+    included.write_text(f'[filter "evil"]\n\tsmudge = {script}\n\tclean = {script}\n')
+    (repo / ".gitattributes").write_text("*.py filter=evil\n")
+    _git(repo, "config", "includeIf.onbranch:**.path", str(included))
+    assert git_snapshot(repo) is None
+    assert not marker.exists()
+
+
+@needs_git
+def test_global_textconv_and_external_diff_never_run(
+    repo: Path, tmp_path: Path, _isolated_git: Path
+) -> None:
+    marker = tmp_path / "marker-global-diff"
+    script = _script(tmp_path / "gdiff.sh", marker)
+    _isolated_git.write_text(
+        f'[diff]\n\texternal = {script}\n[diff "evil"]\n\ttextconv = {script}\n'
+        f"[core]\n\tattributesFile = {tmp_path / 'attrs'}\n"
+    )
+    (tmp_path / "attrs").write_text("*.py diff=evil\n")
+    snapshot = git_snapshot(repo)
+    assert snapshot is not None and any("app.py" in line for line in snapshot["diff_stat"])
+    assert not marker.exists()
+
+
+@needs_git
+def test_a_system_lfs_filter_does_not_disable_the_snapshot(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The CI-runner case: git-lfs installed system-wide."""
+
+    system = tmp_path / "system.cfg"
+    system.write_text('[filter "lfs"]\n\tclean = git-lfs clean -- %f\n\trequired = true\n')
+    monkeypatch.delenv("GIT_CONFIG_NOSYSTEM")
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(system))
+    assert git_snapshot(repo) is not None

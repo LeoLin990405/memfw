@@ -4,8 +4,11 @@ Only ``git rev-parse``, ``git config --get-regexp``, ``git status
 --porcelain`` and ``git diff --stat`` run: no fetch, no optional locks
 (``GIT_OPTIONAL_LOCKS=0``), no fsmonitor, no hooks, no external diff or
 textconv, no submodules, no prompt, a timeout per command, and no inherited
-``GIT_*`` variable. A repository (or user config) that defines any
-``filter.*`` driver gets no snapshot: clean/smudge filters are commands.
+``GIT_*`` variable that could redirect or inject config. A repository whose
+own config (local or worktree, with its includes) defines a ``filter.*``
+driver gets no snapshot: clean/smudge filters are commands. The user's
+global and system config are trusted, so a git-lfs filter there is fine;
+textconv and external diff never run, whichever scope sets them.
 
 Every line is redacted; a line that still
 looks like it holds a secret is dropped.
@@ -33,10 +36,22 @@ _SAFE_CONFIG = (
 )
 
 
-def _env() -> dict[str, str]:
-    """The environment without any ``GIT_*`` variable (they would override ``-C``)."""
+_USER_CONFIG_VARS = frozenset({"GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM"})
+"""Kept: they only choose which of the user's own (trusted) config files git reads."""
 
-    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+def _env() -> dict[str, str]:
+    """The environment without ``GIT_*`` variables that would override ``-C`` or inject config.
+
+    ``GIT_DIR``, ``GIT_WORK_TREE``, ``GIT_CONFIG_PARAMETERS``, ``GIT_CONFIG_COUNT``
+    and the rest are dropped; only :data:`_USER_CONFIG_VARS` stay.
+    """
+
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("GIT_") or key in _USER_CONFIG_VARS
+    }
     env.update({"GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"})
     return env
 
@@ -72,16 +87,31 @@ def _git(cwd: Path, *args: str, timeout: float, runner: Runner) -> str | None:
 
 
 def _has_filters(cwd: Path, *, timeout: float, runner: Runner) -> bool:
-    """True when any config scope defines a ``filter.*`` driver (or the check fails).
+    """True when the repository itself defines a ``filter.*`` driver (or the check fails).
 
-    ``status`` and ``diff`` run clean/smudge filters (git-lfs and the like)
-    named by the repository: commands chosen by whoever wrote the repo's
-    config. With one configured, no snapshot is taken at all.
+    ``status`` and ``diff`` run clean/smudge filters, so a filter set in the
+    repository's own config is a command chosen by whoever wrote that repo.
+    Only the repo-controlled scopes are checked: ``--local`` and
+    ``--worktree``, with ``--includes`` so ``include`` / ``includeIf`` files
+    they pull in count too. Global and system config belong to the user and
+    are trusted (git-lfs puts ``filter.lfs.*`` there on most machines).
     """
 
-    outcome = _run(cwd, "config", "--get-regexp", r"^filter\.", timeout=timeout, runner=runner)
-    # Exit 1 means "no such key"; anything else (0 = found, errors) is unsafe.
-    return outcome is None or outcome[0] != 1
+    for scope in ("--local", "--worktree"):
+        outcome = _run(
+            cwd,
+            "config",
+            scope,
+            "--includes",
+            "--get-regexp",
+            r"^filter\.",
+            timeout=timeout,
+            runner=runner,
+        )
+        # Exit 1 means "no such key"; anything else (0 = found, errors) is unsafe.
+        if outcome is None or outcome[0] != 1:
+            return True
+    return False
 
 
 def _lines(output: str, max_lines: int) -> list[str]:
