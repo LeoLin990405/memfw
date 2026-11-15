@@ -187,7 +187,7 @@ def test_read_normalises_records(tmp_path: Path) -> None:
     assert records[0].timestamp.startswith("2025-11-06T")
     assert records[0].timestamp.endswith("Z")
     assert all(r.session_id == "mvs_0001" and r.agent == "minimax" for r in records)
-    assert all(r.cwd == "/work/demo" and r.project == "/work" for r in records)
+    assert all(r.cwd == "/work/demo" and r.project == "work" for r in records)
     offsets = [r.offset for r in records]
     assert offsets == sorted(offsets) and offsets[0] == 0
 

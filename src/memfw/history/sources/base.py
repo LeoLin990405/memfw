@@ -62,6 +62,13 @@ class ConversationRecord:
     project: str = ""
     model: str = ""
     """Model that produced the turn, when the store records it."""
+    origin: str = ""
+    """Who drove the session, when the reader can tell from the store:
+    ``automated`` or ``subagent`` (see :mod:`memfw.history.sources.labels`).
+    Empty means "nothing recorded": the root's origin applies. Ingest applies
+    the strongest value seen in a session to all of that session's turns."""
+    parent_session: str = ""
+    """Session id this one was spawned or forked from, when the store links them."""
 
 
 @dataclass(frozen=True)

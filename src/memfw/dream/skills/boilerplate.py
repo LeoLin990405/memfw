@@ -25,71 +25,13 @@ Nothing here reads raw transcripts; callers hand in the redacted text.
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 from collections.abc import Iterable
 
-_BLOCK_TAGS = (
-    "system-reminder",
-    "system_reminder",
-    "environment_context",
-    "user_instructions",
-    "INSTRUCTIONS",
-    "permissions instructions",
-    "functions",
-    "background-task-finished",
-    "task-notification",
-    "local-command-stdout",
-    "local-command-stderr",
-    "command-message",
-    "turn_aborted",
-    "persisted-output",
-)
-"""Harness blocks, matched case-sensitively in the exact spelling harnesses emit.
-
-A person's own ``<instructions>`` or ``<tools>`` text is not one of them.
-"""
-_UNWRAP_TAGS = (
-    "user_query",
-    "user_request",
-    "goal_round",
-    "command-args",
-    "command-name",
-)
-"""Request wrappers: the tags go, the request inside stays. Generic words such
-as ``<task>`` or ``<request>`` are left alone: a person may type them."""
-_BLOCKS = [
-    re.compile(
-        rf"<{re.escape(tag)}(?:\s[^>]*)?>.*?(?:</{re.escape(tag)}\s*>|\Z)",
-        re.DOTALL,
-    )
-    for tag in _BLOCK_TAGS
-]
-_UNWRAP = re.compile(
-    r"</?(?:" + "|".join(re.escape(tag) for tag in _UNWRAP_TAGS) + r")(?:\s[^>]*)?>"
-)
-_INJECTED_PREFIX = re.compile(
-    r"^\s*(?:"
-    r"#\s*(?:AGENTS|CLAUDE)\.md\b"
-    r"|Contents of \S*(?:CLAUDE|AGENTS)\.md"
-    r"|\[SYSTEM NOTIFICATION"
-    r"|The following is the Codex agent history"
-    r"|Caveat: The messages below were generated"
-    r")",
-    re.IGNORECASE,
-)
-_INSTRUCTIONS_END = re.compile(r"</INSTRUCTIONS\s*>")
-_INJECTED_EXACT = frozenset(
-    {
-        "tool loaded.",
-        "[request interrupted by user]",
-        "[request interrupted by user for tool use]",
-    }
-)
-_SCHEMA_KEYS = frozenset({"parameters", "properties", "input_schema", "inputSchema", "$schema"})
-_PARAGRAPH = re.compile(r"\n\s*\n")
-_SENTENCE = re.compile(r"(?<=[.!?。！？])\s+(?=\S)")
-_CONTENT_WORD = re.compile(r"[A-Za-z]{2,}|[一-鿿]")
+from ...history.injected import _SENTENCE, _structural
+from ...history.injected import has_content as has_content
+from ...history.injected import paragraphs as paragraphs
+from ...history.injected import strip_structural as strip_structural
 
 _FP_URL = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://\S+")
 _FP_REDACTED = re.compile(r"\[REDACTED:[^\]]*\]|<[a-z]+>")
@@ -100,71 +42,6 @@ _FP_NUMBER = re.compile(r"\d+")
 _FP_SPACE = re.compile(r"\s+")
 
 DIGEST_BYTES = 12
-
-
-def _is_schema(paragraph: str) -> bool:
-    text = paragraph.strip()
-    if '"type": "object"' in text and '"properties"' in text:
-        return True
-    if not text or text[0] not in "[{":
-        return False
-    try:
-        value = json.loads(text)
-    except ValueError:
-        return False
-    items = value if isinstance(value, list) else [value]
-    for item in items:
-        if isinstance(item, dict) and (
-            _SCHEMA_KEYS & set(item) or _SCHEMA_KEYS & set(item.get("function") or {})
-        ):
-            return True
-    return False
-
-
-def _structural(text: str) -> tuple[str, int]:
-    """Residual text and the number of injected pieces removed."""
-
-    removed = 0
-    value = str(text or "")
-    stripped = value.strip()
-    if stripped.lower() in _INJECTED_EXACT:
-        return "", 1
-    if _INJECTED_PREFIX.match(value):
-        ends = list(_INSTRUCTIONS_END.finditer(value))
-        end = ends[-1] if ends else None
-        if end is None:
-            return "", 1
-        value = value[end.end() :]
-        removed += 1
-    for pattern in _BLOCKS:
-        value, count = pattern.subn("\n\n", value)
-        removed += count
-    value = _UNWRAP.sub("\n", value)
-    kept = []
-    for paragraph in paragraphs(value):
-        if _is_schema(paragraph) or paragraph.strip().lower() in _INJECTED_EXACT:
-            removed += 1
-            continue
-        kept.append(paragraph)
-    return "\n\n".join(kept), removed
-
-
-def strip_structural(text: str) -> str:
-    """``text`` without generic harness markers (static patterns only)."""
-
-    return _structural(text)[0]
-
-
-def paragraphs(text: str) -> list[str]:
-    """Blank-line separated paragraphs, each with trailing space trimmed."""
-
-    out = []
-    for part in _PARAGRAPH.split(str(text or "")):
-        lines = [line.rstrip() for line in part.strip("\n").splitlines()]
-        joined = "\n".join(lines).strip()
-        if joined:
-            out.append(joined)
-    return out
 
 
 def _units(paragraph: str) -> list[str]:
@@ -192,12 +69,6 @@ def fingerprint(text: str) -> str:
 
 def _digest(text: str) -> bytes:
     return hashlib.blake2b(text.encode("utf-8"), digest_size=DIGEST_BYTES).digest()
-
-
-def has_content(text: str) -> bool:
-    """At least two content words (or two CJK characters)."""
-
-    return len(_CONTENT_WORD.findall(text or "")) >= 2
 
 
 class BoilerplateFilter:
