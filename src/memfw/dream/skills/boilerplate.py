@@ -252,7 +252,7 @@ class BoilerplateFilter:
         """Count one user or system text of ``session_key`` (pass 1)."""
 
         self._repeated = None
-        session = self._session_ids.setdefault(tuple(session_key), len(self._session_ids))
+        session = self._session_ids.setdefault(session_key, len(self._session_ids))
         cap = self.solo_sessions + 1
         for piece in set(self._pieces(strip_structural(text))):
             key = _digest(piece)

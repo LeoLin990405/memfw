@@ -227,7 +227,7 @@ def cluster(
     by_signature: dict[str, list[int]] = defaultdict(list)
     for episode in ordered:
         if weights is None:
-            candidates = range(len(clusters))
+            candidates: Sequence[int] = range(len(clusters))
         else:
             informative = sorted(
                 (item for item in episode.signatures if weights.get(item, 1.0) >= MIN_WEIGHT),
