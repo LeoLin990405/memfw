@@ -21,18 +21,43 @@ The session is the union of every root's message list, merged in root
 insertion (rowid) order: a root that extends the previous one appends its new
 tail; any other root (after a summary or a rewind) appends the messages that
 were not seen before. ``offset`` is the message's index in that merged list,
-so it stays stable while the chat grows. Messages carry no timestamps, so
-``timestamp`` is empty. Reasoning blocks are excluded and tool output is
-capped. A user message flagged ``providerOptions.cursor.isSummary`` (a
-generated context summary) is reported with role ``system``.
+so it stays stable while the chat grows. Reasoning blocks are excluded and
+tool output is capped. A user message flagged
+``providerOptions.cursor.isSummary`` (a generated context summary) is
+reported with role ``system``.
+
+Session labels (see :func:`_session_labels` and :func:`_timestamps`):
+
+* ``cwd``: ``meta.json`` ``cwd``; when ``meta.json`` is missing or has none
+  (older chats), the ``Workspace Path:`` line of the first ``<user_info>``
+  block in a user message. ``project`` is the cwd's basename.
+* ``timestamp``: message blobs have no time field, but cursor-agent prefixes
+  each user prompt with ``<timestamp>Tuesday, Nov 11, 2026, 9:05 PM
+  (UTC-8)</timestamp>`` (minute precision, local time plus offset). A user
+  turn takes its own tag; every later turn takes the latest tag before it.
+  Turns before the first tag take the chat's creation time: ``meta.json``
+  ``createdAtMs``, else the store meta's ``createdAt``, else (documented
+  last resort) the ``store.db`` file mtime, which is the last write time.
+* ``origin`` / ``parent_session``: the store meta's ``subagentInfo``
+  (``parentAgentId``) marks a chat a ``task`` agent spawned: ``subagent``,
+  with the parent chat's id. Nothing in the store tells a headless
+  (``--print``) run from an interactive one (``mode`` is ``default`` and
+  ``isRunEverything`` is a permission setting either way), so ``automated``
+  is never set here; the ingest step's dispatch-prompt check covers Ticket
+  workers.
+* ``model``: the store meta's ``lastUsedModel`` when it names a model; the
+  ``default`` / ``auto`` placeholders are not models and are left empty.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from collections.abc import Iterator
 from contextlib import closing
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -41,6 +66,7 @@ from .base import (
     SessionLocator,
     ToolCall,
     content_text,
+    iso_timestamp,
     open_sqlite_readonly,
     read_json,
     regular_file,
@@ -49,8 +75,9 @@ from .base import (
     tool_call,
     walk_files,
 )
+from .labels import SUBAGENT
 
-PARSER_VERSION = "1"
+PARSER_VERSION = "2"
 
 _AGENT = "cursor"
 _STORE = "store.db"
@@ -226,10 +253,149 @@ def _turn(message: dict[str, Any]) -> tuple[str, str, tuple[ToolCall, ...]]:
     return role, content_text(texts).strip(), tuple(calls)
 
 
-def _chat_meta(store: Path) -> tuple[str, str]:
-    cwd = _str(_obj(read_json(store.parent / "meta.json")).get("cwd")).strip()
+_TIMESTAMP_TAG = re.compile(r"<timestamp>\s*(.*?)\s*</timestamp>", re.S)
+_TIMESTAMP_TEXT = re.compile(
+    r"(?:[A-Za-z]+,\s*)?([A-Za-z]{3})[A-Za-z]*\.?\s+(\d{1,2}),\s*(\d{4}),\s*"
+    r"(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AaPp][Mm])?\s*"
+    r"\(\s*(?:UTC|GMT)\s*(?:([+-])(\d{1,2})(?::?(\d{2}))?)?\s*\)"
+)
+_MONTHS = {
+    name: index
+    for index, name in enumerate(
+        ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"),
+        start=1,
+    )
+}
+_USER_INFO = re.compile(r"<user_info>(.*?)</user_info>", re.S)
+_WORKSPACE_PATH = re.compile(r"^[ \t]*Workspace Path:[ \t]*(\S[^\r\n]*?)[ \t]*$", re.M)
+_MODEL_PLACEHOLDERS = {"", "default", "auto"}
+
+
+@dataclass(frozen=True)
+class _Labels:
+    cwd: str = ""
+    project: str = ""
+    created: str = ""
+    model: str = ""
+    origin: str = ""
+    parent_session: str = ""
+
+
+def _store_meta(connection: sqlite3.Connection) -> dict[str, Any]:
+    """The store's ``meta`` row: hex-encoded JSON (``agentId``, ``createdAt`` ...)."""
+
+    try:
+        rows = connection.execute("SELECT value FROM meta").fetchall()
+    except sqlite3.Error:
+        return {}
+    for row in rows:
+        value = row[0]
+        raw = value.decode("ascii", errors="replace") if isinstance(value, bytes) else value
+        if not isinstance(raw, str):
+            continue
+        try:
+            decoded = _obj(json.loads(bytes.fromhex(raw.strip()).decode("utf-8")))
+        except (ValueError, RecursionError):
+            continue
+        if decoded:
+            return decoded
+    return {}
+
+
+def _tag_timestamp(text: str) -> str:
+    """ISO-8601 UTC of a user prompt's ``<timestamp>`` tag; ``""`` when absent or unparsable."""
+
+    tag = _TIMESTAMP_TAG.search(text)
+    if tag is None:
+        return ""
+    match = _TIMESTAMP_TEXT.search(tag.group(1))
+    if match is None:
+        return ""
+    month_name, day, year, hour, minute, second, meridiem, sign, off_h, off_m = match.groups()
+    month = _MONTHS.get(month_name.lower())
+    if month is None:
+        return ""
+    hours = int(hour)
+    if meridiem:
+        if not 1 <= hours <= 12:
+            return ""
+        hours = hours % 12 + (12 if meridiem.lower() == "pm" else 0)
+    offset = timedelta(hours=int(off_h or 0), minutes=int(off_m or 0))
+    if sign == "-":
+        offset = -offset
+    try:
+        local = datetime(
+            int(year),
+            month,
+            int(day),
+            hours,
+            int(minute),
+            int(second or 0),
+            tzinfo=timezone(offset),
+        )
+    except (ValueError, OverflowError):
+        return ""
+    return local.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _workspace_path(text: str) -> str:
+    """``Workspace Path:`` of a ``<user_info>`` block in ``text``; ``""`` when none."""
+
+    for block in _USER_INFO.finditer(text):
+        match = _WORKSPACE_PATH.search(block.group(1))
+        if match:
+            return match.group(1).strip()
+    return ""
+
+
+def _mtime(path: Path) -> str:
+    try:
+        return iso_timestamp(path.stat().st_mtime)
+    except OSError:
+        return ""
+
+
+def _session_labels(store: Path, meta: dict[str, Any], turns: list[tuple[str, str]]) -> _Labels:
+    """Session-wide labels from ``meta.json``, the store meta and the user turns."""
+
+    chat = _obj(read_json(store.parent / "meta.json"))
+    # cwd: meta.json first; older chats have no meta.json, so fall back to the
+    # Workspace Path the first user turn's <user_info> block records.
+    cwd = _str(chat.get("cwd")).strip()
+    if not cwd:
+        for role, text in turns:
+            if role == "user":
+                cwd = _workspace_path(text)
+                if cwd:
+                    break
     project = PurePosixPath(cwd).name if cwd not in {"", "/"} else ""
-    return cwd, project
+    # Creation time for turns before the first <timestamp> tag: meta.json
+    # createdAtMs, then the store meta's createdAt (epoch ms), then the store
+    # file's mtime. The mtime is the last write, not the start: a fallback only.
+    created = iso_timestamp(chat.get("createdAtMs")) or iso_timestamp(meta.get("createdAt"))
+    if not created:
+        created = _mtime(store)
+    model = _str(meta.get("lastUsedModel")).strip()
+    if model.lower() in _MODEL_PLACEHOLDERS:
+        model = ""
+    # subagentInfo is written only for chats a task agent spawned; its
+    # parentAgentId is the parent chat's id (its directory name).
+    subagent = _obj(meta.get("subagentInfo"))
+    parent = _str(subagent.get("parentAgentId")).strip()
+    origin = SUBAGENT if subagent else ""
+    return _Labels(cwd, project, created, model, origin, parent)
+
+
+def _timestamps(turns: list[tuple[str, str]], created: str) -> list[str]:
+    """Per-turn timestamps: a user turn's tag, carried forward; ``created`` before the first."""
+
+    out: list[str] = []
+    current = created
+    for role, text in turns:
+        if role == "user":
+            current = _tag_timestamp(text) or current
+        out.append(current)
+    return out
 
 
 class CursorReader:
@@ -260,19 +426,23 @@ class CursorReader:
                 if not _is_store(connection):
                     return
                 ids = _merged_ids(connection)
+                meta = _store_meta(connection)
+                # Every message is parsed up front: cwd and the carried
+                # timestamp depend on turns that may lie before ``after``.
+                parsed = [
+                    (offset, _turn(_message(connection, blob_id)))
+                    for offset, blob_id in enumerate(ids)
+                ]
             except sqlite3.Error:
                 return
-            cwd, project = _chat_meta(locator.path)
+            kept = [(offset, turn) for offset, turn in parsed if turn[0] and (turn[1] or turn[2])]
+            texts = [(role, text) for _, (role, text, _) in kept]
+            labels = _session_labels(locator.path, meta, texts)
+            stamps = _timestamps(texts, labels.created)
             session_id = locator.session_id or locator.path.parent.name
-            turn = 0
-            for offset, blob_id in enumerate(ids):
-                try:
-                    message = _message(connection, blob_id)
-                except sqlite3.Error:
-                    return
-                role, text, calls = _turn(message)
-                if not role or (not text and not calls):
-                    continue
+            for turn, ((offset, (role, text, calls)), stamp) in enumerate(
+                zip(kept, stamps, strict=True)
+            ):
                 if offset > after:
                     yield ConversationRecord(
                         agent=_AGENT,
@@ -281,11 +451,14 @@ class CursorReader:
                         turn=turn,
                         role=role,
                         text=text,
+                        timestamp=stamp,
                         tool_calls=calls,
-                        cwd=cwd,
-                        project=project,
+                        cwd=labels.cwd,
+                        project=labels.project,
+                        model=labels.model,
+                        origin=labels.origin,
+                        parent_session=labels.parent_session,
                     )
-                turn += 1
 
 
 READER = CursorReader()

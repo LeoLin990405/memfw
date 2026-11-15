@@ -6,8 +6,8 @@ Two local stores are understood; each root is recognised by its layout.
 
     db/db.sqlite      tables session, message, part
 
-``session`` rows carry ``id``, ``directory`` (the cwd), ``parent_id`` (set for
-sub-agent sessions) and ``time_deleted``. ``message`` rows carry
+``session`` rows carry ``id``, ``directory`` (the cwd), ``parent_id``,
+``task_type`` and ``time_deleted``. ``message`` rows carry
 ``session_id``, ``sequence`` (0-based order inside the session),
 ``time_created`` (epoch ms) and a JSON ``data`` column with ``role``,
 ``time.created``, ``semantics.kind`` (``user_prompt``, ``assistant_response``,
@@ -23,6 +23,24 @@ record at ``2 * i + 1``. Runtime reminders (``system_reminder``,
 ``todo_reminder``) are boilerplate and skipped; other hidden runtime user
 messages (background notifications, compaction summaries) become ``system``.
 
+Labels (SQLite store):
+
+* ``model``: an assistant message's ``modelId``; a user message's
+  ``modelSelection.modelId`` (the model picked to answer it), else
+  ``model.modelID``. Empty when neither is recorded.
+* ``project``: basename of the session ``directory`` (the workspace root, equal
+  to ``path.root`` of every assistant message), else of the record's cwd.
+* ``origin`` / ``parent_session``: from ``session.task_type`` (enum
+  ``interactive``, ``fork``, ``selection_side_chat``, ``workflow_parent``,
+  ``workflow_child``, ``subagent_child``, ``nested_workflow_child``). The
+  ``*_child`` kinds are sessions another session spawned: ``subagent``, with
+  ``parent_id`` as the parent. ``fork`` and ``selection_side_chat`` are opened
+  by a person from another session: only ``parent_session`` is set. Stores
+  without ``task_type`` get no origin (``parent_id`` alone does not tell a
+  sub-agent from a fork). Headless ``zcode -p`` runs are stored like TUI runs
+  (``task_type`` ``interactive``, input client ``cli``), so ``automated`` is
+  never set here.
+
 **Clean-room ``zcode-cli``** (root ``~/.zcode-cli/sessions``)::
 
     sess_<id>.json    {"version", "meta": {id, cwd, createdAt ...}, "messages": [...]}
@@ -30,9 +48,13 @@ messages (background notifications, compaction summaries) become ``system``.
 
 ``messages`` are Anthropic-style ``{"role", "content"}`` values (a string or
 ``text`` / ``tool_use`` / ``tool_result`` blocks); the offset is the message
-index. Messages have no timestamps of their own: the ``turn.started`` events of
-the sibling ``.jsonl`` log line up one-to-one with the user's prompts, so each
-message takes the start time of the turn it belongs to.
+index. ``meta.model`` is the session's model; ``project`` is the basename of
+``meta.cwd``. Nothing in this store records how a session was started
+(``meta.surface`` is only the presentation surface, ``meta.cron`` the
+session's scheduled jobs), so no origin is set. Messages have no timestamps
+of their own: the ``turn.started`` events of the sibling ``.jsonl`` log line
+up one-to-one with the user's prompts, so each message takes the start time of
+the turn it belongs to.
 """
 
 from __future__ import annotations
@@ -40,7 +62,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Iterator
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .base import (
@@ -58,8 +80,9 @@ from .base import (
     tool_call,
     walk_files,
 )
+from .labels import SUBAGENT
 
-PARSER_VERSION = "1"
+PARSER_VERSION = "2"
 
 AGENT = "glm"
 DB_FILE = "db/db.sqlite"
@@ -68,6 +91,10 @@ _TABLES = {"session", "message", "part"}
 _SKIPPED_KINDS = {"system_reminder", "todo_reminder"}
 _PROMPT_KINDS = {"user_prompt", ""}
 _TOOL_RESULT_CHARS = 64_000  # the store redacts, then truncates
+_SPAWNED_TASK_TYPES = {"subagent_child", "workflow_child", "nested_workflow_child"}
+"""``session.task_type`` values of sessions another session spawned."""
+_LINKED_TASK_TYPES = _SPAWNED_TASK_TYPES | {"fork", "selection_side_chat"}
+"""``task_type`` values whose ``parent_id`` names the session they came from."""
 
 
 def _str(value: Any) -> str:
@@ -88,6 +115,13 @@ def _loads(value: Any) -> dict[str, Any]:
     except (ValueError, RecursionError):
         return {}
     return _dict(parsed)
+
+
+def _project(path: str) -> str:
+    """Basename of ``path`` (the convention of the other readers), or ``""``."""
+
+    path = path.rstrip("/")
+    return PurePosixPath(path).name if path else ""
 
 
 # -- ZCode app CLI (SQLite) -------------------------------------------------------
@@ -111,6 +145,9 @@ def _message_records(
     index: int,
     row_time: Any,
     cwd: str,
+    project: str = "",
+    origin: str = "",
+    parent_session: str = "",
 ) -> list[ConversationRecord]:
     """Zero, one or two records (message, then its tool results) for one message row."""
 
@@ -122,18 +159,23 @@ def _message_records(
         role = "user" if kind in _PROMPT_KINDS else "system"
         env = _dict(_dict(message.get("contextSnapshot")).get("envInfo"))
         cwd = _str(env.get("cwd")) or cwd
-        project = ""
+        # The model selected to answer this prompt; older rows only have ``model``.
+        model = _str(_dict(message.get("modelSelection")).get("modelId")) or _str(
+            _dict(message.get("model")).get("modelID")
+        )
     elif raw_role == "assistant":
         role = "assistant"
         path = _dict(message.get("path"))
         cwd = _str(path.get("cwd")) or cwd
-        project = _str(path.get("root"))
+        project = project or _project(_str(path.get("root")))
+        model = _str(message.get("modelId"))
     elif raw_role == "system":
         role = "system"
-        project = ""
+        model = ""
     else:
         return []
     timestamp = iso_timestamp(_dict(message.get("time")).get("created")) or iso_timestamp(row_time)
+    project = project or _project(cwd)
 
     texts: list[str] = []
     calls: list[ToolCall] = []
@@ -166,6 +208,9 @@ def _message_records(
                 tool_calls=tuple(calls),
                 cwd=cwd,
                 project=project,
+                model=model,
+                origin=origin,
+                parent_session=parent_session,
             )
         )
     if outputs:
@@ -180,6 +225,9 @@ def _message_records(
                 timestamp=timestamp,
                 cwd=cwd,
                 project=project,
+                model=model,
+                origin=origin,
+                parent_session=parent_session,
             )
         )
     return records
@@ -214,6 +262,7 @@ def _sqlite_sessions(root: Path) -> Iterator[SessionLocator]:
                 "store": "sqlite",
                 "cwd": _str(row["directory"]) if "directory" in keys else "",
                 "parent_id": _str(row["parent_id"]) if "parent_id" in keys else "",
+                "task_type": _str(row["task_type"]) if "task_type" in keys else "",
             },
         )
 
@@ -223,6 +272,12 @@ def _sqlite_read(locator: SessionLocator, after: int) -> Iterator[ConversationRe
     if not session_id:
         return
     cwd = _str(locator.extra.get("cwd"))
+    project = _project(cwd)
+    # Origin comes only from ``session.task_type`` (see module doc); without it
+    # (older stores) nothing is labelled.
+    task_type = _str(locator.extra.get("task_type"))
+    origin = SUBAGENT if task_type in _SPAWNED_TASK_TYPES else ""
+    parent = _str(locator.extra.get("parent_id")) if task_type in _LINKED_TASK_TYPES else ""
     connection = open_sqlite_readonly(locator.path)
     if connection is None:
         return
@@ -260,6 +315,9 @@ def _sqlite_read(locator: SessionLocator, after: int) -> Iterator[ConversationRe
             index=index,
             row_time=row["time_created"] if "time_created" in keys else None,
             cwd=cwd,
+            project=project,
+            origin=origin,
+            parent_session=parent,
         )
         for record in records:
             record.turn = turn
@@ -321,6 +379,8 @@ def _json_read(locator: SessionLocator, after: int) -> Iterator[ConversationReco
     meta = _dict(data.get("meta"))
     session_id = locator.session_id or _str(meta.get("id")) or locator.path.stem
     cwd = _str(meta.get("cwd")) or _str(locator.extra.get("cwd"))
+    project = _project(cwd)
+    model = _str(meta.get("model"))  # one model per session; no per-message field
     starts = _turn_starts(locator.path.with_suffix(".jsonl"))
     fallback = iso_timestamp(meta.get("createdAt"))
     prompt = -1
@@ -358,6 +418,8 @@ def _json_read(locator: SessionLocator, after: int) -> Iterator[ConversationReco
             timestamp=timestamp,
             tool_calls=calls,
             cwd=cwd,
+            project=project,
+            model=model,
         )
         turn += 1
         if index > after:

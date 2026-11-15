@@ -21,6 +21,33 @@ The first line is the session header (``type: "session"``, ``id``, ``cwd``,
   tool ran a command.
 * ``system/message`` -- the system prompt.
 
+Session labels (all read in the same pass, so an incremental read that
+resumes past them still labels its later records):
+
+* ``model`` -- the latest of ``request/context.data.model`` (written before
+  the first LLM call of a session), ``model/selection.data.model`` (a ``/model``
+  switch) and ``subagent/descriptor.data.agentModel`` (a sub-agent's own
+  model). ``assistant/message`` carries no model field. Records before the
+  first such event keep ``model`` empty.
+* ``project`` -- the base name of the header ``cwd`` (the convention of the
+  Cursor / OpenCode readers); empty for ``/`` or no ``cwd``.
+* ``parent_session`` -- the header ``parentSession`` (a sub-agent's parent, or
+  the session a seeded fork was copied from).
+* ``origin`` -- ``subagent`` when the header has ``origin: "subagent"`` or a
+  ``delegationDepth`` above 0. Otherwise ``automated``
+  when a ``user/message`` has ``source.kind`` ``schedule`` (a scheduled run)
+  or ``goal`` (a goal-round continuation the runtime writes, with
+  ``goalId``/``round``) and no person typed a prompt before it, or when the
+  session's first ``source.kind: "user"`` prompt has no ``source.rpcId``: the
+  web / desktop / ACP clients deliver a typed prompt over RPC (``rpcId`` +
+  ``clientTimeZone``), the ``headless`` profile (``dsh headless "task"``, one
+  task then exit) does not. A goal a person typed in a client and the harness
+  then continues round by round stays a human-driven session: the
+  continuation prompts are machine-written, the session is not. The header
+  records no mode / headless flag, so the ``rpcId`` test is a heuristic (on
+  the store it was built against, every prompt without ``rpcId`` came from a
+  generated Worker workspace); empty (unknown) until a deciding event is seen.
+
 ``tool/call`` events duplicate the assistant's ``tool-call`` blocks and are
 skipped. ``offset`` is the byte offset of the line in the *decompressed*
 stream, so it is stable while the log grows. The trailing line without a
@@ -33,7 +60,7 @@ import json
 import os
 import stat
 from collections.abc import Iterator
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import zstandard
@@ -51,8 +78,9 @@ from .base import (
     tool_call,
     walk_files,
 )
+from .labels import AUTOMATED, SUBAGENT
 
-PARSER_VERSION = "1"
+PARSER_VERSION = "2"
 
 AGENT = "deepseek"
 SESSION_PREFIX = "session"
@@ -63,8 +91,23 @@ _ASSISTANT = "assistant/message"
 _TOOL = "tool/result"
 _SYSTEM = "system/message"
 _TURN_EVENTS = {_USER, _ASSISTANT, _TOOL, _SYSTEM}
-# Cheap byte pre-filter: lines that cannot be a transcript turn are not parsed.
-_MARKERS = (b'"session"', b"/message", b"tool/result")
+# Events naming the model in use: ``{event type: data key}``.
+_MODEL_EVENTS = {
+    "request/context": "model",
+    "model/selection": "model",
+    "subagent/descriptor": "agentModel",
+}
+# ``user/message`` source kinds written by the runtime in place of a person.
+_AUTOMATED_KINDS = {"goal", "schedule"}
+# Cheap byte pre-filter: lines that cannot be a transcript turn or label are not parsed.
+_MARKERS = (
+    b'"session"',
+    b"/message",
+    b"tool/result",
+    b'"request/context"',
+    b'"model/selection"',
+    b'"subagent/descriptor"',
+)
 # ``user/message`` source kinds the runtime injects; anything else is a person or agent.
 _INJECTED_KINDS = {
     "agent-instructions",
@@ -212,6 +255,58 @@ def _tool_calls(content: Any) -> tuple[ToolCall, ...]:
     )
 
 
+def _project(cwd: str) -> str:
+    return PurePosixPath(cwd).name if cwd not in {"", "/"} else ""
+
+
+class _Labels:
+    """Session labels accumulated while a log is read (see module doc)."""
+
+    def __init__(self) -> None:
+        self.model = ""
+        self.origin = ""
+        self.parent = ""
+        self._prompt_seen = False
+        self._typed = False
+
+    def header(self, header: dict[str, Any]) -> None:
+        # ``parentSession`` is also set on a seeded (forked) session
+        # (``isSeeded: true``, ``delegationDepth: 0``): linked, but not a sub-agent.
+        self.parent = _str(header.get("parentSession")) or self.parent
+        depth = header.get("delegationDepth")
+        nested = isinstance(depth, int) and not isinstance(depth, bool) and depth > 0
+        if _str(header.get("origin")) == SUBAGENT or nested:
+            self.origin = SUBAGENT
+
+    def event(self, event: dict[str, Any]) -> None:
+        kind = event.get("type")
+        data = event.get("data")
+        if not isinstance(data, dict):
+            return
+        key = _MODEL_EVENTS.get(str(kind))
+        if key is not None:
+            self.model = _str(data.get(key)) or self.model
+            return
+        if kind != _USER or self.origin == SUBAGENT:
+            return
+        source = data.get("source")
+        if not isinstance(source, dict):
+            return
+        source_kind = source.get("kind")
+        if source_kind in _AUTOMATED_KINDS:
+            # Goal rounds after a prompt a person typed continue that person's session.
+            if not self._typed:
+                self.origin = AUTOMATED
+        elif source_kind == "user" and not self._prompt_seen:
+            # Only the first typed prompt decides: a headless run resumed from
+            # a client later must not undo it, nor the reverse.
+            self._prompt_seen = True
+            if _str(source.get("rpcId")):
+                self._typed = True
+            else:
+                self.origin = AUTOMATED
+
+
 def _role_and_message(event: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
     kind = event.get("type")
     data = event.get("data")
@@ -261,15 +356,24 @@ class DeepSeekReader:
         cwd = locator.extra.get("cwd", "")
         if not isinstance(cwd, str):
             cwd = ""
+        labels = _Labels()
+        parent = locator.extra.get("parent_session", "")
+        labels.parent = parent if isinstance(parent, str) else ""
         turn = 0
         for offset, event in _events(locator.path):
             if offset == 0 and event.get("type") == _HEADER:
                 cwd = _str(event.get("cwd")) or cwd
+                labels.header(event)
                 continue
+            labels.event(event)
             record = self._record(event, session_id, offset, cwd)
             if record is None:
                 continue
             record.turn = turn
+            record.project = _project(cwd)
+            record.model = labels.model
+            record.origin = labels.origin
+            record.parent_session = labels.parent
             turn += 1
             if offset > after:
                 yield record

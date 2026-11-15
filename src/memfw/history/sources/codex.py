@@ -6,12 +6,38 @@ session and its ``cwd`` (``turn_context`` may move the cwd);
 ``event_msg`` lines repeat the same messages for the UI and are skipped, as
 is ``reasoning``. The transcript index (:mod:`memfw.history.index`) is
 unaffected by this reader.
+
+Session labels come from the ``session_meta`` payload (always the first
+line; it is re-read on every ``read``, so an incremental read from a later
+offset still labels its records):
+
+* ``subagent``: ``source`` is a dict ``{"subagent": {"thread_spawn": {...}}}``
+  (a thread another Codex thread spawned; ``thread_source == "subagent"``).
+  ``parent_session`` is ``source.subagent.thread_spawn.parent_thread_id``,
+  falling back to the top-level ``parent_thread_id`` and then
+  ``forked_from_id``.
+* ``automated``: the auto-review guardian (``source`` is
+  ``{"subagent": {"other": "guardian"}}`` or ``thread_source ==
+  "guardian_review"``; ``parent_session`` is ``parent_thread_id``, the thread
+  it reviews); a headless ``codex exec`` run (``source == "exec"``, or, when
+  ``source`` is missing, ``originator == "codex_exec"``); and a thread the
+  Conductor native runtime drives (``originator == "conductor-native"``).
+* anything else (``source`` ``"cli"`` / ``"vscode"`` with originator
+  ``codex-tui`` / ``Codex Desktop``, or rollouts too old to carry these
+  fields) leaves ``origin`` empty: the root's origin applies.
+
+A sub-agent's ``originator`` is its parent process's (often ``codex_exec``),
+so ``source`` is checked before ``originator``. ``model`` is the latest
+``turn_context.model``; the opening turns (instructions, the first prompt)
+come before the first ``turn_context``, so they take the model of the first
+``turn_context`` in the file. ``project`` is the last component of ``cwd``.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator
-from pathlib import Path
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .base import (
@@ -26,8 +52,9 @@ from .base import (
     tool_call,
     walk_files,
 )
+from .labels import AUTOMATED, SUBAGENT
 
-PARSER_VERSION = "1"
+PARSER_VERSION = "2"
 
 AGENT = "codex"
 _ROLES = {"user": "user", "assistant": "assistant", "developer": "system", "system": "system"}
@@ -39,15 +66,71 @@ def _str(value: Any) -> str:
     return value if isinstance(value, str) else ""
 
 
-def _meta(path: Path) -> tuple[str, str]:
-    """``(session id, cwd)`` from the leading ``session_meta`` line."""
+_MODEL_SCAN_LINES = 400
+"""How far ``_meta`` looks for the first ``turn_context`` (it is near the top)."""
 
-    for _offset, raw in iter_jsonl(path):
+
+@dataclass(frozen=True)
+class _Meta:
+    session_id: str = ""
+    cwd: str = ""
+    origin: str = ""
+    parent: str = ""
+    model: str = ""
+
+
+def _labels(payload: dict[str, Any]) -> tuple[str, str]:
+    """``(origin, parent session)`` from a ``session_meta`` payload (see module doc)."""
+
+    source = payload.get("source")
+    thread_source = _str(payload.get("thread_source"))
+    parent = _str(payload.get("parent_thread_id")) or _str(payload.get("forked_from_id"))
+    sub = source.get("subagent") if isinstance(source, dict) else None
+    guardian = isinstance(sub, dict) and sub.get("other") == "guardian"
+    if guardian or thread_source == "guardian_review":
+        return AUTOMATED, parent
+    if sub is not None or thread_source == "subagent":
+        spawn = sub.get("thread_spawn") if isinstance(sub, dict) else None
+        if isinstance(spawn, dict):
+            parent = _str(spawn.get("parent_thread_id")) or parent
+        return SUBAGENT, parent
+    originator = _str(payload.get("originator"))
+    if source == "exec" or (source is None and originator == "codex_exec"):
+        return AUTOMATED, parent
+    if originator == "conductor-native":
+        return AUTOMATED, parent
+    return "", parent
+
+
+def _meta(path: Path, *, model: bool = False) -> _Meta:
+    """Session id, cwd and labels from the leading ``session_meta`` line.
+
+    With ``model``, also the model of the first ``turn_context`` within
+    ``_MODEL_SCAN_LINES`` lines.
+    """
+
+    meta = _Meta()
+    for index, (_offset, raw) in enumerate(iter_jsonl(path)):
         payload = raw.get("payload")
-        if raw.get("type") == "session_meta" and isinstance(payload, dict):
-            return _str(payload.get("id")), _str(payload.get("cwd"))
-        break
-    return "", ""
+        if index == 0:
+            if raw.get("type") != "session_meta" or not isinstance(payload, dict):
+                break
+            origin, parent = _labels(payload)
+            meta = _Meta(_str(payload.get("id")), _str(payload.get("cwd")), origin, parent)
+            if not model:
+                break
+            continue
+        if index >= _MODEL_SCAN_LINES:
+            break
+        if raw.get("type") == "turn_context" and isinstance(payload, dict):
+            found = _str(payload.get("model"))
+            if found:
+                return _Meta(meta.session_id, meta.cwd, meta.origin, meta.parent, found)
+    return meta
+
+
+def _project(cwd: str) -> str:
+    return PurePosixPath(cwd).name if cwd not in {"", "/"} else ""
 
 
 class CodexReader:
@@ -60,14 +143,15 @@ class CodexReader:
 
     def sessions(self, root: Path) -> Iterator[SessionLocator]:
         for path in walk_files(root, (".jsonl",)):
-            session_id, _cwd = _meta(path)
+            session_id = _meta(path).session_id
             yield SessionLocator(AGENT, path, relative_key(root, path), session_id or path.stem)
 
     def read(self, locator: SessionLocator, *, after: int = -1) -> Iterator[ConversationRecord]:
-        session_id, cwd = _meta(locator.path)
-        session_id = session_id or locator.session_id
+        meta = _meta(locator.path, model=True)
+        session_id = meta.session_id or locator.session_id
+        cwd = meta.cwd
         turn = 0
-        model = ""
+        model = meta.model
         for offset, raw in iter_jsonl(locator.path):
             payload = raw.get("payload")
             if not isinstance(payload, dict):
@@ -110,7 +194,10 @@ class CodexReader:
                 timestamp=iso_timestamp(raw.get("timestamp")),
                 tool_calls=calls,
                 cwd=cwd,
+                project=_project(cwd),
                 model=model,
+                origin=meta.origin,
+                parent_session=meta.parent,
             )
 
 

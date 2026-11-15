@@ -38,6 +38,36 @@ row ids of its header pages and bubbles. All of that comes from key-range
 scans that never load bubble text, so a write to one chat re-reads that chat
 only. When the marker cannot be computed the file stat is used instead.
 
+Sub-agents and forks (``origin`` / ``parent_session``):
+
+* A sub-agent composer (one the parent's ``task_v2`` tool call spawned)
+  carries ``composerData.subagentInfo`` (``{parentComposerId,
+  rootParentConversationId, toolCallId, subagentType, subagentTypeName,
+  conversationLengthAtSpawn ...}``); its ``toolCallId`` is the parent's
+  ``task_v2`` bubble's ``toolFormerData.toolCallId``, and the parent lists
+  the child in ``subagentComposerIds`` (and in that bubble's
+  ``toolFormerData.additionalData.subagentComposerId``). Every record of
+  such a composer gets ``origin = subagent`` and ``parent_session =
+  parentComposerId``. Fallback when ``subagentInfo`` is absent: a composer
+  whose ``subagentComposerIds`` lists this one is its parent (origin
+  ``subagent`` as well). ``subComposerIds`` / best-of-N sub-composers are
+  not treated as sub-agents.
+* A forked sub-agent (one started with the parent's context) stores a copy
+  of the parent's conversation before its own task prompt. The store has no
+  explicit fork flag; the copy is recognised by bubble ids the child's
+  headers share with the parent's (the app keeps some of the copied ids,
+  always the first one in the stores seen). Only then is the prefix
+  measured: from the start, a child bubble is a copy when its bubble id,
+  its ``toolFormerData.toolCallId`` or its ``(type, text)`` also occurs in
+  the parent (any ``bubbleId:<parent>:*`` row, rewound ones included). The
+  first non-empty text bubble that is not a copy (the child's own task
+  prompt) ends the prefix, which is then cut back to the last copied bubble
+  (tool calls in between belong to the child; copied tool outputs can
+  differ slightly, so tool bubbles match by call id, never by output). The
+  prefix positions are not reported; the rest keep their offsets. The
+  boundary is computed from the parent's rows, which the child's change
+  marker does not cover: the copied prefix is history, so it is stable.
+
 Each header is one position ``i``: the bubble is reported at ``offset = 2 * i``
 and, when it is a tool call with output, that output (role ``tool``) at
 ``2 * i + 1``. Offsets follow the app's own message order, so they stay put
@@ -48,6 +78,7 @@ a missing, locked or corrupt store, or a malformed value, is skipped.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -70,8 +101,9 @@ from .base import (
     sqlite_tables,
     tool_call,
 )
+from .labels import SUBAGENT
 
-PARSER_VERSION = "1"
+PARSER_VERSION = "2"
 
 _AGENT = "cursor-ide"
 _GLOBAL_DB = PurePosixPath("globalStorage/state.vscdb")
@@ -276,6 +308,101 @@ def _timestamp(bubble: dict[str, Any], header: dict[str, Any]) -> str:
     return ""
 
 
+# -- sub-agents and forks --------------------------------------------------------
+
+
+def _parent_of(connection: sqlite3.Connection, composer: dict[str, Any], cid: str) -> str:
+    """Parent composer id of a sub-agent composer; ``""`` for a top-level chat.
+
+    ``subagentInfo.parentComposerId`` first; else the composer whose
+    ``subagentComposerIds`` lists ``cid`` (see module doc).
+    """
+
+    info = composer.get("subagentInfo")
+    if isinstance(info, dict):
+        return _safe_id(info.get("parentComposerId"))
+    row = connection.execute(
+        f"SELECT substr(c.key, ?) FROM {_TABLE} AS c WHERE c.key >= ? AND c.key < ?"
+        " AND json_valid(c.value) AND EXISTS (SELECT 1 FROM"
+        " json_each(c.value, '$.subagentComposerIds') AS j WHERE j.value = ?)"
+        " ORDER BY c.key LIMIT 1",
+        (len(_COMPOSER) + 1, _COMPOSER, _upper(_COMPOSER), cid),
+    ).fetchone()
+    return _safe_id(row[0]) if row is not None else ""
+
+
+def _is_subagent(composer: dict[str, Any], parent: str) -> bool:
+    return isinstance(composer.get("subagentInfo"), dict) or bool(parent)
+
+
+def _digest(kind: Any, text: str) -> str:
+    return hashlib.sha256(f"{kind}\x00{text}".encode()).hexdigest()
+
+
+def _parent_marks(
+    connection: sqlite3.Connection, parent: str
+) -> tuple[set[str], set[str], set[str]]:
+    """``(bubble ids, tool call ids, (type, text) digests)`` of every parent bubble row."""
+
+    prefix = f"{_BUBBLE}{parent}:"
+    ids: set[str] = set()
+    calls: set[str] = set()
+    texts: set[str] = set()
+    rows = connection.execute(
+        "SELECT substr(key, ?),"
+        " CASE WHEN json_valid(value) THEN json_extract(value, '$.type') END,"
+        " CASE WHEN json_valid(value) THEN json_extract(value, '$.text') END,"
+        " CASE WHEN json_valid(value) THEN json_extract(value, '$.toolFormerData.toolCallId') END"
+        f" FROM {_TABLE} WHERE key >= ? AND key < ? AND length(value) <= ?",
+        (len(prefix) + 1, prefix, _upper(prefix), _MAX_VALUE_BYTES),
+    )
+    for bubble_id, kind, text, call_id in rows:
+        ids.add(_str(bubble_id))
+        if isinstance(call_id, str) and call_id:
+            calls.add(call_id)
+        stripped = _str(text).strip()
+        if stripped:
+            texts.add(_digest(kind, stripped))
+    return ids, calls, texts
+
+
+def _header_ids(headers: list[Any]) -> list[str]:
+    return [_str(_obj(header).get("bubbleId")) for header in headers]
+
+
+def _fork_prefix(
+    connection: sqlite3.Connection,
+    cid: str,
+    parent: str,
+    headers: list[Any],
+    bubbles: list[dict[str, Any]],
+) -> int:
+    """Number of leading positions of ``cid`` that copy ``parent`` (0: not a fork)."""
+
+    if not parent or parent == cid or not headers:
+        return 0
+    parent_composer = _obj(_value(connection, f"{_COMPOSER}{parent}"))
+    if not parent_composer:
+        return 0
+    parent_ids = set(_header_ids(_headers(connection, parent_composer, parent))) - {""}
+    if not parent_ids.intersection(_header_ids(headers)):
+        return 0  # explicit evidence of a copy is missing: not a fork
+    ids, calls, texts = _parent_marks(connection, parent)
+    ids |= parent_ids
+    last_copy = -1
+    for index, (header, bubble) in enumerate(zip(headers, bubbles, strict=True)):
+        bubble_id = _str(_obj(header).get("bubbleId"))
+        call_id = _str(_obj(bubble.get("toolFormerData")).get("toolCallId"))
+        text = _str(bubble.get("text")).strip()
+        if (bubble_id and bubble_id in ids) or (call_id and call_id in calls):
+            last_copy = index
+        elif text and _digest(bubble.get("type"), text) in texts:
+            last_copy = index
+        elif text:
+            break  # the child's own first message
+    return last_copy + 1
+
+
 # -- reader ----------------------------------------------------------------------
 
 
@@ -349,15 +476,21 @@ class CursorIdeReader:
         cwd = _workspace_path(composer.get("workspaceIdentifier"), root / _WORKSPACES)
         project = _project(cwd)
         model = _str(_obj(composer.get("modelConfig")).get("modelName")).strip()
+        parent = _parent_of(connection, composer, cid)
+        origin = SUBAGENT if _is_subagent(composer, parent) else ""
+        headers = _headers(connection, composer, cid)
+        bubbles = [_bubble(connection, cid, header) for header in headers]
+        skip = _fork_prefix(connection, cid, parent, headers, bubbles)
         turn = 0
-        for index, header in enumerate(_headers(connection, composer, cid)):
-            bubble = _bubble(connection, cid, header)
+        for index, (header, bubble) in enumerate(zip(headers, bubbles, strict=True)):
             if not bubble:
                 continue
             kind = bubble.get("type")
             picked = _str(_obj(bubble.get("modelInfo")).get("modelName")).strip()
             if picked:
                 model = picked
+            if index < skip:
+                continue  # a copy of the parent's conversation (fork prefix)
             if kind == _USER:
                 role = "system" if bubble.get("isSimulatedMsg") is True else "user"
             elif kind == _ASSISTANT:
@@ -386,6 +519,8 @@ class CursorIdeReader:
                         cwd=cwd,
                         project=project,
                         model=model if turn_role != "tool" else "",
+                        origin=origin,
+                        parent_session=parent,
                     )
                 turn += 1
 

@@ -28,13 +28,10 @@ import hashlib
 import re
 from collections.abc import Iterable
 
-from ...history.injected import (
-    _SENTENCE,
-    _structural,
-    has_content,
-    paragraphs,
-    strip_structural,
-)
+from ...history.injected import _SENTENCE, _structural
+from ...history.injected import has_content as has_content
+from ...history.injected import paragraphs as paragraphs
+from ...history.injected import strip_structural as strip_structural
 
 _FP_URL = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://\S+")
 _FP_REDACTED = re.compile(r"\[REDACTED:[^\]]*\]|<[a-z]+>")

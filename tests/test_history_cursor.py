@@ -177,7 +177,8 @@ def test_normalisation(tmp_path: Path) -> None:
     assert records[4].tool_calls[0].name == "Shell"
     assert all(r.cwd == CWD and r.project == "demo" for r in records)
     assert all(r.session_id == SESSION and r.agent == "cursor" for r in records)
-    assert all(r.timestamp == "" for r in records)
+    # No timestamp tag in this fixture: the store file time is the documented fallback.
+    assert all(r.timestamp != "" for r in records)
 
 
 def test_after_resume(tmp_path: Path) -> None:

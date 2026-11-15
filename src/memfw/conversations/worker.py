@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from ..history.injected import has_content, strip_structural
 from .adapter import Ingestor, checked_location, data_dir
 from .backends import PROMPT_VERSION, ModelBackend, estimate_tokens, parse_reply
 from .policy import SharePolicy
@@ -984,13 +985,21 @@ class ConversationWorker:
         return row
 
     def _session_summary(self, job: sqlite3.Row, report: RunReport) -> tuple[str, str]:
-        first_user = next(
-            (turn for turn in self._session_turns(job) if turn.role == "user" and turn.text),
-            None,
-        )
-        first_text = safe_text(first_user.text, 1000)[0] if first_user else ""
-        if first_text.startswith("[withheld"):
-            first_text = ""
+        # Intent comes from what was asked: harness-injected text (a leading
+        # <system-reminder>, AGENTS.md echoes, <user_query> wrappers ...) is
+        # stripped first, and a user turn that is nothing but injected text is
+        # skipped (MiniMax opens every session with one).
+        first_text = ""
+        for turn in self._session_turns(job):
+            if turn.role != "user" or not turn.text:
+                continue
+            text, withheld = safe_text(turn.text)
+            if withheld:
+                continue
+            request = strip_structural(text)
+            if has_content(request):
+                first_text = safe_text(request, 1000)[0]
+                break
         data = {"first_user": first_text, "chunks": _bounded(self._chunk_summaries(job))}
         parsed, tokens_in, tokens_out, code = self._call("session_summary", data, report)
         if code in {"budget", "too_large"}:

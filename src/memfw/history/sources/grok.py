@@ -19,12 +19,32 @@ root and ``created_at``; ``events.jsonl`` gives ``tool_completed`` times by
 ``tool_call_id`` and ``turn_started`` times by conversation message index.
 A record without its own time takes the last known one, starting at
 ``created_at``.
+
+Labels, all from ``summary.json`` (checked on a real store):
+
+* ``project`` is the basename of ``info.cwd`` (the convention of the other
+  readers); without a ``summary.json`` the cwd falls back to the decoded
+  project directory name.
+* ``model`` is the assistant line's ``model_id``; other lines (and assistant
+  lines without one) take the last ``model_id`` seen, starting at the
+  session's ``current_model_id``.
+* ``origin``: ``session_kind`` is ``headless`` for ``grok -p`` / headless
+  runs (``automated``) and ``subagent`` / ``subagent_fork`` /
+  ``subagent_resume`` for sessions a parent session spawned (``subagent``).
+  Interactive TUI sessions carry no ``session_kind`` and stay unlabelled.
+  Goal mode (a ``goal/`` directory) is a person's interactive session whose
+  worker rounds are the ``subagent`` sessions, so it is not labelled itself.
+* ``parent_session`` is ``parent_session_id`` (present on forks and resumes);
+  otherwise the parent's ``subagents/<child id>/meta.json``, whose
+  ``child_session_id`` names this session and ``parent_session_id`` the
+  parent. A child may live under another cwd directory than its parent, so
+  every session directory under the root is checked.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import unquote
 
@@ -40,11 +60,20 @@ from .base import (
     tool_call,
     walk_files,
 )
+from .labels import AUTOMATED, SUBAGENT
 
-PARSER_VERSION = "1"
+PARSER_VERSION = "2"
 
 CHAT_FILE = "chat_history.jsonl"
 _SKIPPED_TYPES = frozenset({"system", "reasoning"})
+_KIND_ORIGIN = {
+    "headless": AUTOMATED,
+    "subagent": SUBAGENT,
+    "subagent_fork": SUBAGENT,
+    "subagent_resume": SUBAGENT,
+}
+"""``summary.json`` ``session_kind`` values that say who drove the session.
+Unknown or missing kinds (interactive sessions have none) leave it unset."""
 
 
 def _str(value: Any) -> str:
@@ -54,6 +83,26 @@ def _str(value: Any) -> str:
 def _session_meta(directory: Path) -> dict[str, Any]:
     summary = read_json(directory / "summary.json")
     return summary if isinstance(summary, dict) else {}
+
+
+def _project(cwd: str) -> str:
+    return PurePosixPath(cwd).name if cwd not in {"", "/"} else ""
+
+
+def _subagent_parent(root: Path, session_id: str) -> str:
+    """Parent id from a ``<parent dir>/subagents/<session_id>/meta.json`` under ``root``."""
+
+    if not session_id or not root.is_dir():
+        return ""
+    for meta_path in root.glob(f"*/*/subagents/{session_id}/meta.json"):
+        meta = read_json(meta_path)
+        if not isinstance(meta, dict):
+            continue
+        child = _str(meta.get("child_session_id")) or _str(meta.get("subagent_id"))
+        parent = _str(meta.get("parent_session_id")) or meta_path.parent.parent.parent.name
+        if child == session_id and parent and parent != session_id:
+            return parent
+    return ""
 
 
 def _event_times(directory: Path) -> tuple[dict[str, str], dict[int, str]]:
@@ -120,7 +169,13 @@ class GrokReader:
         info = meta.get("info")
         info = info if isinstance(info, dict) else {}
         cwd = _str(info.get("cwd")) or unquote(directory.parent.name)
-        project = _str(meta.get("git_root_dir"))
+        project = _project(cwd)
+        origin = _KIND_ORIGIN.get(_str(meta.get("session_kind")), "")
+        parent = _str(meta.get("parent_session_id"))
+        if origin == SUBAGENT and not parent:
+            # session dir -> percent-encoded cwd dir -> store root
+            parent = _subagent_parent(directory.parent.parent, session_id)
+        model = _str(meta.get("current_model_id"))
         by_call, by_index = _event_times(directory)
         last_time = iso_timestamp(meta.get("created_at"))
 
@@ -139,6 +194,7 @@ class GrokReader:
                 role = "assistant"
                 text = content_text(entry.get("content"))
                 calls = _tool_calls(entry.get("tool_calls"))
+                model = _str(entry.get("model_id")) or model
             elif kind == "tool_result":
                 role = "tool"
                 text = content_text(entry.get("content"))
@@ -167,6 +223,9 @@ class GrokReader:
                 tool_calls=calls,
                 cwd=cwd,
                 project=project,
+                model=model,
+                origin=origin,
+                parent_session=parent,
             )
 
 

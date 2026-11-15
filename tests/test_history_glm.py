@@ -212,7 +212,7 @@ def test_sqlite_records_normalised(tmp_path: Path) -> None:
     assert "secret" not in assistant.text
     assert [c.name for c in assistant.tool_calls] == ["Bash", "Read"]
     assert "ls" in assistant.tool_calls[0].summary
-    assert assistant.cwd == "/work/demo" and assistant.project == "/work/demo"
+    assert assistant.cwd == "/work/demo" and assistant.project == "demo"
     assert assistant.timestamp == "2023-11-14T22:13:21Z"
     assert tool.text == "file-a\nboom"
     assert not tool.tool_calls

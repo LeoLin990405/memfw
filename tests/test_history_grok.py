@@ -139,7 +139,7 @@ def test_read_normalises_records(tmp_path: Path) -> None:
         assert record.agent == "grok"
         assert record.session_id == SESSION
         assert record.cwd == "/work/demo"
-        assert record.project == "/work/demo"
+        assert record.project == "demo"
         assert "secret thinking" not in record.text
         assert "fake cli" not in record.text
 
@@ -164,7 +164,7 @@ def test_missing_metadata_falls_back(tmp_path: Path) -> None:
     (session_dir / "summary.json").write_text("{broken", encoding="utf-8")
     (record,) = list(READER.read(_locator(tmp_path)))
     assert record.cwd == "/work/demo"
-    assert record.project == ""
+    assert record.project == "demo"
     assert record.timestamp == ""
 
 
