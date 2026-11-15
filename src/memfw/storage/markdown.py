@@ -227,6 +227,14 @@ class MarkdownStorageMixin:
             ordered["status"] = metadata["status"]
         if metadata.get("evidence"):
             ordered["evidence"] = metadata["evidence"]
+        # Files written before ``type``, ``tenant``, ``related`` and the temporal
+        # fields existed keep their bytes too: the default carries no
+        # information, so it stays off the file exactly like ``recorded_at`` and
+        # the alias targets. A file re-rendered by this version must not gain
+        # lines its own version never wrote.
+        for key in ("type", "tenant", "related", "valid_from", "valid_to", "superseded_by"):
+            if ordered.get(key) in (None, "", []):
+                ordered.pop(key, None)
         frontmatter = yaml.safe_dump(ordered, allow_unicode=True, sort_keys=False).rstrip()
         body = document.body.rstrip("\n")
         return f"---\n{frontmatter}\n---\n\n{body}\n"

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -12,6 +14,7 @@ from memfw.core.errors import DeletedContentUnavailable, IntegrityError
 from memfw.core.models import CaptureState, EventKind, Layer, MemoryDocument, Tier
 from memfw.core.repository import Repository, sha256_text
 from memfw.index import MemoryIndex
+from memfw.retrieval import VaultRetriever
 
 
 def fixed_repo(root: Path) -> Repository:
@@ -299,3 +302,83 @@ def test_cli_quickstart_commands(tmp_path: Path) -> None:
     for command in commands:
         result = runner.invoke(app, command)
         assert result.exit_code == 0, f"{command}: {result.output}"
+
+
+_FIELDS_ADDED_AFTER_0_1_0 = (
+    "type:",
+    "tenant:",
+    "related:",
+    "valid_from:",
+    "valid_to:",
+    "superseded_by:",
+)
+
+
+def test_legacy_file_without_later_default_fields_keeps_its_bytes(tmp_path: Path) -> None:
+    """A file written before type/tenant/temporal existed must not gain lines."""
+
+    repo = fixed_repo(tmp_path / "vault")
+    repo.init()
+    repo.add("Legacy", "old body", memory_id="mem-legacy")
+    path = repo.memories_dir / "mem-legacy.md"
+    legacy = "".join(
+        line
+        for line in path.read_text(encoding="utf-8").splitlines(keepends=True)
+        if not line.startswith(_FIELDS_ADDED_AFTER_0_1_0)
+    )
+    path.write_text(legacy, encoding="utf-8")
+
+    document = repo.get("mem-legacy")
+    assert repo.render(document) == legacy
+
+
+def test_later_default_fields_are_still_written_when_set(tmp_path: Path) -> None:
+    repo = fixed_repo(tmp_path / "vault")
+    repo.init()
+    repo.add(
+        "Typed",
+        "body",
+        memory_id="mem-typed",
+        memory_type="fact",
+        tenant="acme",
+        related=["mem-legacy"],
+    )
+
+    rendered = repo.render(repo.get("mem-typed"))
+    assert "type: fact" in rendered
+    assert "tenant: acme" in rendered
+    assert "related:" in rendered
+    assert "valid_from:" not in rendered
+
+
+def test_stale_index_schema_is_rebuilt_before_search(tmp_path: Path) -> None:
+    """An index written by 0.1.0 has no memory_temporal; searching rebuilds it."""
+
+    repo = fixed_repo(tmp_path / "vault")
+    repo.init()
+    repo.add("Hot note", "findable body", memory_id="hot-note")
+    MemoryIndex(repo.index_path).rebuild(repo)
+    with sqlite3.connect(repo.index_path) as connection:
+        connection.execute("DROP TABLE memory_temporal")
+        connection.commit()
+
+    index = MemoryIndex(repo.index_path)
+    assert index.schema_is_current() is False
+    assert VaultRetriever(repo, index).retrieve("findable") == ["hot-note"]
+    assert index.schema_is_current() is True
+
+
+def test_dry_run_search_reports_rebuild_for_stale_index(tmp_path: Path) -> None:
+    repo = fixed_repo(tmp_path / "vault")
+    repo.init()
+    repo.add("Hot note", "findable body", memory_id="hot-note")
+    MemoryIndex(repo.index_path).rebuild(repo)
+    with sqlite3.connect(repo.index_path) as connection:
+        connection.execute("DROP TABLE memory_temporal")
+        connection.commit()
+
+    result = CliRunner().invoke(
+        app, ["index", "search", "findable", "--root", str(repo.root), "--dry-run"]
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == {"would_rebuild": True, "writes": False, "results": []}

@@ -39,6 +39,12 @@ _ROW_COLUMNS = (
 _SEARCH_COLUMNS = ("title", "body", "summary", "tags")
 _TOKENIZER = Literal["trigram", "unicode61"]
 
+#: Tables every index this version writes carries. An index written by an
+#: earlier version lacks ``memory_temporal`` (and possibly ``memory_access``),
+#: and a query against it fails with ``no such table``. The index is a
+#: disposable projection, so a stale schema is rebuilt, never read in place.
+_INDEX_TABLES = frozenset({"memory_rows", "memory_temporal", "memory_access", "memory_fts"})
+
 
 def _supports_trigram(connect: Callable[..., Any] | None = None) -> bool:
     """Probe SQLite FTS5 trigram support without touching a vault or index file."""
@@ -184,6 +190,30 @@ class MemoryIndex:
 
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
+
+    def schema_is_current(self) -> bool:
+        """True when the file carries every table this version queries.
+
+        The index is disposable, so an index built by an earlier memfw is not
+        read in place: it has no ``memory_temporal``/``memory_access``
+        projection and the first query would fail with ``no such table``. A
+        missing file and a stale file both answer ``False``, which is the
+        signal callers rebuild on. Any SQLite error reads as stale: a corrupt
+        projection is rebuilt rather than trusted.
+        """
+        if not self.path.exists():
+            return False
+        try:
+            with closing(sqlite3.connect(self.path)) as connection:
+                names = {
+                    str(row[0])
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type IN ('table','view')"
+                    )
+                }
+        except sqlite3.Error:
+            return False
+        return _INDEX_TABLES <= names
 
     def rebuild(self, repository: Repository) -> int:
         """Build a complete replacement under the Repository's shared file lock."""

@@ -1241,7 +1241,7 @@ def index_search(
     repository = _repo(root)
     index = MemoryIndex(repository.index_path)
     if dry_run:
-        if not repository.index_path.exists():
+        if not index.schema_is_current():
             typer.echo(json.dumps({"would_rebuild": True, "writes": False, "results": []}))
             return
         matches = index.search(query)
