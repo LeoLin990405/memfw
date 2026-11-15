@@ -1,0 +1,32 @@
+{
+  "task": "Make the synthetic exporter write a stable byte order",
+  "conditions": [
+    "the fixture vault is generated from synthetic records only",
+    "the exporter is run twice with the same inputs"
+  ],
+  "actions": [
+    "sort exported records by a stable key before writing",
+    "compare the two exports byte for byte"
+  ],
+  "evidence": ["test:tests/fixtures/synthetic_exporter_case", "commit:synthetic-0000"],
+  "review": {
+    "reviewer": "synthetic-reviewer",
+    "scope_reviewed": [
+      "the two generated exports and their byte comparison",
+      "the exporter test that asserts stable output"
+    ],
+    "not_reviewed": [
+      "concurrent writes from a second process",
+      "names with characters outside the fixture set"
+    ],
+    "verdict": "accepted"
+  },
+  "version": 1,
+  "counterexamples": [
+    "a run where two records share the same sort key is not covered"
+  ],
+  "invalidated_when": [
+    "the export format gains a field whose order depends on wall-clock time"
+  ],
+  "title": "Synthetic experience point: stable exporter ordering"
+}

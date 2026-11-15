@@ -1,0 +1,63 @@
+{
+  "name": "confounded_observational",
+  "expected_verified": false,
+  "query": "does coffee raise the risk score",
+  "note": "Synthetic data with a known data-generating process: smoking confounds the coffee/risk comparison, and the aggregate direction reverses inside the smoking strata (Simpson's paradox). The attempted write claims causal=verified while the identification assumption is still untested, so the gate must refuse it.",
+  "attempt": {
+    "title": "Coffee raises the synthetic risk score",
+    "body": "Synthetic cohort (n=4000, generated, not observed people).\n\n| group | n | mean risk score |\n| --- | --- | --- |\n| coffee | 2000 | 6.1 |\n| no coffee | 2000 | 5.2 |\n\nStratified by smoking, the direction reverses: coffee drinkers score lower in both strata. The aggregate difference is produced by smoking, which is associated with both coffee and risk.",
+    "epistemic": "inference",
+    "causal": "verified",
+    "causal_record": {
+      "treatment": "coffee",
+      "outcome": "risk score",
+      "confounders": {
+        "known": ["smoking"],
+        "suspected": ["age"],
+        "unobserved": []
+      },
+      "selection": "volunteer cohort",
+      "temporal_order": "coffee habit recorded before the score",
+      "estimand": "ATE of coffee on the risk score",
+      "identification": {
+        "assumptions": ["no unmeasured confounding", "positivity"],
+        "untested": ["smoking adjustment has not been applied yet"]
+      },
+      "robustness": [
+        {
+          "check": "stratify by smoking",
+          "result": "not run",
+          "failed": false
+        }
+      ],
+      "proposed_by": "synthetic fixture",
+      "alternatives": ["no causal effect", "reverse causation through health awareness"]
+    },
+    "evidence": ["data:synthetic-cohort-simpson"],
+    "source": "synthetic",
+    "provenance": "human-authored"
+  },
+  "retrieval": {
+    "title": "Coffee and synthetic risk score: confounded association",
+    "body": "Synthetic cohort data: coffee correlates with the risk score. Smoking confounds the comparison and the aggregate direction reverses inside the smoking strata, so this is an association and a hypothesis, not a verified causal claim.",
+    "epistemic": "inference",
+    "causal": "hypothesis",
+    "causal_record": {
+      "treatment": "coffee",
+      "outcome": "risk score",
+      "confounders": {
+        "known": ["smoking"],
+        "suspected": ["age"],
+        "unobserved": []
+      },
+      "estimand": "ATE of coffee on the risk score",
+      "identification": {
+        "assumptions": ["no unmeasured confounding"],
+        "untested": ["smoking adjustment has not been applied yet"]
+      }
+    },
+    "evidence": ["data:synthetic-cohort-simpson"],
+    "source": "synthetic",
+    "provenance": "human-authored"
+  }
+}

@@ -1,0 +1,81 @@
+{
+  "name": "identified_analysis",
+  "expected_verified": true,
+  "query": "does the synthetic assignment raise the outcome",
+  "note": "Synthetic analysis with a complete identification argument: the assignment is recorded before the outcome, the confounder set is declared, the estimand is named, a robustness check ran, evidence points at the generated dataset, and no identification assumption is left untested. This one must pass the gate.",
+  "attempt": {
+    "title": "The synthetic assignment raises the synthetic outcome",
+    "body": "Synthetic experiment (generated, not observed people). Assignment A/B is randomised; the outcome is measured after assignment; the declared confounder set is empty by design and the balance check ran.\n\n| arm | n | mean outcome |\n| --- | --- | --- |\n| A | 1000 | 3.40 |\n| B | 1000 | 2.10 |\n\nThe identification argument is stated below, the robustness check ran, and the dataset is the recorded source.",
+    "epistemic": "inference",
+    "causal": "verified",
+    "causal_record": {
+      "treatment": "assignment A vs B",
+      "outcome": "synthetic outcome",
+      "confounders": {
+        "known": [],
+        "suspected": [],
+        "unobserved": []
+      },
+      "selection": "randomised assignment, generated",
+      "temporal_order": "assignment recorded before the outcome",
+      "estimand": "ATE of assignment on the outcome",
+      "identification": {
+        "assumptions": [
+          "randomised assignment",
+          "no differential attrition",
+          "stable unit treatment value"
+        ],
+        "untested": []
+      },
+      "robustness": [
+        {
+          "check": "covariate balance across arms",
+          "result": "balanced within tolerance",
+          "failed": false
+        },
+        {
+          "check": "leave-one-batch-out re-estimate",
+          "result": "same sign and magnitude",
+          "failed": false
+        }
+      ],
+      "proposed_by": "synthetic fixture",
+      "alternatives": ["no effect", "measurement drift"]
+    },
+    "evidence": ["data:synthetic-randomised-experiment", "design:synthetic-ab-assignment"],
+    "source": "synthetic",
+    "provenance": "human-authored"
+  },
+  "retrieval": {
+    "title": "Synthetic randomised assignment and outcome",
+    "body": "Synthetic randomised experiment: assignment A/B raises the generated outcome by 1.3 units. Identification assumptions are stated and tested, robustness checks ran against the generated dataset.",
+    "epistemic": "inference",
+    "causal": "verified",
+    "causal_record": {
+      "treatment": "assignment A vs B",
+      "outcome": "synthetic outcome",
+      "confounders": {
+        "known": [],
+        "suspected": [],
+        "unobserved": []
+      },
+      "selection": "randomised assignment, generated",
+      "temporal_order": "assignment recorded before the outcome",
+      "estimand": "ATE of assignment on the outcome",
+      "identification": {
+        "assumptions": ["randomised assignment", "stable unit treatment value"],
+        "untested": []
+      },
+      "robustness": [
+        {
+          "check": "covariate balance across arms",
+          "result": "balanced within tolerance",
+          "failed": false
+        }
+      ]
+    },
+    "evidence": ["data:synthetic-randomised-experiment"],
+    "source": "synthetic",
+    "provenance": "human-authored"
+  }
+}

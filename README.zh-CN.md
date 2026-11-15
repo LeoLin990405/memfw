@@ -296,6 +296,8 @@ memfw 是引擎，编排系统和它保持一定距离地集成：
 | [`docs/handoff.md`](docs/handoff.md) | 交接包、大小与隐私规则、给编排系统的契约 |
 | [`docs/dream.md`](docs/dream.md) | dream 各步骤、匹配规则、记忆字段、技能候选、局限 |
 | [`docs/okf.md`](docs/okf.md) | OKF v0.2 导出与校验 |
+| [`docs/epistemic-and-experience.md`](docs/epistemic-and-experience.md) | 认知类型、因果分级、写入闸门与检索标签 |
+| [`docs/experience-points.md`](docs/experience-points.md) | 经验点：draft 的 JSON schema、`from-github`、失效提案 |
 | [`docs/COMPONENTS.zh-CN.md`](docs/COMPONENTS.zh-CN.md) | 笔记索引、代码检索、只读 HTTP 服务、关联投影 |
 | [`docs/retrieval-architecture.md`](docs/retrieval-architecture.md) | 检索架构 |
 | [`docs/v1-integration.md`](docs/v1-integration.md)、[`docs/READONLY-SERVICE-UPGRADE.md`](docs/READONLY-SERVICE-UPGRADE.md) | 联邦接口与服务升级 |

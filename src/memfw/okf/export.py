@@ -100,6 +100,20 @@ def _concept(document: MemoryDocument, generated_by: str) -> tuple[str, str, dic
             "tag_type": tag_type,
         },
     }
+    # Epistemic type and causal grade travel with the concept but stay inside the
+    # memfw envelope: the OKF concept schema is unchanged for old bundles, and a
+    # consumer that does not know these names still sees them as memfw metadata.
+    memfw = front["memfw"]
+    if document.epistemic:
+        memfw["epistemic"] = document.epistemic
+    if document.causal != "none":
+        memfw["causal"] = document.causal
+    if document.causal_record is not None:
+        memfw["causal_record"] = document.causal_record.model_dump(mode="json")
+    if document.limitations:
+        memfw["limitations"] = list(document.limitations)
+    if document.experience is not None:
+        memfw["experience"] = document.experience.model_dump(mode="json")
     return concept_id, concept_type, front
 
 

@@ -384,6 +384,8 @@ on synthetic duplicate, conflict and stale cases with `python -m eval.dreams`
 | [`docs/handoff.md`](docs/handoff.md) | handoff packs, size and privacy rules, the orchestrator contract |
 | [`docs/dream.md`](docs/dream.md) | dream operations, matching, memory fields, skill candidates, limits |
 | [`docs/okf.md`](docs/okf.md) | OKF v0.2 export and validation |
+| [`docs/epistemic-and-experience.md`](docs/epistemic-and-experience.md) | epistemic type, causal grade, the write gate, and retrieval labels |
+| [`docs/experience-points.md`](docs/experience-points.md) | experience points: draft schema, `from-github`, invalidation |
 | [`docs/COMPONENTS.md`](docs/COMPONENTS.md) | notes index, code retrieval, read-only HTTP service, relatedness |
 | [`docs/retrieval-architecture.md`](docs/retrieval-architecture.md) | retrieval design |
 | [`docs/v1-integration.md`](docs/v1-integration.md), [`docs/READONLY-SERVICE-UPGRADE.md`](docs/READONLY-SERVICE-UPGRADE.md) | federation surface and service upgrades |
