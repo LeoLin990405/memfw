@@ -124,6 +124,14 @@ The conversation store and the worker state are kept **outside** the vault, by d
 `~/.local/share/memfw/` (see [Privacy](#-privacy-and-permissions)). If the vault is a git
 repository, add `index.sqlite3` and `.memfw-history.sqlite*` to its `.gitignore`.
 
+An index written by an older memfw has no temporal projections. Writers are lazy about it:
+`memfw mcp serve` and `memfw index search` check the schema generation (`PRAGMA user_version`)
+before using the file and rebuild it when it is stale, so an upgrade needs no manual step there.
+The read-only HTTP service (`scripts/memfw_readonly_service.py`) never writes, so it **does not**
+rebuild: it detects the missing tables and degrades instead (no temporal filtering when
+`memory_temporal` is absent, and no results at all when `memory_access` is absent). Run
+`memfw index rebuild` once before pointing the read-only service at an upgraded vault.
+
 ## 🧠 Memory commands
 
 | Area | Commands |

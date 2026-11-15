@@ -104,6 +104,8 @@ Claude Code 可以直接运行 `claude mcp add memfw -- memfw-mcp --root /path/t
 
 会话库和 worker 状态放在 vault **之外**，默认在 `~/.local/share/memfw/`（见[隐私与权限](#-隐私与权限)）。如果 vault 本身是 git 仓库，记得把 `index.sqlite3` 和 `.memfw-history.sqlite*` 加进 `.gitignore`。
 
+旧版 memfw 写出的索引里没有时间投影。使用索引的写侧命令是惰性重建的：`memfw mcp serve` 和 `memfw index search` 会先检查 schema 世代（`PRAGMA user_version`），过时就在使用前重建，所以从旧版本升级不需要手动操作。只读 HTTP 服务（`scripts/memfw_readonly_service.py`）完全不写盘，因此**不会**重建：它检测到表缺失就降级（没有 `memory_temporal` 时不做时间过滤，没有 `memory_access` 时不返回结果）。升级后如果要用只读服务，先跑一次 `memfw index rebuild`。
+
 ## 🧠 记忆相关命令
 
 | 类别 | 命令 |
