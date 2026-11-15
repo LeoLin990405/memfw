@@ -119,9 +119,9 @@ def _logs(tmp_path: Path) -> Path:
                 *_release(home, [("Read", {"file_path": f"{home}/proj/CHANGELOG.md"})]),
                 ("user", "now run the lint for the widget package"),
                 ("bash", "uv run ruff check src"),
-                ("result", "clean"),
+                ("result", "All checks passed!"),
                 ("bash", "uv run mypy src"),
-                ("result", "clean"),
+                ("result", "Success: no issues found in 3 source files"),
             ],
             2,
         ),
@@ -142,9 +142,9 @@ def _logs(tmp_path: Path) -> Path:
                 ("out", "ok"),
                 ("user", "run the lint for the widget package"),
                 ("bash", "uv run ruff check src"),
-                ("out", "clean"),
+                ("out", "All checks passed!"),
                 ("bash", "uv run mypy src"),
-                ("out", "clean"),
+                ("out", "Success: no issues found in 3 source files"),
             ],
             3,
         ),
@@ -207,7 +207,7 @@ def _staged(root: Path) -> dict[str, dict[str, str]]:
         ("[tool Bash] command: docker exec prod-db psql", "cmd:docker exec"),
         ("[tool Bash] command: sudo -u someone make", None),
         ("[tool Bash] command: ./deploy-host7.sh", None),
-        ("[tool Bash] command: /usr/bin/python3 -m pytest", "cmd:python3"),
+        ("[tool Bash] command: /usr/bin/python3 -m pytest", "cmd:python3 -m pytest"),
         ("[tool Read] file_path: /x/y.md", None),
         ("[tool WebFetch] url: https://example.invalid", "tool:webfetch"),
         ("plain prose", None),
@@ -265,8 +265,11 @@ def test_clean_removes_paths_and_refuses_secrets() -> None:
     assert clean(f"Run it in /Users/{FAKE_HOME_USER}/proj now") == "Run it in <path> now"
     assert clean("open ~/notes/a.md or C:\\Users\\x\\y") == "open <path> or <path>"
     assert clean("see https://host.invalid/x?a=1") == "see <url>"
+    # A credential after a cue is replaced; one without a cue is still refused.
+    assert clean("token " + FAKE_TOKEN) == "token <secret>"
+    assert clean("see src/pkg/plan.py on host db-node-01") == "see <place> on host <place>"
     with pytest.raises(UnsafeText):
-        clean("token " + FAKE_TOKEN)
+        clean("use " + FAKE_TOKEN)
 
 
 # -- end to end ------------------------------------------------------------------
@@ -300,7 +303,9 @@ def test_repeated_procedure_across_agents_becomes_a_candidate(tmp_path: Path) ->
     assert meta["name"] == candidate.record["name"]
     assert "widget" in meta["name"] and "release" in meta["name"]
     assert "## When to use" in body and "## Steps" in body
-    assert "1. Run `uv run pytest`" in body and "3. Run `git tag`" in body
+    assert "1. Run the tests: run `uv run pytest -q`" in body
+    assert "3. Tag the release: run `git tag`" in body
+    assert "## Preconditions" in body and "Check: tests pass" in body
     record = json.loads(files["candidate.json"])
     assert record["status"] == "proposed"
     assert record["approved"] is False and record["installed"] is False
@@ -403,7 +408,7 @@ def test_private_terms_are_masked_everywhere(tmp_path: Path) -> None:
             ("bash", f"uv run {term}"),
             ("result", "ok"),
             ("bash", "git push"),
-            ("result", "ok"),
+            ("result", "exit code 0"),
         ]
         (logs / f"p{number}.jsonl").write_text(_claude(f"p{number}", turns, number + 1), "utf-8")
     outside = tmp_path / "outside"
@@ -449,9 +454,9 @@ def test_keywords_leave_out_words_with_digits(tmp_path: Path) -> None:
         turns = [
             ("user", f"deploy the widget to host7 ticket{number}"),
             ("bash", "uv build"),
-            ("result", "ok"),
+            ("result", "Successfully built widget"),
             ("bash", "uv publish"),
-            ("result", "ok"),
+            ("result", "exit code 0"),
         ]
         (logs / f"d{number}.jsonl").write_text(_claude(f"d{number}", turns, number + 1), "utf-8")
     root = tmp_path / "vault"
@@ -527,7 +532,7 @@ def test_drafter_steps_must_cite_verified_evidence(tmp_path: Path, monkeypatch: 
                     {{"text": "Invent a deploy step", "evidence": []}},
                     {{"text": "Push to prod", "evidence": ["s99"]}},
                     {{"text": "Build with uv in /Users/{FAKE_HOME_USER}/x", "evidence": [ids[1]]}},
-                    {{"text": "uv build with token {FAKE_TOKEN}", "evidence": [ids[1]]}},
+                    {{"text": "uv build with {FAKE_TOKEN}", "evidence": [ids[1]]}},
                     {{"text": "Run rm -rf on the build dir", "evidence": [ids[0]]}},
                     {{"text": "Run uv build", "evidence": [ids[1]]}},
                     {{"text": "Run git tag for the release", "evidence": [ids[2]]}},

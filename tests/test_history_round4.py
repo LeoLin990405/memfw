@@ -66,9 +66,12 @@ def test_long_prefixed_keys_are_caught(text: str) -> None:
     ],
 )
 def test_wider_key_patterns_stay_linear(text: str) -> None:
+    # About 1 MiB of adversarial input. A quadratic pattern takes minutes here;
+    # linear scanning takes well under a second locally and about 1.2 s on
+    # shared CI runners, so 3 s keeps the guard without timing flakes.
     started = time.perf_counter()
     has_secret(text)
-    assert time.perf_counter() - started < 1.0
+    assert time.perf_counter() - started < 3.0
 
 
 # -- suffixes and separators -------------------------------------------------------------

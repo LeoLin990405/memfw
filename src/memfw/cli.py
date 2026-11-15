@@ -24,6 +24,7 @@ from .core.repository import Repository
 from .curation.engine import enforce_budget, plan_forget, run_forget
 from .curation.review_cli import review_command as run_review
 from .dream.cli import app as dream_app
+from .handoff.cli import handoff as handoff_command
 from .history.cli import app as history_app
 from .index import MemoryIndex
 from .notes import (
@@ -90,6 +91,7 @@ app.add_typer(concepts_app, name="concepts")
 app.add_typer(history_app, name="history")
 app.add_typer(dream_app, name="dream")
 app.add_typer(conversations_app, name="conversations")
+app.command("handoff")(handoff_command)
 capture_app.command(name="confirm")(confirm_command)
 
 
@@ -1017,7 +1019,22 @@ def init(
 ) -> None:
     """Initialize a vault."""
     if dry_run:
-        typer.echo(json.dumps({"path": str(path), "would_initialize": not path.exists()}))
+        # A vault is initialized when vault.yaml exists; an existing but empty (or
+        # partly created) directory is not, and ``init`` would set it up.
+        target = path.expanduser()
+        if target.exists() and not target.is_dir():
+            raise typer.BadParameter(f"not a directory: {path}")
+        initialized = (target / "vault.yaml").is_file()
+        typer.echo(
+            json.dumps(
+                {
+                    "path": str(path),
+                    "exists": target.exists(),
+                    "initialized": initialized,
+                    "would_initialize": not initialized,
+                }
+            )
+        )
         return
     Repository(path, clock=lambda: _NOW or datetime.now(UTC), id_factory=_id_factory(path)).init()
     typer.echo(f"Initialized {path.expanduser().resolve()}")

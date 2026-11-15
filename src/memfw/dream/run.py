@@ -1,4 +1,4 @@
-"""Orchestrate one dream: verify, curate, stub ③/④, budget check, stage.
+"""Orchestrate one dream: verify, curate, distill, budget check (④), stage.
 
 The dream reads the vault and the transcript index and writes only
 candidates under ``_candidates/dream/<dream_id>/``. With ``dry_run`` it writes
@@ -26,6 +26,7 @@ from memfw.history import (
 
 from .budget import budget_candidates, check_budget
 from .curate import curate
+from .distill import MIN_EVENTS, distill
 from .model import Candidate
 from .stage import check_dream_id, stage
 from .verify import Judge, cited, is_current, verify
@@ -45,7 +46,14 @@ class DreamOptions:
     since: str | None = None
     until: str | None = None
     refresh: bool = True
+    read_only_history: bool = False
+    """Read the transcript index read-only even when staging (never create or refresh it).
+
+    The MCP tool sets this: a dream started by an agent writes only its
+    candidates, never the derived index in the vault root."""
     stale_days: int = 180
+    min_events: int = MIN_EVENTS
+    """Independent events a distilled lesson needs (never fewer than 2)."""
     dream_id: str | None = None
     judge: str | None = None
     allow_config_judge: bool = False
@@ -112,8 +120,8 @@ def _history(
         if not db.is_file():
             return None, {
                 "available": False,
-                "reason": "no transcript index yet (dry runs never build one); "
-                "run `memfw history index` first",
+                "reason": "no transcript index yet (dry runs and read-only dreams never "
+                "build one); run `memfw history index` first",
             }
         index = TranscriptIndex(
             db, sources, limits=HistoryLimits.from_config(config), read_only=True
@@ -151,6 +159,8 @@ def run_dream(
     """Run one dream over the vault at ``root``."""
 
     options = options or DreamOptions()
+    if options.min_events < MIN_EVENTS:
+        raise ValueError(f"min_events must be >= {MIN_EVENTS}")
     repository = Repository(root)
     if not repository.config_path.exists():
         raise ValueError(f"not a memfw vault: {root}")
@@ -173,7 +183,12 @@ def run_dream(
         if options.all_memories
         else cited(documents)
     )[: max(0, options.limit)]
-    index, history_info = _history(repository, config, options.refresh, dry_run=dry_run)
+    index, history_info = _history(
+        repository,
+        config,
+        options.refresh and not options.read_only_history,
+        dry_run=dry_run or options.read_only_history,
+    )
     verified, stats = verify(
         to_verify,
         index,
@@ -185,9 +200,10 @@ def run_dream(
         judge=judge,
     )
     curated = curate(documents, now=now, stale_days=options.stale_days)
+    distilled, distill_stats = distill(documents, verified, min_events=options.min_events)
     budget = check_budget(repository.root, config)
     promoted = budget_candidates(budget)
-    candidates = verified + curated + promoted
+    candidates = verified + curated + distilled + promoted
     candidates.sort(key=lambda item: (item.oid, item.operation, item.action, item.memory_ids))
     dream_id = _dream_id(repository, options, now)
     counts: dict[str, int] = {}
@@ -202,6 +218,7 @@ def run_dream(
         "memories": {"current": len(documents), "verified": len(to_verify)},
         "history": history_info,
         "verify": stats.as_dict(),
+        "distill": distill_stats.as_dict(),
         "candidates": counts,
         "budget": [
             {"path": item.path, "lines": item.lines, "bytes": item.bytes, "over": item.over}
@@ -210,8 +227,8 @@ def run_dream(
         "operations": {
             "verify": "run",
             "curate": "run",
-            "distill": "stub: proposal-only, not implemented in v1 "
-            "(needs two independent events per Lesson/Procedure)",
+            "distill": f"run: lessons from >= {options.min_events} independent events "
+            "(proposal-only; procedures: memfw dream skills)",
             "promote": "proposal-only: injected-layer budget demotions",
         },
         "judge": "local hook" if judge is not None else "none (deterministic rules)",

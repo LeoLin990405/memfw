@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -538,6 +539,9 @@ def test_nan_judge_score_is_rejected() -> None:
         judge.score("q", "p", "")
 
 
+@pytest.mark.skipif(
+    shutil.which("uv") is None, reason="needs uv on PATH to build the wheel (absent on CI runners)"
+)
 def test_wheel_search_runs_outside_the_checkout(tmp_path: Path) -> None:
     dist = tmp_path / "dist"
     build = subprocess.run(

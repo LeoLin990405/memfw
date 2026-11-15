@@ -2,7 +2,7 @@
   "dream": {
     "adopted_proposal_rate": null,
     "adopted_proposal_rate_online": true,
-    "cases": 7,
+    "cases": 11,
     "conflict_detection_rate": 1.0,
     "dream_implemented": true,
     "false_merge_rate": 0.0,
@@ -70,6 +70,54 @@
         "stale_total": 0
       },
       {
+        "case_id": "conflict-negation",
+        "conflict_hits": 1,
+        "conflict_total": 1,
+        "false_merges": 0,
+        "kind": "conflict",
+        "merge_hits": 0,
+        "merge_total": 0,
+        "proposed_merges": 0,
+        "stale_hits": 0,
+        "stale_total": 0
+      },
+      {
+        "case_id": "conflict-port-value",
+        "conflict_hits": 1,
+        "conflict_total": 1,
+        "false_merges": 0,
+        "kind": "conflict",
+        "merge_hits": 0,
+        "merge_total": 0,
+        "proposed_merges": 0,
+        "stale_hits": 0,
+        "stale_total": 0
+      },
+      {
+        "case_id": "identity-differs",
+        "conflict_hits": 0,
+        "conflict_total": 0,
+        "false_merges": 0,
+        "kind": "conflict",
+        "merge_hits": 0,
+        "merge_total": 0,
+        "proposed_merges": 0,
+        "stale_hits": 0,
+        "stale_total": 0
+      },
+      {
+        "case_id": "duplicate-synonym",
+        "conflict_hits": 0,
+        "conflict_total": 0,
+        "false_merges": 0,
+        "kind": "duplicate",
+        "merge_hits": 1,
+        "merge_total": 1,
+        "proposed_merges": 1,
+        "stale_hits": 0,
+        "stale_total": 0
+      },
+      {
         "case_id": "stale-closed",
         "conflict_hits": 0,
         "conflict_total": 0,
@@ -100,7 +148,7 @@
   "gold_self_score": {
     "adopted_proposal_rate": null,
     "adopted_proposal_rate_online": true,
-    "cases": 7,
+    "cases": 11,
     "conflict_detection_rate": 1.0,
     "dream_implemented": false,
     "false_merge_rate": 0.0,
@@ -163,6 +211,54 @@
         "merge_hits": 0,
         "merge_total": 0,
         "proposed_merges": 0,
+        "stale_hits": 0,
+        "stale_total": 0
+      },
+      {
+        "case_id": "conflict-negation",
+        "conflict_hits": 1,
+        "conflict_total": 1,
+        "false_merges": 0,
+        "kind": "conflict",
+        "merge_hits": 0,
+        "merge_total": 0,
+        "proposed_merges": 0,
+        "stale_hits": 0,
+        "stale_total": 0
+      },
+      {
+        "case_id": "conflict-port-value",
+        "conflict_hits": 1,
+        "conflict_total": 1,
+        "false_merges": 0,
+        "kind": "conflict",
+        "merge_hits": 0,
+        "merge_total": 0,
+        "proposed_merges": 0,
+        "stale_hits": 0,
+        "stale_total": 0
+      },
+      {
+        "case_id": "identity-differs",
+        "conflict_hits": 0,
+        "conflict_total": 0,
+        "false_merges": 0,
+        "kind": "conflict",
+        "merge_hits": 0,
+        "merge_total": 0,
+        "proposed_merges": 0,
+        "stale_hits": 0,
+        "stale_total": 0
+      },
+      {
+        "case_id": "duplicate-synonym",
+        "conflict_hits": 0,
+        "conflict_total": 0,
+        "false_merges": 0,
+        "kind": "duplicate",
+        "merge_hits": 1,
+        "merge_total": 1,
+        "proposed_merges": 1,
         "stale_hits": 0,
         "stale_total": 0
       },

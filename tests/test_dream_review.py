@@ -453,10 +453,8 @@ def test_curate6_pairs(name: str, expected: str, first: str, second: str) -> Non
     assert _pair_action(first, second) == expected
 
 
-@pytest.mark.xfail(
-    strict=True, reason="synonyms (deploys/deployments, happen/scheduled) are not matched"
-)
-def test_curate_synonym_duplicate_is_a_known_limit() -> None:
+def test_curate_synonym_duplicate_merges() -> None:
+    # Was a strict xfail before M1-3: synonyms are now folded.
     assert (
         _pair_action(
             "Deploys happen on Tuesdays at 10:00.",

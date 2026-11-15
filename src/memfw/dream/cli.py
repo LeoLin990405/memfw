@@ -57,6 +57,10 @@ def dream_run(
     until: Annotated[str | None, typer.Option("--until")] = None,
     tenant: Annotated[str, typer.Option("--tenant")] = "",
     stale_days: Annotated[int, typer.Option("--stale-days")] = 180,
+    min_events: Annotated[
+        int,
+        typer.Option("--min-events", help="Independent events a distilled lesson needs (>= 2)"),
+    ] = 2,
     dream_id: Annotated[str | None, typer.Option("--dream-id")] = None,
     judge: Annotated[
         str | None,
@@ -85,6 +89,7 @@ def dream_run(
         until=until,
         refresh=refresh,
         stale_days=stale_days,
+        min_events=min_events,
         dream_id=dream_id,
         judge=judge,
         allow_config_judge=allow_config_judge,
@@ -137,6 +142,16 @@ def dream_skills(
             help="Read the conversation worker's episode queue instead of the transcript index",
         ),
     ] = False,
+    boilerplate_min_sessions: Annotated[
+        int,
+        typer.Option(
+            "--boilerplate-min-sessions",
+            help="Text repeated in this many sessions is injected boilerplate (0: off)",
+        ),
+    ] = 5,
+    summary: Annotated[
+        bool, typer.Option("--summary", help="Print the report only, not the candidates")
+    ] = False,
 ) -> None:
     """Stage skill candidates from repeated procedures under _candidates/skills/."""
 
@@ -151,13 +166,17 @@ def dream_skills(
         refresh=refresh,
         drafter=drafter,
         from_queue=from_queue,
+        boilerplate_min_sessions=boilerplate_min_sessions,
     )
     try:
         result = run_skills(root, now=_now(now), dry_run=dry_run, options=options)
     except (DreamStageError, HistoryError, MemfwError, ValueError, ImportError, OSError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(2) from exc
-    typer.echo(json.dumps(result.as_dict(), ensure_ascii=False, indent=2))
+    output = result.as_dict()
+    if summary:
+        output = {key: value for key, value in output.items() if key != "candidates"}
+    typer.echo(json.dumps(output, ensure_ascii=False, indent=2))
     failed = result.report.get("staging_errors", 0)
     if failed:
         typer.echo(f"error: {failed} candidate(s) could not be staged", err=True)

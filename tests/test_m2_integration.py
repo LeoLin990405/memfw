@@ -81,7 +81,7 @@ def _claude_session(home: Path, session: str, day: int, *, secret: bool = False)
                 "timestamp": f"{ts}{index}Z",
                 "message": {
                     "role": "user",
-                    "content": [{"type": "tool_result", "content": "ok"}],
+                    "content": [{"type": "tool_result", "content": "exit code 0"}],
                 },
             }
         )
@@ -130,7 +130,7 @@ def _codex_session(home: Path, session: str, day: int) -> None:
             {
                 "timestamp": ts,
                 "type": "response_item",
-                "payload": {"type": "function_call_output", "output": "ok"},
+                "payload": {"type": "function_call_output", "output": "exit code 0"},
             }
         )
     rows.append(

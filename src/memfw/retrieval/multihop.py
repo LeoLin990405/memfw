@@ -274,7 +274,7 @@ def _document_frequencies(rows: list[dict[str, Any]], scorer: BM25Scorer | None)
             and row["summary"] == ""
             and row["tags"] == ""
         )
-        if same_text:
+        if same_text and counts is not None:
             frequencies.update(counts.keys())
             continue
         frequencies.update(set(tokenize(f"{row['title']}\n{row['body']}")))
@@ -307,7 +307,7 @@ def _row_visible(row: dict[str, Any], *, include_history: bool, as_of: datetime 
         if start is None or start > as_of:
             return False
         return end is None or end > as_of
-    return row["valid_to"] == ""
+    return bool(row["valid_to"] == "")
 
 
 def _parse_instant(value: str) -> datetime | None:

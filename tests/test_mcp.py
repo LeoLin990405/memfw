@@ -34,6 +34,8 @@ def test_mcp_tool_list() -> None:
         "conversations_list",
         "conversations_get",
         "conversations_handoff",
+        "dream_run",
+        "dream_list",
     }
 
 

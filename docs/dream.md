@@ -26,19 +26,74 @@ In priority order:
 2. **Curate.** Inside each concept (`about` oid):
    - `merge`: identical bodies, near-identical wording, or paraphrases that
      state the same values (numbers, number words, attribute values) with
-     shared context; the earliest memory is kept. Never across different
-     subjects (staging vs production, Alice vs Bob, `service: api` vs
-     `service: worker`) or when one memory negates the other;
+     shared context, or the same content words once synonyms are folded
+     ("Deploys happen on Fridays" / "Deployments are scheduled on Friday");
+     the earliest memory is kept. Never across different subjects (staging vs
+     production, Alice vs Bob, `service: api` vs `service: worker`) or when a
+     clause of one memory negates the same clause of the other;
    - `supersede`: the same attribute (`key: value` lines or `The <thing> is
-     <value>` sentences) or the same context with different values; the newer
+     <value>` clauses) or the same context with different values; the newer
      memory is proposed to supersede the older one, which would get
      `valid_to`. Both must be about the same subject, and "X" vs "not X" is
      proposed here rather than merged. Nothing is silently overwritten;
    - `mark-stale`: a memory superseded by another but without `valid_to`, or an
      unreferenced, unconfirmed memory not updated for `--stale-days` (180).
      Nothing is deleted.
-3. **Distill** (Lesson / Procedure from at least two independent events):
-   proposal-only stub inside `dream run`; procedures are distilled into skill
+
+   How curate compares two memories (no model):
+   - **Clauses and negation.** Each clause is read on its own, and a negation
+     (`not`, `never`, `no longer`, contractions such as `isn't` and
+     `doesn't`) applies to its clause only. "The cache is enabled" vs "The
+     cache is not enabled" is a `supersede` ("attribute 'cache' is negated in
+     one memory"); "not enabled" and "disabled" say the same thing. A "do not
+     ..." clause about something else neither blocks a merge nor flags a
+     conflict. "The owner is not alice" vs "The owner is bob" is no conflict.
+     Time adverbs around a value (`now`, `still`, `currently`, `today`) are
+     not part of it: "enabled" and "enabled now" agree.
+   - **Value signatures.** A value is tied to the noun next to it (`port
+     8000`, `timeout 30s`, `Postgres 14`), so "port 8000" vs "port 9000" is a
+     conflict ("value of 'port' differs") even when the rest of the wording
+     differs. Different nouns (`3 members`, `30 days`) are not compared.
+   - **Identity keys.** `service`, `name`, `env`/`environment`, `project`,
+     `repo`, `cluster`, `account`, `tenant` and `app` name *which* thing a
+     memory is about. When they differ the memories are about different
+     things, however many other attributes agree (`service: api, owner: alice`
+     vs `service: worker, owner: alice` gives no candidate). The same holds
+     when the other memory names the thing in prose: `env: prod` vs "The
+     staging environment has 3 replicas" are different subjects. The nearest
+     word on each side of the noun (past link words such as `for`, `of`,
+     `the`, `called`; synonyms folded) is compared with the attribute value,
+     and only those words count, so "Prod and staging environment" names
+     staging. With no such word ("The service has 3 replicas") nothing is
+     decided. Keys such as
+     `owner`, `host` and `region` may change and give `supersede`.
+   - **Synonyms.** A small fixed table folds wording: deploy / deploys /
+     deployments, db / database, prod / production, config / configuration,
+     repo / repository, env / environment, app / application, k8s /
+     kubernetes, start / begin, happen / occur / scheduled, stop / halt.
+     Opposites (enabled / disabled) are never folded.
+3. **Distill** (Lesson from at least two independent events). Event memories
+   (`type` or a tag of `event`, `incident`, `episode`, `failure`, `fix`,
+   `bug`, `outage`, `postmortem` or `observation`) about one concept that
+   share content words (at least two, Jaccard >= 0.3) form a cluster; events
+   not linked to a concept cluster together. A cluster yields one `distill`
+   candidate only with at least `--min-events` (2, never fewer) independent
+   events: events whose transcript sessions (the `SOURCE:FILE_ID` of their
+   evidence refs, plus refs this run's verify found) do not overlap. Session
+   ids are compared in one form (lowercase, without a `conv:` prefix, an
+   `@offset`, a `#turn` or a trailing slash). An event that cites no session
+   never counts (`report.distill.uncited_events`): nothing shows it is not
+   the same session as another note. The
+   candidate proposes a new memory under `changes.new_memory` (`type:
+   lesson`, a title and draft body from the recurring words and the event
+   titles, `status: unconfirmed`, the evidence refs, `about` the concept) and
+   lists `events`, `independent_events` and `counterexamples`: memories of the
+   concept that share the recurring words but negate them or are disputed, and
+   events this run marked disputed. Counterexamples are named in the reason,
+   never hidden. A cluster an existing lesson already covers is skipped. The
+   draft never contains transcript text, is redacted, and is dropped if it
+   still carries a secret. `report.distill` counts clusters, proposals and
+   the reasons clusters were rejected. Procedures are distilled into skill
    candidates by `memfw dream skills` (below).
 4. **Promote / demote:** proposal-only. In v1 this is the injected-layer
    budget check below.
@@ -108,6 +163,23 @@ agent and service reading the vault has it, applying dream statuses is safe.
 Note that rewriting a memory with a version that does not know a key drops
 that key.
 
+**Reader-upgrade order** (unchanged by the M1-3 follow-ups, which add no
+memory field and no status value: distill proposals use `type: lesson`,
+`status: unconfirmed` and `evidence`, all of which exist):
+
+1. Upgrade every reader first: each memfw install, the MCP server
+   (`memfw-mcp`) and fleet-memory's reader, so that unknown keys are ignored
+   rather than rejected.
+2. Then upgrade the writers (the `memfw` CLI that applies candidates and the
+   conversation worker).
+3. Only then apply `status` / `evidence` from dream candidates.
+
+Candidate files and `report.json` only gain keys (`report.distill`,
+`changes.new_memory`, `candidates_truncated` in MCP responses), so a reader
+that ignores unknown keys keeps working. The conversation worker's state file
+gains a `scan_cursor` table; an older worker ignores it (see
+`docs/conversations-share.md`).
+
 ## Injected-layer budget
 
 Files loaded at the start of every session must stay small: at most 200 lines
@@ -158,8 +230,30 @@ _candidates/dream/<dream_id>/
 file says `authority: false`.
 
 Options: `--all`, `--limit`, `--focus` (steers the search only), `--max-sessions`,
-`--source-name`, `--since`, `--until`, `--tenant`, `--stale-days`, `--dream-id`,
+`--source-name`, `--since`, `--until`, `--tenant`, `--stale-days`, `--min-events`, `--dream-id`,
 `--judge`, `--allow-config-judge`, `--no-refresh`, `--now` (inject the clock).
+
+## MCP tools
+
+The memfw MCP server (`memfw-mcp`) has two dream tools:
+
+- `dream_run(dry_run=true, focus, all, limit, max_sessions, source, since,
+  until, stale_days, min_events)`: runs one dream as the server's tenant. It
+  is a dry run unless `dry_run` is `false`; then it stages candidates under
+  `_candidates/dream/<dream_id>/` and nothing else. It always uses the
+  deterministic rules: no judge can be named, and `dream_judge` in
+  `vault.yaml` is ignored, because a judge is code that reads transcripts.
+  It reads the transcript index read-only and never builds or refreshes it
+  (run `memfw history index` from the CLI), so a staged dream writes only its
+  own candidate directory. A tenant may have at most 50 staged dreams waiting
+  for review, and one server stages at most one dream per 60 seconds; dry
+  runs are not limited.
+  `limit` is at most 1000 and `max_sessions` 1 to 100. The response returns
+  at most 200 candidates (`candidates_truncated` counts the rest; a staged
+  dream has them all).
+- `dream_list(limit=20)`: this tenant's staged dreams, newest first (id,
+  `created_at`, candidate counts). A symlinked dream directory or report is
+  skipped and named in `skipped`, never followed.
 
 ## Skill candidates
 
@@ -181,38 +275,115 @@ not let the worker process are skipped. A dry run only peeks at the queue; a
 real run acks the episodes after staging, or releases them when it fails.
 Refs then read `conv:APP:SESSION@OFFSET` (`memfw conversations get`).
 
-1. **Episodes.** Each session is split into tasks: a user turn opens an
-   episode, except a user turn that answers a tool call (a tool result).
-2. **Steps.** Each tool call becomes a signature: a shell command keeps its
-   program and up to two following words from a fixed sub-command vocabulary
-   or known-program list (`cd repo && uv run pytest -q` -> `cmd:uv run
-   pytest`, `git push origin my-branch` -> `cmd:git push`, `ssh host7 uptime`
-   -> `cmd:ssh`). Free arguments (hosts, users, branches, paths, versions)
-   are never kept, and an unknown program whose name has digits is not a
-   step. Another tool becomes `tool:<name>`. Generic file tools (read, edit,
-   grep, ...) are not steps. Parallel tool calls are matched to their results,
-   so a tool result never opens an episode.
-3. **Procedures.** Episodes are clustered in a fixed order by half request
-   words, half step signatures (`--similarity`, 0.4; no shared step, no
-   match). A cluster must span `--min-sessions` (3) distinct sessions.
-4. **Verify-first.** A step is kept only when evidence turns for it exist in
-   at least `--min-sessions` of those sessions; other steps are dropped and
-   listed as `dropped_steps`. Fewer than `--min-steps` (2) kept steps, no
-   candidate.
+1. **Boilerplate.** Injected text is stripped from user turns before they
+   become a request. Static rules remove generic harness markers (reminder
+   and environment tag blocks, AGENTS.md / CLAUDE.md echoes, background-task
+   notifications, tool schemas) and unwrap request wrappers such as
+   `<user_query>`. They match the exact spelling harnesses emit, so a
+   person's own `<instructions>` or `<task>` text is kept. A corpus pass then counts every paragraph, line and
+   sentence of the user and system turns: text repeated verbatim (ids, paths
+   and numbers normalised) in `--boilerplate-min-sessions` (5) sessions from
+   two agents, or in three times as many sessions from one agent, is an
+   orchestrator template and is removed too (`0` keeps only the static
+   rules).
+2. **Episodes.** Each session is split into tasks: a user turn opens an
+   episode, except a user turn that answers a tool call (a tool result), one
+   that is only harness markers, or one that only says "continue". A turn
+   that only the corpus pass empties (an orchestrator template, or a request
+   the user really repeats) still opens an episode, with no request words:
+   its steps alone say what it was.
+3. **Steps.** Each tool call becomes one or more signatures: every
+   meaningful segment of a shell command keeps its program and up to two
+   following words from a fixed sub-command vocabulary or known-program list
+   (`cd repo && uv run pytest -q && git push` -> `cmd:uv run pytest`,
+   `cmd:git push`; `ssh host7 uptime` -> `cmd:ssh`). Free arguments (hosts,
+   users, branches, paths, versions) are never kept, and an unknown program
+   whose name has digits is not a step. Read-only programs (`cat`, `sed`,
+   `rg`, ...), bare interpreters (`python3 - <<EOF`), generic file tools
+   (read, edit, grep, ...) and harness plumbing (sub-agents, tool search,
+   waiting) are not steps; another tool becomes `tool:<name>`. Each step also
+   keeps, extracted locally: the stated intent (the call's description, or
+   the sentence before the first call of a batch), flag names (never values), input kinds
+   (`<file>.py`), and the check its result showed (`tests pass`, `lint
+   clean`, `commit created`, `exit 0`, ... from a fixed vocabulary).
+4. **Procedures.** Episodes are clustered in a fixed order on what was done:
+   half step signatures (weighted by rarity once the corpus has 50 sessions,
+   so a step every session runs cannot link two tasks), then request words
+   and stated-intent words (`--similarity`, 0.4).
+5. **Independence and spread.** Sessions under the same dispatch line, or
+   with the same request text within six hours of each other (a retry or a
+   fan-out, also across midnight; ids, numbers and worker ordinals such as
+   "worker two" are normalised), count as one. A cluster needs
+   `--min-sessions` (3, at least 2) independent sessions over at least two
+   natural (UTC) days, and a passing check in at least two of them.
+   Timestamps are parsed (ISO-8601, epoch seconds or milliseconds). Several
+   agents raise the confidence but are not required.
+6. **Verify-first.** A step is kept only when it appears in at least
+   `--min-sessions` independent sessions; other steps are dropped and listed
+   as `dropped_steps`. Fewer than `--min-steps` (2) kept steps, or only
+   steps that look around (`git status`, `git log`, `gh pr view`, web
+   search ...), no candidate.
+   A kept step is drafted with the flags and input kinds most of its
+   sessions used, the checks seen in two or more, and the sessions it was
+   seen in. One session's sentence is never copied: a stated intent is used
+   only when the same scrubbed wording recurs in two independent sessions
+   (`intent_source: shared`); otherwise the headline is generated from the
+   command's class ("Run the tests", "Tag the release", ...). Preconditions come from the programs
+   used (and early setup steps). No model is called unless `--drafter` names
+   a local hook.
+
+`report.quality` sums it up for a reviewer: the candidate count, what the
+boilerplate filter removed (`boilerplate_filtered`: texts stripped or
+emptied, paragraphs and pieces removed, requests skipped as injected or
+"continue"), why clusters were rejected (`rejected`), and one example
+candidate (name and first steps, generated text only). `--summary` prints
+the report without the candidates.
+
+All agent-derived draft text (shared intents, request and intent words)
+is scrubbed: redaction, then URLs, absolute and relative paths, bare
+domains, UNC and backslash paths, a folder name with a trailing slash
+(`src/`) and host-like tokens (letters mixed with digits, such as
+`db-node-01`, or a `host:` in front of a path) become `<place>`. The value
+of an assignment (`NAME=value`, `NAME = value`, quoted values, `$(...)` or
+backticked substitutions, PowerShell `$env:NAME=`) becomes `<secret>`,
+except a plain small number or boolean under a harmless name
+(`retries=3`). After a secret cue (`password`, `passwd`, `token`, `secret`,
+`api key`, `key:`, `pass:`) the value becomes `<secret>` when it follows
+`:`/`=` or a filler (`is`, `to`, `,`, `-`), looks like a credential (a
+digit or symbol, or 8+ characters of mixed case), or follows a password
+cue; plain English (`token count`, `password reset`, `API key before`)
+stays. Backticks in agent text get no exemption. Only command text the
+code generates itself, from the fixed signature vocabulary, is added after
+scrubbing and kept as it is.
+
+**Privacy limits (accepted risk).** The scrub is pattern-based. It does not
+recognise host names without digits (`bastion`, `prod-db`), repository or
+project names in prose (`acme-billing-portal`), or e-mail addresses spelled
+out (`alice at acme dot com`). Such words reach a draft only when they
+recur in at least half of the independent sessions (keywords) or inside an
+intent shared by two of them, but they can. List them under
+`skills_distill.private_terms` (below): they are then masked everywhere in a
+candidate (SKILL.md, evidence and record), a private keyword is dropped
+from the keywords, and the skill name is masked too.
 
 Each candidate is staged under `_candidates/skills/<candidate_id>/`:
 
 - `SKILL.md`: frontmatter `name` (lower-case, hyphenated, at most 64
-  characters) and `description`, then *When to use*, *Steps* (each citing its
-  step ids and session count) and *Evidence*;
-- `evidence.json`: sessions (source, session id, agent), agent counts, and
-  per-step signatures, session counts and refs (`memfw history read REF`);
+  characters) and `description`, then *When to use*, *Preconditions*,
+  *Steps* (each with its intent, command, inputs, checks, the sessions it
+  was seen in, its step id and independent-session count) and *Evidence*;
+- `evidence.json`: sessions (source, session id, agent), agent counts,
+  independent sessions, days, outcomes, preconditions, and per-step
+  signatures, intents, commands, flags, inputs, checks, session ids, counts
+  and refs (`memfw history read REF`);
 - `candidate.json`: the proposal record: `status: proposed`,
   `approved: false`, `installed: false`, `confidence` (0..1, from step
-  support, repetition, agent breadth and the share of steps kept).
+  support, repetition, agent or day spread, the share of steps kept and the
+  share of independent sessions whose checks passed; agent spread counts as
+  a bonus).
 
-Keywords (for the name and *When to use*) are request words found in at
-least half of the episodes; filler words and anything with digits (host or
+Keywords (for the name and *When to use*) are request and intent words
+(request words first) found in at least half of the independent sessions; filler words and anything with digits (host or
 ticket names) are left out.
 
 The candidate id is a hash of the steps, their refs and the sessions: a
@@ -287,13 +458,27 @@ adoption rate stays unknown until a person adopts proposals.
 
 - Lexical matching: paraphrased evidence without shared words is missed, and
   a correction is only proposed for a memory that states exactly one value.
-- Curate matches words, not meanings: synonyms ("deploys" / "deployments are
-  scheduled") are not recognised as duplicates.
-- Distill (③) is a stub in `dream run`; `dream skills` covers repeated
-  procedures only (no lessons). Promote/demote (④) covers the budget check only.
+- Curate matches words, not meanings: only the fixed synonym table is folded,
+  and a value is tied to its neighbouring noun only (a value stated far from
+  its noun is compared as a plain number).
+- Distill drafts a lesson from recurring words and event titles; a person
+  writes the actual lesson sentence. Independence is judged by cited
+  transcript sessions, not by content; uncited events never support a lesson. Promote/demote (④) covers the
+  budget check only.
 - `dream skills` matches steps by command signature: the same procedure done
   with different tools, or a step hidden in prose, is not recognised, and
-  arguments are not part of a step. Only the first 500 index entries of a
+  arguments are not part of a step. Shared intents are the agents' own
+  scrubbed wording; most steps get a generated headline instead, and a
+  local `--drafter` may reword them. A host name without digits
+  (`proddb`) is not recognised as a place: list it under
+  `skills_distill.private_terms` (see *Privacy limits*).
+- The dispatch-line merge reads an entry's `dispatch_line`, but neither the
+  history index nor the conversation-queue adapter supplies one yet (the
+  store has no `links` table), so today it only takes effect in tests; real
+  runs merge retries and fan-outs by request text and time only. Boilerplate detection is statistical:
+  a template injected into fewer sessions than the threshold survives, and a
+  person who pastes the same long request into many sessions has it treated
+  as a template. Only the first 500 index entries of a
   session are read, and only the newest `--max-sessions` (200) sessions.
 - Request keywords are redacted and digit-free, but a plain-word private term
   (a project or host name without digits) can still appear in a candidate

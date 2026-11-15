@@ -31,7 +31,7 @@ from .retrieval import VaultRetriever
 _READONLY: Any = None
 
 
-def shared_readonly():
+def shared_readonly() -> Any:
     """Load the readonly service module that owns ``search_vault``.
 
     The file sits beside this repository, not inside the ``memfw`` package, so
