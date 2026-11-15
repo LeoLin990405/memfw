@@ -305,9 +305,13 @@ memfw 是引擎，编排系统和它保持一定距离地集成：
 
 除 `COMPONENTS` 外，`docs/` 下的文档目前只有英文版。
 
-## 📍 现状
+## 📍 现状与边界
 
-memfw 当前版本 0.1，Apache-2.0 许可，在单机上离线运行。已经实现：vault 与事件日志、保留策略、MCP 服务、会话记录索引、带 14 个 reader 的会话库、共享与 worker、交接包，以及 dream（核对、整理、提炼、预算、技能）。已知局限：匹配是基于词面的（没有共同用词的改写会漏掉）；dream 只暂存候选（没有 `dream apply`，需要用 `update` / `supersede` 落地）；定时运行只提供打印出来的 launchd plist；评估规模较小。详见 [`docs/dream.md`](docs/dream.md#limitations) 和 [`docs/RELEASE-READINESS.md`](docs/RELEASE-READINESS.md)。
+memfw 当前版本 **0.2.0**（2026-11-15），Apache-2.0 许可，在单机上离线运行。已经实现：vault 与哈希链事件日志、保留策略与 `10MB` 预算、可重建的 FTS5 索引与读路径（按词匹配、概念别名、多跳）、MCP 服务、章节级 notes 索引与代码检索、只读转录索引、带 14 个 reader 的会话库、共享与 worker、交接包、dream（核对、整理、提炼、预算、技能）、OKF v0.2 导出，以及只读 HTTP 服务（`memfw-http/2`）。逐条变更见 [`CHANGELOG.md`](CHANGELOG.md)。
+
+**升级边界。** `0.2.0` 没有改动 vault 格式：`vault.yaml` 仍是 `schema_version: 1`，`0.1.x` 写出的文件保持原字节——解析再渲染逐字节一致，普通写入也不会再补默认字段。FTS5 索引是可丢弃的投影，**不会就地迁移**，升级后跑一次 `memfw index rebuild`（索引过期时 memfw 也会先重建再搜索）。
+
+**边界。** 匹配是基于词面的（没有共同用词的改写会漏掉）；dream 只暂存候选（没有 `dream apply`，需要用 `update` / `supersede` 落地）；notes、转录和会话索引都是派生索引，与 vault 分开；只读 HTTP 服务用读写 token 鉴权，未配置写路径时一律拒绝；定时运行只提供打印出来的 launchd plist；评估规模较小。详见 [`docs/dream.md`](docs/dream.md#limitations) 和 [`docs/RELEASE-READINESS.md`](docs/RELEASE-READINESS.md)。
 
 ## 🛠️ 开发
 

@@ -391,14 +391,27 @@ on synthetic duplicate, conflict and stale cases with `python -m eval.dreams`
 | [`docs/RELEASE-READINESS.md`](docs/RELEASE-READINESS.md) | measured checks and known limitations |
 | [`docs/legacy-design-notes.md`](docs/legacy-design-notes.md) | earlier design notes (historical) |
 
-## 📍 Status
+## 📍 Status and boundaries
 
-memfw is version 0.1, Apache-2.0, and runs offline on one machine. Implemented: the vault and
-event log, retention, the MCP server, the transcript index, the conversation store with 14
-readers, sharing and the worker, handoff packs, and dream (verify, curate, distill, budget,
-skills). Known limits: matching is lexical (paraphrases without shared words are missed), dream
-only stages (there is no `dream apply`; apply candidates through `update` / `supersede`),
-scheduling ships as a printed launchd plist, and the evaluation is small. See
+memfw is version **0.2.0** (2026-11-15), Apache-2.0, and runs offline on one machine.
+Implemented: the vault and hash-linked event log, retention and the `10MB` budget, the
+disposable FTS5 index and the read path (per-term matching, concept aliases, multi-hop), the
+MCP servers, the section-level notes index and code retrieval, the read-only transcript index,
+the conversation store with 14 readers, sharing and the worker, handoff packs, dream (verify,
+curate, distill, budget, skills), OKF v0.2 export, and the read-only HTTP service
+(`memfw-http/2`). Changes are listed in [`CHANGELOG.md`](CHANGELOG.md).
+
+**Upgrade boundary.** The vault format did not change in `0.2.0`: `vault.yaml` stays at
+`schema_version: 1`, and a file written by `0.1.x` keeps its bytes — parse → render is
+byte-identical, and a normal write no longer restates default fields. The FTS5 index is a
+disposable projection and is **not** migrated in place, so run `memfw index rebuild` once after
+upgrading (`memfw` also rebuilds a stale index before it searches).
+
+**Boundaries.** Matching is lexical — a paraphrase with no shared word is missed; dream only
+stages proposals (there is no `dream apply`, apply candidates through `update` / `supersede`);
+the notes, transcript and conversation indexes are derived and separate from the vault; the
+read-only HTTP service is authenticated by read/write tokens and refuses an unconfigured
+write path; scheduling ships as a printed launchd plist; the evaluation is small. See
 [`docs/dream.md`](docs/dream.md#limitations) and
 [`docs/RELEASE-READINESS.md`](docs/RELEASE-READINESS.md).
 

@@ -56,7 +56,7 @@ from memfw.notes import HttpEmbeddingProvider
 from memfw.related import RelatedIndex
 from memfw.retrieval.multihop import search_multihop
 
-SERVER_INFO = {"name": "memfw", "version": "0.1.0"}
+SERVER_INFO = {"name": "memfw", "version": "0.2.0"}
 DREAM_MAX_LIMIT = 1000
 DREAM_MAX_SESSIONS = 100
 """The dreams reference reads 1 to 100 sessions; memfw starts small (20)."""
