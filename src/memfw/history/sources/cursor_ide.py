@@ -57,13 +57,15 @@ Sub-agents and forks (``origin`` / ``parent_session``):
   explicit fork flag; the copy is recognised by bubble ids the child's
   headers share with the parent's (the app keeps some of the copied ids,
   always the first one in the stores seen). Only then is the prefix
-  measured: from the start, a child bubble is a copy when its bubble id,
-  its ``toolFormerData.toolCallId`` or its ``(type, text)`` also occurs in
-  the parent (any ``bubbleId:<parent>:*`` row, rewound ones included). The
-  first non-empty text bubble that is not a copy (the child's own task
-  prompt) ends the prefix, which is then cut back to the last copied bubble
-  (tool calls in between belong to the child; copied tool outputs can
-  differ slightly, so tool bubbles match by call id, never by output). The
+  measured: from the start, a child bubble is a copy when its bubble id or
+  its ``toolFormerData.toolCallId`` also occurs in the parent (any
+  ``bubbleId:<parent>:*`` row, rewound ones included). A bubble whose
+  ``(type, text)`` merely matches a parent bubble keeps the scan going but is
+  not counted as a copy. The first non-empty text bubble that matches
+  nothing (the child's own task prompt) ends the scan, and the prefix is cut
+  back to the last bubble matched by id or call id (later bubbles belong to
+  the child; copied tool outputs can differ slightly, so tool bubbles match
+  by call id, never by output). The
   prefix positions are not reported; the rest keep their offsets. The
   boundary is computed from the parent's rows, which the child's change
   marker does not cover: the copied prefix is history, so it is stable.
@@ -397,7 +399,9 @@ def _fork_prefix(
         if (bubble_id and bubble_id in ids) or (call_id and call_id in calls):
             last_copy = index
         elif text and _digest(bubble.get("type"), text) in texts:
-            last_copy = index
+            # Text alone is weak evidence (the child may repeat parent text in
+            # its own prompt): it keeps the scan going but never extends the copy.
+            continue
         elif text:
             break  # the child's own first message
     return last_copy + 1

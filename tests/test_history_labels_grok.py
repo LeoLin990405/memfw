@@ -10,7 +10,7 @@ from memfw.history.conversations import ConversationStore
 from memfw.history.sources.base import ConversationRecord
 from memfw.history.sources.grok import PARSER_VERSION, READER
 
-CWD = "/home/user/work/demo"
+CWD = "/srv/work/demo"
 CWD_DIR = "%2Fhome%2Fuser%2Fwork%2Fdemo"
 OTHER_DIR = "%2Fhome%2Fuser%2Fwork%2Fother"
 
@@ -71,7 +71,7 @@ def test_model_from_message_and_session(tmp_path: Path) -> None:
 
 
 def test_project_is_cwd_basename(tmp_path: Path) -> None:
-    _session(tmp_path, summary={"git_root_dir": "/home/user/work"})
+    _session(tmp_path, summary={"git_root_dir": "/srv/work"})
     assert {r.project for r in _read(tmp_path)} == {"demo"}
 
 

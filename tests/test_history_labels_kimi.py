@@ -12,7 +12,7 @@ from memfw.history.sources.kimi import PARSER_VERSION, READER
 
 SESSION = "session_0000bbbb-0000-0000-0000-000000000002"
 BASE_MS = 1_700_000_000_000
-CWD = "/home/user/work/demo-project"
+CWD = "/srv/work/demo-project"
 
 
 def _message(role: str, source: str, text: str) -> dict[str, Any]:

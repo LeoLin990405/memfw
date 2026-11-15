@@ -15,7 +15,7 @@ from memfw.history.conversations import ConversationStore
 from memfw.history.sources import READERS
 from memfw.history.sources.codex import PARSER_VERSION
 
-CWD = "/home/user/work/demo-repo"
+CWD = "/srv/work/demo-repo"
 
 
 def _meta(**payload: Any) -> dict[str, Any]:

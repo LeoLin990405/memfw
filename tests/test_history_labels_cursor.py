@@ -122,8 +122,8 @@ def test_cwd_from_user_info_when_meta_json_missing(tmp_path: Path) -> None:
 
 
 def test_meta_json_cwd_wins_over_user_info(tmp_path: Path) -> None:
-    _build(tmp_path, _conversation(), chat_meta={"cwd": "/home/user/other", "createdAtMs": 0})
-    assert {r.cwd for r in _read(tmp_path)} == {"/home/user/other"}
+    _build(tmp_path, _conversation(), chat_meta={"cwd": "/srv/other", "createdAtMs": 0})
+    assert {r.cwd for r in _read(tmp_path)} == {"/srv/other"}
 
 
 def test_timestamp_tags_carried_forward(tmp_path: Path) -> None:

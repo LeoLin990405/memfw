@@ -38,14 +38,18 @@ PROMPT_SCAN_CHARS = 4000
 """Only the start of a first prompt is checked for a dispatch marker."""
 
 _DISPATCH_MARKERS = re.compile(
+    r"\s*(?:"
     r"Ticket delivery contract"
     r"|You review one work line of a parallel dispatch"
     r"|You are in a git worktree of the Conductor repo \(branch already checked out"
-    r"|<goal_round\b",
+    r"|<goal_round\b"
+    r")",
 )
 """Conductor dispatch prompts: the Ticket delivery contract a Ticket worker
 gets, the dispatch line reviewer prompt, the dispatch line worker prompt, and
-a goal-round continuation wrapper. Each is generated, never typed."""
+a goal-round continuation wrapper. Each is generated, never typed. A marker
+counts only at the very start of the prompt (after injected wrappers are
+stripped): a person who pastes one further down is still a person."""
 
 
 def strip_injected(text: str) -> str:
@@ -65,16 +69,14 @@ def first_request(texts: list[str] | tuple[str, ...]) -> str:
 
 
 def prompt_origin(text: str) -> str:
-    """``automated`` when ``text`` (a session's first prompt) is a Conductor dispatch prompt.
+    """``automated`` when ``text`` (a session's first prompt) starts with a Conductor marker.
 
     The raw text is checked as well as the stripped one: a goal-round wrapper
     is itself a marker and stripping unwraps it.
     """
 
     head = str(text or "")[:PROMPT_SCAN_CHARS]
-    if _DISPATCH_MARKERS.search(head):
-        return AUTOMATED
-    if _DISPATCH_MARKERS.search(strip_injected(head)):
+    if _DISPATCH_MARKERS.match(head) or _DISPATCH_MARKERS.match(strip_injected(str(text or ""))):
         return AUTOMATED
     return ""
 

@@ -13,7 +13,7 @@ from memfw.history.sources.glm import PARSER_VERSION, READER
 
 BASE_MS = 1_700_000_000_000
 PARENT = "sess-parent"
-CWD = "/home/user/work/demo"
+CWD = "/srv/work/demo"
 
 
 def _make_db(root: Path, sessions: list[tuple[str, str | None, str]]) -> Path:

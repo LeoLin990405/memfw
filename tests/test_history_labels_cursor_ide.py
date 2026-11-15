@@ -16,7 +16,7 @@ PARENT = "aaaa0000-0000-4000-8000-000000000001"
 CHILD = "aaaa0000-0000-4000-8000-000000000002"
 FORK = "aaaa0000-0000-4000-8000-000000000003"
 LISTED = "aaaa0000-0000-4000-8000-000000000004"
-CWD = "/home/user/work/demo"
+CWD = "/srv/work/demo"
 
 
 def _bubble(bubble_id: str, kind: int, text: str = "", **extra: Any) -> dict[str, Any]:
@@ -95,13 +95,14 @@ CHILD_BUBBLES = [
     _bubble("c2", 2, "Tests pass."),
 ]
 
-# The fork copies the parent's first four bubbles: the first keeps its id, the
-# others get new ids; the copied tool output differs slightly (it often does).
+# The fork copies the parent's first four bubbles: the first and the last keep
+# their ids, the others get new ids (f2 matches by text only, f3 by tool call
+# id); the copied tool output differs slightly (it often does).
 FORK_BUBBLES = [
     _bubble("p1", 1, "please fix the build"),
     _bubble("f2", 2, "Looking at it."),
     _tool("f3", "call-ls", "a.txt b.txt (copied)"),
-    _bubble("f4", 2, "Found the problem."),
+    _bubble("p4", 2, "Found the problem."),
     _tool("f5", "call-own", "c.txt"),
     _bubble("f6", 1, "now write the changelog"),
     _bubble("f7", 2, "Found the problem."),
@@ -237,3 +238,31 @@ def test_store_keeps_labels_and_one_copy_of_the_prefix(tmp_path: Path) -> None:
     connection.close()
     assert copies == 1  # the fork's copy of the parent's first prompt is not stored
     assert found == 2  # the parent's turn, and the fork's own later reply
+
+
+def test_own_prompt_repeating_parent_text_is_kept(tmp_path: Path) -> None:
+    """Text matches never end the copied prefix: only bubble or tool call ids do."""
+
+    root = _build(tmp_path)
+    connection = sqlite3.connect(root / "globalStorage" / "state.vscdb")
+    own = [
+        _bubble("p1", 1, "please fix the build"),  # copied (same id)
+        _bubble("g2", 1, "please fix the build"),  # own prompt, repeats parent text
+        _bubble("g3", 2, "Fixing the build now."),
+    ]
+    other = "aaaa0000-0000-4000-8000-000000000006"
+    composer = _composer(other, own, subagentInfo=_info(PARENT, "call-g"))
+    connection.execute(
+        "INSERT INTO cursorDiskKV VALUES (?, ?)", (f"composerData:{other}", json.dumps(composer))
+    )
+    for bubble in own:
+        connection.execute(
+            "INSERT INTO cursorDiskKV VALUES (?, ?)",
+            (f"bubbleId:{other}:{bubble['bubbleId']}", json.dumps(bubble)),
+        )
+    connection.commit()
+    connection.close()
+    assert [(r.offset, r.text) for r in _read(root)[other]] == [
+        (2, "please fix the build"),
+        (4, "Fixing the build now."),
+    ]

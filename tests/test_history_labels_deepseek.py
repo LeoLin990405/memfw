@@ -15,7 +15,7 @@ from memfw.history.conversations import ConversationStore
 from memfw.history.sources.deepseek import PARSER_VERSION, READER
 
 T0 = 1_760_000_000_000  # epoch ms
-CWD = "/home/user/work/demo"
+CWD = "/srv/work/demo"
 
 
 def _header(**extra: Any) -> dict[str, Any]:

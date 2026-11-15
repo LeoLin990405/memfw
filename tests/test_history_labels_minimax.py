@@ -141,19 +141,19 @@ def test_project_is_basename_of_project_workspace(tmp_path: Path) -> None:
         [
             {
                 "session_id": "mvs_0001",
-                "workspace_dir": "/home/user/code/demo-app/src",
-                "project_workspace_dir": "/home/user/code/demo-app",
+                "workspace_dir": "/srv/code/demo-app/src",
+                "project_workspace_dir": "/srv/code/demo-app",
             }
         ],
     )
     records = _read(root)
-    assert {(r.cwd, r.project) for r in records} == {("/home/user/code/demo-app/src", "demo-app")}
+    assert {(r.cwd, r.project) for r in records} == {("/srv/code/demo-app/src", "demo-app")}
 
 
 def test_project_falls_back_to_cwd_basename(tmp_path: Path) -> None:
     root = _root(tmp_path)
     _session(root, "s", "mvs_0001", _ledger())
-    _index(root, [{"session_id": "mvs_0001", "workspace_dir": "/home/user/code/other"}])
+    _index(root, [{"session_id": "mvs_0001", "workspace_dir": "/srv/code/other"}])
     assert {r.project for r in _read(root)} == {"other"}
 
 
@@ -224,8 +224,8 @@ def test_store_keeps_model_project_and_origin(tmp_path: Path) -> None:
         [
             {
                 "session_id": "mvs_0002",
-                "workspace_dir": "/home/user/code/demo-app",
-                "project_workspace_dir": "/home/user/code/demo-app",
+                "workspace_dir": "/srv/code/demo-app",
+                "project_workspace_dir": "/srv/code/demo-app",
                 "parent_session_id": "mvs_0001",
             }
         ],

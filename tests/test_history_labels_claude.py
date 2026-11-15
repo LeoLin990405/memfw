@@ -16,7 +16,7 @@ from memfw.history.sources.base import ConversationRecord, StoreRoot
 from memfw.history.sources.claude import PARSER_VERSION
 
 PARENT = "11111111-2222-3333-4444-555555555555"
-CWD = "/home/user/work/demo"
+CWD = "/srv/work/demo"
 
 
 def _jsonl(path: Path, rows: list[dict[str, Any]]) -> Path:

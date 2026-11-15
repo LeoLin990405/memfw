@@ -295,9 +295,10 @@ class ConversationStore:
                 except Exception:
                     connection.rollback()
                     counts.roots_failed += 1
-            if relabel and not counts.roots_failed and not counts.sessions_failed:
-                # Recorded only once every session was re-read, so an interrupted
-                # pass runs again at the next ingest.
+            done = not (counts.roots_failed or counts.sessions_failed or counts.sessions_busy)
+            if relabel and done:
+                # Recorded only once every session was re-read (none failed or was
+                # skipped as busy), so an interrupted pass runs again next ingest.
                 self._save_labels_version(connection, reader.agent)
             counts.extra["relabelled"] = relabel
         return counts

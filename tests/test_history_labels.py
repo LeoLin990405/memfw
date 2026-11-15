@@ -228,3 +228,43 @@ def test_intent_skips_an_injected_first_user_turn(tmp_path: Path) -> None:
     with sqlite3.connect(tmp_path / "data" / "work.sqlite") as connection:
         intents = [r[0] for r in connection.execute("SELECT intent FROM episodes")]
     assert intents == ["Add a retry wrapper."]
+
+
+class BusyReader(JsonlReader):
+    """Yields nothing while ``busy`` is set, like a store that is locked mid-write."""
+
+    parser_version = "1"
+    append_only = False
+
+    def __init__(self) -> None:
+        self.busy = False
+
+    def read(self, locator: SessionLocator, *, after: int = -1) -> Iterator[ConversationRecord]:
+        if self.busy:
+            return iter(())
+        return super().read(locator, after=after)
+
+
+def test_relabel_pass_is_not_recorded_while_a_session_is_busy(tmp_path: Path) -> None:
+    root = tmp_path / "fake"
+    _write(root, "ticket", [{"role": "user", "text": TICKET}])
+    db = tmp_path / "store.sqlite"
+    reader = BusyReader()
+    ConversationStore(db).ingest(reader, [StoreRoot(root)])
+    with sqlite3.connect(db) as connection:
+        connection.execute("UPDATE conversation_turns SET origin = 'interactive'")
+        connection.execute("DELETE FROM conversation_meta WHERE key LIKE 'labels_version:%'")
+    reader.busy = True
+    counts = ConversationStore(db).ingest(reader, [StoreRoot(root)])
+    assert counts.sessions_busy == 1
+    assert _origins(db) == {"ticket": {"interactive"}}
+    # The pass was not recorded, so it runs again once the store is readable.
+    reader.busy = False
+    again = ConversationStore(db).ingest(reader, [StoreRoot(root)])
+    assert again.extra["relabelled"] is True and again.sessions_read == 1
+    assert _origins(db) == {"ticket": {"automated"}}
+
+
+def test_a_pasted_marker_after_human_text_does_not_label() -> None:
+    assert prompt_origin(f"Can you explain this prompt?\n\n{TICKET}") == ""
+    assert prompt_origin(f"{REMINDER}\n\n{TICKET}") == "automated"
