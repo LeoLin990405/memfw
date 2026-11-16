@@ -1,4 +1,4 @@
-"""MCP tool definitions (``tools/list``) and the server identity (``initialize``)."""
+"""MCP tool and resource definitions (``tools/list``, ``resources/list``), server identity."""
 
 from __future__ import annotations
 
@@ -132,6 +132,18 @@ TOOLS: list[dict[str, Any]] = [
                         "Filter policy for v=2 only. compat_fts keeps the v1 filters "
                         "(tenant, source); strict adds the privacy (clearance none), "
                         "status, lifecycle, validity and archive checks."
+                    ),
+                },
+                "slots": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["core", "handoff", "topics"]},
+                    "default": ["core"],
+                    "description": (
+                        "Slots for v=2 only, returned in this order: core (anchors and "
+                        "procedural memories), handoff (latest shared sessions this app may "
+                        "read: goal and turn refs, redacted), topics (concepts and how many "
+                        "visible memories are about each; no body text). A slot that fails "
+                        "or times out is returned empty with degraded set to a reason code."
                     ),
                 },
             },
@@ -302,4 +314,30 @@ TOOLS: list[dict[str, Any]] = [
             "properties": {"limit": {"type": "integer", "default": 20, "maximum": 200}},
         },
     },
+]
+
+#: The ``memory_context`` slots, also served as MCP resources (``memfw.context.SLOT_NAMES``).
+CONTEXT_SLOTS: tuple[str, ...] = ("core", "handoff", "topics")
+CONTEXT_RESOURCE_PREFIX = "memfw://context/"
+_RESOURCE_TEXT = {
+    "core": "Anchors, then procedural memories (memory_context v=2, slot core).",
+    "handoff": (
+        "The latest shared sessions this app may read: goal and turn refs, redacted "
+        "(memory_context v=2, slot handoff)."
+    ),
+    "topics": (
+        "Concepts with how many visible memories are about each, no body text "
+        "(memory_context v=2, slot topics)."
+    ),
+}
+#: ``resources/list``: one resource per slot. Reading one returns that slot's pack
+#: (``pack_version`` included) under the default policy (compat_fts) and budget.
+RESOURCES: list[dict[str, Any]] = [
+    {
+        "uri": CONTEXT_RESOURCE_PREFIX + name,
+        "name": f"context/{name}",
+        "description": _RESOURCE_TEXT[name],
+        "mimeType": "application/json",
+    }
+    for name in CONTEXT_SLOTS
 ]

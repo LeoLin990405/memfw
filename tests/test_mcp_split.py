@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import copy
+import json
 import os
+from typing import Any
 
 import pytest
 
@@ -45,12 +48,69 @@ def test_server_reexports_are_the_defining_modules_objects() -> None:
         assert getattr(server, name).__module__ == "memfw.mcp.server", name
 
 
+def _messages(text: str) -> list[Any]:
+    """The probe's output: JSON documents joined by newlines."""
+
+    decoder = json.JSONDecoder()
+    found: list[Any] = []
+    position = 0
+    while position < len(text):
+        while position < len(text) and text[position] in " \n":
+            position += 1
+        if position >= len(text):
+            break
+        value, position = decoder.raw_decode(text, position)
+        found.append(value)
+    return found
+
+
+def _render(messages: list[Any]) -> str:
+    return "\n".join(
+        json.dumps(item, ensure_ascii=False, sort_keys=True, indent=1) for item in messages
+    )
+
+
+def with_expected_c2_changes(old: str) -> str:
+    """``old`` (the base ref's probe output) with exactly the changes C2 makes.
+
+    1. ``initialize`` advertises ``capabilities.resources = {"listChanged": false}``;
+    2. ``tools/list``: ``memory_context`` gains the optional ``slots`` property
+       (the current schema's). Nothing else may differ.
+
+    Idempotent: a base ref that already has C2 is left as it is.
+    """
+
+    messages = _messages(old)
+    assert _render(messages) == old, "the probe output does not round-trip"
+    slots = next(tool for tool in schema.TOOLS if tool["name"] == "memory_context")
+    slots_property = slots["inputSchema"]["properties"]["slots"]
+    changed = copy.deepcopy(messages)
+    seen = {"initialize": 0, "tools/list": 0}
+    for item in changed:
+        if not isinstance(item, dict) or not isinstance(item.get("result"), dict):
+            continue
+        result = item["result"]
+        if item.get("id") == 1 and "capabilities" in result:
+            result["capabilities"]["resources"] = {"listChanged": False}
+            seen["initialize"] += 1
+        if item.get("id") == 3 and "tools" in result:
+            tool = next(tool for tool in result["tools"] if tool["name"] == "memory_context")
+            tool["inputSchema"]["properties"]["slots"] = slots_property
+            seen["tools/list"] += 1
+    assert seen == {"initialize": 1, "tools/list": 1}, seen
+    return _render(changed)
+
+
 @pytest.mark.skipif(
     not os.environ.get("MEMFW_ARCH_BASE_REF"),
     reason="opt-in (slow): set MEMFW_ARCH_BASE_REF to compare every MCP tool against that ref",
 )
 def test_all_tools_byte_identical_to_base_ref() -> None:
-    """``mcp_all_tools`` on the base ref and on this tree; only timing fields are masked."""
+    """``mcp_all_tools`` on the base ref and on this tree; only timing fields are masked.
+
+    The base ref predates C2, so its output gets C2's two expected changes
+    (``with_expected_c2_changes``) before the comparison; any other byte differs.
+    """
 
     from tests.harness import byte_identical
 
@@ -75,4 +135,7 @@ def test_all_tools_byte_identical_to_base_ref() -> None:
         old_ref=os.environ["MEMFW_ARCH_BASE_REF"],
     )
     for result in results:
-        assert result.identical, f"{result.payload}:\n{result.diff[:4000]}"
+        expected = byte_identical.Comparison(
+            payload=result.payload, old=with_expected_c2_changes(result.old), new=result.new
+        )
+        assert expected.identical, f"{result.payload}:\n{expected.diff[:4000]}"

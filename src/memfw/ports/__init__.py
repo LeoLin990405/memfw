@@ -29,9 +29,13 @@ from .claims import (
 from .clock import Clock, FixedClock, IdGen, SeededIdGen, SystemClock, UuidIdGen
 from .context import (
     ContextEntry,
+    ContextItem,
     ContextPack,
     ContextSlot,
+    ContextSlotProvider,
+    SlotRequest,
     compute_pack_version,
+    item_content_hash,
     pack_version_payload,
 )
 from .protocols import Deriver, Ingestor, Projector, RecallProvider
@@ -99,8 +103,10 @@ __all__ = [
     "Citation",
     "Clock",
     "ContextEntry",
+    "ContextItem",
     "ContextPack",
     "ContextSlot",
+    "ContextSlotProvider",
     "DeriveRequest",
     "DerivedView",
     "Deriver",
@@ -117,6 +123,7 @@ __all__ = [
     "RecallProvider",
     "RefKind",
     "SeededIdGen",
+    "SlotRequest",
     "StageResult",
     "StagingError",
     "SystemClock",
@@ -127,6 +134,7 @@ __all__ = [
     "check_view_citations",
     "compute_pack_version",
     "default_registry",
+    "item_content_hash",
     "missing_modules",
     "pack_version_payload",
     "register",

@@ -541,6 +541,49 @@ to earlier versions: `limit_tokens`, `used_chars`, `entries`.
   string, and that `as_dict()` is JSON serialisable (else `ContractError`). A `forbidden` string
   under 8 characters is a usage error (`ValueError`).
 
+### 4.3 Context slots and resources (C2)
+
+`memory_context(v=2, slots=[...])` builds the named slots and returns them in that order;
+`slots` defaults to `["core"]` (output byte-identical to C1), applies to `v=2` only, and must
+be a non-empty list of known names without repeats (`unknown slot (known: core, handoff,
+topics)` otherwise; the input is not echoed).
+
+| Slot | Entries | Source |
+|---|---|---|
+| `core` | `ContextEntry` (memories, §4.2) | the vault |
+| `handoff` | `ContextItem` `kind: session`, `id: conversation:<app>/<session_id>`, `label: <app> <updated_at>`, `text`: redacted goal (≤ 280 chars), `count`: turns, `refs`: latest turn refs | `ConversationShare` as the calling app (the 3 latest visible sessions) |
+| `topics` | `ContextItem` `kind: topic`, `id`: concept oid, `label`: `pref_label`, `count`: memories, no text | active, unmerged concepts; memories the policy keeps with no `valid_to` that name the concept (or one merged into it) in `about`/`applies_to`; only concepts with at least one |
+
+- **Share rules.** `handoff` reads only through `ConversationShare.list_sessions` and
+  `handoff`, so `conversation_share` applies: hidden and opted-out apps never appear,
+  `can_read` narrows. No app, the reserved `operator`, sharing off or a caller that may not
+  read give an empty slot (not degraded); a missing store gives `degraded: unavailable`.
+- **Budget.** Each slot gets the `limit_tokens` budget on its own. Items are never cut
+  part-way: an item that does not fit, and every one after it, is overflow (`truncated_ids`
+  holds item ids).
+- **Degrade.** Providers run in parallel threads, each with a deadline
+  (`Runtime.context_slot_timeouts`: `core` 10 s, `handoff` and `topics` 3 s, from the start
+  of the call). A provider that raises (`error`; the message is never returned), a missing
+  store (`unavailable`), a missed deadline (`timeout`), another slot returned (`invalid`)
+  or two builds of that slot still running from earlier calls (`busy`) give an empty slot
+  with `degraded: <reason>`; the other slots are returned as usual. `degraded` appears in
+  `as_dict()` and in the `pack_version` payload only when set, so a healthy slot encodes
+  exactly as in C1.
+- **`pack_version`** covers every slot in order. An item contributes `[id, kind,
+  content_hash, chars]`, where `content_hash` is `item_content_hash` (sha256 over kind, id,
+  label, text, count and refs); the payload itself still holds no label or text.
+- **Ports.** `ContextSlotProvider` (`name`, `build(SlotRequest) -> ContextSlot`; must not
+  write) and `SlotRequest(limit_tokens, policy, now)` are in `memfw.ports.context`.
+  `memfw.context` has the providers and `assemble_pack`; the `handoff` and `topics`
+  providers take a `SessionFeed` / `TopicCatalogue` that the Runtime builds
+  (`memfw.runtime.context_sources`), so `memfw.context` imports no other capability.
+- **MCP resources.** `resources/list` lists `memfw://context/core`, `/handoff` and `/topics`
+  (`application/json`). `resources/read {"uri": ...}` returns one `contents` item whose
+  `text` is that slot's v=2 payload (`pack_version` included), for the same caller (app,
+  tenant, sources), `compat_fts` and the default budget. An unknown URI is error `-32002`,
+  a missing or non-string `uri` `-32602`, a failure `-32603` with the client-safe message.
+  `initialize` advertises `capabilities.resources = {"listChanged": false}`.
+
 ## 5. Adapter rules
 
 From the compat framework spec, §5:
@@ -726,7 +769,8 @@ def test_search_matches_recorded_contract(monkeypatch):
 | `check_deriver(deriver, *, vault, request, vault_exclude=())` | vault unchanged; `DerivedView` is read-only, names the deriver and kind, and cites only requested memories |
 | `check_clock(clock, *, samples=32)` | `Clock` protocol; every `now()` is a timezone-aware `datetime`; no sample earlier than the previous one |
 | `check_id_gen(id_gen, *, samples=1000)` | `IdGen` protocol; every `new_id()` is a `str` valid as a memory id; no id repeated |
-| `check_context_pack(pack, *, slots=None, max_tokens=None, forbidden=())` | exactly a `ContextPack`; `pack_version` recomputes; overflow matches `truncated_ids`; one partial entry at most, carried last and listed in `truncated_ids`; no content in the version payload; `as_dict()` serialisable (§4.2) |
+| `check_context_pack(pack, *, slots=None, max_tokens=None, forbidden=())` | exactly a `ContextPack`; `pack_version` recomputes; overflow matches `truncated_ids`; one partial entry at most, carried last and listed in `truncated_ids`; no content (memory text/title, item label/text) in the version payload; `as_dict()` serialisable (§4.2) |
+| `check_context_slot_provider(provider, *, request, max_tokens=None, forbidden=(), vault=None, vault_exclude=(), allow_degraded=False)` | `ContextSlotProvider`; `build` returns exactly a `ContextSlot` with the provider's name that passes `check_context_pack`; not degraded unless allowed; two builds give the same version key; vault unchanged when given (§4.3) |
 
 `tree_digest(root, *, exclude=())` is the helper they use to compare file trees.
 

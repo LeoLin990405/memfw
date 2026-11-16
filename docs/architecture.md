@@ -204,7 +204,9 @@ reads the name (`memfw.mcp.tools_dream.DREAM_MAX_STAGED`,
 `memfw.mcp.tools_search.search_multihop`). The probe `tests.harness.probes:mcp_all_tools`
 sends every MCP method and all 15 tools (116 messages, error paths included) to one fixture
 vault; `tests/test_mcp_split.py` runs it against `MEMFW_ARCH_BASE_REF` when that is set
-(opt-in, skipped by default).
+(opt-in, skipped by default). Since C2 the comparison first applies C2's two
+expected changes to the base output (`initialize` advertises `resources`; `memory_context`
+gains the optional `slots` property; `with_expected_c2_changes`), so any other byte still fails.
 
 **A4b (next).** Each group reaches its capability through the `Runtime` or a protocol, and
 its allowlist entries go.
