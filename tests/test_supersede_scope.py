@@ -79,7 +79,7 @@ def test_replacement_keeps_tenant_and_scope_fields(tmp_path: Path) -> None:
     assert new.related == old.related
     assert new.about == ["entity:quarry-pump"]
     assert new.applies_to == ["site:north"]
-    assert new.group_key == "pumps"
+    assert new.group_key is None  # consolidation would group it with the old one
     assert new.manually_marked is True
     assert new.source == "ops-log"
     assert new.tags == ["ops", "pump"]
@@ -141,9 +141,13 @@ def test_overrides_replace_inherited_fields_but_never_tenant(tmp_path: Path) -> 
     assert new.layer == Layer.CONSOLIDATED
 
     other = repository.add("other", "Body.", tenant="acme")
-    with pytest.raises(IntegrityError):
+    with pytest.raises(IntegrityError, match="cannot override tenant"):
         repository.supersede(other.id, "v2", "Body 2.", overrides={"tenant": ""})
+    with pytest.raises(IntegrityError, match="not accepted: bogus"):
+        repository.supersede(other.id, "v2", "Body 2.", overrides={"bogus": 1})
     assert repository.get(other.id).valid_to is None
+    regrouped = repository.supersede(other.id, "v2", "Body 2.", overrides={"group_key": "g"})
+    assert regrouped.group_key == "g"
 
 
 def test_replacement_is_invisible_to_another_tenant_over_mcp(tmp_path: Path) -> None:
@@ -249,6 +253,7 @@ def test_fsck_reports_a_replacement_in_another_tenant_without_rewriting(
     assert len(mismatches) == 1
     assert mismatches[0]["memory_id"] == legacy.id
     assert old.id in str(mismatches[0]["message"])
+    assert f"Fix the whole chain: {legacy.id}" in str(mismatches[0]["message"])
     assert legacy_path.read_bytes() == legacy_bytes
     assert old_path.read_bytes() == old_bytes
 
@@ -273,3 +278,47 @@ def test_merge_refuses_targets_from_another_tenant(tmp_path: Path) -> None:
 
     with pytest.raises(IntegrityError, match="tenant"):
         _validate_merge(repository, _Proposal())  # type: ignore[arg-type]
+
+
+def test_consolidation_never_forgets_the_current_replacement(tmp_path: Path) -> None:
+    """A replacement must not share its predecessor's ``group_key``.
+
+    Budget consolidation groups by ``group_key`` and keeps the most salient or
+    most recently updated member. The superseded predecessor (just updated with
+    ``valid_to``) would win, and the current replacement would be forgotten.
+    """
+    from memfw.budget import BudgetLimits
+    from memfw.curation.engine import run_forget
+    from memfw.policies import PolicyName
+
+    repository = _vault(tmp_path)
+    old = repository.add("pump", "The pump runs at dawn.", tenant="acme", group_key="pumps")
+    new = repository.supersede(old.id, "pump v2", "The pump runs at noon.")
+    assert new.group_key is None
+
+    result = run_forget(
+        repository,
+        PolicyName.CONSOLIDATE_THEN_FORGET,
+        BudgetLimits(max_count=1),
+        scope="all",
+        action="hard",
+        dry_run=True,
+    )
+    assert new.id not in result.plan.forgotten_ids
+    for proposal in result.plan.consolidation_proposals:
+        assert new.id not in proposal.duplicate_ids
+    assert new.id in {document.id for document in repository.list()}
+
+
+def test_fsck_mismatch_names_every_downstream_replacement(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    old = repository.add("pump", "Old body.", tenant="acme")
+    legacy = repository.add("pump v2", "Second body.")
+    repository.update(old.id, actor="human", valid_to=legacy.created_at, superseded_by=legacy.id)
+    # Superseding the mis-scoped replacement keeps its (wrong) tenant.
+    third = repository.supersede(legacy.id, "pump v3", "Third body.")
+    assert third.tenant == ""
+
+    mismatches = [item for item in repository.fsck() if item["kind"] == "supersede_scope_mismatch"]
+    assert len(mismatches) == 1
+    assert str(mismatches[0]["message"]).endswith(f"Fix the whole chain: {legacy.id}, {third.id}")

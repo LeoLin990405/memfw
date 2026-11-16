@@ -107,7 +107,7 @@ class MemoryOperationsMixin:
             tier=tier,
             type=memory_type,
             tenant=tenant,
-            related=related or [],
+            related=list(related or []),
             about=list(about or []),
             applies_to=list(applies_to or []),
             source=source,
@@ -372,7 +372,13 @@ class MemoryOperationsMixin:
         layer, tier, type           inherited (``anchor_always_hot`` still
                                     forces an anchored replacement hot)
         related, about, applies_to  inherited
-        anchor, group_key           inherited
+        anchor                      inherited
+        group_key                   unset: budget consolidation groups by
+                                    ``group_key`` and keeps the most salient or
+                                    most recently updated member, which would be
+                                    the just-superseded predecessor; the current
+                                    replacement would then be planned for
+                                    forgetting
         manually_marked             inherited (a human pin, not usage data)
         source, tags                inherited unless ``source``/``tags`` given
         provenance                  ``provenance`` or ``supersedes:<old id>``
@@ -398,10 +404,15 @@ class MemoryOperationsMixin:
                                     human protections against forgetting)
         ==========================  ==========================================
 
-        ``overrides`` may replace any inherited field except ``tenant``:
-        ``layer``, ``tier``, ``type``, ``related``, ``about``, ``applies_to``,
-        ``anchor``, ``group_key``, ``manually_marked``, ``epistemic``, ``causal``,
-        ``causal_record``, ``limitations``, ``experience`` and ``evidence``.
+        ``overrides`` may set any of ``layer``, ``tier``, ``type``, ``related``,
+        ``about``, ``applies_to``, ``anchor``, ``group_key``, ``manually_marked``,
+        ``epistemic``, ``causal``, ``causal_record``, ``limitations``,
+        ``experience`` and ``evidence``. ``tenant`` cannot be overridden.
+
+        ``fsck`` reports ``supersede_scope_mismatch`` whenever a replacement's
+        tenant differs from its predecessor's. That includes a deliberate move
+        with ``update`` after the supersede: the finding stays reported, as
+        there is no way to acknowledge it yet.
         """
         if actor != "human":
             raise IntegrityError("Supersede requires a human actor")
@@ -416,7 +427,8 @@ class MemoryOperationsMixin:
             "about": list(old.about),
             "applies_to": list(old.applies_to),
             "anchor": old.anchor,
-            "group_key": old.group_key,
+            # Not inherited: see the table above.
+            "group_key": None,
             "manually_marked": old.manually_marked,
             # A replacement is still the same epistemic object: keep the
             # experience record (and the causal grade) instead of dropping it.
@@ -428,10 +440,16 @@ class MemoryOperationsMixin:
             "evidence": list(old.evidence),
         }
         if overrides:
-            unknown = set(overrides) - set(inherited)
+            if "tenant" in overrides:
+                raise IntegrityError(
+                    "Supersede cannot override tenant: a replacement stays in its "
+                    "predecessor's tenant"
+                )
+            unknown = sorted(set(overrides) - set(inherited))
             if unknown:
                 raise IntegrityError(
-                    "Supersede overrides accept fields: " + ", ".join(sorted(inherited))
+                    f"Supersede override not accepted: {', '.join(unknown)}; "
+                    f"accepted fields: {', '.join(sorted(inherited))}"
                 )
             inherited.update(overrides)
         memory_type = inherited.pop("type")
@@ -1157,6 +1175,13 @@ def _supersession_issues(
         predecessor_tenant = by_id[memory_id].tenant
         replacement_tenant = by_id[target].tenant
         if predecessor_tenant != replacement_tenant:
+            # Later replacements of a mis-scoped one were written in its tenant
+            # too, so the fix must cover every id down the chain.
+            chain = [target]
+            following = links.get(target)
+            while following is not None and following in present and following not in chain:
+                chain.append(following)
+                following = links.get(following)
             issues.append(
                 {
                     "memory_id": target,
@@ -1165,7 +1190,8 @@ def _supersession_issues(
                     "actual_hash": None,
                     "message": (
                         f"replacement of {memory_id} has tenant {replacement_tenant!r}, "
-                        f"its predecessor {predecessor_tenant!r}; not rewritten"
+                        f"its predecessor {predecessor_tenant!r}; not rewritten. "
+                        f"Fix the whole chain: {', '.join(chain)}"
                     ),
                 }
             )

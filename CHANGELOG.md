@@ -16,17 +16,26 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 - `supersede` (API and CLI) writes the replacement in the predecessor's
   tenant. Before, it was always written in the default tenant `""`: visible to
   untenanted callers and invisible to its owner. The replacement now also keeps
-  `layer`, `tier`, `type`, `related`, `about`, `applies_to`, `anchor`,
-  `group_key` and `manually_marked`; `status` resets to `unconfirmed` and
-  access statistics, `summary`, validity and archive fields start fresh (the
-  full table is in the `Repository.supersede` docstring). A new `overrides`
-  argument replaces inherited fields, never `tenant`.
+  `layer`, `tier`, `type`, `related`, `about`, `applies_to`, `anchor` and
+  `manually_marked`; `status` resets to `unconfirmed` and access statistics,
+  `summary`, validity and archive fields start fresh (the full table is in the
+  `Repository.supersede` docstring). `group_key` is deliberately not inherited:
+  budget consolidation would group the replacement with its superseded
+  predecessor, keep the predecessor and plan the current replacement for
+  forgetting. A new `overrides` argument sets inherited fields (and
+  `group_key`), never `tenant`.
+- Because `tier` is inherited, superseding a cold-archived stub gives a
+  replacement with `tier: cold` that is not a stub (it carries the new body).
+  Soft forget, which cools hot memories, therefore no longer picks it.
 - A reviewed merge refuses duplicates from a tenant other than the
   representative's, since it copies their bodies into the representative.
 - Vaults may already hold replacements written in tenant `""`. `fsck` reports
   each one as `supersede_scope_mismatch` (the replacement's tenant differs from
-  its predecessor's) and does not rewrite it; an operator decides, for example
-  by setting `tenant` with `Repository.update`.
+  its predecessor's) and does not rewrite it. Any later replacement of such a
+  memory inherited the wrong tenant too, so the message lists every downstream
+  id of the chain: fix them all, for example by setting `tenant` with
+  `Repository.update`. A deliberate tenant move with `update` on a replacement
+  is reported the same way; there is no acknowledgement for it yet.
 
 ### Fixed — vault integrity
 
