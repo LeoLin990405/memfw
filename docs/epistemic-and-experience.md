@@ -165,7 +165,8 @@ open_question:
   from another tenant, or one the active policy drops (for example a private one under
   `policy=strict`), never appears in a label. See
   [ports-and-recall.md §4.1](ports-and-recall.md#41-mcp-memory_search-modetwo_stage). The
-  context pack does not include open questions yet.
+  context pack does not include open questions yet (iteration C, default off). A question
+  with `valid_to` set is never shown in a label, even for an earlier `as_of`.
 
 ## Retrieval and export
 

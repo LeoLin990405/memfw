@@ -179,6 +179,7 @@ class Runtime:
         from memfw.recall import Coordinator
         from memfw.recall.builtin import default_resolvers
 
+        moment = datetime.now(UTC)
         captured: dict[str, Observed] = {}
 
         def observe(name: str) -> Callable[[Any, Any], None]:
@@ -208,9 +209,12 @@ class Runtime:
             configs=configs,
             inflight=self.recall_inflight,
             total_timeout=self.total_timeout,
+            # One instant for the whole call: the coordinator's filter and the
+            # open-question labels judge validity at the same ``now``.
+            clock=lambda: moment,
         )
         result = coordinator.search(query, limit=limit, policy=filter_policy)
-        result = _with_open_question_labels(repository, result, filter_policy)
+        result = _with_open_question_labels(repository, result, filter_policy, now=moment)
         answered = set(result.labels.providers)
         seen = {name: captured[name] for name in list(captured) if name in answered}
         return RecallOutcome(result=result, observed=seen)
@@ -253,6 +257,8 @@ class Runtime:
         source: str,
         include_history: bool,
         as_of: datetime | None,
+        scope: str = "",
+        now: datetime | None = None,
     ) -> dict[str, tuple[str, ...]]:
         """U2 labels for hits of the other ``memory_search`` modes (``labels: true``).
 
@@ -262,16 +268,27 @@ class Runtime:
         hit's, and ``conflicted`` when such a question lists the hit in its
         ``conflicts``. ``repository`` is the caller's open vault. Ids without
         labels are absent. Any other ``policy_name`` raises ``ValueError``.
+
+        ``scope`` is taken as ``mode=fts`` takes it: it only selects scoped
+        alias labels and filters no hit, and labels match ``about`` concept
+        ids, never aliases, so it changes no label. ``now`` defaults to the
+        current time. No ids means nothing is read; otherwise the index
+        staleness check runs first (the hybrid and vector paths do not run it).
         """
 
         if policy_name not in RECALL_POLICIES:
             raise ValueError("unknown policy")
+        del scope  # see the docstring: no label depends on it
+        if not memory_ids:
+            return {}
         from memfw.recall.builtin import open_question_labels_for
 
         policy = self._filter_policy(
             policy_name, source=source, include_history=include_history, as_of=as_of
         )
-        return open_question_labels_for(repository, memory_ids, policy, now=datetime.now(UTC))
+        self.ensure_index(repository)
+        moment = now if now is not None else datetime.now(UTC)
+        return open_question_labels_for(repository, memory_ids, policy, now=moment)
 
     # --- memory_context (C1) ---------------------------------------------------
 
@@ -342,7 +359,7 @@ class Runtime:
 
 
 def _with_open_question_labels(
-    repository: Repository, result: RecallResult, policy: Any
+    repository: Repository, result: RecallResult, policy: Any, *, now: datetime
 ) -> RecallResult:
     """``result`` with each hit's open-question labels appended to its ``labels``."""
 
@@ -353,7 +370,7 @@ def _with_open_question_labels(
     from memfw.recall.builtin import open_question_labels_for
 
     extra = open_question_labels_for(
-        repository, [hit.memory_id for hit in result.hits], policy, now=datetime.now(UTC)
+        repository, [hit.memory_id for hit in result.hits], policy, now=now
     )
     if not extra:
         return result

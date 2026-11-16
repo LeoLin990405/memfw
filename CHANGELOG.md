@@ -27,6 +27,16 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 - The `memory_search` description tells agents that a hit of type
   `open-question`, or one labelled `open_question:*` or `conflicted`, means the
   answer is unknown: say so rather than guess.
+- A question with `valid_to` set is never shown, even for an `as_of` before
+  that instant (conservative). `scope` changes no label: as in `mode=fts` it
+  only selects scoped alias labels, and labels match `about` concept ids. The
+  labels are judged at the same instant as the coordinator's filter.
+- Cost: candidate questions come from the search index (`memory_access`, type
+  `open-question`, the caller's tenant), and only those files are read and
+  judged from the vault document; a scan of `memories/` is the fallback when
+  the index cannot be read. A page with no rows reads nothing.
+- Deferred: attaching an anchor's open questions to the `memory_context` pack
+  (iteration C, default off) is not part of this change.
 - `memfw.recall.open_question_labels` / `OpenQuestionIndex` (pure),
   `memfw.recall.builtin.open_question_index` (the per-call vault builder) and
   `Runtime.open_question_labels`.

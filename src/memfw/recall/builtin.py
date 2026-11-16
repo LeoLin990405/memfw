@@ -27,7 +27,9 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import sqlite3
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -160,13 +162,57 @@ def default_resolvers(root: Path | str) -> dict[RefKind, Resolver]:
     return {"memory_id": ids, "path": MemoryPathResolver(ids)}
 
 
-#: Bytes every open-question file contains (its ``type``); a cheap pre-filter
-#: so building the index parses only candidate files, not the whole vault.
+def _indexed_question_ids(repository: Repository, tenant: str) -> list[str] | None:
+    """Ids the search index lists as ``open-question`` in ``tenant``; None if unreadable.
+
+    The index only narrows which files are read: each one is still parsed
+    from the vault and judged by the call's policy. Callers run the index
+    staleness check first (``Runtime.ensure_index``).
+    """
+
+    path = repository.index_path
+    if path.is_symlink() or not path.is_file():
+        return None
+    try:
+        uri = f"{path.resolve().as_uri()}?mode=ro"
+        with closing(sqlite3.connect(uri, uri=True, timeout=5)) as connection:
+            rows = connection.execute(
+                "SELECT id FROM memory_access WHERE memory_type = ? AND tenant = ? ORDER BY id",
+                (OPEN_QUESTION_TYPE, tenant),
+            ).fetchall()
+    except (OSError, sqlite3.Error):
+        return None
+    return [str(row[0]) for row in rows]
+
+
+#: Bytes every open-question file contains (its ``type``): the fallback scan,
+#: used only when the index cannot be read, parses only files that have them.
 _OPEN_QUESTION_MARKER = OPEN_QUESTION_TYPE.encode("ascii")
 
 
+def _scanned_question_ids(repository: Repository) -> list[str]:
+    memories = repository.root / "memories"
+    if memories.is_symlink() or not memories.is_dir():
+        return []
+    found: list[str] = []
+    for path in sorted(memories.glob("*.md")):
+        if path.is_symlink():
+            continue
+        try:
+            if _OPEN_QUESTION_MARKER in path.read_bytes():
+                found.append(path.stem)
+        except OSError:
+            continue
+    return found
+
+
 def _is_open(document: MemoryDocument, policy: FilterPolicy, now: datetime) -> bool:
-    """An unresolved, current open question that ``policy`` would keep."""
+    """An unresolved, current open question that ``policy`` would keep.
+
+    A question with ``valid_to`` set is never shown, even for an ``as_of``
+    before that instant (conservative: ``valid_to`` on a question means it
+    was resolved or withdrawn, and its file already names the answer).
+    """
 
     block = document.open_question
     if document.type != OPEN_QUESTION_TYPE or block is None:
@@ -181,25 +227,29 @@ def open_question_index(
 ) -> OpenQuestionIndex:
     """The open questions ``policy`` lets this caller see, keyed for labelling.
 
-    ``repository`` is the caller's open vault (resolved per call). A question
-    is listed only when it is unresolved (no ``resolved_by``, no ``valid_to``,
-    not superseded) and ``evaluate`` keeps it under ``policy`` (tenant, source,
-    and for ``strict`` privacy, status, lifecycle, archive): a question in
-    another tenant, or one the policy drops, contributes nothing, so its id
-    can never appear in a label. An unreadable file is skipped (no label).
+    ``repository`` is the caller's open vault (resolved per call). Candidates
+    come from the search index (``memory_access``: type ``open-question`` in
+    the policy's tenant); without a readable index, from a scan of
+    ``memories/``. Each candidate is read from the vault and listed only when
+    it is unresolved (no ``resolved_by``, no ``valid_to``, not superseded; see
+    ``_is_open``) and ``evaluate`` keeps it under ``policy`` (tenant, source,
+    ``as_of``; for ``strict`` also privacy, status, lifecycle, archive): a
+    question in another tenant, or one the policy drops, contributes nothing,
+    so its id can never appear in a label. An unreadable file is skipped.
     """
 
-    memories = repository.root / "memories"
-    if memories.is_symlink() or not memories.is_dir():
-        return OpenQuestionIndex()
+    ids = _indexed_question_ids(repository, policy.tenant)
+    if ids is None:
+        ids = _scanned_question_ids(repository)
     questions: list[tuple[str, list[str], list[str]]] = []
-    for path in sorted(memories.glob("*.md")):
-        if path.is_symlink() or not _ID_RE.fullmatch(path.stem):
+    for memory_id in ids:
+        if not _ID_RE.fullmatch(memory_id):
+            continue
+        path = repository.root / "memories" / f"{memory_id}.md"
+        if path.is_symlink():
             continue
         try:
-            if _OPEN_QUESTION_MARKER not in path.read_bytes():
-                continue
-            document = repository.get(path.stem)
+            document = repository.get(memory_id)
         except (MemfwError, OSError, UnicodeDecodeError, ValueError):
             continue
         if document.open_question is None or not _is_open(document, policy, now):
@@ -219,11 +269,14 @@ def open_question_labels_for(
 ) -> dict[str, tuple[str, ...]]:
     """Open-question labels for each hit id that has any (others are absent).
 
-    The hit's ``about`` is read from the vault; a hit outside ``policy``'s
-    tenant, or one that cannot be read, gets none. Without a visible open
-    question nothing but the index scan happens.
+    ``now`` is the instant the policy is evaluated at (the coordinator's, for
+    ``two_stage``). The hit's ``about`` is read from the vault; a hit outside
+    ``policy``'s tenant, or one that cannot be read, gets none. No hits, or no
+    visible open question, means nothing else is read.
     """
 
+    if not memory_ids:
+        return {}
     index = open_question_index(repository, policy, now=now)
     if not index:
         return {}

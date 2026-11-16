@@ -435,10 +435,16 @@ index and builds the rows.
   A question counts only when it has no `resolved_by`, no `valid_to`, is not superseded,
   and the call's `FilterPolicy` keeps it (tenant, source, `as_of`; `strict` adds privacy,
   status, lifecycle and archive), so a question in another tenant or one the policy drops
-  never shows up in a label. The pure function is `memfw.recall.open_question_labels` over an
-  `OpenQuestionIndex`; `memfw.recall.builtin.open_question_index` builds it per call from the
-  caller's `Repository` (it parses only files that contain `open-question`), and
-  `Runtime.recall` appends the labels to the coordinator's hits. The other modes get the same
+  never shows up in a label. A question with `valid_to` is never shown, even for an earlier
+  `as_of` (conservative). `scope` changes no label (as in `mode=fts` it only selects scoped
+  alias labels; labels match concept ids). The pure function is
+  `memfw.recall.open_question_labels` over an `OpenQuestionIndex`;
+  `memfw.recall.builtin.open_question_index` builds it per call from the caller's
+  `Repository`: candidate ids come from the search index (`memory_access`, type
+  `open-question`, the policy's tenant; a scan of `memories/` only when the index cannot be
+  read), and each candidate is parsed from the vault and judged by the policy, never by index
+  columns. `Runtime.recall` appends the labels to the coordinator's hits, judged at the
+  coordinator's `now`; an empty page reads nothing. The other modes get the same
   labels, with the `compat_fts` policy they filter by, only with `labels: true`
   (`Runtime.open_question_labels`): every row then has `recall_labels`. Without the flag
   their output is byte-identical; without a visible open question `two_stage` is too. An open

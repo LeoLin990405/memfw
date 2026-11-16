@@ -1094,7 +1094,7 @@ class Gateway:
                 rows = fuse_rows(rows, alias_rows, limit=page)
             elif len(rows) > page:
                 rows = rows[:page]
-        if labels:
+        if labels and rows:
             # Opt-in (U2): the Runtime computes them with the compat_fts policy
             # these modes filter by; without the flag rows are unchanged.
             found = self.runtime.open_question_labels(
@@ -1108,6 +1108,7 @@ class Gateway:
                     if as_of is not None
                     else None
                 ),
+                scope=scope,
             )
             for row in rows:
                 row["recall_labels"] = list(found.get(str(row["id"]), ()))

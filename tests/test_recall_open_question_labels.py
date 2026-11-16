@@ -311,3 +311,124 @@ def test_as_of_before_question_gives_no_label(tmp_path: Path) -> None:
         as_of=datetime(2000, 1, 1, tzinfo=UTC),
     )
     assert found == {}
+
+
+def test_scope_changes_no_label(tmp_path: Path) -> None:
+    repository = _base(tmp_path)
+    _question(repository, "m-port-a")
+    _indexed(repository)
+    gateway = _gateway(repository.root)
+    plain = gateway.search("service port", limit=20, mode="fts", labels=True)
+    scoped = gateway.search("service port", limit=20, mode="fts", labels=True, scope="team")
+    assert _labels(scoped) == _labels(plain)
+    assert _labels(scoped)["m-port-a"] == [OPEN, CONFLICTED_LABEL]
+
+
+def test_question_with_valid_to_is_hidden_even_for_an_earlier_as_of(tmp_path: Path) -> None:
+    repository = _base(tmp_path)
+    _question(repository, "m-port-a")
+    repository.resolve_open_question(QUESTION, "m-port-b")
+    _indexed(repository)
+    runtime = _gateway(repository.root).runtime
+    found = runtime.open_question_labels(
+        repository,
+        ["m-port-a", "m-runbook"],
+        policy_name="compat_fts",
+        source="",
+        include_history=False,
+        as_of=datetime(2099, 1, 1, tzinfo=UTC),
+    )
+    assert found == {}
+    earlier = runtime.open_question_labels(
+        repository,
+        ["m-port-a"],
+        policy_name="compat_fts",
+        source="",
+        include_history=True,
+        as_of=None,
+    )
+    assert earlier == {}
+
+
+def test_labels_use_the_given_now(tmp_path: Path) -> None:
+    repository = _base(tmp_path)
+    _question(repository, "m-port-a")
+    repository.update(QUESTION, valid_from=datetime(2090, 1, 1, tzinfo=UTC))
+    _indexed(repository)
+    runtime = _gateway(repository.root).runtime
+    kwargs: dict[str, Any] = {
+        "policy_name": "strict",
+        "source": "",
+        "include_history": False,
+        "as_of": None,
+    }
+    assert runtime.open_question_labels(repository, ["m-port-a"], **kwargs) == {}
+    later = runtime.open_question_labels(
+        repository, ["m-port-a"], now=datetime(2091, 1, 1, tzinfo=UTC), **kwargs
+    )
+    assert later == {"m-port-a": (OPEN, CONFLICTED_LABEL)}
+
+
+def test_two_stage_labels_share_the_coordinator_now(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import memfw.recall.builtin as builtin
+    from memfw.recall import Coordinator
+
+    repository = _base(tmp_path)
+    _question(repository, "m-port-a")
+    _indexed(repository)
+    seen: dict[str, Any] = {}
+    real_search = Coordinator.search
+    real_labels = builtin.open_question_labels_for
+
+    def search(self: Coordinator, *args: Any, **kwargs: Any) -> Any:
+        seen["coordinator"] = self.clock()
+        return real_search(self, *args, **kwargs)
+
+    def labels(*args: Any, **kwargs: Any) -> Any:
+        seen["labels"] = kwargs["now"]
+        return real_labels(*args, **kwargs)
+
+    monkeypatch.setattr(Coordinator, "search", search)
+    monkeypatch.setattr(builtin, "open_question_labels_for", labels)
+    _gateway(repository.root).search("service port", limit=20, mode="two_stage")
+    assert seen["coordinator"] == seen["labels"]
+
+
+def test_candidates_come_from_the_index_with_a_scan_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import memfw.recall.builtin as builtin
+
+    repository = _base(tmp_path)
+    _question(repository, "m-port-a")
+    _indexed(repository)
+    policy = FilterPolicy.compat_fts(tenant="")
+    now = datetime.now(UTC)
+    assert builtin._indexed_question_ids(repository, "") == [QUESTION]
+    assert builtin._indexed_question_ids(repository, "beta") == []
+
+    def no_scan(_repository: Repository) -> list[str]:
+        raise AssertionError("scanned although the index is readable")
+
+    monkeypatch.setattr(builtin, "_scanned_question_ids", no_scan)
+    assert open_question_index(repository, policy, now=now).conflicted == {"m-port-a"}
+    monkeypatch.undo()
+    repository.index_path.unlink()
+    assert builtin._indexed_question_ids(repository, "") is None
+    assert open_question_index(repository, policy, now=now).conflicted == {"m-port-a"}
+
+
+def test_no_rows_reads_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import memfw.recall.builtin as builtin
+
+    repository = _indexed(_base(tmp_path))
+    _question(repository, "m-port-a")
+
+    def boom(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("built the index for an empty page")
+
+    monkeypatch.setattr(builtin, "open_question_index", boom)
+    payload = _gateway(repository.root).search("zzzz-nothing", limit=5, mode="fts", labels=True)
+    assert payload["results"] == []
