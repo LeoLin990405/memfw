@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import math
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -164,7 +164,7 @@ class Policy(Protocol):
         budget: BudgetLimits,
         *,
         now: datetime,
-        protect_historical: bool = False,
+        protected_history_ids: Collection[str] = (),
     ) -> PolicyPlan: ...
 
 
@@ -239,25 +239,31 @@ class _BasePolicy:
         budget: BudgetLimits,
         *,
         now: datetime,
-        protect_historical: bool = False,
+        protected_history_ids: Collection[str] = (),
     ) -> PolicyPlan:
         """Select forget candidates until the budget fits.
 
-        Anchors are never selected. With ``protect_historical`` (the engine sets
-        it for ``forget_action: hard``), historical versions (``valid_to`` or
-        ``superseded_by`` set) are never selected either: hard deletion would
-        remove the predecessor file of a version chain, which ``as_of`` queries
-        and ``.history`` reconstruction need. They stay retained with reason
-        ``protected_history`` and still count toward usage, so the selector
-        moves on to current candidates; if those run out, the plan is reported
-        unsatisfied instead of deleting history. Soft forgetting leaves the flag
-        off: cooling moves a historical version into the cold archive, which
-        keeps its original bytes. A human can still delete a historical memory
-        explicitly with ``Repository.delete``.
+        Anchors are never selected. Neither is any id in
+        ``protected_history_ids``: the engine passes the members of every live
+        supersede chain (see ``live_chain_ids``) for ``forget_action: hard``.
+        Hard-deleting a chain predecessor would lose the version that ``as_of``
+        queries and ``.history`` reconstruction need, and deleting the current
+        head while keeping its predecessors would leave an orphaned history
+        that can never be evicted, so the whole chain stays. Protected members
+        are retained with reason ``protected_history`` and still count toward
+        usage, so the selector moves on to other candidates; if those run out,
+        the plan is reported unsatisfied (``history_floor``) instead.
+
+        Plain expiry is not protected: a record with ``valid_to`` set but no
+        live successor is an ordinary candidate. Soft forgetting passes no ids:
+        cooling moves a record into the cold archive, which keeps its original
+        bytes. An explicit ``Repository.delete``, an approved merge or an
+        approved forget proposal can still remove a chain member.
         """
         current = _utc(now)
         items = _normalize(candidates)
         forgotten: list[PolicyCandidate] = []
+        protected = frozenset(protected_history_ids)
         over_budget = not _fits(items, budget)
         ranked = self._rank(items, current) if over_budget else []
         # Knowledge citations add an opt-in, strategy-independent protection
@@ -279,7 +285,7 @@ class _BasePolicy:
             for candidate, _, _ in ranked:
                 if _fits(retained, budget):
                     break
-                if candidate.is_anchor or (protect_historical and candidate.historical):
+                if candidate.is_anchor or candidate.id in protected:
                     continue
                 retained.remove(candidate)
                 forgotten.append(candidate)
@@ -303,7 +309,7 @@ class _BasePolicy:
                     else "protected_anchor"
                     if item.is_anchor
                     else "protected_history"
-                    if protect_historical and item.historical and over_budget
+                    if item.id in protected and over_budget
                     else "budget_fits_or_candidate_not_selected"
                 ),
                 score=reason_map[item.id][1] if item.id in forgotten_ids else None,
@@ -543,6 +549,30 @@ class ConsolidateThenForgetPolicy(_BasePolicy):
                     )
                 )
         return tuple(sorted(proposals, key=lambda item: (item.representative_id, item.match_basis)))
+
+
+def live_chain_ids(documents: Iterable[Any]) -> frozenset[str]:
+    """Ids of every member of a live supersede chain.
+
+    A link is live when a record's ``superseded_by`` names a record that is in
+    ``documents``; both ends of every live link are members, so a chain
+    ``a -> b -> c`` yields all three. A ``superseded_by`` that names a missing
+    record, and plain expiry (``valid_to`` alone), make no link.
+    """
+
+    rows = [
+        (
+            str(row.get("id") if isinstance(row, dict) else row.id),
+            row.get("superseded_by") if isinstance(row, dict) else row.superseded_by,
+        )
+        for row in documents
+    ]
+    existing = {identifier for identifier, _ in rows}
+    members: set[str] = set()
+    for identifier, successor in rows:
+        if successor and successor in existing and successor != identifier:
+            members.update((identifier, str(successor)))
+    return frozenset(members)
 
 
 def make_policy(name: PolicyName | str) -> Policy:

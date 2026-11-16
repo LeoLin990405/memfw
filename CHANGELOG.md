@@ -11,27 +11,33 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
-### Fixed — budget enforcement keeps version history
+### Fixed — budget enforcement keeps live supersede chains
 
-- With `forget_action: hard`, the `fifo`, `lru`, `decay` and `salience`
-  policies no longer hard-delete historical records (`valid_to` or
-  `superseded_by` set). Before, budget pressure could delete the predecessor
-  of a version chain (`a-old` in `a-old -> z-new`): the event log kept its
-  events, but the file was gone, so `as_of` queries and `.history`
-  reconstruction lost it. Historical candidates are now skipped from the
-  hard-forget plan with the decision reason `protected_history`; they still
-  count toward usage, so the selector moves on to current records.
-- When only historical records (and anchors) are left and the budget is still
-  over, the result is reported as unmet with the new reason code
-  `history_floor` (`anchor_floor` keeps precedence when anchors block), a
-  `budget_unsatisfiable` event, and the new `blocking_history_ids` field in
-  the result and its JSON.
-- Soft forgetting is unchanged: cooling moves a historical record into the
-  cold archive, which keeps its original bytes. An explicit human
-  `delete` of a historical memory is unchanged too. Plans for vaults without
-  historical records are byte-identical to before; `Policy.plan` takes a new
-  keyword `protect_historical` (default `False`), which the engine sets for
-  hard forgetting.
+- Budget/policy enforcement with `forget_action: hard` never deletes a live
+  supersede chain. A record is a chain member when its `superseded_by` names a
+  memory that still exists, or when such a record names it; for
+  `a-old -> z-new` both are kept. Before, `fifo`, `lru`, `decay` and
+  `salience` could delete `a-old` (losing it for `as_of` queries and
+  `.history` reconstruction), or delete the head `z-new` and leave `a-old` as
+  an orphan. Chain members are retained with the decision reason
+  `protected_history` and still count toward usage, so the policy moves on to
+  other records. This applies in body and total budget modes and to
+  `memfw forget run --action hard`.
+- Plain expiry is not protected: a record with `valid_to` set (past or
+  future) and no live successor stays an ordinary eviction candidate.
+- When only chain members (and anchors) are left in scope and the budget is
+  still over, the result is unmet with the new reason code `history_floor`, a
+  `budget_unsatisfiable` event, and the new `blocking_history_ids` field
+  (filled only for `history_floor`). `anchor_floor` keeps precedence in body
+  mode. Dry runs report the same floor from the plan. Total mode with
+  `budget_scope: hot` now judges the floor from in-scope records only.
+  `proposal_stats` gains `history_retained` and `history_floor_unmet`.
+- Still allowed: an explicit `memfw delete` / `Repository.delete`, an
+  approved merge and an approved forget proposal can remove a chain member.
+  Soft forgetting is unchanged (the cold archive keeps the original bytes).
+  Plans for vaults without live chains are byte-identical to before.
+  `Policy.plan` takes a new keyword `protected_history_ids` (default empty);
+  `memfw.policies.live_chain_ids` computes it.
 
 ### Fixed — recall privacy tags fail closed (security)
 

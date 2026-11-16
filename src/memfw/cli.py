@@ -1803,7 +1803,14 @@ def forget_run(
     policy: Annotated[PolicyName, typer.Option("--policy")],
     root: Annotated[Path, typer.Option("--root", "-r")] = Path("."),
     action: Annotated[
-        str, typer.Option("--action", help="soft or hard (cold/delete aliases accepted)")
+        str,
+        typer.Option(
+            "--action",
+            help=(
+                "soft or hard (cold/delete aliases accepted). hard never deletes a live "
+                "supersede chain; use `memfw delete` to remove one explicitly"
+            ),
+        ),
     ] = "soft",
     scope: Annotated[str, typer.Option("--scope", help="hot or all")] = "hot",
     dry_run: Annotated[bool, typer.Option("--dry-run/--apply")] = True,
