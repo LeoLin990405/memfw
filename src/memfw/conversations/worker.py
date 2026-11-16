@@ -5,8 +5,11 @@ One run:
 1. takes an exclusive lock (a second concurrent run exits ``locked``);
 2. puts jobs a crashed run left ``running`` back to ``pending`` (resumable);
 3. ingests new records incrementally (the store's own ingest, via the adapter);
-4. scans for sessions that changed and have been idle for ``idle_minutes``,
-   and queues per-session jobs keyed by the session's fingerprint:
+4. scans for sessions that changed and have been idle for ``idle_minutes``
+   (a session whose turns carry no timestamp is idle only once the worker has
+   seen it unchanged for ``idle_minutes``: unknown activity is never taken as
+   idle, since the store records no file mtime to fall back on), and queues
+   per-session jobs keyed by the session's fingerprint:
    ``chunk_summary`` (one per ~8k-token chunk), ``session_summary``,
    ``memory_claims`` (verify-first, staged as dream candidates) and
    ``episode`` (handed to the skill-candidate step through the ``episodes``
@@ -48,6 +51,7 @@ from .store import (
     ensure_private_dir,
     ensure_private_file,
     safe_text,
+    ts_key,
 )
 
 STATE_NAME = "conversations-work.sqlite"
@@ -210,6 +214,9 @@ class WorkState:
                 passes INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT '',
                 last_updated_at TEXT NOT NULL DEFAULT '', last_app TEXT NOT NULL DEFAULT '',
                 last_session_id TEXT NOT NULL DEFAULT '');
+            CREATE TABLE IF NOT EXISTS unstamped_seen (
+                app TEXT NOT NULL, session_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
+                first_seen TEXT NOT NULL, PRIMARY KEY (app, session_id));
             CREATE TABLE IF NOT EXISTS runs (
                 run_id TEXT PRIMARY KEY, started_at TEXT NOT NULL, finished_at TEXT,
                 status TEXT NOT NULL, report TEXT NOT NULL DEFAULT '{}');
@@ -538,7 +545,14 @@ class ConversationWorker:
                     "SELECT DISTINCT dream_id FROM staged_claims WHERE app = ?", (app,)
                 )
             }
-            for table in ("jobs", "summaries", "episodes", "session_state", "staged_claims"):
+            for table in (
+                "jobs",
+                "summaries",
+                "episodes",
+                "session_state",
+                "staged_claims",
+                "unstamped_seen",
+            ):
                 connection.execute(f"DELETE FROM {table} WHERE app = ?", (app,))
         report.purged_apps = len(purged)
         report.candidates_to_review = sorted(review)
@@ -594,7 +608,10 @@ class ConversationWorker:
             if not self.policy.processable(info.app):
                 return False
             updated = _parse_ts(info.updated_at)
-            if updated is not None and updated > cutoff:
+            if updated is None:
+                # No usable timestamp: last activity is unknown, so not idle yet.
+                updated = self._first_seen_unchanged(info)
+            if updated > cutoff:
                 report.sessions_waiting_idle += 1
                 return False
             if self._plan(info):
@@ -646,13 +663,44 @@ class ConversationWorker:
         report.scan_cursor_end = offset
         self._save_scan_cursor(last[0] if last else None, offset, passes)
 
+    def _first_seen_unchanged(self, info: SessionInfo) -> datetime:
+        """When this run's worker first saw ``info`` in its current shape.
+
+        For a session without timestamps (the store keeps no file mtime) this
+        stands in for its last activity: a new or changed fingerprint resets it
+        to now, so the session waits ``idle_minutes`` after its last observed
+        change before it is processed (conservative: never idle on first sight).
+        """
+
+        mark = fingerprint(info)
+        now = self.now()
+        with self.state.open() as connection:
+            row = connection.execute(
+                "SELECT fingerprint, first_seen FROM unstamped_seen"
+                " WHERE app = ? AND session_id = ?",
+                (info.app, info.session_id),
+            ).fetchone()
+            if row is not None and row["fingerprint"] == mark:
+                seen = _parse_ts(str(row["first_seen"]))
+                if seen is not None:
+                    return seen
+            connection.execute(
+                "INSERT INTO unstamped_seen (app, session_id, fingerprint, first_seen)"
+                " VALUES (?, ?, ?, ?) ON CONFLICT (app, session_id) DO UPDATE SET"
+                " fingerprint = excluded.fingerprint, first_seen = excluded.first_seen",
+                (info.app, info.session_id, mark, now.isoformat()),
+            )
+        return now
+
     @staticmethod
     def _comes_after(info: SessionInfo, key: tuple[str, str, str]) -> bool:
         """Whether ``info`` lies strictly after ``key`` in newest-first order."""
 
         updated_at, app, session_id = key
-        if info.updated_at != updated_at:
-            return info.updated_at < updated_at
+        # Compare as the store orders: by the UTC key, not the raw text.
+        mine, theirs = ts_key(info.updated_at) or "", ts_key(updated_at) or ""
+        if mine != theirs:
+            return mine < theirs
         return (info.app, info.session_id) > (app, session_id)
 
     def _keyset_offset(self, exclude: tuple[str, ...], key: tuple[str, str, str]) -> int:

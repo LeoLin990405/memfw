@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import builtins
 import hashlib
+import logging
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from ..core.common import sha256_text
 from ..core.context import RepositoryHost
@@ -22,6 +23,8 @@ from ..core.epistemic import (
 from ..core.errors import DeletedContentUnavailable, IntegrityError, NotFoundError
 from ..core.models import EventKind, Layer, MemoryDocument, Tier, fold_temporal_aliases
 from ..storage.transactions import _serialized
+
+_LOG = logging.getLogger(__name__)
 
 
 class MemoryOperationsMixin:
@@ -176,6 +179,7 @@ class MemoryOperationsMixin:
         proposal_id: str | None = None,
         approved_by: str | None = None,
         proposal_operation: str | None = None,
+        _human_decision: bool = False,
         **changes: Any,
     ) -> MemoryDocument:
         old = self.get(memory_id)
@@ -215,6 +219,8 @@ class MemoryOperationsMixin:
             "type",
             "tenant",
             "related",
+            "about",
+            "applies_to",
             "source",
             "provenance",
             "anchor",
@@ -261,6 +267,9 @@ class MemoryOperationsMixin:
         # Fold aliases before they meet the stored document. A conflict is only
         # two names in this request, and it raises before any write.
         folded_changes = fold_temporal_aliases(dict(changes))
+        new_target = folded_changes.get("superseded_by")
+        if new_target is not None and new_target != old.superseded_by:
+            _check_supersession_target(self, memory_id, str(new_target))
         values = old.model_dump()
         values.update(folded_changes)
         # One gate for every write path. A human approval of an agent proposal
@@ -268,7 +277,10 @@ class MemoryOperationsMixin:
         # already-verified document but cannot turn one into verified.
         if set(folded_changes) & EPISTEMIC_FIELDS:
             validate_epistemic_write(
-                values, actor=actor, human_decision=approved, previous_causal=old.causal
+                values,
+                actor=actor,
+                human_decision=approved or (_human_decision and actor == "human"),
+                previous_causal=old.causal,
             )
         config = self.read_config()
         is_anchored = values.get("layer") == Layer.ANCHOR or bool(values.get("anchor"))
@@ -715,6 +727,16 @@ class MemoryOperationsMixin:
         history = self.history_dir / memory_id
         if history.exists():
             shutil.rmtree(history)
+        # The memory's history may have moved body text into shared body
+        # objects; drop the ones no surviving history still references. The
+        # DELETE is already committed, so a failure here must not abort the
+        # rest of the erasure; ``fsck`` prunes again.
+        try:
+            cast(Any, self)._prune_body_objects()
+        except Exception:
+            _LOG.warning(
+                "body-object prune after deleting %s failed; run fsck", memory_id, exc_info=True
+            )
         for quarantined in (self.root / ".quarantine").glob(f"{memory_id}-*.md"):
             quarantined.unlink(missing_ok=True)
         if self.archives_dir.exists():
@@ -724,6 +746,7 @@ class MemoryOperationsMixin:
         self._erase_target_proposals(
             memory_id, actor=actor, preserve_ids=_preserve_proposal_ids or set()
         )
+        _clear_superseded_by_refs(self, memory_id, actor=actor)
         if self.index_path.exists():
             # Drop the disposable database so deleted text is not left in FTS5 pages.
             self.index_path.unlink()
@@ -821,30 +844,32 @@ class MemoryOperationsMixin:
                 raise DeletedContentUnavailable(
                     "Prior cold Markdown stub has no verified archived body"
                 ) from exc
+        # Restore every document field of the target version. Identity and the
+        # server-stamped fields stay with the current record: ``update`` assigns
+        # the next version and a fresh ``updated_at``; ``created_at`` and
+        # ``recorded_at`` never change after ``add``.
+        restored = old_doc.model_dump(
+            exclude={"id", "created_at", "recorded_at", "version", "updated_at"}
+        )
+        stale_target = restored.get("superseded_by")
+        if (
+            stale_target is not None
+            and stale_target != self.get(event.memory_id).superseded_by
+            and not self._current_path(str(stale_target)).exists()
+        ):
+            raise IntegrityError(
+                f"Rollback target version of {event.memory_id} has superseded_by "
+                f"{stale_target}, which points to a deleted memory; clear superseded_by "
+                f"on that version (update {event.memory_id} with superseded_by=None and "
+                "the other fields you need) instead of rolling back to it"
+            )
+        # A human rollback is a human decision about the restored state, so the
+        # epistemic gate treats it like a recorded HUMAN_DECISION.
         return self.update(
             event.memory_id,
             actor=actor,
-            **old_doc.model_dump(
-                include={
-                    "title",
-                    "body",
-                    "layer",
-                    "tier",
-                    "source",
-                    "provenance",
-                    "anchor",
-                    "tags",
-                    "summary",
-                    "is_stub",
-                    "archive_ref",
-                    "archived_hash",
-                    "strength",
-                    "reference_count",
-                    "last_access_interval_days",
-                    "manually_marked",
-                    "group_key",
-                }
-            ),
+            _human_decision=actor == "human",
+            **restored,
         )
 
     @_serialized
@@ -974,6 +999,158 @@ class MemoryOperationsMixin:
                     "actual_hash": actual_hash,
                 }
             )
+        # Re-run the post-DELETE cleanup that ``delete`` performs after its
+        # tombstone commits, in case it failed or was interrupted there.
+        try:
+            cast(Any, self)._prune_body_objects()
+        except Exception as exc:
+            issues.append(
+                {
+                    "memory_id": None,
+                    "kind": "body_prune_failed",
+                    "expected_hash": None,
+                    "actual_hash": None,
+                    "message": str(exc),
+                }
+            )
+        deleted = {key for key, value in expected.items() if value is None}
+        for document in _current_documents(self):
+            stale = document.superseded_by
+            if stale is None or stale not in deleted or self._current_path(stale).exists():
+                continue
+            cleared = _clear_superseded_by_refs(self, stale, actor="mechanism")
+            for referrer in cleared:
+                issues.append(
+                    {
+                        "memory_id": referrer,
+                        "kind": "deleted_superseded_by_cleared",
+                        "expected_hash": None,
+                        "actual_hash": None,
+                        "message": f"cleared superseded_by to deleted memory {stale}",
+                    }
+                )
+        issues.extend(_supersession_issues(_current_documents(self)))
         if registered_deletions:
             self.validate_knowledge_cards()
         return issues
+
+
+def _check_supersession_target(host: RepositoryHost, memory_id: str, target: str) -> None:
+    """Reject a ``superseded_by`` that is missing, the memory itself, or a cycle."""
+    if target == memory_id:
+        raise IntegrityError(f"A memory cannot supersede itself: {memory_id}")
+    if not host._current_path(target).exists():
+        raise IntegrityError(f"superseded_by names a missing memory: {target}")
+    seen: set[str] = set()
+    current: str | None = target
+    while current is not None and current not in seen:
+        if current == memory_id:
+            raise IntegrityError(
+                f"superseded_by {target} would create a supersession cycle with {memory_id}"
+            )
+        seen.add(current)
+        if not host._current_path(current).exists():
+            return
+        current = host.get(current).superseded_by
+
+
+def _supersession_issues(
+    documents: builtins.list[MemoryDocument],
+) -> builtins.list[dict[str, str | None]]:
+    """Report ``superseded_by`` links to missing memories and supersession cycles."""
+    links = {doc.id: doc.superseded_by for doc in documents if doc.superseded_by is not None}
+    present = {doc.id for doc in documents}
+    issues: builtins.list[dict[str, str | None]] = []
+    for memory_id, target in sorted(links.items()):
+        if target not in present:
+            issues.append(
+                {
+                    "memory_id": memory_id,
+                    "kind": "dangling_superseded_by",
+                    "expected_hash": None,
+                    "actual_hash": None,
+                    "message": f"superseded_by names a missing memory: {target}",
+                }
+            )
+            continue
+        seen = [memory_id]
+        current: str | None = target
+        while current is not None and current not in seen:
+            seen.append(current)
+            current = links.get(current)
+        if current == memory_id:
+            issues.append(
+                {
+                    "memory_id": memory_id,
+                    "kind": "cyclic_superseded_by",
+                    "expected_hash": None,
+                    "actual_hash": None,
+                    "message": "supersession cycle: " + " -> ".join([*seen, memory_id]),
+                }
+            )
+    return issues
+
+
+def _clear_superseded_by_refs(
+    host: RepositoryHost, memory_id: str, *, actor: str
+) -> builtins.list[str]:
+    """Unlink memories that named a hard-deleted memory as their replacement.
+
+    ``valid_to`` stays: the record did stop being current at that instant.
+    Each unlink is an ordinary update event. A pointer the cleanup may not
+    touch (an anchor, when the deleting actor is not human) is left for
+    ``fsck`` to report as dangling. This runs after the DELETE commits, so
+    any failure is contained per reference; ``fsck`` re-runs the cleanup.
+    Returns the ids whose pointer was cleared.
+    """
+    cleanup_actor = "human" if actor == "human" else "mechanism"
+    cleared: builtins.list[str] = []
+    try:
+        documents = _current_documents(host, mentioning=memory_id)
+    except Exception:
+        _LOG.warning("superseded_by cleanup for %s failed; run fsck", memory_id, exc_info=True)
+        return cleared
+    for document in documents:
+        if document.superseded_by != memory_id:
+            continue
+        try:
+            host.update(document.id, actor=cleanup_actor, superseded_by=None)
+        except IntegrityError:
+            continue
+        except Exception:
+            _LOG.warning(
+                "clearing superseded_by on %s after deleting %s failed; run fsck",
+                document.id,
+                memory_id,
+                exc_info=True,
+            )
+            continue
+        cleared.append(document.id)
+    return cleared
+
+
+def _current_documents(
+    host: RepositoryHost, *, mentioning: str | None = None
+) -> builtins.list[MemoryDocument]:
+    """Parse the current Markdown files, skipping unreadable ones.
+
+    Unlike ``list()`` this leaves the caller-visible list warnings alone.
+    With ``mentioning``, files whose bytes do not contain both that memory id
+    and ``superseded`` are skipped without a YAML parse. Memory ids match
+    ``_ID_RE`` (no characters YAML would escape), so a file whose
+    ``superseded_by`` (or ``superseded`` alias) names the id always contains
+    it literally; the prefilter only drops files that cannot match.
+    """
+    documents: builtins.list[MemoryDocument] = []
+    if not host.memories_dir.exists():
+        return documents
+    needle = mentioning.encode("utf-8") if mentioning is not None else None
+    for path in sorted(host.memories_dir.glob("*.md")):
+        try:
+            raw = path.read_bytes()
+            if needle is not None and (needle not in raw or b"superseded" not in raw):
+                continue
+            documents.append(host.parse(raw.decode("utf-8"), expected_id=path.stem))
+        except (IntegrityError, UnicodeDecodeError):
+            continue
+    return documents

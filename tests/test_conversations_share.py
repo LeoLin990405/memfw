@@ -452,7 +452,7 @@ def test_schedule_prints_but_never_installs(tmp_path: Path, isolated_home: Path)
         ["conversations", "schedule", "--print", "--root", str(vault), "--bin", "/opt/memfw"],
     )
     assert result.exit_code == 0, result.output
-    plist = plistlib.loads(result.output.encode())
+    plist = plistlib.loads(result.stdout.encode())
     assert plist["ProgramArguments"] == [
         "/opt/memfw",
         "conversations",

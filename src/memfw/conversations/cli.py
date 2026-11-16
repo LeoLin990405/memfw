@@ -16,7 +16,7 @@ import typer
 from ..core.errors import MemfwError
 from .backends import load_backend
 from .policy import OPERATOR
-from .schedule import DEFAULT_INTERVAL, render
+from .schedule import DEFAULT_INTERVAL, default_log_dir, render
 from .service import open_share, open_worker, read_config
 from .share import render_markdown
 from .store import ConversationError
@@ -206,5 +206,10 @@ def schedule(
         raise _fail(ConversationError("--root (or MEMFW_ROOT) is required"))
     try:
         typer.echo(render(vault=root, memfw_bin=memfw_bin, interval=interval), nl=False)
+        typer.echo(
+            f"# launchd does not create the log directory; before loading run: "
+            f"mkdir -p {default_log_dir()}",
+            err=True,
+        )
     except ConversationError as exc:
         raise _fail(exc) from exc

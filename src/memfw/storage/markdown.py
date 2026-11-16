@@ -9,29 +9,15 @@ from pathlib import Path
 from typing import Any, cast
 
 import yaml
-from pydantic import ValidationError
 
 from ..core.common import sha256_text
 from ..core.context import RepositoryHost
 from ..core.errors import IntegrityError
+from ..core.markdown_parse import _OPTIONAL_DEFAULT_FIELDS, parse_memory_markdown
 from ..core.models import MemoryDocument
 
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _BODY_MARKERS = (b"\n---\n\n", b"\r\n---\r\n\r\n")
-
-#: Fields whose default carries no information, so a rewrite omits them.
-#: They were added on 2026-11-06; a file written after that date carries them
-#: explicitly, even at the default. ``parse`` records which of these the source
-#: file had so ``render`` writes them back and the bytes survive both
-#: directions: legacy file -> new file, and new file -> rewritten file.
-_OPTIONAL_DEFAULT_FIELDS = (
-    "type",
-    "tenant",
-    "related",
-    "valid_from",
-    "valid_to",
-    "superseded_by",
-)
 
 
 def _split_raw_markdown(raw: bytes) -> tuple[bytes, bytes]:
@@ -181,20 +167,66 @@ class MarkdownStorageMixin:
 
         import zstandard
 
-        for archive_path in sorted(self.archives_dir.glob("*.tar.zst")):
+        own_member = f"memories/{memory_id}.md"
+
+        def matching_body(raw: bytes, expected_id: str) -> bytes | None:
             try:
-                tar_bytes = zstandard.ZstdDecompressor().decompress(archive_path.read_bytes())
-                with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:") as archive:
-                    member = archive.extractfile(f"memories/{memory_id}.md")
+                _, body = _split_raw_markdown(raw)
+                self.parse(raw.decode("utf-8"), expected_id=expected_id)
+            except Exception:
+                return None
+            return body if hashlib.sha256(body).hexdigest() == body_hash else None
+
+        archives: list[tarfile.TarFile] = []
+        try:
+            for archive_path in sorted(self.archives_dir.glob("*.tar.zst")):
+                try:
+                    tar_bytes = zstandard.ZstdDecompressor().decompress(archive_path.read_bytes())
+                    archives.append(tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:"))
+                except Exception:
+                    continue
+            # The memory's own archived file is the usual source. Body objects
+            # are content-addressed across memories, so another memory's
+            # archived file holding the same bytes is an equally exact source:
+            # pruning may have dropped the object while that memory was live.
+            for archive in archives:
+                try:
+                    member = archive.extractfile(own_member)
+                except Exception:
+                    continue
+                if member is None:
+                    continue
+                body = matching_body(member.read(), memory_id)
+                if body is not None:
+                    return body
+            for archive in archives:
+                try:
+                    members = archive.getmembers()
+                except Exception:
+                    continue
+                for info in members:
+                    name = info.name
+                    if (
+                        name == own_member
+                        or not info.isfile()
+                        or not name.startswith("memories/")
+                        or not name.endswith(".md")
+                        or "/" in name.removeprefix("memories/")
+                    ):
+                        continue
+                    try:
+                        member = archive.extractfile(info)
+                    except Exception:
+                        continue
                     if member is None:
                         continue
-                    raw = member.read()
-                    _, body = _split_raw_markdown(raw)
-                    self.parse(raw.decode("utf-8"), expected_id=memory_id)
-                    if hashlib.sha256(body).hexdigest() == body_hash:
+                    other_id = name.removeprefix("memories/").removesuffix(".md")
+                    body = matching_body(member.read(), other_id)
+                    if body is not None:
                         return body
-            except Exception:
-                continue
+        finally:
+            for archive in archives:
+                archive.close()
         return None
 
     def _body_source_hash(self: RepositoryHost, memory_id: str, content_hash: str) -> str:
@@ -296,69 +328,7 @@ class MarkdownStorageMixin:
 
     @staticmethod
     def parse(markdown: str, *, expected_id: str | None = None) -> MemoryDocument:
-        markdown = markdown.replace("\r\n", "\n")
-        if not markdown.startswith("---\n"):
-            raise IntegrityError("Markdown is missing YAML frontmatter")
-
-        class UniqueKeyLoader(yaml.SafeLoader):
-            pass
-
-        def unique_mapping(
-            loader: yaml.SafeLoader, node: yaml.nodes.MappingNode, deep: bool = False
-        ) -> dict[Any, Any]:
-            mapping: dict[Any, Any] = {}
-            for key_node, value_node in node.value:
-                key = loader.construct_object(key_node, deep=deep)
-                if key in mapping:
-                    raise IntegrityError(f"Duplicate frontmatter key: {key}")
-                mapping[key] = loader.construct_object(value_node, deep=deep)
-            return mapping
-
-        UniqueKeyLoader.add_constructor(
-            yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, unique_mapping
-        )
-        try:
-            _, raw, body = markdown.split("---\n", 2)
-            metadata = yaml.load(raw, Loader=UniqueKeyLoader)
-        except (ValueError, yaml.YAMLError) as exc:
-            raise IntegrityError(f"Invalid Markdown frontmatter: {exc}") from exc
-        if not isinstance(metadata, dict):
-            raise IntegrityError("Frontmatter must be a YAML mapping")
-        if expected_id is not None and metadata.get("id") != expected_id:
-            raise IntegrityError("Frontmatter id does not match filename")
-        body = body.lstrip("\n")
-        if body.endswith("\n"):
-            body = body[:-1]
-        # Remember which optional fields the source file carried, so render()
-        # can write them back instead of dropping a default that the file's own
-        # writer chose to spell out.
-        observed = tuple(key for key in _OPTIONAL_DEFAULT_FIELDS if key in metadata)
-        try:
-            document = MemoryDocument.model_validate({**metadata, "body": body})
-            document._observed_default_fields = observed
-            return document
-        except ValidationError as exc:
-            # Forward compatibility: a newer memfw may write frontmatter keys this
-            # version does not know. Ignore exactly those keys (the document stays
-            # visible) instead of rejecting the whole memory; any other error is
-            # still an integrity error. A rewrite by this version drops them.
-            unknown = {
-                str(error["loc"][0])
-                for error in exc.errors()
-                if error["type"] == "extra_forbidden" and error.get("loc")
-            }
-            if not unknown or len(unknown) != len(exc.errors()):
-                raise IntegrityError(f"Invalid memory document: {exc}") from exc
-            known = {key: value for key, value in metadata.items() if str(key) not in unknown}
-            try:
-                document = MemoryDocument.model_validate({**known, "body": body})
-                document._ignored_keys = tuple(sorted(unknown))
-                document._observed_default_fields = observed
-                return document
-            except Exception as retry:
-                raise IntegrityError(f"Invalid memory document: {retry}") from retry
-        except Exception as exc:
-            raise IntegrityError(f"Invalid memory document: {exc}") from exc
+        return parse_memory_markdown(markdown, expected_id=expected_id)
 
     def _write_version(
         self: RepositoryHost,
@@ -390,11 +360,18 @@ class MarkdownStorageMixin:
             _, new_body = _split_raw_markdown(markdown.encode("utf-8"))
             if old_body != new_body:
                 body_hash = hashlib.sha256(old_body).hexdigest()
+                # This memory's own archive is a sufficient body source only
+                # for its own history. Another memory's history may reference
+                # the same object, and that memory cannot rely on an archive
+                # it does not own (the archive can later be erased or thawed).
                 if (
                     cast(Any, self)._body_is_referenced(body_hash)
                     and cast(Any, self)._current_body_by_hash(body_hash, exclude_memory=memory_id)
                     is None
-                    and cast(Any, self)._archived_body_by_hash(memory_id, body_hash) is None
+                    and (
+                        cast(Any, self)._body_referenced_by_other(body_hash, memory_id)
+                        or cast(Any, self)._archived_body_by_hash(memory_id, body_hash) is None
+                    )
                 ):
                     body_path = cast(Any, self)._body_object_path(body_hash)
                     if not body_path.exists():
@@ -444,15 +421,10 @@ class MarkdownStorageMixin:
                 continue
         return False
 
-    def _preserve_shared_body_before_erasure(self: RepositoryHost, memory_id: str) -> None:
-        current_path = self._current_path(memory_id)
-        if not current_path.exists():
-            return
-        self.parse(current_path.read_text(encoding="utf-8"), expected_id=memory_id)
-        _, body = _split_raw_markdown(current_path.read_bytes())
-        body_hash = hashlib.sha256(body).hexdigest()
+    def _body_referenced_by_other(self: RepositoryHost, body_hash: str, memory_id: str) -> bool:
+        """Whether a retained version of a memory other than ``memory_id`` uses the body."""
+
         history_dirs = self.history_dir.glob("*") if self.history_dir.exists() else ()
-        referenced_elsewhere = False
         for directory in history_dirs:
             if not directory.is_dir() or directory.name == memory_id or directory.name == "bodies":
                 continue
@@ -462,14 +434,20 @@ class MarkdownStorageMixin:
                         json.loads(delta_path.read_text(encoding="utf-8")).get("body_hash")
                         == body_hash
                     ):
-                        referenced_elsewhere = True
-                        break
-                except (OSError, ValueError, TypeError):
+                        return True
+                except (OSError, ValueError, TypeError, AttributeError):
                     continue
-            if referenced_elsewhere:
-                break
+        return False
+
+    def _preserve_shared_body_before_erasure(self: RepositoryHost, memory_id: str) -> None:
+        current_path = self._current_path(memory_id)
+        if not current_path.exists():
+            return
+        self.parse(current_path.read_text(encoding="utf-8"), expected_id=memory_id)
+        _, body = _split_raw_markdown(current_path.read_bytes())
+        body_hash = hashlib.sha256(body).hexdigest()
         if (
-            referenced_elsewhere
+            cast(Any, self)._body_referenced_by_other(body_hash, memory_id)
             and cast(Any, self)._current_body_by_hash(body_hash, exclude_memory=memory_id) is None
         ):
             body_path = cast(Any, self)._body_object_path(body_hash)

@@ -17,11 +17,17 @@ Contract summary:
   ``score = x / (1 + x)`` with ``x = max(0, -raw_score)``; with no bm25 (a
   query of one or two characters uses a case-insensitive substring branch)
   ``raw_score`` is ``null`` and
-  ``score = 1 / (1 + rank)`` for the returned rank starting at 0. ``/related``
+  ``score = 1 / (1 + rank)`` for the returned rank starting at 0. On a
+  trigram index, terms under three characters in a longer query are matched
+  the same substring way and ranked after the FTS hits, never above them.
+  ``/related``
   edge scores use the same ``x / (1 + x)`` shape with ``x`` the positive raw
   edge value. Both formulas are monotonic;
 * ``degraded`` is true only when a request did not take its preferred path:
   ``/search`` always runs FTS (the only implemented mode) and reports false,
+  except on an index of an older schema generation, which is never read or
+  rebuilt here: it answers no results, ``degraded`` true and ``errors``
+  ``["index_stale"]``,
   ``/related`` reports false on the edges projection and true when it falls back
   to lexical search;
 * temporal filtering and tenant filtering both happen before a hit is ranked
@@ -35,7 +41,8 @@ to the environment variable), ``MEMFW_RELATED_DB`` (or ``--related-db``),
 ``MEMFW_READONLY_TOKEN`` / ``MEMFW_READONLY_TOKEN_FILE`` and
 ``MEMFW_WRITE_TOKEN`` / ``MEMFW_WRITE_TOKEN_FILE`` (environment first, then
 file; file content is stripped). A token file must be mode ``0600``. The read
-and write tokens must differ. ``--host 0.0.0.0`` is refused. Each request
+and write tokens must differ. A ``--host`` that resolves to a wildcard
+address (``0.0.0.0``, ``::``, ``0``, an empty host) is refused. Each request
 socket times out after 5 seconds.
 """
 
@@ -45,9 +52,11 @@ import argparse
 import copy
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import re
+import socket
 import sqlite3
 import sys
 import traceback
@@ -306,6 +315,34 @@ def _connect_related(path: Path) -> sqlite3.Connection:
     return connection
 
 
+#: Stdlib mirror of ``memfw.index._INDEX_SCHEMA_VERSION`` and ``_INDEX_TABLES``.
+#: ``tests/test_fix_service_index_stale.py`` checks the two stay equal.
+INDEX_SCHEMA_VERSION = 2
+INDEX_TABLES = frozenset({"memory_rows", "memory_temporal", "memory_access", "memory_fts"})
+INDEX_STALE = "index_stale"
+
+
+def _index_is_current(connection: sqlite3.Connection) -> bool:
+    """Read-only twin of ``MemoryIndex.schema_is_current``.
+
+    An index from an earlier schema generation lacks the temporal or tenant
+    projection; reading it would silently drop filtering or return nothing.
+    The service never rebuilds it. Any SQLite error reads as stale.
+    """
+
+    try:
+        version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        names = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type IN ('table','view')"
+            )
+        }
+    except (sqlite3.Error, TypeError, ValueError):
+        return False
+    return version == INDEX_SCHEMA_VERSION and INDEX_TABLES <= names
+
+
 def _has_table(connection: sqlite3.Connection, name: str) -> bool:
     row = connection.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
@@ -521,10 +558,86 @@ def _query_terms(query: str, tokenizer: str = "trigram") -> list[str]:
 def _fts_query(query: str, tokenizer: str = "trigram") -> str | None:
     """Quote each term and join them with OR. ``None`` means there is no term."""
 
-    terms = _query_terms(query, tokenizer)
+    return _quoted_or(_query_terms(query, tokenizer))
+
+
+def _quoted_or(terms: list[str]) -> str | None:
     if not terms:
         return None
     return " OR ".join('"' + term.replace('"', '""') + '"' for term in terms)
+
+
+def _split_short_terms(terms: list[str], tokenizer: str = "trigram") -> tuple[list[str], list[str]]:
+    """Stdlib copy of ``memfw.index.fts_terms.split_short_terms``.
+
+    A trigram index cannot match a term shorter than three code points, so
+    such terms go to the short list. A unicode61 index keeps every term.
+    """
+
+    if tokenizer != "trigram":
+        return list(terms), []
+    return [term for term in terms if len(term) >= 3], [
+        term for term in terms if len(term) < 3 and _useful_short_term(term)
+    ]
+
+
+#: Stdlib copy of ``memfw.index.fts_terms.SHORT_STOPWORDS``: common English
+#: two-letter words, skipped as short terms when lowercase.
+_SHORT_STOPWORDS = frozenset(
+    {
+        "am",
+        "an",
+        "as",
+        "at",
+        "be",
+        "by",
+        "do",
+        "he",
+        "if",
+        "in",
+        "is",
+        "it",
+        "me",
+        "my",
+        "no",
+        "of",
+        "on",
+        "or",
+        "so",
+        "to",
+        "up",
+        "us",
+        "we",
+    }
+)
+
+
+def _useful_short_term(term: str) -> bool:
+    """Keep CJK and other non-ASCII terms, acronyms (``AI``, ``Q3``) and any
+    ASCII term that is not a lowercase English stopword."""
+
+    if not term.isascii():
+        return True
+    if term.isupper() or any(character.isdigit() for character in term):
+        return True
+    return term.casefold() not in _SHORT_STOPWORDS
+
+
+def _short_terms_clause(columns: list[str], terms: list[str]) -> tuple[str, list[str]]:
+    """Stdlib copy of ``memfw.index.fts_terms.short_terms_clause``.
+
+    ``columns`` are trusted identifiers chosen here, never user input.
+    """
+
+    parts: list[str] = []
+    params: list[str] = []
+    for term in terms:
+        for column in columns:
+            parts.append(f"instr(lower({column}), lower(?)) > 0")
+            params.append(term)
+    if not parts:
+        return "0", []
+    return "(" + " OR ".join(parts) + ")", params
 
 
 def _index_tokenizer(connection: sqlite3.Connection) -> str:
@@ -586,6 +699,28 @@ def _temporal_clause(
     )
 
 
+_ROW_COLUMNS = (
+    "r.id AS id, r.title AS title, r.summary AS summary, "
+    "r.search_body AS search_body, r.source AS source, r.tier AS tier, "
+    "r.layer AS layer, r.provenance AS provenance, r.version AS version"
+)
+_SUBSTRING_COLUMNS = ["r.title", "r.search_body", "r.summary", "r.tags"]
+
+
+def _row_filters(
+    *, source: str, tenant: str, temporal_sql: str, temporal_params: list[Any]
+) -> tuple[list[str], list[Any]]:
+    where = ["a.tenant = ?"]
+    params: list[Any] = [tenant]
+    if source:
+        where.append("r.source = ?")
+        params.append(source)
+    if temporal_sql:
+        where.append(temporal_sql)
+        params.extend(temporal_params)
+    return where, params
+
+
 def _search_batch(
     connection: sqlite3.Connection,
     *,
@@ -598,48 +733,63 @@ def _search_batch(
     offset: int,
     tokenizer: str = "trigram",
 ) -> list[sqlite3.Row]:
+    filters, filter_params = _row_filters(
+        source=source, tenant=tenant, temporal_sql=temporal_sql, temporal_params=temporal_params
+    )
     if len(needle) <= 2:
         # FTS drops tokens this short. Match every field, and fold ASCII case
         # so "AL" hits the same rows as "al". SQLite lower() covers that range.
         folded = needle.lower()
         select = (
-            "SELECT r.id AS id, r.title AS title, r.summary AS summary, "
-            "r.search_body AS search_body, r.source AS source, r.tier AS tier, "
-            "r.layer AS layer, r.provenance AS provenance, r.version AS version, "
-            "NULL AS raw_score FROM memory_rows r "
+            f"SELECT {_ROW_COLUMNS}, NULL AS raw_score FROM memory_rows r "
             "JOIN memory_access a ON a.id = r.id"
         )
         where = [
             "(instr(lower(r.title), ?) > 0 OR instr(lower(r.search_body), ?) > 0 "
-            "OR instr(lower(r.summary), ?) > 0 OR instr(lower(r.tags), ?) > 0)"
+            "OR instr(lower(r.summary), ?) > 0 OR instr(lower(r.tags), ?) > 0)",
+            *filters,
         ]
-        params: list[Any] = [folded, folded, folded, folded]
-        order = " ORDER BY r.id"
-    else:
-        select = (
-            "SELECT r.id AS id, r.title AS title, r.summary AS summary, "
-            "r.search_body AS search_body, r.source AS source, r.tier AS tier, "
-            "r.layer AS layer, r.provenance AS provenance, r.version AS version, "
-            "bm25(memory_fts) AS raw_score "
-            "FROM memory_fts JOIN memory_rows r ON r.id = memory_fts.id "
-            "JOIN memory_access a ON a.id = r.id"
-        )
-        match = _fts_query(needle, tokenizer)
+        params: list[Any] = [folded, folded, folded, folded, *filter_params]
+        sql = f"{select} WHERE " + " AND ".join(where) + " ORDER BY r.id LIMIT ? OFFSET ?"
+        return list(connection.execute(sql, [*params, limit, offset]).fetchall())
+    terms = _query_terms(needle, tokenizer)
+    long_terms, short_terms = _split_short_terms(terms, tokenizer)
+    match = _quoted_or(long_terms)
+    fts_select = (
+        f"SELECT {_ROW_COLUMNS}, bm25(memory_fts) AS raw_score, 0 AS branch "
+        "FROM memory_fts JOIN memory_rows r ON r.id = memory_fts.id "
+        "JOIN memory_access a ON a.id = r.id WHERE "
+        + " AND ".join(["memory_fts MATCH ?", *filters])
+    )
+    if not short_terms:
         if match is None:
             return []
-        where = ["memory_fts MATCH ?"]
-        params = [match]
-        order = " ORDER BY raw_score, r.id"
-    where.append("a.tenant = ?")
-    params.append(tenant)
-    if source:
-        where.append("r.source = ?")
-        params.append(source)
-    if temporal_sql:
-        where.append(temporal_sql)
-        params.extend(temporal_params)
-    sql = f"{select} WHERE " + " AND ".join(where) + order + " LIMIT ? OFFSET ?"
-    params.extend([limit, offset])
+        sql = fts_select + " ORDER BY raw_score, r.id LIMIT ? OFFSET ?"
+        return list(connection.execute(sql, [match, *filter_params, limit, offset]).fetchall())
+    # A trigram index cannot match a term under three characters, so those
+    # terms are a substring OR over the same fields. FTS hits come first in
+    # rank order, then the substring-only hits by id; one row appears once.
+    clause, clause_params = _short_terms_clause(_SUBSTRING_COLUMNS, short_terms)
+    substring_where = [clause, *filters]
+    substring_params: list[Any] = [*clause_params, *filter_params]
+    if match is not None:
+        substring_where.append(
+            "r.id NOT IN (SELECT memory_fts.id FROM memory_fts WHERE memory_fts MATCH ?)"
+        )
+        substring_params.append(match)
+    substring_select = (
+        f"SELECT {_ROW_COLUMNS}, NULL AS raw_score, 1 AS branch FROM memory_rows r "
+        "JOIN memory_access a ON a.id = r.id WHERE " + " AND ".join(substring_where)
+    )
+    if match is None:
+        sql = substring_select + " ORDER BY id LIMIT ? OFFSET ?"
+        params = [*substring_params, limit, offset]
+    else:
+        sql = (
+            f"{fts_select} UNION ALL {substring_select} "
+            "ORDER BY branch, raw_score, id LIMIT ? OFFSET ?"
+        )
+        params = [match, *filter_params, *substring_params, limit, offset]
     return list(connection.execute(sql, params).fetchall())
 
 
@@ -689,8 +839,10 @@ def _alias_expansion(
             scope=scope,
         )
     except OntologyError as exc:
+        # The detail can name a vault file; it goes to the operator log only.
+        sys.stderr.write(f"memfw alias expansion failed: {exc}\n")
         del results[limit:]
-        return [], str(exc)
+        return [], "alias expansion unavailable: a concept file is invalid"
     alias_rows: list[dict[str, Any]] = []
     for memory_id, why in hits:
         payload = _document_payload(base, memory_id)
@@ -775,12 +927,14 @@ def search_vault(
 
     connection = _connect_index(base)
     try:
-        if not _has_table(connection, "memory_access"):
+        if not _index_is_current(connection):
+            # Never an empty page that looks like "no match": the caller must
+            # rebuild the disposable index (``memfw index rebuild``).
             return {
                 "contract": CONTRACT,
                 "mode": "fts",
-                "degraded": False,
-                "errors": [],
+                "degraded": True,
+                "errors": [INDEX_STALE],
                 "results": [],
             }
         temporal_sql, temporal_params = _temporal_clause(
@@ -827,8 +981,13 @@ def search_vault(
         connection.close()
 
     results = []
+    previous_score: float | None = None
     for rank, (row, payload) in enumerate(zip(matched, payloads, strict=True)):
         score, raw_score, _used_bm25 = _score_from_raw(row["raw_score"], rank)
+        if raw_score is None and previous_score is not None:
+            # A substring hit ranked after bm25 hits never outscores them.
+            score = min(score, previous_score)
+        previous_score = score
         summary = _collapsed(
             str(row["summary"] or "") or str(row["search_body"] or ""), MAX_SUMMARY_CHARS
         )
@@ -900,7 +1059,9 @@ def _memory_metadata(root: Path, memory_id: str, tenant: str) -> tuple[Path, dic
     if not path.is_file():
         raise ServiceError(404, "memory not found")
     metadata = _metadata(path)
-    if tenant and str(metadata.get("tenant") or "") != tenant:
+    # Exact equality, empty included: an untenanted request must not learn
+    # that another tenant's memory exists.
+    if str(metadata.get("tenant") or "") != tenant:
         raise ServiceError(404, "memory not found")
     return path, metadata
 
@@ -953,7 +1114,7 @@ def _projection_target_is_current(
         return False
     if payload["valid_to"] or payload["superseded_by"]:
         return False
-    if tenant and str(payload["tenant"] or "") != tenant:
+    if str(payload["tenant"] or "") != tenant:
         return False
     return True
 
@@ -968,11 +1129,10 @@ def _related_from_edges(
 ) -> list[dict[str, Any]]:
     connection = _connect_related(related_db)
     try:
-        filters = ""
-        params: list[Any] = []
-        if tenant:
-            filters = " AND i.tenant=?"
-            params.append(tenant)
+        # Always scoped, empty tenant included: a neighbour of another tenant
+        # contributes neither its id nor its title.
+        filters = " AND i.tenant=?"
+        params: list[Any] = [tenant]
         outgoing = connection.execute(
             "SELECT e.*, i.title AS title, i.path AS path FROM related_edges e "
             "LEFT JOIN related_items i ON i.source=e.dst_source AND i.id=e.dst_id "
@@ -1271,12 +1431,36 @@ def _assert_safe_candidate_directory(base: Path, directory: Path) -> None:
         raise _internal()
 
 
-def _published_candidate_hash(base: Path, relative: str) -> str:
+def _published_candidate_key(base: Path, relative: str) -> dict[str, Any]:
+    """The fields that make a resubmission identical to the published candidate."""
     path = base / relative
     if path.is_symlink() or not path.is_file():
         raise _internal()
-    metadata = _metadata(path)
-    return str(metadata.get("content_hash") or "")
+    return _candidate_key(_metadata(path))
+
+
+def _candidate_key(metadata: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "content_hash": str(metadata.get("content_hash") or ""),
+        "title": str(metadata.get("title") or ""),
+        "tenant": str(metadata.get("tenant") or ""),
+        "source": str(metadata.get("source") or ""),
+        "tags": [str(item) for item in metadata.get("tags") or []],
+        "related": [str(item) for item in metadata.get("related") or []],
+    }
+
+
+def _existing_candidate(base: Path, relative: str, expected: dict[str, Any]) -> None:
+    """Return when the published candidate is this same submission, else 409.
+
+    The same ``proposal_id`` with a different title, tenant, source, tags or
+    related list is a different proposal, not a duplicate.
+    """
+    published = _published_candidate_key(base, relative)
+    if published["content_hash"] != expected["content_hash"]:
+        raise ServiceError(409, "candidate exists with different content")
+    if published != expected:
+        raise ServiceError(409, "candidate exists with different metadata")
 
 
 class _DirectoryHandle:
@@ -1392,10 +1576,10 @@ def stage_candidate(root: Path | str, payload: dict[str, Any]) -> dict[str, Any]
         "path": relative,
         "authority": False,
     }
+    expected = _candidate_key({**values, "content_hash": content_hash})
     if (base / relative).exists() or (base / relative).is_symlink():
-        if _published_candidate_hash(base, relative) == content_hash:
-            return duplicate_response
-        raise ServiceError(409, "candidate exists with different content")
+        _existing_candidate(base, relative, expected)
+        return duplicate_response
     created_at = datetime.now(UTC).isoformat()
     header = {
         "proposal_id": values["proposal_id"],
@@ -1414,9 +1598,8 @@ def stage_candidate(root: Path | str, payload: dict[str, Any]) -> dict[str, Any]
     with _open_candidate_directory(base) as directory_handle:
         published = _publish_candidate(directory_handle.descriptor, candidate_id, markdown_text)
     if not published:
-        if _published_candidate_hash(base, relative) == content_hash:
-            return duplicate_response
-        raise ServiceError(409, "candidate exists with different content")
+        _existing_candidate(base, relative, expected)
+        return duplicate_response
     return {
         "contract": CONTRACT,
         "staged": True,
@@ -1599,6 +1782,9 @@ class Handler(BaseHTTPRequestHandler):
                     tenant=scope_tenant(payload.get("tenant", "")),
                 )
             else:
+                if os.environ.get(TENANT_ENV, ""):
+                    # A bound token stages only for its own tenant.
+                    payload = {**payload, "tenant": scope_tenant(payload.get("tenant", ""))}
                 result = stage_candidate(root, payload)
             self._send(200, result)
         except ServiceError as error:
@@ -1681,6 +1867,31 @@ def check_readonly_contract(url: str, *, timeout: float = 1.0) -> dict[str, Any]
     return result
 
 
+def _binds_wildcard(host: str, port: int) -> bool:
+    """True when ``host`` would bind an unspecified address, or cannot be resolved.
+
+    ``""``, ``"0"``, ``"0.0"`` and ``"000.0.0.0"`` all bind INADDR_ANY, so the
+    host is resolved the way ``bind`` would and every address is checked.
+    """
+
+    try:
+        infos = socket.getaddrinfo(
+            host or None, port, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE
+        )
+    except (OSError, UnicodeError):
+        return True
+    if not infos:
+        return True
+    for info in infos:
+        address = str(info[4][0]).split("%", 1)[0]
+        try:
+            if ipaddress.ip_address(address).is_unspecified:
+                return True
+        except ValueError:
+            return True
+    return False
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="MemFW read-only HTTP service (memfw-http/2)")
     parser.add_argument("--root", default=os.environ.get(ROOT_ENV))
@@ -1698,8 +1909,10 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write(json.dumps(checked, sort_keys=True) + "\n")
         return 0 if checked["ok"] else 1
     host = str(args.host).strip()
-    if host == "0.0.0.0":
-        raise SystemExit("binding 0.0.0.0 is not supported")
+    if _binds_wildcard(host, args.port):
+        raise SystemExit(
+            "--host must resolve to a specific address; wildcard binds are not supported"
+        )
     root_value = str(args.root).strip() if args.root else ""
     if not root_value:
         raise SystemExit(f"--root or {ROOT_ENV} is required")

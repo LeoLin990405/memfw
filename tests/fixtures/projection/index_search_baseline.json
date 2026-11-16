@@ -1,0 +1,61 @@
+{
+  "_comment": "Recorded from memfw main 9c99bc2 (pre-PR-1) on tests/projection_fixtures.build_search_vault; elapsed_seconds normalized to 0.0. Do not regenerate with new code.",
+  "outputs": {
+    "cron": {
+      "dry_run_unbuilt": [
+        0,
+        "{\"would_rebuild\": true, \"writes\": false, \"results\": []}\n"
+      ],
+      "dry_run": [
+        0,
+        "{\"writes\": false, \"results\": [[\"f1a2b3c4d5e60\", \"Pause cron before disk migration\"], [\"f1a2b3c4d5e62\", \"迁移前先暂停定时任务\"]]}\n"
+      ],
+      "apply": [
+        0,
+        "f1a2b3c4d5e60\tPause cron before disk migration\nf1a2b3c4d5e62\t迁移前先暂停定时任务\n{\"cold_hit_count\": 0, \"cold_restore_seconds\": 0, \"cold_restore_seconds_by_memory\": {}, \"elapsed_seconds\": 0.0, \"result_count\": 2}\n"
+      ]
+    },
+    "migration": {
+      "dry_run_unbuilt": [
+        0,
+        "{\"would_rebuild\": true, \"writes\": false, \"results\": []}\n"
+      ],
+      "dry_run": [
+        0,
+        "{\"writes\": false, \"results\": [[\"f1a2b3c4d5e61\", \"Disk migration checklist\"], [\"f1a2b3c4d5e60\", \"Pause cron before disk migration\"]]}\n"
+      ],
+      "apply": [
+        0,
+        "f1a2b3c4d5e61\tDisk migration checklist\nf1a2b3c4d5e60\tPause cron before disk migration\n{\"cold_hit_count\": 0, \"cold_restore_seconds\": 0, \"cold_restore_seconds_by_memory\": {}, \"elapsed_seconds\": 0.0, \"result_count\": 2}\n"
+      ]
+    },
+    "迁移": {
+      "dry_run_unbuilt": [
+        0,
+        "{\"would_rebuild\": true, \"writes\": false, \"results\": []}\n"
+      ],
+      "dry_run": [
+        0,
+        "{\"writes\": false, \"results\": [[\"f1a2b3c4d5e62\", \"迁移前先暂停定时任务\"]]}\n"
+      ],
+      "apply": [
+        0,
+        "f1a2b3c4d5e62\t迁移前先暂停定时任务\n{\"cold_hit_count\": 0, \"cold_restore_seconds\": 0, \"cold_restore_seconds_by_memory\": {}, \"elapsed_seconds\": 0.0, \"result_count\": 1}\n"
+      ]
+    },
+    "absent-term-xyz": {
+      "dry_run_unbuilt": [
+        0,
+        "{\"would_rebuild\": true, \"writes\": false, \"results\": []}\n"
+      ],
+      "dry_run": [
+        0,
+        "{\"writes\": false, \"results\": []}\n"
+      ],
+      "apply": [
+        0,
+        "{\"cold_hit_count\": 0, \"cold_restore_seconds\": 0, \"cold_restore_seconds_by_memory\": {}, \"elapsed_seconds\": 0.0, \"result_count\": 0}\n"
+      ]
+    }
+  }
+}

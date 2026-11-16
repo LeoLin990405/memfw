@@ -8,7 +8,7 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, NoReturn
 
 import typer
 
@@ -16,11 +16,11 @@ from . import __version__
 from .budget import BYTE_BUDGETS, BudgetLimits, BudgetProfile
 from .capture.cli import app as capture_app
 from .capture.confirm import confirm_command
-from .capture.review import list_staged_candidates
+from .capture.review import Candidate, list_staged_candidates
 from .code_retrieval import CodeIndex, index_code
 from .conversations.cli import app as conversations_app
 from .core.epistemic import validate_epistemic_write
-from .core.errors import IntegrityError, MemfwError
+from .core.errors import IntegrityError, MemfwError, NotFoundError
 from .core.models import Layer, Tier
 from .core.repository import Repository
 from .curation.engine import enforce_budget, plan_forget, run_forget
@@ -63,6 +63,8 @@ from .notes.retrieval import Mode
 from .okf import export_okf, validate_okf_bundle
 from .ontology.cli import app as concepts_app
 from .policies import PolicyName
+from .projection import ProjectionError, export_projection, load_policy, read_hits
+from .projection import resolve as resolve_hits
 from .related import RelatedIndex
 from .retrieval import VaultRetriever
 from .stats import measure_runtime
@@ -80,6 +82,9 @@ okf_app = typer.Typer(help="Export and validate an OKF v0.2 knowledge bundle")
 notes_app = typer.Typer(help="Index and search a Markdown notes tree (derived, rebuildable)")
 code_app = typer.Typer(help="Local code retrieval: lexical + optional semantic + structure")
 eval_app = typer.Typer(help="Local evaluation harnesses (no network, no model calls)")
+projection_app = typer.Typer(
+    help="Read-only recall projection: export files for an external recall backend"
+)
 app.add_typer(index_app, name="index")
 app.add_typer(okf_app, name="okf")
 app.add_typer(notes_app, name="notes")
@@ -96,6 +101,7 @@ app.add_typer(history_app, name="history")
 app.add_typer(dream_app, name="dream")
 app.add_typer(experience_app, name="experience")
 app.add_typer(eval_app, name="eval")
+app.add_typer(projection_app, name="projection")
 app.add_typer(conversations_app, name="conversations")
 app.command("handoff")(handoff_command)
 capture_app.command(name="confirm")(confirm_command)
@@ -619,6 +625,51 @@ def _reject_missing_proposal_id(details: dict[str, object]) -> None:
     raise typer.Exit(code=1)
 
 
+def _candidate_error(details: dict[str, object], error: str, message: str) -> NoReturn:
+    """Print a candidate-apply refusal as JSON and exit 1, like the other refusals."""
+    typer.echo(
+        json.dumps(
+            {**details, "error": error, "status": error, "message": message},
+            ensure_ascii=False,
+        )
+    )
+    raise typer.Exit(code=1)
+
+
+def _read_staged_candidate(candidate: Path) -> Candidate:
+    from .capture.lifecycle import read_candidate
+    from .capture.review import InvalidProposalIdError
+
+    try:
+        return read_candidate(candidate)
+    except InvalidProposalIdError as exc:
+        _candidate_error(
+            {"candidate": str(candidate)},
+            "invalid_proposal_id",
+            f"{exc}; proposal_id must be a non-blank string, re-stage the candidate with /stage",
+        )
+    except (MemfwError, OSError) as exc:
+        _candidate_error({"candidate": str(candidate)}, "invalid_candidate", str(exc))
+
+
+def _require_proposal_id(staged: Candidate, details: dict[str, object]) -> None:
+    """Refuse a candidate without a usable proposal_id.
+
+    ``read_candidate`` already turns ``""``/whitespace into ``None`` and refuses
+    a non-string; the strip here keeps a hand-built :class:`Candidate` honest.
+    """
+    if staged.proposal_id is None or not staged.proposal_id.strip():
+        _reject_missing_proposal_id(details)
+
+
+def _require_related(repository: Repository, staged: Candidate, details: dict[str, object]) -> None:
+    for related_id in staged.related:
+        try:
+            repository.get(related_id)
+        except MemfwError as exc:
+            _candidate_error(details, "related_not_found", str(exc))
+
+
 @app.command("candidate-apply")
 def candidate_apply(
     candidate: Annotated[Path, typer.Argument(help="staged candidate Markdown")],
@@ -631,13 +682,12 @@ def candidate_apply(
         candidate_provenance,
         find_applied_memory_id,
         mark_candidate_applied,
-        read_candidate,
         validate_candidate_hash,
     )
 
     repository = _repo(root, allow_pending=not dry_run)
     if dry_run:
-        staged = read_candidate(candidate)
+        staged = _read_staged_candidate(candidate)
         details = candidate_dict(staged)
         if staged.content_hash is None or staged.content_hash == "":
             typer.echo(
@@ -651,8 +701,7 @@ def candidate_apply(
                 )
             )
             raise typer.Exit(code=1)
-        if not staged.proposal_id:
-            _reject_missing_proposal_id(details)
+        _require_proposal_id(staged, details)
         if staged.content_hash:
             try:
                 validate_candidate_hash(staged)
@@ -669,8 +718,7 @@ def candidate_apply(
                     )
                 )
                 raise typer.Exit(code=1) from exc
-        for related_id in staged.related:
-            repository.get(related_id)
+        _require_related(repository, staged, details)
         typer.echo(
             json.dumps(
                 {**details, "dry_run": True, "writes": False, "authority": False},
@@ -683,7 +731,7 @@ def candidate_apply(
     with repository._locked():
         if repository.pending_path.exists():
             raise typer.BadParameter("Vault has a pending transaction; run `memfw recover` first")
-        staged = read_candidate(candidate)
+        staged = _read_staged_candidate(candidate)
         details = candidate_dict(staged)
         if staged.content_hash is None or staged.content_hash == "":
             typer.echo(
@@ -697,8 +745,7 @@ def candidate_apply(
                 )
             )
             raise typer.Exit(code=1)
-        if not staged.proposal_id:
-            _reject_missing_proposal_id(details)
+        _require_proposal_id(staged, details)
         if staged.status == "applied" or staged.applied_memory_id is not None:
             memory_id = staged.applied_memory_id
             typer.echo(
@@ -765,8 +812,7 @@ def candidate_apply(
             )
             raise typer.Exit(code=1)
 
-        for related_id in staged.related:
-            repository.get(related_id)
+        _require_related(repository, staged, details)
 
         document = repository.add(
             staged.title,
@@ -823,9 +869,11 @@ def candidates_list(
 
     Candidates not applied within 30 days of ``recorded_at`` are hidden.
     """
+    skipped: list[str] = []
+    candidates = list_staged_candidates(root, include_expired=include_expired, skipped=skipped)
     typer.echo(
         json.dumps(
-            {"candidates": list_staged_candidates(root, include_expired=include_expired)},
+            {"candidates": candidates, "skipped": skipped},
             ensure_ascii=False,
             indent=2,
         )
@@ -1324,13 +1372,15 @@ def rollback(
         repository = _repo(root)
         if dry_run:
             event = next((item for item in repository.events() if item.event_id == event_id), None)
+            if event is None:
+                # Fail the same way the real run does for an unknown event.
+                raise NotFoundError(f"Event not found: {event_id}")
             typer.echo(
                 json.dumps(
                     {
                         "event_id": event_id,
                         "available": bool(
-                            event
-                            and event.before_hash
+                            event.before_hash
                             and repository._has_version(event.memory_id, event.before_hash)
                         ),
                     }
@@ -1359,11 +1409,23 @@ def index_rebuild(
 
 @index_app.command("search")
 def index_search(
-    query: Annotated[str, typer.Argument()],
+    query: Annotated[str | None, typer.Argument()] = None,
     root: Annotated[Path, typer.Option("--root", "-r")] = Path("."),
     dry_run: Annotated[bool, typer.Option("--dry-run/--apply")] = False,
+    query_stdin: Annotated[
+        bool,
+        typer.Option("--query-stdin", help="Read the query from stdin (keeps it out of argv)"),
+    ] = False,
 ) -> None:
     """Search current Markdown and cold summary stubs; hits may trigger measured autowarm."""
+    if query_stdin:
+        if query is not None:
+            raise typer.BadParameter("give QUERY or --query-stdin, not both")
+        query = typer.get_text_stream("stdin").read().strip()
+        if not query:
+            raise typer.BadParameter("--query-stdin read an empty query")
+    elif query is None:
+        raise typer.BadParameter("missing QUERY (or pass --query-stdin)")
     repository = _repo(root)
     index = MemoryIndex(repository.index_path)
     if dry_run:
@@ -1490,7 +1552,11 @@ def cold_archive(
         ids = [doc.id for doc in repository.list() if doc.tier == Tier.COLD and not doc.is_stub]
         typer.echo(json.dumps({"archive_id": archive_id, "memory_ids": ids}))
         return
-    typer.echo(str(repository.cold_archive(archive_id)))
+    try:
+        archive = repository.cold_archive(archive_id)
+    except (MemfwError, ValueError, OSError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(str(archive))
 
 
 @app.command("cold-restore")
@@ -1540,29 +1606,53 @@ def record_proposal(
     dry_run: Annotated[bool, typer.Option("--dry-run/--apply")] = False,
 ) -> None:
     """Append an agent proposal with a hash bound to its exact payload."""
-    try:
-        parsed = json.loads(payload)
-    except ValueError as exc:
-        raise typer.BadParameter("--payload must be valid JSON") from exc
+    parsed = _json_object(payload, "--payload")
     if parsed.get("memory_id") != memory_id or parsed.get("operation") != operation:
         raise typer.BadParameter("Payload memory_id/operation must match the command options")
+    changes = parsed.get("changes", {})
+    if not isinstance(changes, dict):
+        raise typer.BadParameter("Payload changes must be a JSON object")
     if dry_run:
+        # The same checks the real run makes, minus the append; nothing stricter.
+        try:
+            _repo(root).check_proposal(
+                memory_id=memory_id,
+                operation=operation,
+                changes=changes,
+                agent_id=agent_id,
+                signature=signature,
+            )
+        except (MemfwError, ValueError) as exc:
+            raise typer.BadParameter(str(exc)) from exc
         typer.echo(
             json.dumps(
                 {"valid": True, "memory_id": memory_id, "operation": operation}, ensure_ascii=False
             )
         )
         return
-    changes = parsed.get("changes", {})
-    event = _repo(root).record_proposal(
-        memory_id=memory_id,
-        operation=operation,
-        changes=changes,
-        rationale=rationale,
-        agent_id=agent_id,
-        signature=signature,
-    )
+    try:
+        event = _repo(root).record_proposal(
+            memory_id=memory_id,
+            operation=operation,
+            changes=changes,
+            rationale=rationale,
+            agent_id=agent_id,
+            signature=signature,
+        )
+    except (MemfwError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
     typer.echo(event.event_id)
+
+
+def _json_object(raw: str, option: str) -> dict[str, Any]:
+    """Parse ``raw`` as a JSON object or fail with a clean usage error."""
+    try:
+        parsed = json.loads(raw)
+    except ValueError as exc:
+        raise typer.BadParameter(f"{option} must be valid JSON") from exc
+    if not isinstance(parsed, dict):
+        raise typer.BadParameter(f"{option} must be a JSON object")
+    return parsed
 
 
 @app.command("approve-proposal")
@@ -1575,10 +1665,11 @@ def approve_proposal(
     dry_run: Annotated[bool, typer.Option("--dry-run/--apply")] = False,
 ) -> None:
     """Record human approval bound to an exact, current proposal payload."""
+    data = _json_object(payload, "--payload")
     try:
-        data = json.loads(payload)
         repository = _repo(root)
         if dry_run:
+            repository.check_proposal_approval(proposal_id, data)
             typer.echo(json.dumps({"proposal_id": proposal_id, "payload_valid": True}))
             return
         result = repository.decide_proposal(proposal_id, payload=data)
@@ -1797,24 +1888,27 @@ def supersede(
     dry_run: Annotated[bool, typer.Option("--dry-run/--apply")] = True,
 ) -> None:
     """Create a human-confirmed replacement and mark the old memory historical."""
-    repository = _repo(root)
-    old = repository.get(memory_id)
-    if dry_run:
-        typer.echo(
-            json.dumps(
-                {
-                    "dry_run": True,
-                    "old_memory_id": old.id,
-                    "new_title": title,
-                    "would_set": {"valid_to": repository._now().isoformat()},
-                },
-                ensure_ascii=False,
-                indent=2,
+    try:
+        repository = _repo(root)
+        old = repository.get(memory_id)
+        if dry_run:
+            typer.echo(
+                json.dumps(
+                    {
+                        "dry_run": True,
+                        "old_memory_id": old.id,
+                        "new_title": title,
+                        "would_set": {"valid_to": repository._now().isoformat()},
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
             )
-        )
-        return
-    new = repository.supersede(memory_id, title, body, actor="human")
-    updated_old = repository.get(old.id)
+            return
+        new = repository.supersede(memory_id, title, body, actor="human")
+        updated_old = repository.get(old.id)
+    except MemfwError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     typer.echo(
         json.dumps(
             {
@@ -1836,16 +1930,19 @@ def layer_set(
     dry_run: Annotated[bool, typer.Option("--dry-run/--apply")] = False,
 ) -> None:
     """Move one memory across the current/consolidated/anchor layer axis."""
-    repository = _repo(root)
-    current = repository.get(memory_id)
-    if dry_run:
-        typer.echo(
-            json.dumps(
-                {"memory_id": memory_id, "before": current.layer.value, "after": layer.value}
+    try:
+        repository = _repo(root)
+        current = repository.get(memory_id)
+        if dry_run:
+            typer.echo(
+                json.dumps(
+                    {"memory_id": memory_id, "before": current.layer.value, "after": layer.value}
+                )
             )
-        )
-        return
-    repository.update(memory_id, layer=layer)
+            return
+        repository.update(memory_id, layer=layer)
+    except MemfwError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     typer.echo(f"Moved {memory_id} to {layer.value}")
 
 
@@ -1899,7 +1996,7 @@ def eval_causal(
     typer.echo(f"false_rejects: {payload['false_rejects']}")
     typer.echo(f"missing_labels: {payload['retrieval_layer']['missing_labels']}")
     typer.echo(
-        "hypothesis_as_conclusion: " f"{payload['retrieval_layer']['hypothesis_as_conclusion']}"
+        f"hypothesis_as_conclusion: {payload['retrieval_layer']['hypothesis_as_conclusion']}"
     )
 
 
@@ -1911,7 +2008,10 @@ def okf_export(
     bundle_title: Annotated[str | None, typer.Option("--title")] = None,
 ) -> None:
     """Export the local vault as an OKF v0.2 bundle (derived, rebuildable)."""
-    result = export_okf(root, out, force=force, bundle_title=bundle_title)
+    try:
+        result = export_okf(root, out, force=force, bundle_title=bundle_title)
+    except (FileExistsError, ValueError, MemfwError, OSError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
     typer.echo(
         json.dumps(
             {
@@ -1946,3 +2046,151 @@ def okf_validate(path: Annotated[Path, typer.Argument(help="OKF bundle directory
     )
     if not result.valid:
         raise typer.Exit(code=1)
+
+
+@okf_app.command("import")
+def okf_import(
+    bundle: Annotated[Path, typer.Argument(help="OKF bundle directory (untrusted input)")],
+    root: Annotated[Path, typer.Option("--root", "-r")] = Path("."),
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run/--apply",
+            help="Report only (default); --apply stages candidates under _candidates/remember/",
+        ),
+    ] = True,
+    tenant: Annotated[str, typer.Option("--tenant")] = "",
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Print the full report as JSON")
+    ] = False,
+) -> None:
+    """Stage an OKF bundle's concepts as candidates (never the authoritative vault).
+
+    The bundle is path-checked and validated first; an unsafe or invalid bundle
+    is refused whole. Concepts whose body is already in the vault are skipped.
+    Apply each staged candidate with ``memfw candidate-apply --apply``.
+    """
+    from .okf.importer import OkfImportError, import_okf
+
+    try:
+        result = import_okf(bundle, root, dry_run=dry_run, tenant=tenant)
+    except OkfImportError as exc:
+        if json_output:
+            # Same shape and exit code as ``okf validate`` on an invalid bundle.
+            payload = {
+                "valid": False,
+                "error": str(exc),
+                "errors": exc.errors,
+                "warnings": [],
+                "authority": False,
+            }
+            typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        else:
+            typer.echo(f"error: {exc}", err=True)
+            for line in exc.errors:
+                typer.echo(f"  {line}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = result.as_dict()
+    if json_output:
+        typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return
+    mode = "dry run" if dry_run else "applied"
+    typer.echo(f"okf import ({mode}): {payload['concept_count']} concepts, source {result.source}")
+    for item in result.items:
+        detail = item.reason or item.proposal_id or ""
+        typer.echo(f"  {item.status:<15} {item.concept}  {detail}")
+    counts = ", ".join(f"{key}={value}" for key, value in result.counts.items())
+    typer.echo(f"counts: {counts or 'none'}")
+    for warning in result.warnings:
+        typer.echo(f"warning: {warning}")
+
+
+def _projection_fail(exc: Exception) -> None:
+    """One stderr line and exit 2: projection callers must fail closed."""
+
+    typer.echo(f"error: {' '.join(str(exc).split())}", err=True)
+    raise typer.Exit(code=2)
+
+
+@projection_app.command("export")
+def projection_export(
+    root: Annotated[Path, typer.Option("--root", "-r", help="memfw vault (read only)")],
+    out: Annotated[Path, typer.Option("--out", help="Directory that receives the generation")],
+    policy: Annotated[
+        Path | None, typer.Option("--policy", help="Projection policy JSON (default: v1)")
+    ] = None,
+    policy_version: Annotated[
+        int | None, typer.Option("--policy-version", help="Override: 1, or 2 (adds R3 fields)")
+    ] = None,
+    lifecycle_source: Annotated[
+        Path | None, typer.Option("--lifecycle-source", help="memory-meta-index.json")
+    ] = None,
+    previous: Annotated[
+        Path | None, typer.Option("--previous", help="Previous generation dir or manifest")
+    ] = None,
+    skip_privacy: Annotated[
+        str | None,
+        typer.Option(
+            "--skip-privacy",
+            help="Comma list of privacy classes not to project, e.g. unknown,local-private",
+        ),
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="One JSON line (the default)")] = True,
+) -> None:
+    """Write a new projection generation (files + manifest); the vault is only read."""
+    del as_json
+    try:
+        result = export_projection(
+            root,
+            out,
+            policy=load_policy(
+                policy,
+                version=policy_version,
+                skip_privacy=(
+                    [item.strip() for item in skip_privacy.split(",") if item.strip()]
+                    if skip_privacy is not None
+                    else None
+                ),
+            ),
+            lifecycle_source=lifecycle_source,
+            previous=previous,
+            now=_NOW,
+        )
+    except (MemfwError, OSError) as exc:
+        _projection_fail(exc)
+        return
+    typer.echo(json.dumps(result, ensure_ascii=False))
+
+
+@app.command("resolve")
+def resolve_command(
+    root: Annotated[Path, typer.Option("--root", "-r", help="memfw vault (read only)")],
+    ids_stdin: Annotated[
+        bool, typer.Option("--ids-stdin", help="Read ids or memories/<id>.md hits from stdin")
+    ] = False,
+    lifecycle_source: Annotated[
+        Path | None, typer.Option("--lifecycle-source", help="memory-meta-index.json")
+    ] = None,
+    policy: Annotated[Path | None, typer.Option("--policy")] = None,
+    policy_version: Annotated[int | None, typer.Option("--policy-version")] = None,
+    max_lines: Annotated[int, typer.Option("--max-lines", help="Body lines; 0 = no body")] = 200,
+    as_json: Annotated[bool, typer.Option("--json", help="One JSON line (the default)")] = True,
+) -> None:
+    """Batch read-only lookup of recall hits: authoritative lifecycle/validity/privacy."""
+    del as_json
+    if not ids_stdin:
+        _projection_fail(ProjectionError("--ids-stdin is required (ids never go in argv)"))
+        return
+    try:
+        hits = read_hits(typer.get_text_stream("stdin"))
+        payload = resolve_hits(
+            root,
+            hits,
+            lifecycle_source=lifecycle_source,
+            policy=load_policy(policy, version=policy_version),
+            max_lines=max_lines,
+        )
+    except (MemfwError, OSError) as exc:
+        _projection_fail(exc)
+        return
+    typer.echo(json.dumps(payload, ensure_ascii=False))

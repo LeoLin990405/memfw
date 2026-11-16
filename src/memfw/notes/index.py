@@ -25,13 +25,14 @@ import sqlite3
 import time
 import urllib.request
 from array import array
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
 import yaml
 
+from ..index.fts_terms import MAX_TERMS, query_terms, short_terms_clause, split_short_terms
 from . import http as notes_http
 
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
@@ -39,7 +40,10 @@ WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]")
 MAX_SECTION_CHARS = 4000
 SECTION_OVERLAP = 200
 EMBED_MAX_CHARS = 8000
+BACKFILL_BATCH = 64
 FTS_K = 60
+FTS_TOKENIZERS = ("trigram", "unicode61")
+_TOKENIZE_RE = re.compile(r"tokenize\s*=\s*['\"]?(\w+)")
 
 
 class NoteParseError(RuntimeError):
@@ -360,21 +364,56 @@ def _note_file_inside_root(path: Path, root: Path) -> bool:
     return True
 
 
-def _substring_rows(connection: sqlite3.Connection, needle: str, limit: int) -> list[sqlite3.Row]:
+Filters = tuple[list[str], list[object]]
+NO_FILTERS: Filters = ([], [])
+
+
+def _where(filters: Filters) -> tuple[str, list[object]]:
+    """`` AND ...`` suffix for ``filters`` (clauses over ``s`` and ``n``)."""
+    clauses, parameters = filters
+    if not clauses:
+        return "", []
+    return " AND " + " AND ".join(clauses), list(parameters)
+
+
+def _substring_rows(
+    connection: sqlite3.Connection, needle: str, limit: int, filters: Filters = NO_FILTERS
+) -> list[sqlite3.Row]:
     """Bounded LIKE probe. A too-complex pattern yields no rows, not a sqlite message."""
 
     pattern = f"%{needle}%"
+    suffix, parameters = _where(filters)
     try:
         return list(
             connection.execute(
                 "SELECT s.id, 0.0 AS score FROM sections s "
                 "JOIN notes n ON n.id=s.note_id "
-                "WHERE s.content LIKE ? OR s.heading LIKE ? OR n.title LIKE ? LIMIT ?",
-                (pattern, pattern, pattern, limit),
+                "WHERE (s.content LIKE ? OR s.heading LIKE ? OR n.title LIKE ?)"
+                + suffix
+                + " LIMIT ?",
+                (pattern, pattern, pattern, *parameters, limit),
             ).fetchall()
         )
     except sqlite3.OperationalError:
         return []
+
+
+def _decode_tags(tags: object, tags_json: object = None) -> list[str]:
+    """Tags of a ``notes`` row: ``tags_json`` when present, else the legacy space-joined text."""
+    if isinstance(tags_json, str) and tags_json:
+        try:
+            loaded = json.loads(tags_json)
+        except ValueError:
+            loaded = None
+        if isinstance(loaded, list):
+            return [str(item) for item in loaded]
+    return str(tags or "").split()
+
+
+def _has_tags(tags: object, tags_json: object, wanted_json: str) -> int:
+    """SQL function: 1 when the note carries every tag in ``wanted_json``."""
+    note_tags = set(_decode_tags(tags, tags_json))
+    return int(all(str(tag) in note_tags for tag in json.loads(wanted_json)))
 
 
 class NotesIndex:
@@ -383,21 +422,99 @@ class NotesIndex:
     def __init__(self, db_path: Path | str, *, embedder: EmbeddingProvider | None = None) -> None:
         self.db_path = Path(db_path)
         self.embedder = embedder
-        self.fts_tokenizer = "trigram" if _supports_trigram() else "unicode61"
         self.vec_enabled = False
+        self.fts_tokenizer = ""
+        self._segment: Callable[[str], str] | None = None
+        self._set_tokenizer("trigram" if _supports_trigram() else "unicode61")
+
+    def _set_tokenizer(self, tokenizer: str) -> None:
+        self.fts_tokenizer = tokenizer
         self._segment = None
-        if self.fts_tokenizer == "unicode61":
+        if tokenizer == "unicode61":
             try:
                 import jieba  # type: ignore[import-untyped]
             except ImportError as exc:  # pragma: no cover - environment dependent
                 raise RuntimeError("jieba is required when FTS5 trigram is unavailable") from exc
             self._segment = lambda text: " ".join(jieba.lcut(text, cut_all=False))
 
+    def _stored_tokenizer(self, connection: sqlite3.Connection) -> str:
+        """Tokenizer the existing index was built with, or "" for a new index.
+
+        ``meta.fts_tokenizer`` is written at build time; an index from before
+        that key existed is read from the ``sections_fts`` schema instead.
+        """
+        if self._has_table(connection, "meta"):
+            row = connection.execute("SELECT value FROM meta WHERE key='fts_tokenizer'").fetchone()
+            if row is not None and str(row[0]) in FTS_TOKENIZERS:
+                return str(row[0])
+        row = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE name='sections_fts'"
+        ).fetchone()
+        if row is not None and row[0]:
+            match = _TOKENIZE_RE.search(str(row[0]))
+            if match and match.group(1) in FTS_TOKENIZERS:
+                return match.group(1)
+            return "unicode61"  # FTS5's default tokenizer
+        return ""
+
+    def _use_stored_tokenizer(self, connection: sqlite3.Connection) -> None:
+        stored = self._stored_tokenizer(connection)
+        if stored and stored != self.fts_tokenizer:
+            self._set_tokenizer(stored)
+
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
+        connection.create_function("memfw_has_tags", 3, _has_tags, deterministic=True)
         return connection
+
+    @staticmethod
+    def _tags_json_column(connection: sqlite3.Connection) -> str:
+        """``n.tags_json`` on current indexes, ``NULL`` on ones built before it existed."""
+        columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(notes)")}
+        return "n.tags_json" if "tags_json" in columns else "NULL"
+
+    def _filters(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        path_prefix: str | None,
+        tags: Sequence[str],
+        course: str | None,
+        metadata: dict[str, str] | None,
+        since: float | None,
+        until: float | None,
+    ) -> Filters:
+        """SQL clauses over ``sections s JOIN notes n`` for the search filters.
+
+        They are applied while collecting candidates, so a filter never
+        empties a result that the candidate cap cut short.
+        """
+        clauses: list[str] = []
+        parameters: list[object] = []
+        if path_prefix:
+            clauses.append("substr(n.path, 1, ?) = ?")
+            parameters.extend([len(path_prefix), path_prefix])
+        if course:
+            clauses.append("n.course = ?")
+            parameters.append(course)
+        if tags:
+            tags_json = self._tags_json_column(connection)
+            clauses.append(f"memfw_has_tags(n.tags, {tags_json}, ?) = 1")
+            parameters.append(json.dumps([str(tag) for tag in tags], ensure_ascii=False))
+        if since is not None:
+            clauses.append("n.mtime >= ?")
+            parameters.append(float(since))
+        if until is not None:
+            clauses.append("n.mtime <= ?")
+            parameters.append(float(until))
+        for key, value in (metadata or {}).items():
+            if not re.fullmatch(r"[A-Za-z0-9_]+", key):
+                raise ValueError("metadata filter keys must be identifiers")
+            clauses.append(f"json_extract(n.frontmatter, '$.{key}') = ?")
+            parameters.append(str(value))
+        return clauses, parameters
 
     def _load_vec(self, connection: sqlite3.Connection) -> bool:
         try:
@@ -415,6 +532,81 @@ class NotesIndex:
 
     def _dimension(self) -> int:
         return int(getattr(self.embedder, "dimension", 0) or 0)
+
+    def _embedder_identity(self) -> str:
+        """Provider class, dimension and fingerprint the stored vectors came from."""
+        if self.embedder is None:
+            return ""
+        fingerprint = getattr(self.embedder, "fingerprint", "")
+        return f"{type(self.embedder).__name__}|{self._dimension()}|{fingerprint}"
+
+    def _vectors_stale(self, meta: dict[str, str]) -> bool:
+        """True when stored vectors came from a different embedder or dimension."""
+        stored = meta.get("embedding_identity")
+        if stored is not None:
+            return stored != self._embedder_identity()
+        # Index from before ``embedding_identity``: compare the legacy keys.
+        expected = {
+            "embedding_model": type(self.embedder).__name__,
+            "embedding_fingerprint": str(getattr(self.embedder, "fingerprint", "")),
+            "dimension": str(self._dimension()),
+        }
+        return any(meta.get(key, value) != value for key, value in expected.items())
+
+    def _drop_vectors(self, connection: sqlite3.Connection) -> None:
+        for table in ("vec_sections", "section_vectors"):
+            if self._has_table(connection, table):
+                try:
+                    connection.execute(f"DROP TABLE {table}")
+                except sqlite3.OperationalError:
+                    pass  # vec0 table without sqlite-vec loaded; unusable anyway
+
+    def _store_vectors(
+        self,
+        connection: sqlite3.Connection,
+        section_ids: Sequence[int],
+        vectors: Sequence[Sequence[float]],
+    ) -> None:
+        for section_id, vector in zip(section_ids, vectors, strict=True):
+            if len(vector) != self._dimension():
+                raise RuntimeError("embedding dimension mismatch")
+            if self.vec_enabled:
+                connection.execute(
+                    "INSERT INTO vec_sections(section_id,embedding) VALUES (?,?)",
+                    (section_id, array("f", vector).tobytes()),
+                )
+            else:
+                connection.execute(
+                    "INSERT INTO section_vectors(section_id,dim,data) VALUES (?,?,?)",
+                    (section_id, len(vector), array("f", vector).tobytes()),
+                )
+
+    def _backfill_vectors(self, connection: sqlite3.Connection) -> int:
+        """Embed every section that has no vector yet, e.g. after an embedder change."""
+        if self.embedder is None:
+            return 0
+        table = "vec_sections" if self.vec_enabled else "section_vectors"
+        if not self._has_table(connection, table):
+            return 0
+        rows = connection.execute(
+            "SELECT s.id, s.heading, s.content, n.title FROM sections s "
+            f"JOIN notes n ON n.id=s.note_id WHERE s.id NOT IN (SELECT section_id FROM {table}) "
+            "ORDER BY s.id"
+        ).fetchall()
+        embedded = 0
+        for start in range(0, len(rows), BACKFILL_BATCH):
+            batch = rows[start : start + BACKFILL_BATCH]
+            texts = [
+                (str(row["title"]) + "\n" + str(row["heading"]) + "\n" + str(row["content"]))[
+                    :EMBED_MAX_CHARS
+                ]
+                for row in batch
+            ]
+            vectors = _embed(self.embedder, texts, role="document")
+            self._store_vectors(connection, [int(row["id"]) for row in batch], vectors)
+            embedded += len(batch)
+            connection.commit()
+        return embedded
 
     def _tokenize(self, text: str) -> str:
         if self._segment is None:
@@ -435,7 +627,8 @@ class NotesIndex:
                     mtime REAL NOT NULL,
                     frontmatter TEXT NOT NULL,
                     tags TEXT NOT NULL,
-                    course TEXT NOT NULL
+                    course TEXT NOT NULL,
+                    tags_json TEXT
                 );
                 CREATE TABLE IF NOT EXISTS sections (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -458,12 +651,28 @@ class NotesIndex:
                 );
                 """
             )
+            if self._tags_json_column(connection) == "NULL":
+                # ``tags`` stays space-joined for older readers; ``tags_json``
+                # keeps tags that contain spaces intact.
+                connection.execute("ALTER TABLE notes ADD COLUMN tags_json TEXT")
+            self._use_stored_tokenizer(connection)
+            connection.execute(
+                "INSERT OR REPLACE INTO meta(key,value) VALUES ('fts_tokenizer',?)",
+                (self.fts_tokenizer,),
+            )
             dimension = self._dimension()
             connection.execute(f"""
                 CREATE VIRTUAL TABLE IF NOT EXISTS sections_fts USING fts5(
                     heading, content, title, tokenize='{self.fts_tokenizer}'
                 )
             """)
+            meta = {
+                str(row[0]): str(row[1])
+                for row in connection.execute("SELECT key,value FROM meta").fetchall()
+            }
+            if self.embedder is not None and self._vectors_stale(meta):
+                # A different model or dimension: old vectors are not comparable.
+                self._drop_vectors(connection)
             if dimension:
                 if self.vec_enabled:
                     connection.execute(
@@ -475,19 +684,21 @@ class NotesIndex:
                         "CREATE TABLE IF NOT EXISTS section_vectors ("
                         "section_id INTEGER PRIMARY KEY, dim INTEGER NOT NULL, data BLOB NOT NULL)"
                     )
-            connection.execute(
-                "INSERT OR REPLACE INTO meta(key,value) VALUES ('embedding_model',?)",
-                (type(self.embedder).__name__ if self.embedder else "",),
-            )
             fingerprint = getattr(self.embedder, "fingerprint", "") if self.embedder else ""
-            connection.execute(
-                "INSERT OR REPLACE INTO meta(key,value) VALUES ('embedding_fingerprint',?)",
-                (str(fingerprint),),
-            )
-            connection.execute(
-                "INSERT OR REPLACE INTO meta(key,value) VALUES ('dimension',?)",
-                (str(dimension),),
-            )
+            embedding_meta = {
+                "embedding_model": type(self.embedder).__name__ if self.embedder else "",
+                "embedding_fingerprint": str(fingerprint),
+                "dimension": str(dimension),
+            }
+            if self.embedder is not None:
+                embedding_meta["embedding_identity"] = self._embedder_identity()
+            # Without an embedder the stored vectors and their metadata stay
+            # as they are, so a later run with the same embedder reuses them.
+            verb = "REPLACE" if self.embedder is not None else "IGNORE"
+            for key, value in embedding_meta.items():
+                connection.execute(
+                    f"INSERT OR {verb} INTO meta(key,value) VALUES (?,?)", (key, value)
+                )
             connection.commit()
 
     @staticmethod
@@ -503,6 +714,7 @@ class NotesIndex:
             return {"exists": False, "notes": 0, "sections": 0, "vectors": 0}
         with self._connect() as connection:
             self._load_vec(connection)
+            self._use_stored_tokenizer(connection)
             notes = connection.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
             sections = connection.execute("SELECT COUNT(*) FROM sections").fetchone()[0]
             vectors = 0
@@ -538,9 +750,11 @@ class NotesIndex:
         ]
         for section_id in section_ids:
             connection.execute("DELETE FROM sections_fts WHERE rowid=?", (section_id,))
-            if self.vec_enabled:
+            # Vector tables exist only when an embedder was configured, and
+            # vec_sections can only be touched with sqlite-vec loaded.
+            if self.vec_enabled and self._has_table(connection, "vec_sections"):
                 connection.execute("DELETE FROM vec_sections WHERE section_id=?", (section_id,))
-            else:
+            if self._has_table(connection, "section_vectors"):
                 connection.execute("DELETE FROM section_vectors WHERE section_id=?", (section_id,))
         connection.execute("DELETE FROM links WHERE note_id=?", (note_id,))
         connection.execute("DELETE FROM sections WHERE note_id=?", (note_id,))
@@ -590,8 +804,9 @@ class NotesIndex:
                 if row is not None:
                     self._delete_note(connection, int(row["id"]))
                 cursor = connection.execute(
-                    "INSERT INTO notes(path,title,content_hash,mtime,frontmatter,tags,course) "
-                    "VALUES (?,?,?,?,?,?,?)",
+                    "INSERT INTO notes("
+                    "path,title,content_hash,mtime,frontmatter,tags,course,tags_json"
+                    ") VALUES (?,?,?,?,?,?,?,?)",
                     (
                         note.path,
                         note.title,
@@ -600,6 +815,7 @@ class NotesIndex:
                         json.dumps(note.frontmatter, ensure_ascii=False, default=str),
                         " ".join(note.tags),
                         note.course,
+                        json.dumps(note.tags, ensure_ascii=False),
                     ),
                 )
                 note_id = int(cursor.lastrowid or 0)
@@ -642,19 +858,7 @@ class NotesIndex:
                         for _, heading, content in section_rows
                     ]
                     vectors = _embed(self.embedder, texts, role="document")
-                    for (section_id, _, _), vector in zip(section_rows, vectors, strict=True):
-                        if len(vector) != self._dimension():
-                            raise RuntimeError("embedding dimension mismatch")
-                        if self.vec_enabled:
-                            connection.execute(
-                                "INSERT INTO vec_sections(section_id,embedding) VALUES (?,?)",
-                                (section_id, array("f", vector).tobytes()),
-                            )
-                        else:
-                            connection.execute(
-                                "INSERT INTO section_vectors(section_id,dim,data) VALUES (?,?,?)",
-                                (section_id, len(vector), array("f", vector).tobytes()),
-                            )
+                    self._store_vectors(connection, [row[0] for row in section_rows], vectors)
                     counts["embedded"] += len(section_rows)
                 counts["updated"] += 1
                 if commit_every > 0 and counts["updated"] % commit_every == 0:
@@ -667,71 +871,112 @@ class NotesIndex:
                         self._delete_note(connection, int(row["id"]))
                         counts["deleted"] += 1
             connection.commit()
+            counts["embedded"] += self._backfill_vectors(connection)
+            connection.commit()
         return counts
 
-    @staticmethod
-    def _fts_terms(needle: str) -> list[str]:
-        """Build a small OR query from mixed Latin/CJK terms.
+    def _fts_terms(self, needle: str) -> list[str]:
+        """Terms for ``needle`` against this index's tokenizer.
 
-        Trigram FTS5 does substring matching, so a whole sentence as one quoted
-        phrase only matches exact wording. Splitting into the original phrase
-        plus useful tokens gives BM25 a chance to rank documents that contain
-        only part of a natural-language query.
+        A double-quoted query is one phrase. Otherwise the shared
+        ``query_terms`` builder is used; on a trigram index CJK tokens are
+        also split by jieba so a sentence matches notes containing only part
+        of it. Terms shorter than three characters are kept: ``_fts_search``
+        routes them around the trigram tokenizer.
         """
         stripped = needle.strip()
         if len(stripped) >= 2 and stripped[0] == '"' and stripped[-1] == '"':
             phrase = stripped[1:-1].strip()
-            return [phrase] if len(phrase) >= 3 else []
+            return [phrase] if len(phrase) >= 2 else []
+        base = query_terms(stripped, self.fts_tokenizer)
         tokens: list[str] = []
-        for part in stripped.split():
-            if len(part) < 3:
-                continue
-            if re.fullmatch(r"[A-Za-z0-9_./+-]+", part):
-                tokens.append(part)
-                continue
-            try:
-                import jieba
+        for term in base:
+            tokens.append(term)
+            if self.fts_tokenizer == "trigram" and not term.isascii():
+                try:
+                    import jieba
 
-                pieces = [piece.strip() for piece in jieba.lcut(part)]
-            except ImportError:  # pragma: no cover - declared dependency
-                pieces = [part]
-            tokens.extend(piece for piece in pieces if len(piece) >= 3)
+                    tokens.extend(piece.strip() for piece in jieba.lcut(term, cut_all=False))
+                except ImportError:  # pragma: no cover - declared dependency
+                    pass
         seen: set[str] = set()
         output: list[str] = []
         for token in tokens:
-            if token not in seen:
-                seen.add(token)
-                output.append(token)
+            key = token.casefold()
+            if len(token) < 2 or key in seen:
+                continue
+            seen.add(key)
+            output.append(token)
+            if len(output) == MAX_TERMS:
+                break
         return output
 
     def _fts_search(
-        self, connection: sqlite3.Connection, query: str, limit: int
+        self,
+        connection: sqlite3.Connection,
+        query: str,
+        limit: int,
+        filters: Filters = NO_FILTERS,
     ) -> list[tuple[int, float]]:
         needle = query.strip()
         if not needle:
             return []
         terms = self._fts_terms(needle)
+        long_terms, short_terms = split_short_terms(terms, self.fts_tokenizer)
         rows: list[sqlite3.Row] = []
-        if terms:
-            expression = " OR ".join('"' + term.replace('"', '""') + '"' for term in terms)
+        if long_terms:
+            expression = " OR ".join('"' + term.replace('"', '""') + '"' for term in long_terms)
+            suffix, filter_parameters = _where(filters)
+            join = (
+                " JOIN sections s ON s.id=sections_fts.rowid JOIN notes n ON n.id=s.note_id"
+                if suffix
+                else ""
+            )
             try:
                 rows = connection.execute(
-                    "SELECT rowid AS id, bm25(sections_fts) AS score FROM sections_fts "
-                    "WHERE sections_fts MATCH ? ORDER BY score LIMIT ?",
-                    (expression, limit),
+                    "SELECT sections_fts.rowid AS id, bm25(sections_fts) AS score "
+                    "FROM sections_fts" + join + " WHERE sections_fts MATCH ?" + suffix + " "
+                    "ORDER BY score LIMIT ?",
+                    (expression, *filter_parameters, limit),
                 ).fetchall()
             except sqlite3.OperationalError:
                 rows = []
-        if not rows and len(needle) < 3:
-            rows = _substring_rows(connection, needle, limit)
-        if not rows and terms:
-            # A short final CJK fragment (e.g. "工具") has no trigram; fall back
-            # to a bounded substring probe rather than dropping the query.
-            rows = _substring_rows(connection, needle, limit)
-        return [(int(row["id"]), float(row["score"])) for row in rows]
+        if short_terms and len(rows) < limit:
+            # Trigram FTS5 cannot match a term shorter than three characters
+            # ("AI", "数据"); match those by substring and rank them after the
+            # BM25 hits.
+            clause, parameters = short_terms_clause(
+                ["s.heading", "s.content", "n.title"], short_terms
+            )
+            found = {int(row["id"]) for row in rows}
+            suffix, filter_parameters = _where(filters)
+            try:
+                extra = connection.execute(
+                    "SELECT s.id AS id, 0.0 AS score FROM sections s "
+                    "JOIN notes n ON n.id=s.note_id WHERE " + clause + suffix + " "
+                    "ORDER BY s.id LIMIT ?",
+                    (*parameters, *filter_parameters, limit + len(found)),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                extra = []
+            for row in extra:
+                if int(row["id"]) not in found:
+                    found.add(int(row["id"]))
+                    rows.append(row)
+                if len(rows) >= limit:
+                    break
+        if not rows:
+            # A single character, or terms no tokenizer matched: fall back to a
+            # bounded substring probe rather than dropping the query.
+            rows = _substring_rows(connection, needle, limit, filters)
+        return [(int(row["id"]), float(row["score"])) for row in rows[:limit]]
 
     def _vector_search(
-        self, connection: sqlite3.Connection, query: str, limit: int
+        self,
+        connection: sqlite3.Connection,
+        query: str,
+        limit: int,
+        filters: Filters = NO_FILTERS,
     ) -> list[tuple[int, float]]:
         if self.embedder is None:
             return []
@@ -741,13 +986,41 @@ class NotesIndex:
             return []
         if len(vector) != self._dimension():
             return []
+        stored = (
+            connection.execute("SELECT value FROM meta WHERE key='embedding_identity'").fetchone()
+            if self._has_table(connection, "meta")
+            else None
+        )
+        if stored is not None and str(stored[0]) != self._embedder_identity():
+            return []  # vectors from another embedder; reindex rebuilds them
+        allowed: set[int] | None = None
+        suffix, filter_parameters = _where(filters)
+        if suffix:
+            allowed = {
+                int(row[0])
+                for row in connection.execute(
+                    "SELECT s.id FROM sections s JOIN notes n ON n.id=s.note_id WHERE 1" + suffix,
+                    tuple(filter_parameters),
+                )
+            }
+            if not allowed:
+                return []
         if self._has_table(connection, "vec_sections"):
+            blob = array("f", vector).tobytes()
             try:
-                rows = connection.execute(
-                    "SELECT section_id, distance FROM vec_sections "
-                    "WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
-                    (array("f", vector).tobytes(), limit),
-                ).fetchall()
+                if allowed is None:
+                    rows = connection.execute(
+                        "SELECT section_id, distance FROM vec_sections "
+                        "WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
+                        (blob, limit),
+                    ).fetchall()
+                else:
+                    rows = connection.execute(
+                        "SELECT section_id, distance FROM vec_sections WHERE embedding MATCH ? "
+                        "AND section_id IN (SELECT value FROM json_each(?)) "
+                        "ORDER BY distance LIMIT ?",
+                        (blob, json.dumps(sorted(allowed)), limit),
+                    ).fetchall()
                 return [(int(row["section_id"]), float(row["distance"])) for row in rows]
             except sqlite3.OperationalError:
                 return []
@@ -758,6 +1031,8 @@ class NotesIndex:
         for row in rows:
             dim = int(row["dim"])
             if dim != len(vector):
+                continue
+            if allowed is not None and int(row["section_id"]) not in allowed:
                 continue
             data = array("f")
             data.frombytes(row["data"])
@@ -790,16 +1065,27 @@ class NotesIndex:
         candidate_limit = candidates or max(limit * 8, 50)
         with self._connect() as connection:
             self._load_vec(connection)
+            self._use_stored_tokenizer(connection)
+            filters = self._filters(
+                connection,
+                path_prefix=path_prefix,
+                tags=tags,
+                course=course,
+                metadata=metadata,
+                since=since,
+                until=until,
+            )
             lexical = (
-                self._fts_search(connection, query, candidate_limit)
+                self._fts_search(connection, query, candidate_limit, filters)
                 if mode in {"fts", "hybrid"}
                 else []
             )
             semantic = (
-                self._vector_search(connection, query, candidate_limit)
+                self._vector_search(connection, query, candidate_limit, filters)
                 if mode in {"vector", "hybrid"}
                 else []
             )
+            tags_json = self._tags_json_column(connection)
         fused: dict[int, tuple[float, str]] = {}
         for rank, (section_id, _) in enumerate(lexical, start=1):
             score, source = fused.get(section_id, (0.0, ""))
@@ -809,26 +1095,15 @@ class NotesIndex:
             fused[section_id] = (score + 1.0 / (rrf_k + rank), source + "vec")
         if not fused:
             return []
-        clauses = [f"s.id IN ({','.join('?' for _ in fused)})"]
-        parameters: list[object] = list(fused)
-        if since is not None:
-            clauses.append("n.mtime >= ?")
-            parameters.append(float(since))
-        if until is not None:
-            clauses.append("n.mtime <= ?")
-            parameters.append(float(until))
-        for key, value in (metadata or {}).items():
-            if not re.fullmatch(r"[A-Za-z0-9_]+", key):
-                raise ValueError("metadata filter keys must be identifiers")
-            clauses.append(f"json_extract(n.frontmatter, '$.{key}') = ?")
-            parameters.append(str(value))
+        suffix, filter_parameters = _where(filters)
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT s.id AS section_id, s.heading, s.content, s.ordinal, "
-                "s.hash AS section_hash, n.path, n.title, n.tags, n.course "
+                "s.hash AS section_hash, n.path, n.title, n.tags, n.course, "
+                f"{tags_json} AS tags_json "
                 "FROM sections s JOIN notes n ON n.id=s.note_id "
-                "WHERE " + " AND ".join(clauses),
-                tuple(parameters),
+                f"WHERE s.id IN ({','.join('?' for _ in fused)})" + suffix,
+                (*fused, *filter_parameters),
             ).fetchall()
         hits: list[NoteHit] = []
         seen_notes: set[str] = set()
@@ -836,13 +1111,7 @@ class NotesIndex:
             path = str(row["path"])
             if path in seen_notes:
                 continue
-            if path_prefix and not path.startswith(path_prefix):
-                continue
-            if course and str(row["course"]) != course:
-                continue
-            note_tags = str(row["tags"]).split()
-            if tags and not all(tag in note_tags for tag in tags):
-                continue
+            note_tags = _decode_tags(row["tags"], row["tags_json"])
             seen_notes.add(path)
             fused_score, sources = fused[int(row["section_id"])]
             hits.append(

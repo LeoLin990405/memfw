@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+import yaml
 
 from .model import (
     OntologyError,
@@ -35,7 +36,7 @@ def _dump(payload: object) -> None:
     typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
 
-def _fail(exc: OntologyError) -> None:
+def _fail(exc: Exception) -> None:
     typer.echo(str(exc), err=True)
     raise typer.Exit(code=1) from exc
 
@@ -132,4 +133,6 @@ def import_seed_command(
         result = import_seed(seed, vault, apply=_writes(apply, dry_run))
     except OntologyError as exc:
         _fail(exc)
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        _fail(OntologyError(f"cannot read seed file {seed}: {exc}"))
     _dump(result)

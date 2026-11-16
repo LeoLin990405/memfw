@@ -98,3 +98,81 @@ def fts_query(query: str) -> str | None:
     """Build the match string from regex tokens. No CJK word segmentation."""
 
     return fts_query_from_terms(_TERM.findall(query))
+
+
+def split_short_terms(terms: list[str], tokenizer: str = "trigram") -> tuple[list[str], list[str]]:
+    """Split ``terms`` into (FTS-matchable, short) for an index of ``tokenizer``.
+
+    A trigram index cannot match a term shorter than three code points, so
+    two-character terms (``AI``, ``数据``) go to the short list and the caller
+    matches them with ``short_terms_clause`` instead. A unicode61 index stores
+    jieba segments, so every term stays FTS-matchable. A lowercase English
+    stopword (``is``, ``of``) is dropped from the short list.
+    """
+
+    if tokenizer != "trigram":
+        return list(terms), []
+    long_terms = [term for term in terms if len(term) >= 3]
+    short_terms = [term for term in terms if len(term) < 3 and _useful_short_term(term)]
+    return long_terms, short_terms
+
+
+def short_terms_clause(columns: list[str], terms: list[str]) -> tuple[str, list[str]]:
+    """SQL ``(instr(...) > 0 OR ...)`` matching any of ``terms`` in any of ``columns``.
+
+    Matching is ASCII-case-insensitive like the default trigram tokenizer.
+    ``columns`` are trusted SQL identifiers chosen by the caller, never user
+    input. An empty ``terms`` list returns ``("0", [])``.
+    """
+
+    parts: list[str] = []
+    params: list[str] = []
+    for term in terms:
+        for column in columns:
+            parts.append(f"instr(lower({column}), lower(?)) > 0")
+            params.append(term)
+    if not parts:
+        return "0", []
+    return "(" + " OR ".join(parts) + ")", params
+
+
+#: Common English two-letter words. A lowercase one is skipped as a short
+#: term: as a substring it matches most rows and only adds noise.
+SHORT_STOPWORDS = frozenset(
+    {
+        "am",
+        "an",
+        "as",
+        "at",
+        "be",
+        "by",
+        "do",
+        "he",
+        "if",
+        "in",
+        "is",
+        "it",
+        "me",
+        "my",
+        "no",
+        "of",
+        "on",
+        "or",
+        "so",
+        "to",
+        "up",
+        "us",
+        "we",
+    }
+)
+
+
+def _useful_short_term(term: str) -> bool:
+    """Keep CJK and other non-ASCII terms, acronyms (``AI``, ``Q3``) and any
+    ASCII term that is not a lowercase English stopword."""
+
+    if not term.isascii():
+        return True
+    if term.isupper() or any(character.isdigit() for character in term):
+        return True
+    return term.casefold() not in SHORT_STOPWORDS

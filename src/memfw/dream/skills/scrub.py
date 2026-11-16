@@ -35,7 +35,7 @@ _DOMAIN = re.compile(
 )
 _ABSOLUTE = re.compile(r"(?:^|(?<=[\s=:'\"(`,]))(?:~|\.{1,2})?/[^\s'\"`;,)]*|[A-Za-z]:\\\S*")
 _UNC = re.compile(r"\\\\[^\s\\`'\"]+(?:\\[^\s\\`'\"]*)*")
-"""``\\host\share\dir``."""
+r"""``\\host\share\dir``."""
 _RELATIVE = re.compile(
     r"(?<![\w<])[\w.-]+(?:[/\\][\w.-]+)+[/\\]?"  # dir/file, dir\file
     r"|(?<![\w<])[\w.-]*\w[/\\](?=$|[\s`'\",;:)\w])"  # dir/ or dir\ on its own

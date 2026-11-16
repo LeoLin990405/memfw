@@ -56,7 +56,7 @@ def _text(content: Any) -> str:
         content = [
             block
             for block in content
-            if not (isinstance(block, dict) and block.get("type") in _SKIPPED_BLOCKS)
+            if not (isinstance(block, dict) and _str(block.get("type")) in _SKIPPED_BLOCKS)
         ]
     return content_text(content).strip()
 

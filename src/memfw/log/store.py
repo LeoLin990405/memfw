@@ -244,7 +244,14 @@ class EventLogMixin:
     def recover_log_compaction(self: RepositoryHost) -> bool:
         """Explicitly rewrite an interrupted duplicate-prefix log to its verified live tail."""
         with self._locked():
-            logical = self.events()
+            # A crash between the catalog commit and the state rewrite leaves a
+            # stale catalog anchor. Verify everything else (segments, summaries,
+            # snapshots, live chain and committed head) and then re-anchor.
+            self._mutation_local.allow_stale_catalog_anchor = True
+            try:
+                logical = self.events()
+            finally:
+                del self._mutation_local.allow_stale_catalog_anchor
             archived, _ = self._log_segments()
             expected_tail = logical[len(archived) :]
             expected_bytes = b"".join(
@@ -254,6 +261,20 @@ class EventLogMixin:
             live = self._live_events(archived)
             canonical_live = b"".join((event.model_dump_json() + "\n").encode() for event in live)
             if current == canonical_live:
+                if _catalog_anchor_is_stale(self):
+                    state = _read_event_state(self)
+                    expected_head = logical[-1].event_hash if logical else "0" * 64
+                    if (
+                        state is None
+                        or state.get("event_count") != len(logical)
+                        or state.get("last_hash") != expected_head
+                    ):
+                        raise IntegrityError(
+                            "Event state does not match the verified log; cannot re-anchor"
+                        )
+                    self._event_cursor_cache = None
+                    self._seed_event_cursor(len(logical), expected_head)
+                    return True
                 return False
             self._atomic_write(self.events_path, expected_bytes)
             (self.root / "events.cursor.json").unlink(missing_ok=True)
@@ -512,7 +533,11 @@ class EventLogMixin:
             previous = cached[-1].event_hash if cached else "0" * 64
         else:
             existing = (
-                self.events() if self.events_path.exists() or self.log_catalog_path.exists() else []
+                self.events()
+                if self.events_path.exists()
+                or self.log_catalog_path.exists()
+                or self.event_state_path.exists()
+                else []
             )
             base_count = len(existing)
             previous = existing[-1].event_hash if existing else "0" * 64
@@ -577,6 +602,11 @@ class EventLogMixin:
             self.log_catalog_path.read_bytes() if self.log_catalog_path.exists() else b""
         )
         catalog_hash = hashlib.sha256(catalog_bytes).hexdigest()
+        if not self.events_path.exists():
+            # Raises when committed state still expects events; never treat a
+            # deleted active log as an empty one to append to.
+            self.events()
+            raise IntegrityError("Event log is missing; run `memfw init` or restore it")
         stat = self.events_path.stat()
         process_signature = (
             stat.st_dev,
@@ -731,6 +761,10 @@ class EventLogMixin:
 
         archived, _ = self._log_segments()
         live = self._live_events(archived)
+        if not self._recovering and not getattr(
+            self._mutation_local, "allow_stale_catalog_anchor", False
+        ):
+            _verify_catalog_anchor(self, archived)
         return archived + live
 
     def replay(self: RepositoryHost) -> dict[str, str | None]:
@@ -1066,6 +1100,12 @@ _SUMMARY_DETAIL_KEYS = frozenset(
         "scope",
         "floor_explanation",
         "physical_breakdown",
+        # Read back from archived events by recovery and proposal checks
+        # (storage/transactions.py, core/repository.py).
+        "storage",
+        "before_config_hash",
+        "after_config_hash",
+        "target_snapshot_hash_mode",
     }
 )
 
@@ -1093,11 +1133,27 @@ def _event_summary(event: Event) -> dict[str, Any]:
 
 
 def _summarize_events(events: list[Event], previous_hash: str) -> tuple[list[str], str]:
+    from . import event_digest
+
     rows: list[str] = []
     previous = previous_hash
     for event in events:
         summary = _event_summary(event)
-        payload = {"previous_summary_hash": previous, "event": summary}
+        lossless = event_digest(Event.model_validate(summary)) == event.event_hash
+        if event.is_compacted_summary:
+            # Re-summarizing an archived summary: its original digest is the
+            # recorded event_hash, which the archive read already verified.
+            original_digest = event.event_hash
+        else:
+            original_digest = event_digest(event)
+            if original_digest != event.event_hash:
+                raise IntegrityError(f"Refusing to archive event with bad digest: {event.event_id}")
+        payload: dict[str, Any] = {
+            "previous_summary_hash": previous,
+            "event": summary,
+            "original_event_digest": original_digest,
+            "lossless": lossless,
+        }
         digest = hashlib.sha256(_canonical_json(payload)).hexdigest()
         rows.append(
             json.dumps(
@@ -1122,7 +1178,12 @@ def _parse_segment_summaries(
     for number, line in enumerate(raw[:-1].split(b"\n") if raw else [], 1):
         try:
             row = json.loads(line)
-            payload = {"previous_summary_hash": row["previous_summary_hash"], "event": row["event"]}
+            if not isinstance(row, dict):
+                raise ValueError("summary row must be an object")
+            keys = set(row)
+            if keys not in (_LEGACY_SUMMARY_ROW_KEYS, _SUMMARY_ROW_KEYS):
+                raise IntegrityError(f"Unexpected event summary fields at summary {number}")
+            payload = {key: value for key, value in row.items() if key != "summary_hash"}
             summary_hash = hashlib.sha256(_canonical_json(payload)).hexdigest()
             if (
                 row["previous_summary_hash"] != summary_previous
@@ -1133,6 +1194,8 @@ def _parse_segment_summaries(
             if event_data["prev_event_hash"] != event_previous:
                 raise IntegrityError(f"Broken original event hash chain at summary {number}")
             event = Event.model_validate(event_data)
+            if keys == _SUMMARY_ROW_KEYS:
+                _verify_summary_row(row, event, number)
             object.__setattr__(event, "_compacted", True)
             result.append(event)
             event_previous = event.event_hash
@@ -1142,6 +1205,75 @@ def _parse_segment_summaries(
         except Exception as exc:
             raise IntegrityError(f"Invalid event summary {number}: {exc}") from exc
     return result, summary_previous
+
+
+_LEGACY_SUMMARY_ROW_KEYS = frozenset({"previous_summary_hash", "event", "summary_hash"})
+_SUMMARY_ROW_KEYS = _LEGACY_SUMMARY_ROW_KEYS | {"original_event_digest", "lossless"}
+
+
+def _verify_summary_row(row: dict[str, Any], event: Event, number: int) -> None:
+    """Re-verify a summary row against the original event it was written from."""
+    from . import event_digest
+
+    lossless = row["lossless"]
+    if not isinstance(lossless, bool) or row["original_event_digest"] != event.event_hash:
+        raise IntegrityError(f"Event summary original digest mismatch at summary {number}")
+    if lossless and event_digest(event) != event.event_hash:
+        raise IntegrityError(f"Event summary does not match its original event at {number}")
+
+
+def _read_event_state(repository: RepositoryHost) -> dict[str, Any] | None:
+    if not repository.event_state_path.exists():
+        return None
+    try:
+        state = json.loads(repository.event_state_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError) as exc:
+        raise IntegrityError(f"Event state is invalid: {exc}") from exc
+    if not isinstance(state, dict):
+        raise IntegrityError("Event state is invalid")
+    return cast(dict[str, Any], state)
+
+
+def _catalog_anchor_is_stale(repository: RepositoryHost) -> bool:
+    """Whether events.state.json pins a different catalog than the one on disk."""
+    state = _read_event_state(repository)
+    if state is None or state.get("schema_version") != 2:
+        # Legacy events.head/events.cursor.json vaults carry no combined anchor.
+        return False
+    expected = state.get("catalog_hash")
+    if not isinstance(expected, str):
+        raise IntegrityError("Event state is missing its catalog_hash anchor")
+    catalog_bytes = (
+        repository.log_catalog_path.read_bytes() if repository.log_catalog_path.exists() else b""
+    )
+    if hashlib.sha256(catalog_bytes).hexdigest() == expected:
+        return False
+    try:
+        schema = json.loads(catalog_bytes).get("schema_version") if catalog_bytes else None
+    except (ValueError, AttributeError) as exc:
+        raise IntegrityError(f"Invalid event segment catalog: {exc}") from exc
+    # Schema 1 catalogs hold full canonical events whose digests are re-verified
+    # on every read; only body-free summary catalogs depend on the anchor.
+    return bool(schema != 1)
+
+
+def _verify_catalog_anchor(repository: RepositoryHost, archived: list[Event]) -> None:
+    if not _catalog_anchor_is_stale(repository):
+        return
+    if archived and repository.events_path.exists():
+        with repository.events_path.open("rb") as stream:
+            first_line = stream.readline()
+        if first_line:
+            first = Event.model_validate_json(first_line)
+            if first.prev_event_hash != archived[-1].event_hash:
+                # Interrupted compaction (catalog committed, old log still
+                # present); _live_events verified the duplicated prefix and the
+                # committed head, and `memfw recover` re-anchors it.
+                return
+    raise IntegrityError(
+        "Event segment catalog does not match the catalog_hash committed in "
+        "events.state.json; run `memfw recover` only if a compaction was interrupted"
+    )
 
 
 def _deterministic_tar(items: list[tuple[str, bytes]]) -> bytes:

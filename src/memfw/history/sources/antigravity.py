@@ -28,9 +28,10 @@ step whose full line is too large to read still comes through truncated.
 ``PLANNER_RESPONSE`` / ``NOTIFY_USER`` steps are ``assistant`` with their tool
 calls, ``SYSTEM_MESSAGE`` / ``ERROR_MESSAGE`` steps are ``system``, context
 bookkeeping steps are skipped, and every other step is a tool step whose
-``content`` is its output (``tool``). The offset is ``step_index`` (the line
-number when a step has none). ``conversation_summaries.db`` supplies the
-workspace (``cwd``) and project of a conversation when it can be opened.
+``content`` is its output (``tool``). The offset is ``(step_index + 1) * 1024``;
+a step with no index sits between its neighbours (see :func:`_steps`).
+``conversation_summaries.db`` supplies the workspace (``cwd``) and project of a
+conversation when it can be opened.
 """
 
 from __future__ import annotations
@@ -57,7 +58,7 @@ from .base import (
     tool_call,
 )
 
-PARSER_VERSION = "1"
+PARSER_VERSION = "2"
 
 AGENT = "antigravity"
 BRAIN_DIR = "brain"
@@ -65,6 +66,9 @@ LOGS_DIR = Path(".system_generated") / "logs"
 COMPACT_FILE = "transcript.jsonl"
 FULL_FILE = "transcript_full.jsonl"
 SUMMARIES_DB = "conversation_summaries.db"
+_STRIDE = 1024
+"""Offset room per step index for steps written without a ``step_index``."""
+_MAX_INDEX = 2**53 // _STRIDE
 
 _TYPE_PREFIX = "CORTEX_STEP_TYPE_"
 _SOURCE_PREFIX = "CORTEX_STEP_SOURCE_"
@@ -98,7 +102,13 @@ def _uri_path(uri: str) -> str:
     """Local path of a ``file://`` URI (other strings pass through)."""
 
     if uri.startswith("file://"):
-        return unquote(urlparse(uri).path)
+        try:
+            return unquote(urlparse(uri).path)
+        except ValueError:
+            # Malformed (``file://[broken``): drop the authority part by hand.
+            rest = uri[len("file://") :]
+            slash = rest.find("/")
+            return unquote(rest[slash:]) if slash >= 0 else ""
     return uri
 
 
@@ -155,18 +165,34 @@ def _summaries(root: Path) -> dict[str, dict[str, str]]:
 
 
 def _steps(logs: Path) -> list[tuple[int, dict[str, Any]]]:
-    """``(offset, step)`` pairs of a conversation, compact lines overlaid by full ones."""
+    """``(offset, step)`` pairs of a conversation, compact lines overlaid by full ones.
+
+    A step with a ``step_index`` ``i`` gets offset ``(i + 1) * _STRIDE``. A step
+    without one is placed after the last indexed step before it in its file:
+    the k-th such step after index ``i`` gets ``(i + 1) * _STRIDE + k`` (``k``
+    from 1; ``k - 1`` before any indexed step), so offsets never collide and
+    follow file order. The same position in both files is the same step (the
+    full line wins); unindexed steps past ``_STRIDE - 1`` in one gap are dropped.
+    """
 
     merged: dict[int, dict[str, Any]] = {}
     for name in (COMPACT_FILE, FULL_FILE):
         path = logs / name
         if not regular_file(path):
             continue
-        for line, (_position, step) in enumerate(iter_jsonl(path)):
+        last = -1
+        gap = 0
+        for _position, step in iter_jsonl(path):
             index = step.get("step_index")
-            if not isinstance(index, int) or isinstance(index, bool) or index < 0:
-                index = line
-            merged[index] = step
+            if isinstance(index, int) and not isinstance(index, bool) and 0 <= index < _MAX_INDEX:
+                last = index
+                gap = 0
+                merged[(index + 1) * _STRIDE] = step
+                continue
+            gap += 1
+            if gap >= _STRIDE:
+                continue
+            merged[(last + 1) * _STRIDE + gap - (1 if last < 0 else 0)] = step
     return sorted(merged.items())
 
 

@@ -233,8 +233,13 @@ def _index_rows(repository: Repository, *, tenant: str) -> list[dict[str, Any]]:
             "ORDER BY r.id",
             (tenant,),
         ).fetchall()
+    present = _present_ids(repository)
     rows = []
     for item in fetched:
+        if str(item["id"]) not in present:
+            # Deleted outside memfw (sync, git pull, rm) since the index was
+            # built: the projection must not return a memory that is gone.
+            continue
         tenant = item["tenant"]
         row = {
             "id": str(item["id"]),
@@ -259,6 +264,16 @@ def _index_rows(repository: Repository, *, tenant: str) -> list[dict[str, Any]]:
         }
         rows.append(row)
     return rows
+
+
+def _present_ids(repository: Repository) -> set[str]:
+    """Ids whose Markdown file exists now. One directory listing, not one stat per row."""
+
+    try:
+        names = os.listdir(repository.memories_dir)
+    except OSError:
+        return set()
+    return {name[:-3] for name in names if name.endswith(".md")}
 
 
 def _document_frequencies(rows: list[dict[str, Any]], scorer: BM25Scorer | None) -> Counter[str]:
@@ -307,7 +322,8 @@ def _row_visible(row: dict[str, Any], *, include_history: bool, as_of: datetime 
         if start is None or start > as_of:
             return False
         return end is None or end > as_of
-    return bool(row["valid_to"] == "")
+    # A superseded memory is history even when no valid_to was written.
+    return bool(row["valid_to"] == "" and row["superseded_by"] == "")
 
 
 def _parse_instant(value: str) -> datetime | None:

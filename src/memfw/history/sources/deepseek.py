@@ -67,13 +67,14 @@ import zstandard
 
 from .base import (
     MAX_FILE_BYTES,
-    MAX_LINE_BYTES,
     ConversationRecord,
     SessionLocator,
+    SessionTooLarge,
     ToolCall,
     content_text,
     iso_timestamp,
     iter_jsonl,
+    iter_lines,
     relative_key,
     tool_call,
     walk_files,
@@ -139,13 +140,14 @@ def _decoded(line: bytes) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def _iter_zstd_jsonl(path: Path) -> Iterator[tuple[int, dict[str, Any]]]:
+def _iter_zstd_jsonl(path: Path, *, strict: bool = False) -> Iterator[tuple[int, dict[str, Any]]]:
     """``(decompressed byte offset, object)`` per complete JSON-object line of a zstd log.
 
     Mirrors :func:`memfw.history.sources.base.iter_jsonl` for a compressed file:
     ``O_NOFOLLOW``, over-long lines skipped, the unterminated trailing line and a
     truncated trailing frame (still being written) dropped, lines without a
-    transcript marker not parsed. Never raises on corrupt data.
+    transcript marker not parsed. Never raises on corrupt data; a file over
+    ``MAX_FILE_BYTES`` gives nothing, or :class:`SessionTooLarge` with ``strict``.
     """
 
     try:
@@ -156,6 +158,8 @@ def _iter_zstd_jsonl(path: Path) -> Iterator[tuple[int, dict[str, Any]]]:
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_FILE_BYTES:
             os.close(descriptor)
+            if strict and stat.S_ISREG(info.st_mode):
+                raise SessionTooLarge(f"{info.st_size} bytes > {MAX_FILE_BYTES}")
             return
         handle = os.fdopen(descriptor, "rb")
     except OSError:
@@ -167,50 +171,37 @@ def _iter_zstd_jsonl(path: Path) -> Iterator[tuple[int, dict[str, Any]]]:
         except zstandard.ZstdError:
             return
         with reader:
-            buffer = b""
-            offset = 0
-            skipping = False
-            while True:
-                try:
-                    chunk = reader.read(_CHUNK)
-                except (zstandard.ZstdError, OSError):
-                    return
-                if not chunk:
-                    return
-                buffer += chunk
+
+            def chunks() -> Iterator[bytes]:
                 while True:
-                    newline = buffer.find(b"\n")
-                    if newline < 0:
-                        if len(buffer) > MAX_LINE_BYTES:
-                            skipping = True
-                            offset += len(buffer)
-                            buffer = b""
-                        break
-                    line, buffer = buffer[:newline], buffer[newline + 1 :]
-                    start = offset
-                    offset += newline + 1
-                    if skipping:
-                        skipping = False
-                        continue
-                    if not line.strip() or len(line) > MAX_LINE_BYTES:
-                        continue
-                    if not any(marker in line for marker in _MARKERS):
-                        continue
-                    value = _decoded(line)
-                    if value is not None:
-                        yield start, value
+                    try:
+                        chunk = reader.read(_CHUNK)
+                    except (zstandard.ZstdError, OSError):
+                        return
+                    if not chunk:
+                        return
+                    yield chunk
+
+            for start, line in iter_lines(chunks()):
+                if not line.strip():
+                    continue
+                if not any(marker in line for marker in _MARKERS):
+                    continue
+                value = _decoded(line)
+                if value is not None:
+                    yield start, value
 
 
-def _events(path: Path) -> Iterator[tuple[int, dict[str, Any]]]:
+def _events(path: Path, *, strict: bool = False) -> Iterator[tuple[int, dict[str, Any]]]:
     if path.name.endswith(".zstd"):
-        return _iter_zstd_jsonl(path)
+        return _iter_zstd_jsonl(path, strict=strict)
     return iter_jsonl(path)
 
 
-def _header(path: Path) -> dict[str, Any]:
+def _header(path: Path, *, strict: bool = False) -> dict[str, Any]:
     """The session header line, or ``{}`` when the first record is not one."""
 
-    for _offset, event in _events(path):
+    for _offset, event in _events(path, strict=strict):
         return event if event.get("type") == _HEADER else {}
     return {}
 
@@ -279,11 +270,11 @@ class _Labels:
             self.origin = SUBAGENT
 
     def event(self, event: dict[str, Any]) -> None:
-        kind = event.get("type")
+        kind = _kind(event.get("type"))
         data = event.get("data")
         if not isinstance(data, dict):
             return
-        key = _MODEL_EVENTS.get(str(kind))
+        key = _MODEL_EVENTS.get(kind)
         if key is not None:
             self.model = _str(data.get(key)) or self.model
             return
@@ -292,7 +283,7 @@ class _Labels:
         source = data.get("source")
         if not isinstance(source, dict):
             return
-        source_kind = source.get("kind")
+        source_kind = _kind(source.get("kind"))
         if source_kind in _AUTOMATED_KINDS:
             # Goal rounds after a prompt a person typed continue that person's session.
             if not self._typed:
@@ -307,20 +298,26 @@ class _Labels:
                 self.origin = AUTOMATED
 
 
+def _kind(value: Any) -> str:
+    """A ``type`` / ``kind`` value usable as a set member: non-strings become ``""``."""
+
+    return value if isinstance(value, str) else ""
+
+
 def _role_and_message(event: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
-    kind = event.get("type")
+    kind = _kind(event.get("type"))
     data = event.get("data")
     if kind not in _TURN_EVENTS or not isinstance(data, dict):
         return None
     if kind == _USER:
         source = data.get("source")
-        source_kind = source.get("kind") if isinstance(source, dict) else None
+        source_kind = _kind(source.get("kind")) if isinstance(source, dict) else ""
         role = "system" if source_kind in _INJECTED_KINDS else "user"
         return role, data
     message = data.get("message")
     if not isinstance(message, dict):
         return None
-    role = {_ASSISTANT: "assistant", _TOOL: "tool", _SYSTEM: "system"}[str(kind)]
+    role = {_ASSISTANT: "assistant", _TOOL: "tool", _SYSTEM: "system"}[kind]
     return role, message
 
 
@@ -336,10 +333,16 @@ class DeepSeekReader:
         for path in walk_files(root, _SUFFIXES):
             if not _is_session_file(path):
                 continue
-            header = _header(path)
+            fallback = path.parent.name.removeprefix("session-")
+            try:
+                header = _header(path, strict=True)
+            except SessionTooLarge:
+                # Listed anyway: ``read`` reports it as too large, so ingest keeps
+                # what it stored before instead of treating the session as gone.
+                yield SessionLocator(AGENT, path, relative_key(root, path), fallback)
+                continue
             if not header:
                 continue
-            fallback = path.parent.name.removeprefix("session-")
             yield SessionLocator(
                 agent=AGENT,
                 path=path,
@@ -360,7 +363,7 @@ class DeepSeekReader:
         parent = locator.extra.get("parent_session", "")
         labels.parent = parent if isinstance(parent, str) else ""
         turn = 0
-        for offset, event in _events(locator.path):
+        for offset, event in _events(locator.path, strict=True):
             if offset == 0 and event.get("type") == _HEADER:
                 cwd = _str(event.get("cwd")) or cwd
                 labels.header(event)

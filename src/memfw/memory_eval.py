@@ -12,6 +12,8 @@ import random
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime
+from importlib import resources
+from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import Any, Literal
 
@@ -240,11 +242,10 @@ __all__ = [
 #   FTS retriever (no model, no network) and a deterministic answer template
 #   checks that a ``hypothesis`` is never rendered as a conclusion.
 #
-# The fixtures are synthetic; see ``tests/fixtures/causal_eval/``.
+# The fixtures are synthetic package data in ``memfw/eval_data/causal_eval/``,
+# read through importlib.resources so an installed wheel finds them too.
 
-CAUSAL_FIXTURE_DIR = (
-    Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "causal_eval"
-)
+CAUSAL_FIXTURE_DIR: Traversable = resources.files("memfw") / "eval_data" / "causal_eval"
 
 _HYPOTHESIS_LEVELS = frozenset({"hypothesis", "association"})
 
@@ -368,14 +369,25 @@ class CausalPromotionReport:
         }
 
 
-def load_causal_materials(directory: Path | str | None = None) -> list[CausalMaterial]:
-    """Read the synthetic fixtures. Unknown keys are rejected by :class:`dict` use."""
+def load_causal_materials(
+    directory: Traversable | Path | str | None = None,
+) -> list[CausalMaterial]:
+    """Read the synthetic fixtures. Unknown keys are rejected by :class:`dict` use.
 
-    base = Path(directory) if directory is not None else CAUSAL_FIXTURE_DIR
+    With no ``directory`` the fixtures shipped inside the package are used.
+    """
+
+    if directory is None:
+        base: Traversable = CAUSAL_FIXTURE_DIR
+    elif isinstance(directory, str):
+        base = Path(directory)
+    else:
+        base = directory
     if not base.is_dir():
         raise FileNotFoundError(f"causal eval fixtures not found: {base}")
     materials: list[CausalMaterial] = []
-    for path in sorted(base.glob("*.json")):
+    files = (item for item in base.iterdir() if item.name.endswith(".json") and item.is_file())
+    for path in sorted(files, key=lambda item: item.name):
         payload = json.loads(path.read_text(encoding="utf-8"))
         materials.append(
             CausalMaterial(
@@ -509,7 +521,7 @@ def _retrieval_layer(
 
 
 def run_causal_promotion_eval(
-    fixtures: Path | str | None = None,
+    fixtures: Traversable | Path | str | None = None,
     *,
     workdir: Path | str | None = None,
 ) -> CausalPromotionReport:

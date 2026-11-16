@@ -181,7 +181,7 @@ class GrokReader:
 
         turn = 0
         for index, (offset, entry) in enumerate(iter_jsonl(locator.path)):
-            kind = entry.get("type")
+            kind = _str(entry.get("type"))
             role = ""
             text = ""
             calls: tuple[ToolCall, ...] = ()

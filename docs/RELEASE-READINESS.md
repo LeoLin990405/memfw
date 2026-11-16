@@ -34,6 +34,11 @@ cases, so the suite no longer depends on a quiet host.
 - Two tests skip when `reports/day4_baseline_snapshot.zip` is absent. The file
   is a release asset rather than a tracked source file; download and checksum
   instructions are in [`reports/LARGE_FILES.md`](../reports/LARGE_FILES.md).
+- `events.state.json` is not keyed (no MAC or signature). Truncating the tail
+  of `events.jsonl` while also editing the state file to match is not
+  detected. The head/count/`catalog_hash` checks protect against crashes and
+  accidental damage, not against deliberate tampering by someone who can
+  write the vault.
 
 ## Candidate lifecycle
 

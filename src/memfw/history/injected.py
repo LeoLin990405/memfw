@@ -35,6 +35,8 @@ _BLOCK_TAGS = (
 
 A person's own ``<instructions>`` or ``<tools>`` text is not one of them.
 """
+_CLOSED_ONLY_TAGS = ("ide_opened_file", "ide_selection", "user-prompt-submit-hook")
+"""Stripped only as a complete open...close block: an unclosed tag in prose stays."""
 _UNWRAP_TAGS = (
     "user_query",
     "user_request",
@@ -50,6 +52,13 @@ _BLOCKS = [
         re.DOTALL,
     )
     for tag in _BLOCK_TAGS
+]
+_BLOCKS += [
+    re.compile(
+        rf"<{re.escape(tag)}(?:\s[^>]*)?>.*?</{re.escape(tag)}\s*>",
+        re.DOTALL,
+    )
+    for tag in _CLOSED_ONLY_TAGS
 ]
 _UNWRAP = re.compile(
     r"</?(?:" + "|".join(re.escape(tag) for tag in _UNWRAP_TAGS) + r")(?:\s[^>]*)?>"

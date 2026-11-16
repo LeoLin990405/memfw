@@ -111,7 +111,8 @@ class KimiDesktopReader:
         turn = 0
         model = ""
         for offset, event in iter_jsonl(locator.path):
-            if event.get("type") in MODEL_EVENTS:
+            kind = event.get("type")
+            if isinstance(kind, str) and kind in MODEL_EVENTS:
                 model = _model(event) or model
                 continue
             record = KimiReader._record(event, session_id, offset, cwd)

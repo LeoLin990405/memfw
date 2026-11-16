@@ -43,6 +43,8 @@ from .store import (
     SessionInfo,
     Turn,
     check_private_location,
+    ts_display,
+    ts_key,
 )
 
 DATA_DIR = DEFAULT_RELATIVE.parent
@@ -93,13 +95,19 @@ def synced_dirs(config: Mapping[str, Any] | None) -> list[Path]:
     return [Path(str(item)).expanduser() for item in raw]
 
 
+TS_FUNCTION = "memfw_ts_key"
+"""SQL function registered on every read connection: :func:`~.store.ts_key`."""
+
+
 def _since(value: str | None) -> str | None:
+    """The ``since`` bound as a :func:`~.store.ts_key` (offsets normalised to UTC)."""
+
     if not value:
         return None
     text = str(value).strip()
     if len(text) > 40 or any(char not in _SINCE_CHARS for char in text):
         raise ConversationError("since must be an ISO-8601 timestamp or date")
-    return text
+    return ts_key(text)
 
 
 def _like(term: str) -> str:
@@ -130,6 +138,9 @@ class SqliteStoreSource:
         with closing(sqlite3.connect(uri, uri=True, timeout=1)) as connection:
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA query_only = 1")
+            # Stored rows may still hold offset timestamps (written before ingest
+            # normalised them): compare and order through the key, never raw text.
+            connection.create_function(TS_FUNCTION, 1, ts_key, deterministic=True)
             yield connection
 
     @staticmethod
@@ -159,8 +170,9 @@ class SqliteStoreSource:
         with self._open() as connection:
             rows = connection.execute(
                 "SELECT agent, session_id, COUNT(*) AS turns, MIN(offset) AS first_offset,"
-                " MAX(offset) AS last_offset, MIN(NULLIF(ts, '')) AS started_at,"
-                " MAX(NULLIF(ts, '')) AS updated_at, MAX(cwd) AS cwd, MAX(project) AS project,"
+                f" MAX(offset) AS last_offset, MIN({TS_FUNCTION}(NULLIF(ts, ''))) AS started_at,"
+                f" MAX({TS_FUNCTION}(NULLIF(ts, ''))) AS updated_at, MAX(cwd) AS cwd,"
+                " MAX(project) AS project,"
                 f" MAX(origin) AS origin FROM {TURNS_TABLE} WHERE {where}"
                 f" GROUP BY agent, session_id {having}"
                 " ORDER BY updated_at DESC, agent, session_id LIMIT ? OFFSET ?",
@@ -173,8 +185,8 @@ class SqliteStoreSource:
                 turns=int(row["turns"]),
                 first_offset=int(row["first_offset"]),
                 last_offset=int(row["last_offset"]),
-                started_at=str(row["started_at"] or ""),
-                updated_at=str(row["updated_at"] or ""),
+                started_at=ts_display(row["started_at"]),
+                updated_at=ts_display(row["updated_at"]),
                 cwd=str(row["cwd"] or ""),
                 project=str(row["project"] or ""),
                 origin=str(row["origin"] or ""),
@@ -198,7 +210,7 @@ class SqliteStoreSource:
         having = ""
         since_value = _since(since)
         if since_value:
-            having = "HAVING MAX(ts) >= ?"
+            having = f"HAVING MAX({TS_FUNCTION}(NULLIF(ts, ''))) >= ?"
             params = [*params, since_value]
         return self._session_rows(where, params, having, limit, offset)
 
@@ -225,7 +237,7 @@ class SqliteStoreSource:
                 offset=int(row["offset"]),
                 turn=int(row["turn"]),
                 role=str(row["role"] or ""),
-                ts=str(row["ts"] or ""),
+                ts=ts_display(ts_key(str(row["ts"] or ""))),
                 text=WITHHELD,
                 withheld=True,
             )
@@ -244,7 +256,7 @@ class SqliteStoreSource:
             offset=int(row["offset"]),
             turn=int(row["turn"]),
             role=str(row["role"] or ""),
-            ts=str(row["ts"] or ""),
+            ts=ts_display(ts_key(str(row["ts"] or ""))),
             text=str(row["text"] or ""),
             tool_calls=calls,
         )
@@ -285,13 +297,13 @@ class SqliteStoreSource:
         params = [*params, *(_like(term) for term in terms)]
         since_value = _since(since)
         if since_value:
-            clauses.append("ts >= ?")
+            clauses.append(f"{TS_FUNCTION}(ts) >= ?")
             params.append(since_value)
         with self._open() as connection:
             rows = connection.execute(
                 "SELECT agent, session_id, offset, turn, role, ts, text, tool_calls, withheld"
                 f" FROM {TURNS_TABLE} WHERE {' AND '.join(clauses)}"
-                " ORDER BY ts DESC, agent, session_id, offset LIMIT ? OFFSET ?",
+                f" ORDER BY {TS_FUNCTION}(ts) DESC, agent, session_id, offset LIMIT ? OFFSET ?",
                 [*params, limit, offset],
             ).fetchall()
         return [self._turn(row) for row in rows]

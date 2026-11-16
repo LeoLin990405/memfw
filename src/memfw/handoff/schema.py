@@ -35,6 +35,7 @@ GOAL_BYTES = 2 * 1024
 TURN_BYTES = 1024
 MAX_FILES = 50
 MAX_CALLS_PER_TURN = 8
+MAX_NOTES = 8
 
 # Model part: every list <= 10 items, every item <= 200 chars, part <= 4 KiB.
 MODEL_KEYS = ("decisions", "done", "in_progress", "next", "pitfalls", "open_questions")
@@ -117,6 +118,9 @@ PACK_SCHEMA: dict[str, Any] = {
                         "diff_stat": {"type": "array", "items": _STR},
                     },
                 },
+                # Optional (added in v1, additive): short code-written notes, such
+                # as why git state is missing ("git_skipped: ...").
+                "notes": {"type": "array", "items": _STR, "maxItems": MAX_NOTES},
                 "recent_turns": {
                     "type": "array",
                     "items": {

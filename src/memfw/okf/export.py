@@ -8,6 +8,7 @@ The memfw repository remains the authority; this module never writes it.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 from collections import Counter
@@ -167,16 +168,143 @@ def export_okf(
 ) -> OkfExportResult:
     """Export ``root`` (a memfw vault) to ``output`` as an OKF v0.2 bundle."""
     repository = Repository(Path(root))
+    # Resolve first: ``Path(".").with_name`` raises, and the safety checks
+    # below must compare real locations, not spellings or symlinks.
+    output_path = Path(output).expanduser().resolve()
+    _check_output(output_path, repository.root, force=force)
     repository.init()
     documents = repository.list()
-    generated_at = (now or datetime.now(UTC)).astimezone(UTC).isoformat().replace("+00:00", "Z")
-    output_path = Path(output)
+    moment = (now or datetime.now(UTC)).astimezone(UTC)
+    generated_at = moment.isoformat().replace("+00:00", "Z")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = output_path.with_name(output_path.name + ".tmp")
-    if temp_path.exists():
+    if _is_within(repository.root.resolve(), temp_path):
+        raise ValueError(f"refusing to use {temp_path} as scratch: it is or contains the vault")
+    if temp_path.is_symlink() or temp_path.is_file():
+        temp_path.unlink()  # never follow a symlink into rmtree
+    elif temp_path.exists():
         shutil.rmtree(temp_path)
     temp_path.mkdir(parents=True)
+    try:
+        concepts, validation = _write_bundle(
+            temp_path, repository, documents, generated_by, generated_at, bundle_title
+        )
+        if output_path.exists():
+            # Re-check: the output may have appeared since the first check.
+            _check_output(output_path, repository.root, force=force)
+            backup = _backup_path(output_path, moment)
+            if _is_within(repository.root.resolve(), backup):
+                raise ValueError(f"refusing to back up {output_path} onto the vault: {backup}")
+            output_path.rename(backup)
+        temp_path.rename(output_path)
+    finally:
+        if temp_path.exists():
+            shutil.rmtree(temp_path, ignore_errors=True)
+    # Report the path as the caller spelled it; the checks above used the real one.
+    # ``.`` and ``..`` name no directory of their own (after ``--force`` the
+    # working directory is the backup), so those are reported resolved.
+    spelled = Path(output)
+    reported = spelled if spelled.name and spelled.name != ".." else output_path
+    return OkfExportResult(
+        bundle=reported,
+        concepts=len(concepts),
+        valid=validation.valid,
+        manifest=reported / "manifest.json",
+        warnings=validation.warnings,
+    )
 
+
+def _same_file(left: Path, right: Path) -> bool:
+    try:
+        return os.path.samefile(left, right)
+    except OSError:
+        return False
+
+
+def _is_within(path: Path, parent: Path) -> bool:
+    """True when ``path`` is ``parent`` or below it, compared by file identity.
+
+    Text comparison after ``resolve()`` is not enough: on a case-insensitive
+    file system (the macOS default) ``vault`` and ``VAULT`` are one directory.
+    Each existing ancestor of ``path`` is compared to ``parent`` by
+    ``(st_dev, st_ino)``. A ``parent`` that does not exist yet is compared by
+    case-folded text, which refuses more, never less.
+    """
+
+    if not parent.exists():
+        folded = str(parent).casefold()
+        return any(str(candidate).casefold() == folded for candidate in (path, *path.parents))
+    return any(
+        _same_file(candidate, parent)
+        for candidate in (path, *path.parents)
+        if candidate.exists()
+    )
+
+
+def _is_memfw_bundle(path: Path) -> bool:
+    try:
+        manifest = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(manifest, dict):
+        return False
+    generator = manifest.get("generator")
+    generated_by = manifest.get("generated_by")
+    return (isinstance(generator, str) and generator.startswith("memfw-okf-export/")) or (
+        isinstance(generated_by, str) and "memfw-okf-export" in generated_by
+    )
+
+
+def _check_output(output_path: Path, vault_root: Path, *, force: bool) -> None:
+    """Refuse outputs that would clobber the vault or anything not ours."""
+
+    vault = vault_root.expanduser().resolve()
+    if _is_within(vault, output_path):
+        raise ValueError(
+            f"refusing to export to {output_path}: it is or contains the vault {vault}"
+        )
+    if _is_within(output_path, vault):
+        raise ValueError(f"refusing to export to {output_path}: it is inside the vault {vault}")
+    temp_path = output_path.with_name(output_path.name + ".tmp")
+    if _is_within(vault, temp_path.resolve()):
+        raise ValueError(
+            f"refusing to export to {output_path}: its scratch path {temp_path} "
+            f"is or contains the vault {vault}"
+        )
+    if not output_path.exists():
+        return
+    if not output_path.is_dir():
+        raise FileExistsError(
+            f"output already exists and is not an OKF bundle directory: {output_path}"
+        )
+    if not force:
+        raise FileExistsError(f"output already exists: {output_path} (use --force)")
+    if not _is_memfw_bundle(output_path):
+        raise FileExistsError(
+            f"refusing to replace {output_path} with --force: it has no manifest.json "
+            "written by memfw-okf-export"
+        )
+
+
+def _backup_path(output_path: Path, moment: datetime) -> Path:
+    stamp = moment.strftime("%Y%m%dT%H%M%SZ")
+    base = output_path.with_name(f"{output_path.name}.bak-{stamp}")
+    candidate = base
+    counter = 1
+    while candidate.exists() or candidate.is_symlink():
+        candidate = base.with_name(f"{base.name}-{counter}")
+        counter += 1
+    return candidate
+
+
+def _write_bundle(
+    temp_path: Path,
+    repository: Repository,
+    documents: list[MemoryDocument],
+    generated_by: str,
+    generated_at: str,
+    bundle_title: str | None,
+) -> tuple[list[dict[str, Any]], OkfValidation]:
     concepts: list[dict[str, Any]] = []
     for document in documents:
         concept_id, concept_type, front = _concept(document, generated_by)
@@ -222,24 +350,7 @@ def export_okf(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
 
-    if output_path.exists():
-        if not force:
-            shutil.rmtree(temp_path)
-            raise FileExistsError(f"output already exists: {output_path} (use force=True)")
-        backup = output_path.with_name(
-            output_path.name + f".bak-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
-        )
-        output_path.rename(backup)
-        temp_path.rename(output_path)
-    else:
-        temp_path.rename(output_path)
-    return OkfExportResult(
-        bundle=output_path,
-        concepts=len(concepts),
-        valid=validation.valid,
-        manifest=output_path / "manifest.json",
-        warnings=validation.warnings,
-    )
+    return concepts, validation
 
 
 def validate_okf_bundle(path: Path | str) -> OkfValidation:

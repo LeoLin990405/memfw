@@ -13,14 +13,6 @@
       ],
       "score": 0.75,
       "title": "Beta corpus note"
-    },
-    {
-      "id": "mem-gamma",
-      "reasons": [
-        "lexical"
-      ],
-      "score": 0.09090909090909091,
-      "title": "Gamma corpus note"
     }
   ]
 }

@@ -24,32 +24,42 @@ The server is deliberately local-only: it has no remote host or external search 
 from __future__ import annotations
 
 import argparse
-import copy
 import hashlib
 import json
 import os
 import re
+import sqlite3
 import stat
 import sys
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import yaml
-from yaml.nodes import Node
+# Kept as a module attribute: tests patch ``memfw.mcp.server.yaml.safe_load``
+# to prove the search path never parses YAML.
+import yaml  # noqa: F401
 
+from memfw.capture.staging import (
+    CANDIDATE_DIR,
+    MAX_CANDIDATE_BYTES,
+    candidate_document,
+    open_candidate_directory,
+    publish_candidate,
+)
 from memfw.capture.suggestions import suggest_related
-from memfw.conversations import OPERATOR, ConversationShare, open_share
+from memfw.conversations import OPERATOR, ConversationShare, SharePolicy, open_share
 from memfw.core.errors import NotFoundError
-from memfw.core.models import Layer, Tier
+from memfw.core.models import Layer, MemoryDocument, Tier
 from memfw.core.repository import Repository
 from memfw.dream.run import DreamOptions, run_dream
 from memfw.dream.stage import DREAM_DIR
 from memfw.history import HistoryLimits, TranscriptIndex, default_db, sources_from_config
+from memfw.history.index import split_ref
 from memfw.index import MemoryIndex
 from memfw.memory_hybrid import MemoryHybridRetriever, shared_readonly
 from memfw.notes import HttpEmbeddingProvider
@@ -68,8 +78,8 @@ DREAM_MAX_STAGED = 50
 DREAM_STAGE_INTERVAL_SECONDS = 60.0
 """Least time between two staged dream_run calls of one server and tenant."""
 PROTOCOL = "2024-11-05"
-_MAX_CONTENT_BYTES = 64 * 1024
-_CANDIDATE_DIR = Path("_candidates") / "remember"
+_MAX_CONTENT_BYTES = MAX_CANDIDATE_BYTES
+_CANDIDATE_DIR = CANDIDATE_DIR
 INSTRUCTIONS = (
     "memfw exposes a local Markdown memory vault. Use memory_search before answering "
     "questions that depend on stored memories, and memory_get to read one memory by id. "
@@ -331,6 +341,33 @@ def _slug(text: str) -> str:
     return value[:48] or "memory"
 
 
+_CONCEPT_ERROR = "alias expansion skipped: a concept file is invalid"
+
+
+def _client_message(message: str, root: Path) -> str:
+    """A message safe to return to an MCP client.
+
+    Errors raised below the gateway (the ontology loader, for one) can name
+    absolute vault paths. Those never reach the client: the detail goes to
+    stderr and the client gets the message with vault paths made relative,
+    or a fixed message when an absolute path would remain.
+    """
+
+    text = message
+    for base in {str(root.expanduser()), str(root.expanduser().resolve())}:
+        if base and base != "/":
+            text = text.replace(base.rstrip("/") + "/", "").replace(base, ".")
+    if text != message or _ABSOLUTE_PATH.search(text):
+        sys.stderr.write(f"memfw MCP: {message}\n")
+        sys.stderr.flush()
+    if _ABSOLUTE_PATH.search(text):
+        return _CONCEPT_ERROR if "concept" in text else "internal error (details in server log)"
+    return text
+
+
+_ABSOLUTE_PATH = re.compile(r"(?:^|[\s'\"(=:])(?:/|~/|[A-Za-z]:\\)[^\s'\"]+")
+
+
 def _flag(arguments: dict[str, Any], key: str, default: bool) -> bool:
     value = arguments.get(key, default)
     if value is None:
@@ -401,142 +438,20 @@ def client_endpoint_fields(arguments: dict[str, Any]) -> list[str]:
     return found
 
 
-class _SingleLine(str):
-    """A string rendered as one double-quoted YAML scalar."""
+# The staging writer is shared with every Ingestor (``memfw okf import``).
+_candidate_document = candidate_document
+_open_candidate_directory = open_candidate_directory
+_publish_candidate = publish_candidate
 
 
-class _CandidateDumper(yaml.SafeDumper):
-    """Dumper that keeps every string on one escaped line."""
+def _indexed_ids(path: Path) -> set[str] | None:
+    """Memory ids in the index, or None when it cannot be read."""
 
-
-def _represent_single_line(dumper: yaml.SafeDumper, data: _SingleLine) -> Node:
-    return dumper.represent_scalar("tag:yaml.org,2002:str", str(data), style='"')
-
-
-_CandidateDumper.add_representer(_SingleLine, _represent_single_line)
-
-
-def _single_line(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {str(key): _single_line(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_single_line(item) for item in value]
-    if isinstance(value, str):
-        return _SingleLine(value)
-    return value
-
-
-def _candidate_document(
-    *,
-    title: str,
-    text: str,
-    proposal_id: str,
-    tenant: str,
-    tags: list[str],
-    related: list[str],
-    suggestions: list[dict[str, Any]],
-) -> str:
-    """Frontmatter `candidate-apply` can read: hash is sha256 of the body."""
-    content_hash = "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
-    # The candidate is recorded now; ``recorded_at`` is the TTL clock.
-    created_at = datetime.now(UTC).isoformat()
-    metadata = {
-        "type": "candidate",
-        "lifecycle": "active",
-        "proposal_id": proposal_id,
-        "source": "candidate",
-        "tenant": tenant,
-        "tags": list(tags),
-        "related": list(related),
-        "created_at": created_at,
-        "recorded_at": created_at,
-        "content_hash": content_hash,
-        "suggestions": copy.deepcopy(suggestions),
-        "authority": False,
-    }
-    header = {
-        "name": title,
-        "title": title,
-        "type": "candidate",
-        "lifecycle": "active",
-        "proposal_id": proposal_id,
-        "source": "candidate",
-        "tenant": tenant,
-        "tags": list(tags),
-        "related": list(related),
-        "created_at": created_at,
-        "recorded_at": created_at,
-        "content_hash": content_hash,
-        "suggestions": copy.deepcopy(suggestions),
-        "authority": False,
-        "metadata": metadata,
-    }
-    rendered = yaml.dump(
-        _single_line(header),
-        Dumper=_CandidateDumper,
-        allow_unicode=True,
-        sort_keys=False,
-        width=10**9,
-    )
-    if "---\n" in rendered:
-        raise ValueError("candidate frontmatter is not safe to publish")
-    return f"---\n{rendered}---\n\n{text}\n"
-
-
-def _open_candidate_directory(root: Path) -> int:
-    """Open `<root>/_candidates/remember` without following a swapped symlink."""
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-    root_fd = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-    current = root_fd
     try:
-        for part in _CANDIDATE_DIR.parts:
-            try:
-                os.mkdir(part, 0o777, dir_fd=current)
-            except FileExistsError:
-                pass
-            next_fd = os.open(part, flags, dir_fd=current)
-            if current != root_fd:
-                os.close(current)
-            current = next_fd
-        return current
-    except BaseException:
-        if current != root_fd:
-            os.close(current)
-        raise
-    finally:
-        os.close(root_fd)
-
-
-def _publish_candidate(root: Path, filename: str, text: str) -> None:
-    """Write `filename` with O_EXCL plus an atomic link. Never overwrites.
-
-    The same pattern as `/stage`: a unique temporary file is published with
-    `os.link`, which fails if the destination already exists.
-    """
-    directory_fd = _open_candidate_directory(root)
-    temporary_name = f".{filename}.{uuid.uuid4().hex}.tmp"
-    descriptor: int | None = None
-    try:
-        descriptor = os.open(
-            temporary_name,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-            0o600,
-            dir_fd=directory_fd,
-        )
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
-            descriptor = None
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.link(temporary_name, filename, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        try:
-            os.unlink(temporary_name, dir_fd=directory_fd)
-        except FileNotFoundError:
-            pass
-        os.close(directory_fd)
+        with closing(sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)) as db:
+            return {str(row[0]) for row in db.execute("SELECT id FROM memory_rows")}
+    except (OSError, sqlite3.Error):
+        return None
 
 
 def _ensure_search_index(repository: Repository) -> None:
@@ -544,21 +459,30 @@ def _ensure_search_index(repository: Repository) -> None:
 
     Stale means: missing, built by an earlier schema generation (an index
     written by memfw 0.1.x has no ``memory_temporal`` projection and would
-    answer every FTS query with nothing), or older than a Markdown file.
+    answer every FTS query with nothing), older than a Markdown file, or
+    holding a different set of memories than ``memories/`` once that directory
+    changed after the index was built. The last check catches a file copied
+    in with its old mtime kept (``rsync -a``, Syncthing, ``cp -p``) and a file
+    deleted outside memfw: neither leaves a surviving file newer than the
+    index. A file that cannot be parsed is skipped by the rebuild, so it only
+    triggers one rebuild per directory change, never one per search.
     """
 
     path = repository.index_path
     stale = not path.is_file() or not MemoryIndex(path).schema_is_current()
     if not stale and repository.memories_dir.is_dir():
         indexed_at = path.stat().st_mtime
-        stale = False
+        stems: set[str] = set()
         with os.scandir(repository.memories_dir) as entries:
             for item in entries:
                 if not item.name.endswith(".md"):
                     continue
+                stems.add(item.name[: -len(".md")])
                 if item.stat(follow_symlinks=False).st_mtime > indexed_at:
                     stale = True
                     break
+        if not stale and repository.memories_dir.stat().st_mtime > indexed_at:
+            stale = _indexed_ids(path) != stems
     if stale:
         repository.init()
         MemoryIndex(path).rebuild(repository)
@@ -848,7 +772,7 @@ class Gateway:
                 scope=scope,
             )
         except OntologyError as exc:
-            return [], [], str(exc)
+            return [], [], _client_message(str(exc), repository.root)
         service = shared_readonly()
         rows: list[dict[str, Any]] = []
         for memory_id, why in hits:
@@ -951,30 +875,48 @@ class Gateway:
         elif mode == "fts":
             page = max(1, min(int(limit), 50))
             _ensure_search_index(repository)
-            payload = shared_readonly().search_vault(
-                repository.root,
-                query,
-                limit=page,
-                source=source,
-                tenant=self.tenant,
-                include_history=include_history,
-                as_of=as_of,
-                scope=scope,
-            )
-            visible = [
-                item
-                for item in payload["results"]
-                if not self.allowed_sources or item["source"] in self.allowed_sources
-            ]
+            # With an allow-list and no explicit source, ask the shared reader
+            # once per allowed source so the SQL filters by source before the
+            # page cap: filtering one capped page afterwards could return
+            # fewer than ``limit`` hits, or none, while allowed hits exist.
+            sources = [source] if source or not self.allowed_sources else self.allowed_sources
+            merged: list[dict[str, Any]] = []
+            fts_errors: list[str] = []
+            fts_ambiguity: list[Any] = []
+            for each in dict.fromkeys(sources):
+                payload = shared_readonly().search_vault(
+                    repository.root,
+                    query,
+                    limit=page,
+                    source=each,
+                    tenant=self.tenant,
+                    include_history=include_history,
+                    as_of=as_of,
+                    scope=scope,
+                )
+                merged.extend(
+                    item
+                    for item in payload["results"]
+                    if not self.allowed_sources or item["source"] in self.allowed_sources
+                )
+                for message in payload.get("errors") or []:
+                    text = _client_message(str(message), repository.root)
+                    if text not in fts_errors:
+                        fts_errors.append(text)
+                for entry in payload.get("ambiguity") or []:
+                    if entry not in fts_ambiguity:
+                        fts_ambiguity.append(entry)
+            if len(sources) > 1:
+                merged.sort(key=lambda item: -float(item.get("score") or 0.0))
             result = {
                 "mode": "fts",
                 "degraded": False,
-                "errors": [str(item) for item in (payload.get("errors") or [])],
+                "errors": fts_errors,
                 "model_versions": {},
-                "results": visible,
+                "results": merged[:page],
             }
-            if payload.get("ambiguity"):
-                result["ambiguity"] = payload["ambiguity"]
+            if fts_ambiguity:
+                result["ambiguity"] = fts_ambiguity
         else:
             page = max(0, min(limit, 50))
             retriever = self._retriever(repository)
@@ -1089,7 +1031,7 @@ class Gateway:
                 rows = fuse_rows(rows, alias_rows, limit=page)
             elif len(rows) > page:
                 rows = rows[:page]
-        errors = list(result["errors"])
+        errors = [_client_message(str(item), repository.root) for item in result["errors"]]
         if alias_note:
             errors.append(alias_note)
         payload = {
@@ -1105,9 +1047,16 @@ class Gateway:
             payload["route"] = result["route"]
         return payload
 
+    def _visible(self, document: MemoryDocument) -> bool:
+        """In the bound tenant and, when ``MEMFW_ALLOWED_SOURCES`` is set, an allowed source."""
+
+        if document.tenant != self.tenant:
+            return False
+        return not self.allowed_sources or document.source in self.allowed_sources
+
     def get(self, memory_id: str) -> dict[str, Any]:
         document = self._repo().get(memory_id)
-        if document.tenant != self.tenant:
+        if not self._visible(document):
             raise ValueError("memory is not visible in this tenant")
         return {
             "id": document.id,
@@ -1187,12 +1136,12 @@ class Gateway:
             neighbour = repository.get(str(row.get("id") or ""))
         except NotFoundError:
             return False
-        return neighbour.tenant == self.tenant
+        return self._visible(neighbour)
 
     def related(self, memory_id: str, limit: int = 10) -> dict[str, Any]:
         repository = self._repo()
         document = repository.get(memory_id)
-        if document.tenant != self.tenant:
+        if not self._visible(document):
             raise ValueError("memory is not visible in this tenant")
         bounded = max(1, min(limit, 50))
         rows = RelatedIndex(self.root / ".memfw-related.sqlite").related(
@@ -1211,7 +1160,7 @@ class Gateway:
             document
             for document in repository.list()
             if document.valid_to is None
-            and document.tenant == self.tenant
+            and self._visible(document)
             and (document.layer == Layer.ANCHOR or document.anchor or document.type == "procedural")
         ]
         selected.sort(
@@ -1252,7 +1201,7 @@ class Gateway:
 
     def status(self) -> dict[str, Any]:
         repository = self._repo()
-        documents = repository.list()
+        documents = [document for document in repository.list() if self._visible(document)]
         layers = {layer.value: 0 for layer in Layer}
         tiers = {tier.value: 0 for tier in Tier}
         for document in documents:
@@ -1276,17 +1225,55 @@ class Gateway:
         Refreshed incrementally, at most once per ``MEMFW_HISTORY_REFRESH_SECONDS``
         (default 30); concurrent refreshes are serialised by the index's lock.
         """
+        return self._history_scoped()[0]
+
+    def _history_scoped(self) -> tuple[TranscriptIndex, frozenset[str] | None]:
+        """The index and the source names this caller may read (``None``: all).
+
+        The same visibility as the conversation tools: a source named after an app
+        in ``conversation_optout.agents`` or with ``readable: false`` is never
+        returned, and the caller's own rule applies (opted out or ``can_read:
+        false`` is refused; a ``can_read`` list narrows the sources). The index
+        keeps every configured source, so hidden ones are filtered per query.
+        """
         repository = self._repo()
         config = repository.read_config()
         sources = sources_from_config(config)
         if not sources:
             raise ValueError("no history_sources configured in vault.yaml")
+        allowed = self._history_allowed(SharePolicy.from_config(config), sources)
         index = TranscriptIndex(
             default_db(repository.root), sources, limits=HistoryLimits.from_config(config)
         )
         # Never wait on another refresh: serve the existing index instead.
         index.refresh(min_interval=self.history_refresh_seconds, blocking=False)
-        return index
+        return index, allowed
+
+    def _history_allowed(
+        self, policy: SharePolicy, sources: Sequence[Any]
+    ) -> frozenset[str] | None:
+        caller = (self.app or "").strip().lower()
+        if caller and caller in policy.optout:
+            raise ValueError(f"app {caller} has opted out of conversation sharing")
+        can_read = True if caller == OPERATOR else policy.rule(caller).can_read
+        if can_read is False:
+            raise ValueError(f"app {caller or '(unnamed)'} may not read shared conversations")
+        hidden = set(policy.hidden())
+        include = None if can_read is True else set(can_read)
+        names = [str(source.name) for source in sources]
+        allowed = frozenset(
+            name
+            for name in names
+            if name.strip().lower() not in hidden
+            and (include is None or name.strip().lower() in include)
+        )
+        return None if len(allowed) == len(names) else allowed
+
+    @staticmethod
+    def _history_source(source: str, allowed: frozenset[str] | None) -> None:
+        if source and allowed is not None and source not in allowed:
+            # Same answer as a source that does not exist: nothing leaks.
+            raise ValueError(f"unknown history source: {source}")
 
     def history_list(
         self,
@@ -1297,13 +1284,50 @@ class Gateway:
         until: str = "",
         limit: int = 50,
     ) -> dict[str, Any]:
-        return self._history().list(
-            source=source or None,
-            session=session or None,
-            since=since or None,
-            until=until or None,
-            limit=limit,
-        )
+        index, allowed = self._history_scoped()
+        self._history_source(source, allowed)
+        if source or allowed is None:
+            listed = index.list(
+                source=source or None,
+                session=session or None,
+                since=since or None,
+                until=until or None,
+                limit=limit,
+            )
+            if allowed is not None and "stats" in listed:
+                # Restricted caller: count only what it may see.
+                listed["stats"] = index.stats([source] if source else allowed)
+            return listed
+        parts = [
+            index.list(
+                source=name,
+                session=session or None,
+                since=since or None,
+                until=until or None,
+                limit=limit,
+            )
+            for name in sorted(allowed)
+        ]
+        bounded = max(1, min(int(limit), 500))
+        if session:
+            entries = [entry for part in parts for entry in part["entries"]][:bounded]
+            windows: dict[str, dict[str, Any]] = {}
+            for entry in entries:
+                window = windows.setdefault(
+                    entry["window_id"],
+                    {
+                        "window_id": entry["window_id"],
+                        "parent_window_id": entry["parent_window_id"],
+                        "entries": 0,
+                        "first_ref": entry["ref"],
+                    },
+                )
+                window["entries"] += 1
+            return {"session_id": session, "windows": list(windows.values()), "entries": entries}
+        sessions = [item for part in parts for item in part["sessions"]]
+        sessions.sort(key=lambda item: (item["source"], item["session_id"]))
+        sessions.sort(key=lambda item: item["started_at"] or "", reverse=True)
+        return {"sessions": sessions[:bounded], "stats": index.stats(allowed)}
 
     def history_search(
         self,
@@ -1315,19 +1339,44 @@ class Gateway:
         until: str = "",
         limit: int = 10,
     ) -> dict[str, Any]:
-        return self._history().search(
-            query,
-            source=source or None,
-            session=session or None,
-            since=since or None,
-            until=until or None,
-            limit=limit,
-        )
+        index, allowed = self._history_scoped()
+        self._history_source(source, allowed)
+        if source or allowed is None:
+            return index.search(
+                query,
+                source=source or None,
+                session=session or None,
+                since=since or None,
+                until=until or None,
+                limit=limit,
+            )
+        parts = [
+            index.search(
+                query,
+                source=name,
+                session=session or None,
+                since=since or None,
+                until=until or None,
+                limit=limit,
+            )
+            for name in sorted(allowed)
+        ]
+        results = [hit for part in parts for hit in part["results"]]
+        results.sort(key=lambda hit: hit.get("timestamp") or "", reverse=True)
+        results.sort(key=lambda hit: float(hit.get("score") or 0.0), reverse=True)
+        return {
+            "query": query,
+            "fallback": any(part["fallback"] for part in parts),
+            "results": results[: max(1, min(int(limit), 100))],
+        }
 
     def history_read(
         self, ref: str, *, before: int = 2, after: int = 2, max_bytes: int = 8192
     ) -> dict[str, Any]:
-        return self._history().read(ref, before=before, after=after, max_bytes=max_bytes)
+        index, allowed = self._history_scoped()
+        if allowed is not None:
+            self._history_source(split_ref(ref)[0], allowed)
+        return index.read(ref, before=before, after=after, max_bytes=max_bytes)
 
     def _conversations(self) -> ConversationShare:
         """The shared conversation store as this server's app sees it."""
@@ -1488,7 +1537,7 @@ class Gateway:
                 int(args.get("limit") or 10),
                 mode=str(args.get("mode") or "hybrid"),
                 source=str(args.get("source") or ""),
-                include_history=bool(args.get("include_history", False)),
+                include_history=_flag(args, "include_history", False),
                 as_of=(str(args["as_of"]) if args.get("as_of") else None),
                 rounds=(int(args["rounds"]) if args.get("rounds") is not None else None),
                 scope=args.get("scope"),
@@ -1626,12 +1675,13 @@ class Gateway:
                     }
                 )
             except Exception as exc:  # pragma: no cover - protocol boundary
+                text = _client_message(str(exc), self.root)[:500]
                 self.respond(
                     {
                         "jsonrpc": "2.0",
                         "id": msg_id,
                         "result": {
-                            "content": [{"type": "text", "text": str(exc)[:500]}],
+                            "content": [{"type": "text", "text": text}],
                             "isError": True,
                         },
                     }

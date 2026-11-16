@@ -26,13 +26,51 @@ from ..storage.transactions import TransactionMixin, _serialized
 from .common import sha256_text as sha256_text
 from .epistemic import EPISTEMIC_FIELDS, validate_proposed_write
 from .errors import IntegrityError, NotFoundError
-from .models import CaptureState, Event, EventKind, Layer, MemoryDocument, Tier, utc_now
+from .models import (
+    CaptureState,
+    Event,
+    EventKind,
+    Layer,
+    MemoryDocument,
+    Tier,
+    fold_temporal_aliases,
+    utc_now,
+)
 
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 
 if TYPE_CHECKING:
     from ..agents.models import Proposal, ProposalStatus
+
+
+#: Fields a legacy agent proposal may change. Epistemic type and causal grade
+#: are allowed: proposals may claim a hypothesis, never ``verified``; the
+#: shared gate rejects that.
+_PROPOSAL_FIELDS = frozenset(
+    {
+        "title",
+        "body",
+        "layer",
+        "tier",
+        "source",
+        "provenance",
+        "anchor",
+        "tags",
+        "summary",
+        "strength",
+        "reference_count",
+        "last_access_interval_days",
+        "manually_marked",
+        "group_key",
+        "evidence",
+        "epistemic",
+        "causal",
+        "causal_record",
+        "limitations",
+        "experience",
+    }
+)
 
 
 class Repository(
@@ -664,52 +702,9 @@ class Repository(
             )
         assert memory_id is not None and operation is not None
         assert rationale is not None and agent_id is not None and signature is not None
-        changes = changes or {}
-        if not agent_id or not signature:
-            raise IntegrityError("Agent proposals require an agent id and signature metadata")
-        self._check_id(memory_id)
-        if operation not in {"update", "delete", "layer_change", "tier_change"}:
-            raise IntegrityError("Unsupported proposal operation")
-        allowed = {
-            "title",
-            "body",
-            "layer",
-            "tier",
-            "source",
-            "provenance",
-            "anchor",
-            "tags",
-            "summary",
-            "strength",
-            "reference_count",
-            "last_access_interval_days",
-            "manually_marked",
-            "group_key",
-            # Epistemic type and causal grade: proposals may claim a hypothesis,
-            # never ``verified``. The shared gate rejects that below.
-            "evidence",
-            "epistemic",
-            "causal",
-            "causal_record",
-            "limitations",
-            "experience",
-        }
-        if operation != "delete" and (not changes or set(changes) - allowed):
-            raise IntegrityError("Proposal changes contain unsupported fields")
-        normalized = dict(changes)
-        for key in ("layer", "tier"):
-            if key in normalized:
-                normalized[key] = (
-                    normalized[key].value
-                    if hasattr(normalized[key], "value")
-                    else str(normalized[key])
-                )
-        self._validate_proposed_epistemic(memory_id, normalized, actor=f"agent:{agent_id}")
-        payload_hash = self._payload_hash(memory_id, operation, normalized)
-        try:
-            before_hash = hashlib.sha256(self._current_path(memory_id).read_bytes()).hexdigest()
-        except FileNotFoundError:
-            before_hash = None
+        payload_hash, before_hash = self._prepare_legacy_proposal(
+            memory_id, operation, changes or {}, agent_id=agent_id, signature=signature
+        )
         return self._append_event(
             EventKind.AGENT_PROPOSAL,
             memory_id,
@@ -724,6 +719,143 @@ class Repository(
                 "target_hash": payload_hash,
             },
         )
+
+    def check_proposal(
+        self,
+        *,
+        memory_id: str,
+        operation: str,
+        changes: dict[str, Any] | None,
+        agent_id: str,
+        signature: str,
+    ) -> None:
+        """Run every check :meth:`record_proposal` makes, and append nothing."""
+
+        self._prepare_legacy_proposal(
+            memory_id, operation, changes or {}, agent_id=agent_id, signature=signature
+        )
+
+    def _prepare_legacy_proposal(
+        self,
+        memory_id: str,
+        operation: str,
+        changes: dict[str, Any],
+        *,
+        agent_id: str,
+        signature: str,
+    ) -> tuple[str, str | None]:
+        """Validate a legacy proposal; return its payload hash and the memory's before hash."""
+
+        if not isinstance(changes, dict):
+            raise IntegrityError("Proposal changes must be an object")
+        if not agent_id or not signature:
+            raise IntegrityError("Agent proposals require an agent id and signature metadata")
+        self._check_id(memory_id)
+        if operation not in {"update", "delete", "layer_change", "tier_change"}:
+            raise IntegrityError("Unsupported proposal operation")
+        # Every legacy operation targets an existing memory. Refuse an unknown
+        # id here, before any event is appended to the log.
+        if not self._current_path(memory_id).exists():
+            raise NotFoundError(f"Memory not found: {memory_id}")
+        if operation != "delete" and (not changes or set(changes) - _PROPOSAL_FIELDS):
+            raise IntegrityError("Proposal changes contain unsupported fields")
+        if operation != "delete":
+            # Refuse what approval would later fail on (``layer: bogus``), so a
+            # human decision is never recorded for a proposal that cannot apply.
+            self._proposal_update_changes(memory_id, changes)
+        normalized = dict(changes)
+        for key in ("layer", "tier"):
+            if key in normalized:
+                normalized[key] = (
+                    normalized[key].value
+                    if hasattr(normalized[key], "value")
+                    else str(normalized[key])
+                )
+        self._validate_proposed_epistemic(memory_id, normalized, actor=f"agent:{agent_id}")
+        payload_hash = self._payload_hash(memory_id, operation, normalized)
+        try:
+            before_hash: str | None = hashlib.sha256(
+                self._current_path(memory_id).read_bytes()
+            ).hexdigest()
+        except FileNotFoundError:
+            before_hash = None
+        return payload_hash, before_hash
+
+    def _proposal_update_changes(self, memory_id: str, changes: dict[str, Any]) -> dict[str, Any]:
+        """Convert ``layer``/``tier`` and check the result is a valid memory, writing nothing.
+
+        This is the shape :meth:`update` receives when a proposal is approved;
+        anything it would reject is an :class:`IntegrityError` here instead.
+        """
+
+        normalized = dict(changes)
+        try:
+            if "layer" in normalized:
+                normalized["layer"] = Layer(normalized["layer"])
+            if "tier" in normalized:
+                normalized["tier"] = Tier(normalized["tier"])
+        except ValueError as exc:
+            raise IntegrityError(
+                f"Proposal changes contain an invalid layer or tier: {exc}"
+            ) from exc
+        try:
+            values = self.get(memory_id).model_dump()
+            values.update(fold_temporal_aliases(dict(normalized)))
+            MemoryDocument.model_validate(values)
+        except UnicodeDecodeError as exc:
+            raise IntegrityError(f"Memory is not valid UTF-8: {memory_id}") from exc
+        except ValueError as exc:  # pydantic.ValidationError and alias conflicts
+            first = str(exc).splitlines()
+            raise IntegrityError(
+                "Proposal changes do not make a valid memory: " + " ".join(first[:3])
+            ) from exc
+        return normalized
+
+    def check_proposal_approval(
+        self, proposal_id: str, payload: dict[str, Any]
+    ) -> tuple[Event, str, str, str, dict[str, Any]]:
+        """Every check an approval makes before it writes; nothing is written.
+
+        Returns the proposal event, the payload digest, the memory id, the
+        operation and the changes in the form :meth:`update` takes. Used by
+        :meth:`decide_proposal` and by ``approve-proposal --dry-run``.
+        """
+
+        if not isinstance(payload, dict):
+            raise IntegrityError("Approval payload must be an object")
+        events = self.events()
+        proposal = next((event for event in events if event.event_id == proposal_id), None)
+        if proposal is None or proposal.kind != EventKind.AGENT_PROPOSAL:
+            raise NotFoundError("Agent proposal not found")
+        if any(
+            event.kind == EventKind.HUMAN_DECISION
+            and event.details.get("proposal_id") == proposal_id
+            for event in events
+        ):
+            raise IntegrityError("Proposal already has a human decision")
+        canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        digest = hashlib.sha256(canonical.encode()).hexdigest()
+        if digest != proposal.details.get("target_hash"):
+            raise IntegrityError("Approval payload does not match the signed proposal target hash")
+        memory_id = str(payload.get("memory_id", ""))
+        operation = str(payload.get("operation", ""))
+        changes = payload.get("changes", {})
+        if not isinstance(changes, dict):
+            raise IntegrityError("Proposal changes must be an object")
+        if operation not in {"update", "delete", "layer_change", "tier_change"}:
+            raise IntegrityError("Unsupported proposal operation")
+        current_path = self._current_path(memory_id)
+        current_hash = (
+            hashlib.sha256(current_path.read_bytes()).hexdigest() if current_path.exists() else None
+        )
+        if current_hash != proposal.before_hash:
+            raise IntegrityError(
+                "Proposal is stale; current memory hash differs from proposal before_hash"
+            )
+        normalized = (
+            {} if operation == "delete" else self._proposal_update_changes(memory_id, changes)
+        )
+        return proposal, digest, memory_id, operation, normalized
 
     def _proposal_path(self, proposal_id: str) -> Path:
         if not _ID_RE.fullmatch(proposal_id):
@@ -1050,33 +1182,9 @@ class Repository(
             )
         if decision != "approve":
             raise IntegrityError("Only explicit human approve decisions are currently supported")
-        events = self.events()
-        proposal = next((event for event in events if event.event_id == proposal_id), None)
-        if proposal is None or proposal.kind != EventKind.AGENT_PROPOSAL:
-            raise NotFoundError("Agent proposal not found")
-        if any(
-            event.kind == EventKind.HUMAN_DECISION
-            and event.details.get("proposal_id") == proposal_id
-            for event in events
-        ):
-            raise IntegrityError("Proposal already has a human decision")
-        canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        digest = hashlib.sha256(canonical.encode()).hexdigest()
-        if digest != proposal.details.get("target_hash"):
-            raise IntegrityError("Approval payload does not match the signed proposal target hash")
-        memory_id = str(payload.get("memory_id", ""))
-        operation = str(payload.get("operation", ""))
-        changes = payload.get("changes", {})
-        if not isinstance(changes, dict):
-            raise IntegrityError("Proposal changes must be an object")
-        current_path = self._current_path(memory_id)
-        current_hash = (
-            hashlib.sha256(current_path.read_bytes()).hexdigest() if current_path.exists() else None
+        proposal, digest, memory_id, operation, normalized = self.check_proposal_approval(
+            proposal_id, payload
         )
-        if current_hash != proposal.before_hash:
-            raise IntegrityError(
-                "Proposal is stale; current memory hash differs from proposal before_hash"
-            )
         self.capture_event(
             EventKind.HUMAN_DECISION,
             actor="human",
@@ -1112,11 +1220,6 @@ class Repository(
             )
             result = None
         elif operation in {"update", "layer_change", "tier_change"}:
-            normalized = dict(changes)
-            if "layer" in normalized:
-                normalized["layer"] = Layer(normalized["layer"])
-            if "tier" in normalized:
-                normalized["tier"] = Tier(normalized["tier"])
             result = self.update(
                 memory_id,
                 actor=proposal.actor,

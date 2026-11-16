@@ -160,7 +160,8 @@ class MemoryHybridRetriever:
             start = document.valid_from or document.created_at
             end = document.valid_to
             return start <= as_of and (end is None or end > as_of)
-        return document.valid_to is None
+        # A superseded memory is history even when no valid_to was written.
+        return document.valid_to is None and not document.superseded_by
 
     def _source_allowed(self, source: str, requested: str) -> bool:
         if requested and source != requested:

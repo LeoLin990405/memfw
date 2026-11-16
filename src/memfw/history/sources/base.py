@@ -18,16 +18,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 import stat
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
 from ..parse import _blocks, render
+
+_LOG = logging.getLogger(__name__)
 
 MAX_LINE_BYTES = 1024 * 1024
 MAX_FILE_BYTES = 64 * 1024 * 1024
@@ -129,20 +132,63 @@ class Reader(Protocol):
 # -- helpers shared by readers ---------------------------------------------------
 
 
+class SessionTooLarge(Exception):
+    """Raised by ``Reader.read`` when a session's file is over the size limit.
+
+    Distinct from "nothing readable": ingest keeps what it stored before and
+    does not retry the session until its file changes.
+    """
+
+
+def utc_timestamp(value: str) -> str:
+    """ISO-8601 text with a UTC offset normalised to ``...Z``; anything else unchanged.
+
+    Stored timestamps are compared as text, so ``2026-01-01T09:00:00+08:00``
+    becomes ``2026-01-01T01:00:00Z``. Naive or unparseable values are returned
+    stripped but otherwise as given (their zone is unknown).
+    """
+
+    stripped = value.strip() if isinstance(value, str) else ""
+    if not stripped or stripped.endswith(("Z", "z")) and "+" not in stripped[10:]:
+        return stripped[:-1] + "Z" if stripped.endswith("z") else stripped
+    try:
+        parsed = datetime.fromisoformat(stripped)
+    except ValueError:
+        return stripped
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return stripped
+    try:
+        moment = parsed.astimezone(UTC)
+    except (OverflowError, ValueError):
+        return stripped
+    out = moment.strftime("%Y-%m-%dT%H:%M:%S")
+    if moment.microsecond:
+        if moment.microsecond % 1000 == 0:
+            out += f".{moment.microsecond // 1000:03d}"
+        else:
+            out += f".{moment.microsecond:06d}"
+    return out + "Z"
+
+
 def iso_timestamp(value: Any) -> str:
-    """ISO-8601 UTC for epoch seconds / milliseconds / nanoseconds, or a passthrough string."""
+    """ISO-8601 UTC for epoch seconds / milliseconds / nanoseconds, or a normalised string.
+
+    Never raises: out-of-range numbers (``1e400``, huge integers) give ``""``.
+    """
 
     if isinstance(value, bool) or value is None:
         return ""
     if isinstance(value, (int, float)):
-        seconds = float(value)
-        if seconds > 1e17:
-            seconds /= 1e9
-        elif seconds > 1e14:
-            seconds /= 1e6
-        elif seconds > 1e11:
-            seconds /= 1e3
         try:
+            seconds = float(value)
+            if seconds != seconds or seconds in (float("inf"), float("-inf")):
+                return ""
+            if seconds > 1e17:
+                seconds /= 1e9
+            elif seconds > 1e14:
+                seconds /= 1e6
+            elif seconds > 1e11:
+                seconds /= 1e3
             return datetime.fromtimestamp(seconds, UTC).isoformat().replace("+00:00", "Z")
         except (OverflowError, OSError, ValueError):
             return ""
@@ -151,9 +197,9 @@ def iso_timestamp(value: Any) -> str:
         if stripped.replace(".", "", 1).isdigit():
             try:
                 return iso_timestamp(float(stripped))
-            except ValueError:
+            except (OverflowError, ValueError):
                 return ""
-        return stripped
+        return utc_timestamp(stripped)
     return ""
 
 
@@ -196,8 +242,12 @@ def walk_files(root: Path, suffixes: tuple[str, ...]) -> Iterator[Path]:
                 yield path
 
 
-def read_bytes(path: Path, limit: int = MAX_FILE_BYTES) -> bytes:
-    """Whole file (``O_NOFOLLOW``), or ``b""`` when missing, not regular, or over ``limit``."""
+def read_bytes(path: Path, limit: int = MAX_FILE_BYTES, *, strict: bool = False) -> bytes:
+    """Whole file (``O_NOFOLLOW``), or ``b""`` when missing, not regular, or over ``limit``.
+
+    With ``strict`` a file over ``limit`` raises :class:`SessionTooLarge` instead,
+    so a session reader can tell "too large" from "empty".
+    """
 
     try:
         descriptor = os.open(path, _FILE_FLAGS)
@@ -205,7 +255,11 @@ def read_bytes(path: Path, limit: int = MAX_FILE_BYTES) -> bytes:
         return b""
     try:
         info = os.fstat(descriptor)
-        if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+        if not stat.S_ISREG(info.st_mode):
+            return b""
+        if info.st_size > limit:
+            if strict:
+                raise SessionTooLarge(f"{info.st_size} bytes > {limit}")
             return b""
         chunks: list[bytes] = []
         while True:
@@ -218,10 +272,13 @@ def read_bytes(path: Path, limit: int = MAX_FILE_BYTES) -> bytes:
         os.close(descriptor)
 
 
-def read_json(path: Path) -> Any:
-    """Parsed JSON file, or ``None`` when unreadable or invalid."""
+def read_json(path: Path, *, strict: bool = False) -> Any:
+    """Parsed JSON file, or ``None`` when unreadable or invalid.
 
-    data = read_bytes(path)
+    With ``strict`` a file over the size limit raises :class:`SessionTooLarge`.
+    """
+
+    data = read_bytes(path, strict=strict)
     if not data:
         return None
     try:
@@ -230,11 +287,58 @@ def read_json(path: Path) -> Any:
         return None
 
 
+_BOM = b"\xef\xbb\xbf"
+
+
+def iter_lines(chunks: Iterable[bytes]) -> Iterator[tuple[int, bytes]]:
+    """``(byte offset, line)`` for each complete line of a byte stream given in chunks.
+
+    The newline is not part of ``line``. A first line starting with a UTF-8
+    BOM has it removed (its offset stays 0). The trailing line without a
+    newline (still being written) is not yielded, nor are lines over
+    ``MAX_LINE_BYTES`` (their bytes still count toward later offsets).
+    Each chunk is scanned with a moving index, so splitting costs linear time.
+    """
+
+    tail = b""
+    base = 0
+    """Byte offset of ``tail[0]`` (of the next chunk when ``tail`` is empty)."""
+    skipping = False
+    for chunk in chunks:
+        if not chunk:
+            continue
+        data = tail + chunk if tail else chunk
+        index = 0
+        while True:
+            newline = data.find(b"\n", index)
+            if newline < 0:
+                break
+            start = base + index
+            if skipping:
+                skipping = False
+            elif newline - index <= MAX_LINE_BYTES:
+                line = data[index:newline]
+                if start == 0 and line.startswith(_BOM):
+                    line = line[len(_BOM) :]
+                yield start, line
+            index = newline + 1
+        if len(data) - index > MAX_LINE_BYTES:
+            # An over-long line without its newline yet: drop what is buffered
+            # and skip the rest of it when the newline arrives.
+            skipping = True
+            base += len(data)
+            tail = b""
+        else:
+            tail = data[index:]
+            base += index
+
+
 def iter_jsonl(path: Path, *, after: int = -1) -> Iterator[tuple[int, dict[str, Any]]]:
     """``(byte offset, object)`` for each complete JSON-object line starting after ``after``.
 
     The trailing line without a newline (still being written) is not yielded.
     Lines over ``MAX_LINE_BYTES`` and lines that are not JSON objects are skipped.
+    A UTF-8 BOM before the first line is ignored.
     """
 
     try:
@@ -244,40 +348,58 @@ def iter_jsonl(path: Path, *, after: int = -1) -> Iterator[tuple[int, dict[str, 
     try:
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             return
-        position = 0
-        buffer = b""
-        offset = 0
-        skipping = False
-        while True:
-            chunk = os.pread(descriptor, 1024 * 1024, position)
-            if not chunk:
-                return
-            position += len(chunk)
-            buffer += chunk
+
+        def chunks() -> Iterator[bytes]:
+            position = 0
             while True:
-                newline = buffer.find(b"\n")
-                if newline < 0:
-                    if len(buffer) > MAX_LINE_BYTES:
-                        skipping = True
-                        offset += len(buffer)
-                        buffer = b""
-                    break
-                line, buffer = buffer[:newline], buffer[newline + 1 :]
-                start = offset
-                offset += newline + 1
-                if skipping:
-                    skipping = False
-                    continue
-                if start <= after or not line.strip() or len(line) > MAX_LINE_BYTES:
-                    continue
-                try:
-                    value = json.loads(line.decode("utf-8", errors="replace"))
-                except (ValueError, RecursionError):
-                    continue
-                if isinstance(value, dict):
-                    yield start, value
+                chunk = os.pread(descriptor, 1024 * 1024, position)
+                if not chunk:
+                    return
+                position += len(chunk)
+                yield chunk
+
+        for start, line in iter_lines(chunks()):
+            if start <= after or not line.strip():
+                continue
+            try:
+                value = json.loads(line.decode("utf-8", errors="replace"))
+            except (ValueError, RecursionError):
+                continue
+            if isinstance(value, dict):
+                yield start, value
     finally:
         os.close(descriptor)
+
+
+def _relative(path: Path, root: Path) -> str:
+    """``path`` relative to ``root`` (no home directory in logs); the bare name otherwise."""
+
+    try:
+        return f"{root.name}/{path.relative_to(root)}"
+    except ValueError:
+        return path.name
+
+
+def inside(root: Path, path: Path) -> bool:
+    """True when ``path``, with every symlink resolved, lies under ``root`` (also resolved).
+
+    Guards fixed sub-paths (``globalStorage/state.vscdb``, ``db/db.sqlite`` ...)
+    whose intermediate directories could be symlinks pointing out of the root.
+    """
+
+    try:
+        resolved = path.resolve()
+        base = root.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    if resolved == base or resolved.is_relative_to(base):
+        return True
+    _LOG.warning(
+        "skipping %s: it resolves outside the store root (a symlinked store directory "
+        "is not read)",
+        _relative(path, root),
+    )
+    return False
 
 
 def open_sqlite_readonly(path: Path) -> sqlite3.Connection | None:

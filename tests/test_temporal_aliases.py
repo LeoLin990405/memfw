@@ -106,6 +106,7 @@ def test_update_stores_alias_under_the_canonical_name(tmp_path: Path) -> None:
     repository = Repository(root)
     repository.init()
     repository.add("Alias note", "alias corpus keyword", memory_id="mem-alias")
+    repository.add("Target mem-next", "target body mem-next", memory_id="mem-next")
     updated = repository.update(
         "mem-alias",
         actor="human",
@@ -125,6 +126,8 @@ def test_alias_replaces_and_clears_a_stored_canonical_value(tmp_path: Path) -> N
     repository = Repository(root)
     repository.init()
     repository.add("Alias note", "alias corpus keyword", memory_id="mem-alias")
+    repository.add("Target mem-a", "target body mem-a", memory_id="mem-a")
+    repository.add("Target mem-b", "target body mem-b", memory_id="mem-b")
     repository.update(
         "mem-alias",
         actor="human",
@@ -158,6 +161,8 @@ def test_same_request_conflict_does_not_change_file_or_event(tmp_path: Path) -> 
     repository = Repository(root)
     repository.init()
     repository.add("Alias note", "alias corpus keyword", memory_id="mem-alias")
+    repository.add("Target mem-a", "target body mem-a", memory_id="mem-a")
+    repository.add("Target mem-b", "target body mem-b", memory_id="mem-b")
     repository.update("mem-alias", actor="human", valid_to=UNTIL, superseded_by="mem-a")
     path = root / "memories" / "mem-alias.md"
     before = path.read_bytes()

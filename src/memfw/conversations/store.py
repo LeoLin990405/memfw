@@ -21,7 +21,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
+from memfw.history.injected import has_content, strip_structural
 from memfw.history.redact import MAX_SCAN_CHARS, has_secret, redact
+from memfw.history.sources.base import utc_timestamp
 
 WITHHELD = "[withheld: secret-shaped content]"
 DATA_NOTICE = (
@@ -67,6 +69,78 @@ def safe_text(text: str, limit: int | None = None) -> tuple[str, bool]:
     if limit is not None and len(cleaned) > limit:
         cleaned = cleaned[: max(0, limit - 1)] + "…"
     return cleaned, False
+
+
+_KEY_FRACTION = ".000000Z"
+
+
+def ts_key(value: str | None) -> str | None:
+    """A sortable text key for a stored timestamp (``None`` stays ``None``).
+
+    Stored rows may hold UTC (``...Z``) or offset (``...+08:00``) forms, with or
+    without fractions. Text comparison of those is wrong (``+08:00`` is eight
+    hours off, and ``...00.5Z`` sorts before ``...00Z``), so every comparison and
+    ordering goes through this key: UTC with a fixed six-digit fraction.
+    Naive or unparseable values are returned stripped (their zone is unknown;
+    they compare as text, as before). A re-ingest stores normalised values.
+    """
+
+    if value is None:
+        return None
+    text = utc_timestamp(str(value))
+    if len(text) < 17 or not text.endswith("Z") or text[10] != "T":
+        return text
+    body = text[:-1]
+    if len(body) == 16:
+        body += ":00"  # no seconds: ``2026-01-01T00:00Z``
+    if "." in body[19:]:
+        whole, fraction = body[:19], body[20:]
+        if not fraction.isdigit():
+            return text
+        fraction = fraction[:6]  # nanoseconds: truncate to microseconds
+        return f"{whole}.{fraction.ljust(6, '0')}Z"
+    if len(body) != 19:
+        return text
+    return body + _KEY_FRACTION
+
+
+def ts_display(key: str | None) -> str:
+    """The display form of a :func:`ts_key` (``...Z``, ``.fff`` or ``.ffffff``)."""
+
+    if not key:
+        return ""
+    if len(key) == 27 and key.endswith("Z") and key[19] == ".":
+        fraction = key[20:26]
+        if fraction == "000000":
+            return key[:19] + "Z"
+        if fraction.endswith("000"):
+            return f"{key[:19]}.{fraction[:3]}Z"
+    return key
+
+
+GOAL_SCAN_TURNS = 200
+"""At most this many leading turns are examined; only user turns can yield the goal."""
+
+
+def goal_text(texts: Sequence[str]) -> str:
+    """The first user text that is the person's own words, harness markers removed.
+
+    Turns that are only harness-injected (a ``<system-reminder>`` block, a
+    command wrapper) are skipped: the first turn with content after
+    :func:`strip_structural` wins; failing that, the first with any residual
+    text; else ``""``.
+    """
+
+    fallback = ""
+    for raw in texts:
+        stripped = strip_structural(raw or "").strip()
+        if not stripped:
+            continue
+        if has_content(stripped):
+            return stripped
+        if not fallback:
+            fallback = stripped
+    return fallback
 
 
 @dataclass(frozen=True)

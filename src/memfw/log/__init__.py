@@ -23,6 +23,7 @@ def read_events(
 ) -> list[Event]:
     """Read and validate canonical JSONL, hash chain, and committed head."""
     if not path.exists():
+        _require_missing_log_is_empty(path, expected_prev)
         return []
     result: list[Event] = []
     chain_prev = expected_prev
@@ -80,3 +81,32 @@ def read_events(
         elif not result and head is not None and head != expected_prev:
             raise IntegrityError("Empty event log head does not match its archived anchor")
     return result
+
+
+def _require_missing_log_is_empty(path: Path, expected_prev: str) -> None:
+    """Reject a deleted active log whose committed state still expects events.
+
+    A missing ``events.jsonl`` is only equivalent to an empty log when the
+    committed head (combined state or legacy head) points at the archived
+    anchor. Otherwise the committed events are gone and must not be read as an
+    empty history that the next append would silently fork from.
+    """
+    state_path = path.with_name("events.state.json")
+    head_path = path.with_name("events.head")
+    head: object = None
+    if state_path.exists():
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            head = state["last_hash"]
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            raise IntegrityError(f"Event state is invalid: {exc}") from exc
+    elif head_path.exists():
+        try:
+            head = head_path.read_text(encoding="ascii").strip()
+        except (OSError, ValueError) as exc:
+            raise IntegrityError(f"Legacy event head is invalid: {exc}") from exc
+    if head is not None and head != expected_prev:
+        raise IntegrityError(
+            "Event log is missing but committed event state expects events; "
+            "restore events.jsonl from backup"
+        )

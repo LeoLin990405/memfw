@@ -215,6 +215,8 @@ class KimiReader:
         # yielded), so model and ACP state seen before ``after`` still apply.
         for offset, event in iter_jsonl(locator.path):
             kind = event.get("type")
+            if not isinstance(kind, str):
+                continue
             if kind in MODEL_EVENTS:
                 model = _model(event) or model
                 continue
