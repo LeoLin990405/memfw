@@ -96,7 +96,11 @@ def test_complete_small_gating_run_is_byte_semantically_deterministic() -> None:
         rho_access=0.3,
         prevalence=0.2,
     )
-    assert first == second
+    # Allocated bytes come from st_blocks, which the filesystem decides (ext4
+    # delayed allocation can round the same logical file to a different block
+    # count between runs), so they and the fractions built from them are not
+    # part of the determinism contract. Logical bytes and every other field are.
+    assert _without_allocation(first) == _without_allocation(second)
     assert first["oracle_ideal_candidate_count"] == len(first["oracle_ideal_candidate_ids"])
     assert first["oracle_realized_overcapture_count"] == (
         first["oracle_realized_candidate_count"] - first["oracle_realized_important_count"]
@@ -114,3 +118,29 @@ def test_complete_small_gating_run_is_byte_semantically_deterministic() -> None:
         assert row["h6_allocated_pass"] == (
             row["h6_recall_eligible"] and row["h6_stage_allocated_fraction"] <= 0.20
         )
+
+
+# Labels of the sample that had the largest allocated size: which sample wins
+# depends on st_blocks rounding, so they are filesystem-dependent too.
+_ALLOCATION_PEAK_LABELS = frozenset(
+    {
+        "peak_sample",
+        "peak_sample_temp_paths",
+        "peak_acquisition_and_packing_sample",
+        "peak_after_simulated_confirmation_sample",
+        "atomic_temp_peak_sample",
+        "atomic_temp_peak_paths",
+    }
+)
+
+
+def _without_allocation(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            key: _without_allocation(item)
+            for key, item in value.items()
+            if "allocated" not in str(key) and key not in _ALLOCATION_PEAK_LABELS
+        }
+    if isinstance(value, list):
+        return [_without_allocation(item) for item in value]
+    return value
