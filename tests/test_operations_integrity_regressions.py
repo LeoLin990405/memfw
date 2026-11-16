@@ -330,4 +330,8 @@ def test_delete_back_ref_cleanup_does_not_parse_every_memory(
     monkeypatch.setattr(Repository, "parse", staticmethod(counting_parse))
     repository.delete("n000", actor="human")
     assert repository.get("n001").superseded_by is None
-    assert calls < 50, calls
+    # The old code parsed every memory (>200 parses for 200 memories); the
+    # prefilter parses only files that mention the deleted id. The exact count
+    # varies a little across platforms, so the bound only separates O(N) from
+    # near-constant work.
+    assert calls < 100, calls
