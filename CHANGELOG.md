@@ -278,8 +278,8 @@ backend only through exported files and the `resolve` interface.
   `docs/ports-and-recall.md` §4.1.
 - **Behaviour change:** `memory_search` with `policy` other than `compat_fts`
   and a mode other than `two_stage` is now an error, as is a non-string
-  `policy`. Without `policy`, every other mode and the default are
-  byte-identical to before.
+  `policy`. Without `policy` (or with `null` or `""`, both read as the
+  default), every other mode and the default are byte-identical to before.
 - `Coordinator(..., inflight=InflightRegistry())` shares in-flight counts
   between coordinators; `FtsProvider` and `HybridProvider` take an optional
   `observe(page_items, payloads)` hook for in-process callers.

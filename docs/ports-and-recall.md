@@ -383,8 +383,8 @@ hits. It is opt-in; nothing else changes.
   the index's temporal clause, exactly what `mode=fts` applies. `strict` is the default
   `FilterPolicy(...)` with the same tenant, sources, `as_of` and `include_history`: it adds
   the privacy (clearance `none`), status, lifecycle and archive checks and the strict temporal
-  rule (`valid_from` in the future is dropped). An unknown value, or a non-string in the tool
-  call, is an error. **Any other mode rejects a `policy` other than `compat_fts`** (an error
+  rule (`valid_from` in the future is dropped). Absent, `null` and `""` mean `compat_fts`. An unknown
+  value, or a non-string in the tool call, is an error. **Any other mode rejects a `policy` other than `compat_fts`** (an error
   where it was ignored before).
 - **Input rules match `mode=fts`.** The query must be 1..512 characters without NUL or lone
   surrogates, and fails with the same error as `fts`, before any provider runs. `as_of` is

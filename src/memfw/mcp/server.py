@@ -383,10 +383,13 @@ _ABSOLUTE_PATH = re.compile(r"(?:^|[\s'\"(=:])(?:/|~/|[A-Za-z]:\\)[^\s'\"]+")
 
 
 def _policy_argument(arguments: dict[str, Any]) -> str:
-    """``memory_search`` ``policy``: absent means ``compat_fts``; any non-string is an error."""
+    """``memory_search`` ``policy``: absent, null or ``""`` means ``compat_fts``.
+
+    Any non-string is an error.
+    """
 
     value = arguments.get("policy")
-    if value is None:
+    if value is None or value == "":
         return "compat_fts"
     if not isinstance(value, str):
         raise ValueError("policy must be a string")
@@ -975,6 +978,8 @@ class Gateway:
         del judge
         if not query.strip():
             raise ValueError("query required")
+        if policy is None or policy == "":
+            policy = "compat_fts"  # absent, as before this argument existed
         if policy not in SEARCH_POLICIES:
             raise ValueError("unknown policy")
         if mode != "two_stage" and policy != "compat_fts":
@@ -1202,7 +1207,7 @@ class Gateway:
         # errors, before any provider runs.
         needle = query.strip()
         if len(needle) > service.MAX_QUERY_CHARS:
-            raise service._bad_request("query must be 1..512 characters")
+            raise service._bad_request(f"query must be 1..{service.MAX_QUERY_CHARS} characters")
         if service._unsupported_query(needle):
             raise service._bad_request("query contains an unsupported character")
         page = max(1, min(int(limit), 50))
@@ -1269,8 +1274,11 @@ class Gateway:
                     break
             why = "semantic" if item is None or "memory_type" not in item else "lexical"
             if item is not None and "memory_type" in item:
+                # The policy already checked both; never widen on a race.
+                if str(item.get("tenant") or "") != self.tenant:
+                    continue
                 if self.allowed_sources and item.get("source") not in self.allowed_sources:
-                    continue  # the policy already checked; never widen on a race
+                    continue
                 row = _index_row(repository, item, len(rows), why=why)
             else:
                 try:

@@ -297,15 +297,40 @@ def test_freshness_matches_fts_after_an_edit(tmp_path: Path) -> None:
     assert _rows(two) == _rows(fts)
 
 
-def test_query_length_and_characters_error_like_fts(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("query", "as_of"),
+    [
+        ("x" * 5000, None),
+        ("x" * 513, None),
+        ("nul\x00byte", None),
+        ("lone \ud800 surrogate", None),
+        ("backup", "yesterday"),
+        ("backup", "2026-13-01T00:00:00+00:00"),
+        ("backup", ""),
+    ],
+    ids=["5000", "513", "nul", "surrogate", "as_of-word", "as_of-month", "as_of-empty"],
+)
+def test_input_errors_match_fts_exactly(tmp_path: Path, query: str, as_of: str | None) -> None:
+    """Pins error type and message parity with mode=fts, so a drift in the
+    shared service's rules shows up here."""
+
     repository = _vault(tmp_path)
     gateway = _gateway(repository.root)
-    for query in ("x" * 5000, "nul\x00byte"):
-        with pytest.raises(Exception) as fts_error:
-            gateway.search(query, mode="fts")
-        with pytest.raises(type(fts_error.value)) as two_error:
-            gateway.search(query, mode="two_stage")
-        assert str(two_error.value) == str(fts_error.value)
+    with pytest.raises(Exception) as fts_error:
+        gateway.search(query, mode="fts", as_of=as_of)
+    with pytest.raises(type(fts_error.value)) as two_error:
+        gateway.search(query, mode="two_stage", as_of=as_of)
+    assert type(two_error.value) is type(fts_error.value)
+    assert str(two_error.value) == str(fts_error.value)
+    assert getattr(two_error.value, "status", None) == getattr(fts_error.value, "status", None)
+
+
+def test_a_512_character_query_is_accepted_like_fts(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    gateway = _gateway(repository.root)
+    query = "backup " + "x" * 505
+    assert len(query) == 512
+    assert _ids(gateway.search(query, mode="two_stage")) == _ids(gateway.search(query, mode="fts"))
 
 
 def test_tool_handler_rejects_a_non_string_policy(tmp_path: Path) -> None:
@@ -314,11 +339,32 @@ def test_tool_handler_rejects_a_non_string_policy(tmp_path: Path) -> None:
     for value in (False, 0, 1, [], {}, ["strict"]):
         with pytest.raises(ValueError, match="policy must be a string"):
             handler({"query": "backup", "mode": "two_stage", "policy": value})
-    with pytest.raises(ValueError, match="unknown policy"):
-        handler({"query": "backup", "mode": "two_stage", "policy": ""})
     assert handler({"query": "backup", "mode": "two_stage", "policy": None})["policy"] == (
         "compat_fts"
     )
+
+
+def _stable(payload: dict[str, Any]) -> str:
+    """The payload without timings (``recall_metrics`` differs per call)."""
+
+    return json.dumps({k: v for k, v in payload.items() if k != "recall_metrics"}, sort_keys=True)
+
+
+def test_empty_or_null_policy_is_the_default_in_every_mode(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    gateway = _gateway(repository.root)
+    handler = gateway.handlers()["memory_search"]
+    for mode in (None, "fts", "hybrid", "vector", "multihop", "two_stage"):
+        base: dict[str, Any] = {"query": "backup", "limit": 5}
+        if mode:
+            base["mode"] = mode
+        expected = _stable(handler(base))
+        for value in ("", None):
+            assert _stable(handler({**base, "policy": value})) == expected
+        direct = {"mode": mode} if mode else {}
+        assert _stable(gateway.search("backup", 5, policy="", **direct)) == _stable(
+            gateway.search("backup", 5, **direct)
+        )
 
 
 # -- the coordinator filter, driven through the MCP path -----------------------
