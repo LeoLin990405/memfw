@@ -131,8 +131,9 @@ open_question:
   open question. The question file is kept and its unresolved version stays in
   `.history/`. Recall without `as_of` hides the resolved question (it has `valid_to`); an
   `as_of` earlier than the resolution still returns it, read from the current file, so
-  its block already names `resolved_by`. `supersede` of an unresolved question keeps the
-  type, block, tenant and `about`; conflict ids that were deleted or moved to another
+  its block already names `resolved_by`. `supersede` of an unresolved question keeps its
+  scope like any memory's and carries the block over with `resolved_by` cleared (it is
+  also accepted in `overrides`); conflict ids that were deleted or moved to another
   tenant are dropped and listed as `dropped_conflicts` in the SUPERSEDE event.
 * **Lint.** `fsck` reports `open_question_dangling_conflict`,
   `open_question_self_conflict`, `open_question_cross_tenant_conflict` (conflict checks
