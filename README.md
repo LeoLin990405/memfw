@@ -397,6 +397,7 @@ on synthetic duplicate, conflict and stale cases with `python -m eval.dreams`
 | [`docs/experience-points.md`](docs/experience-points.md) | experience points: draft schema, `from-github`, invalidation |
 | [`docs/COMPONENTS.md`](docs/COMPONENTS.md) | notes index, code retrieval, read-only HTTP service, relatedness |
 | [`docs/retrieval-architecture.md`](docs/retrieval-architecture.md) | retrieval design |
+| [`docs/architecture.md`](docs/architecture.md) | package layers, import guards, the shrinking allowlist, the byte-identical harness |
 | [`docs/v1-integration.md`](docs/v1-integration.md), [`docs/READONLY-SERVICE-UPGRADE.md`](docs/READONLY-SERVICE-UPGRADE.md) | federation surface and service upgrades |
 | [`docs/evaluation.md`](docs/evaluation.md), [`reports/`](reports), [`results/`](results) | evaluation evidence |
 | [`docs/RELEASE-READINESS.md`](docs/RELEASE-READINESS.md) | measured checks and known limitations |

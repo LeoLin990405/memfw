@@ -33,6 +33,8 @@ Every component is a separately packageable, replaceable unit:
 - **Enforced by tests.** `tests/test_ports_isolation.py` checks the imports of each source
   file (AST). It also runs `import memfw.ports` in a subprocess and asserts that no other
   memfw module was loaded. The same check runs for `import memfw.recall`.
+  `tests/test_architecture_layers.py` extends the AST check to every memfw module (see
+  [Architecture guards](architecture.md)).
 
 `memfw/__init__.py` imports `memfw.related` when the package loads. The subprocess check
 therefore compares against a baseline taken after `import memfw`. If `memfw-ports` is ever
@@ -162,6 +164,32 @@ content, citations, epistemic_cap="inference", causal_cap="association", read_on
 
 `check_view_citations(view, exists)` raises `ValueError` if the view cites an id for which
 `exists(memory_id)` is false.
+
+### 2.5 Clock and IdGen
+
+`memfw.ports.clock` names the two values the kernel must never invent on its own: the current
+time and new ids. Both are small `runtime_checkable` protocols:
+
+```python
+class Clock(Protocol):
+    def now(self) -> datetime: ...   # timezone-aware; never goes backwards
+
+class IdGen(Protocol):
+    def new_id(self) -> str: ...     # fresh, valid as a memory id, never repeated
+```
+
+| Implementation | Behaviour |
+|---|---|
+| `SystemClock()` | `datetime.now(UTC)`, the same as `memfw.core.models.utc_now` |
+| `FixedClock(at)` | returns `at` (timezone-aware) until `advance(delta)` or `set(at)`; never moves backwards |
+| `UuidIdGen()` | `str(uuid.uuid4())`, the default `Repository` `id_factory` |
+| `SeededIdGen(seed, *, start=0)` | `sha256(f"{seed}:{n}")[:32]` for n = start+1, start+2, ...: the `memfw --id-seed` scheme |
+
+`clock.now` and `id_gen.new_id` are the zero-argument callables `Repository(clock=...,
+id_factory=...)` already accepts. Core does not use the ports yet; A3 (composition root) wires
+them in. `check_clock(clock, *, samples=32)` and `check_id_gen(id_gen, *, samples=1000)` in
+`memfw.ports.testing` are the contract: aware and monotonic times; distinct `str` ids matching
+`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`.
 
 ## 3. The coordinator pipeline
 
@@ -595,6 +623,8 @@ def test_search_matches_recorded_contract(monkeypatch):
 | `check_projector(projector, *, vault, out, policy, vault_exclude=())` | vault unchanged; `Manifest` names the projector and policy version; listed files exist; two exports have the same `content_sha256` and count |
 | `check_ingestor(ingestor, *, vault, items, proposal_id=..., source=...)` | refuses an empty proposal id or source without writing; writes only under `_candidates/`; a second run stages nothing new and returns the same ids |
 | `check_deriver(deriver, *, vault, request, vault_exclude=())` | vault unchanged; `DerivedView` is read-only, names the deriver and kind, and cites only requested memories |
+| `check_clock(clock, *, samples=32)` | `Clock` protocol; every `now()` is a timezone-aware `datetime`; no sample earlier than the previous one |
+| `check_id_gen(id_gen, *, samples=1000)` | `IdGen` protocol; every `new_id()` is a `str` valid as a memory id; no id repeated |
 
 `tree_digest(root, *, exclude=())` is the helper they use to compare file trees.
 
