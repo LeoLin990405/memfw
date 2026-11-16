@@ -16,6 +16,7 @@ from memfw.index import MemoryIndex
 from memfw.mcp.server import TOOLS, Gateway
 from memfw.notes import HashEmbeddingProvider
 from memfw.ports import Availability, Candidate, RecallBudget
+from memfw.runtime import Runtime
 
 QUERIES = (
     "homelab backup",
@@ -406,15 +407,15 @@ class _StubProvider:
 
 
 def _with_stub(monkeypatch: pytest.MonkeyPatch, stub: Any, *, only: bool = False) -> None:
-    original = Gateway._two_stage_providers
+    original = Runtime._two_stage_providers
 
-    def providers(self: Gateway, *args: Any, **kwargs: Any) -> tuple[list[Any], dict[str, Any]]:
+    def providers(self: Runtime, *args: Any, **kwargs: Any) -> tuple[list[Any], dict[str, Any]]:
         found, configs = original(self, *args, **kwargs)
         if only:
             return [stub], {}
         return [*found, stub], configs
 
-    monkeypatch.setattr(Gateway, "_two_stage_providers", providers)
+    monkeypatch.setattr(Runtime, "_two_stage_providers", providers)
 
 
 STUB_IDS = ("m-alpha", "m-ops", "m-exp", "m-old", "m-future", "m-priv", "m-backup", "m-missing")

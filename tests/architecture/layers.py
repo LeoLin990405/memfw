@@ -122,7 +122,8 @@ UNITS: Final[dict[str, str]] = {
     "memfw.export": "L3-capability",
     "memfw.code_retrieval": "L3-capability",
     "memfw.memory_eval": "L3-capability",
-    # --- L4 runtime: reserved for memfw.runtime (A3); nothing yet.
+    # --- L4 runtime: the composition root (A3a: recall wiring).
+    "memfw.runtime": "L4-runtime",
     # --- L5 interfaces: protocol translation only.
     "memfw.cli": "L5-interface",
     "memfw.mcp": "L5-interface",
@@ -176,9 +177,8 @@ RESTRICTED: Final[dict[str, frozenset[str]]] = {
     # Recall's core reaches memfw internals only through recall/builtin.py.
     "memfw.recall": frozenset({"memfw.ports"}),
     # Spec section 9: the MCP server depends on the Runtime and protocols only
-    # (A3 builds memfw.runtime, A4 splits the server). Add memfw.runtime here
-    # when it exists.
-    "memfw.mcp": frozenset({"memfw.ports"}),
+    # (A3 builds memfw.runtime, A4 splits the server).
+    "memfw.mcp": frozenset({"memfw.ports", "memfw.runtime"}),
 }
 
 #: Modules allowed to call a loader on a name only known at run time, with the

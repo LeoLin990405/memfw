@@ -106,14 +106,6 @@ ALLOWLIST: Final[dict[tuple[str, str], tuple[str, Sites]]] = {
         "A3: embedder is built by the Runtime",
         {"memfw.mcp.server": 1},
     ),
-    ("memfw.mcp", "memfw.recall"): (
-        "A3: Coordinator/InflightRegistry come from the Runtime",
-        {"memfw.mcp.server": 3},
-    ),
-    ("memfw.mcp", "memfw.recall.builtin"): (
-        "A3: two_stage providers are assembled by the Runtime",
-        {"memfw.mcp.server": 2},
-    ),
     ("memfw.mcp", "memfw.related"): (
         "A3: RelatedIndex comes from the Runtime",
         {"memfw.mcp.server": 1},
