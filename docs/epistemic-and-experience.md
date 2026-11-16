@@ -168,6 +168,57 @@ open_question:
   context pack does not include open questions yet (iteration C, default off). A question
   with `valid_to` set is never shown in a label, even for an earlier `as_of`.
 
+## Corroboration (derived)
+
+`memfw corroboration rebuild` writes `corroboration.sqlite3` at the vault root (next to
+`index.sqlite3`; never inside `memories/`). It is a rebuildable projection: delete it and
+rebuild it and the bytes are identical. It never writes the vault and never changes
+`epistemic` or `status`. Nothing else in memfw reads it yet.
+
+Per memory it records which (app, session) pairs mention it, from
+`conv:APP:SESSION@OFFSET` references in three places:
+
+* the memory's own `evidence`;
+* staged conversation-worker claims (`memory_claims`, under `_candidates/dream/`) whose
+  claim equals the memory's match key after normalising case, whitespace and trailing
+  punctuation. The key is the summary, else the title, and only one of at least 4 tokens
+  and 20 characters that no other default-tenant memory has as its title or summary
+  (other tenants are never consulted, so their text cannot change the answer).
+  The conversation store has no tenant, so claims credit only memories in the default
+  tenant `""`. The worker stages a claim once per app (it dedupes on app and claim), so
+  repeating a claim in later sessions of the same app adds nothing until the claim text
+  differs. Dream review records no rejected state: a rejected or stale candidate keeps
+  counting until it is removed from `_candidates/`;
+* experience points in the same tenant whose `related` lists it and whose review verdict
+  is `accepted` (`failed` is not support).
+
+Only ids, app names, counts and times are stored, no text. The file is created `0600`.
+
+Independence rules:
+
+* the same app in the same session counts once;
+* a carrier derived from the memory does not count: its evidence (an experience point's
+  or a claim candidate's) cites the memory id (bare, `memory:` or `mem:`), or a candidate
+  names it in `memory_ids`;
+* a mention in a session where the memory was injected, at or after the injection, does
+  not count. Injection is read from `memory_access` events that carry `session_id` (and
+  `source`/`agent_id` as the app when present). **Gap:** memfw's retrieval and
+  `memory_context` do not record a session today, so an agent restating an injected
+  memory is not detected until a producer records one;
+* a carrier with a generated provenance (`llm`, `agent`, `dream`, `dream-distilled`, ...)
+  does not count, nor does a dream candidate that is not conversation-worker output, nor
+  a contradicting evidence ref;
+* apps that are not `readable`, or opted out, under `conversation_share` are never
+  written to the file.
+
+`memfw corroboration show MEMORY_ID --as-app APP` returns
+`{count, apps, sessions, first_seen, last_seen}` trimmed to what `APP` may read: only apps
+its `can_read` allows (plus itself) appear in `apps`, `sessions` and `count`; with
+`can_read: false`, sharing off, or an opted-out caller, it sees only its own. Hidden apps
+are filtered again at read time, so tightening the policy takes effect before the next
+rebuild. `first_seen`/`last_seen` use the evidence timestamp, else the carrier's
+`created_at` (an upper bound).
+
 ## Retrieval and export
 
 * `MemoryHybridRetriever` rows and the MCP `memory_search` result rows carry

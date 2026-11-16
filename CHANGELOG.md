@@ -11,6 +11,22 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
+### Added — corroboration projection (U4)
+
+- `memfw corroboration rebuild` writes a rebuildable `corroboration.sqlite3` at the vault
+  root: per memory, the independent (app, session) pairs that mention it, from its own
+  `conv:` evidence, staged conversation-worker claims (default tenant only, matched on a
+  unique key of at least 4 tokens and 20 characters) and accepted experience points. Ids,
+  names, counts and times only; the file is `0600`; rebuilds are byte-identical; the
+  vault is only read.
+- Independence rules: one count per app and session; carriers that cite the memory id,
+  dream candidates naming it, mentions after a session-scoped injection event, generated
+  provenance, and apps hidden or opted out under `conversation_share` do not count.
+- `memfw corroboration show ID --as-app APP` (and `memfw.corroboration.corroboration_for`)
+  trim the answer to the apps `APP` may read; hidden apps never appear. Default off:
+  nothing else reads the projection and no existing output changes. Not on MCP yet.
+  See `docs/epistemic-and-experience.md`.
+
 ### Added — recall shows "unknown" (U2)
 
 - MCP `memory_search` marks hits that an unresolved open question is about:

@@ -19,11 +19,14 @@ from .capture.confirm import confirm_command
 from .capture.review import Candidate, list_staged_candidates
 from .code_retrieval import CodeIndex, index_code
 from .conversations.cli import app as conversations_app
+from .conversations.policy import OPERATOR, SharePolicy
 from .core import invocation
 from .core.epistemic import validate_epistemic_write
 from .core.errors import IntegrityError, MemfwError, NotFoundError
 from .core.models import Layer, Tier
 from .core.repository import Repository, open_vault
+from .corroboration import CorroborationError, corroboration_for, projection_path
+from .corroboration import rebuild as rebuild_corroboration
 from .curation.engine import enforce_budget, plan_forget, run_forget
 from .curation.review_cli import review_command as run_review
 from .dream.cli import app as dream_app
@@ -86,7 +89,11 @@ eval_app = typer.Typer(help="Local evaluation harnesses (no network, no model ca
 projection_app = typer.Typer(
     help="Read-only recall projection: export files for an external recall backend"
 )
+corroboration_app = typer.Typer(
+    help="Corroboration projection: which apps/sessions independently mention a memory"
+)
 app.add_typer(index_app, name="index")
+app.add_typer(corroboration_app, name="corroboration")
 app.add_typer(okf_app, name="okf")
 app.add_typer(notes_app, name="notes")
 app.add_typer(code_app, name="code")
@@ -2183,4 +2190,51 @@ def resolve_command(
     except (MemfwError, OSError) as exc:
         _projection_fail(exc)
         return
+    typer.echo(json.dumps(payload, ensure_ascii=False))
+
+
+def _share_rules(repository: Repository) -> SharePolicy:
+    config = repository.read_config() if repository.config_path.exists() else {}
+    try:
+        return SharePolicy.from_config(config)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+@corroboration_app.command("rebuild")
+def corroboration_rebuild(
+    root: Annotated[Path, typer.Option("--root", "-r", help="memfw vault (read only)")] = Path("."),
+) -> None:
+    """Rebuild corroboration.sqlite3 from the vault (the vault is only read)."""
+    repository = _repo(root)
+    try:
+        counts = rebuild_corroboration(repository, _share_rules(repository))
+    except (MemfwError, CorroborationError, OSError) as exc:
+        _projection_fail(exc)
+        return
+    path = projection_path(repository.root).relative_to(repository.root).as_posix()
+    typer.echo(json.dumps({"path": path, **counts}, ensure_ascii=False))
+
+
+@corroboration_app.command("show")
+def corroboration_show(
+    memory_id: Annotated[str, typer.Argument(help="Memory id")],
+    as_app: Annotated[
+        str, typer.Option("--as-app", help="Caller app; output is trimmed to what it may read")
+    ] = OPERATOR,
+    root: Annotated[Path, typer.Option("--root", "-r", help="memfw vault (read only)")] = Path("."),
+) -> None:
+    """Corroboration of one memory as seen by --as-app (ids, names and counts only)."""
+    repository = _repo(root)
+    try:
+        answer = corroboration_for(
+            [memory_id],
+            caller_app=as_app,
+            rules=_share_rules(repository),
+            path=projection_path(repository.root),
+        )
+    except (MemfwError, CorroborationError, OSError) as exc:
+        _projection_fail(exc)
+        return
+    payload = {"id": memory_id, "corroboration": answer[memory_id].as_dict()}
     typer.echo(json.dumps(payload, ensure_ascii=False))

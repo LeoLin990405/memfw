@@ -106,6 +106,8 @@ UNITS: Final[dict[str, str]] = {
     "memfw.notes": "L1-projection",
     # Read-only index over agent transcripts.
     "memfw.history": "L1-projection",
+    # Rebuildable corroboration counts (U4); the share policy is injected.
+    "memfw.corroboration": "L1-projection",
     # --- L1 read paths over the projections.
     "memfw.retrieval": "L1-read",
     "memfw.memory_hybrid": "L1-read",
