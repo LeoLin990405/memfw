@@ -17,6 +17,13 @@ from pathlib import Path
 
 import pytest
 
+from memfw.context import (
+    CoreSlotProvider,
+    HandoffSlotProvider,
+    SessionSummary,
+    TopicCatalogue,
+    TopicsSlotProvider,
+)
 from memfw.core.markdown_parse import parse_memory_markdown
 from memfw.core.repository import Repository
 from memfw.dream.claims import DreamClaimStager, DreamClaimVerifier
@@ -34,6 +41,7 @@ from memfw.ports import (
     ProjectionPolicy,
     RecallBudget,
     SeededIdGen,
+    SlotRequest,
     StagedClaim,
     SystemClock,
     UuidIdGen,
@@ -60,6 +68,7 @@ from memfw.ports.testing import (
     check_claim_stager,
     check_claim_verifier,
     check_clock,
+    check_context_slot_provider,
     check_deriver,
     check_id_gen,
     check_ingestor,
@@ -148,6 +157,42 @@ STAGERS: dict[str, Callable[[], object]] = {
     "file": FileClaimStager,
 }
 
+
+def _visible(document: object) -> bool:
+    return getattr(document, "tenant", None) == ""
+
+
+def _sessions(limit: int) -> list[SessionSummary]:
+    """A fixed session feed (no conversation store): what the share would hand off."""
+
+    rows = [
+        SessionSummary(
+            "codex", "s-1", 4, "2026-01-05T10:03:00Z", "Add a retry wrapper", ("codex:s-1@0",)
+        ),
+        SessionSummary("claude", "s-2", 2, "2026-01-05T10:05:00Z", "Plan the NAS1 migration", ()),
+    ]
+    return rows[:limit]
+
+
+def _catalogue() -> TopicCatalogue:
+    """A fixed concept catalogue (no concept files)."""
+
+    return TopicCatalogue(
+        labels={"concept:backup": "Backup"},
+        canonical={"concept:backup": "concept:backup", "concept:old": "concept:backup"},
+    )
+
+
+#: ``ContextSlotProvider``: the vault-backed ``core`` slot and two providers
+#: over injected (fake) sources, built per vault.
+SLOT_PROVIDERS: dict[str, Callable[[Repository], object]] = {
+    "core": lambda repository: CoreSlotProvider(repository, _visible),
+    "topics-fake-catalogue": lambda repository: TopicsSlotProvider(
+        repository, _visible, _catalogue
+    ),
+    "handoff-fake-feed": lambda repository: HandoffSlotProvider(_sessions),
+}
+
 MATRIX: dict[str, dict[str, object]] = {
     "RecallProvider": dict(RECALL),
     "Projector": dict(PROJECTORS),
@@ -157,6 +202,7 @@ MATRIX: dict[str, dict[str, object]] = {
     "IdGen": dict(ID_GENS),
     "ClaimVerifier": dict(VERIFIERS),
     "ClaimStager": dict(STAGERS),
+    "ContextSlotProvider": dict(SLOT_PROVIDERS),
 }
 
 
@@ -807,3 +853,34 @@ def test_fusion_with_fts_and_reference_provider(tmp_path: Path) -> None:
         "homelab backup", limit=10, policy=FilterPolicy().with_tenant("alpha")
     )
     assert alpha.ids == ["m-alpha"]
+
+
+# --- ContextSlotProvider -------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", sorted(SLOT_PROVIDERS))
+def test_context_slot_providers_pass_the_same_contract(tmp_path: Path, name: str) -> None:
+    repository = _vault(tmp_path)
+    repository.add("Anchor", "Always cite sources.", memory_id="a-cite", anchor="sources")
+    repository.add("Backup topic", "backup topic body", memory_id="m-topic", about=["concept:old"])
+    repository.add(
+        "Alpha topic",
+        "alpha topic body",
+        memory_id="m-topic-a",
+        about=["concept:backup"],
+        tenant="alpha",
+    )
+    request = SlotRequest(limit_tokens=2000, policy="compat_fts", now=T0)
+    slot = check_context_slot_provider(
+        SLOT_PROVIDERS[name](repository),
+        request=request,
+        forbidden=["backup topic body", "tenant alpha homelab backup notes"],
+        vault=repository.root,
+        vault_exclude=LOCK,
+    )
+    assert slot.entries, name
+    if name == "topics-fake-catalogue":
+        # The other tenant's memory is not counted; the merged concept counts for its target.
+        assert [(entry.id, getattr(entry, "count", None)) for entry in slot.entries] == [
+            ("concept:backup", 1)
+        ]

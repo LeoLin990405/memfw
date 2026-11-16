@@ -230,6 +230,7 @@ entry). `tests/test_ports_isolation.py` now walks `memfw/ports` recursively and 
 | `IdGen` | `UuidIdGen`, `SeededIdGen` (`memfw.ports.clock`) | `check_id_gen` |
 | `ClaimVerifier` | `DreamClaimVerifier` (`memfw.dream.claims`); `KeywordClaimVerifier` | `check_claim_verifier` |
 | `ClaimStager` | `DreamClaimStager` (`memfw.dream.claims`); `FileClaimStager` (`_candidates/claims-ref/<batch>.json`) | `check_claim_stager` |
+| `ContextSlotProvider` | `CoreSlotProvider` (the vault); `TopicsSlotProvider` and `HandoffSlotProvider` over injected sources (`memfw.context`; the drill feeds them a fixed catalogue and session feed) | `check_context_slot_provider` |
 
 `tests/test_swap_drills.py` parametrizes each port over that column and fails if a port drops
 below two. Its coordinator drill runs the recall pipeline with `InMemoryRecallProvider` in

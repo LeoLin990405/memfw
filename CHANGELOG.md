@@ -68,6 +68,8 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   `memfw.ports.testing`. `memfw.context` composes the slots and imports only core and
   ports; the Runtime adapts the conversation share and the concept catalogue
   (`memfw.runtime.context_sources`). No new allowlist entry.
+- Swap drills: `ContextSlotProvider` joins the port matrix (`core`, `topics` with a fixed
+  catalogue, `handoff` with a fixed session feed, all through `check_context_slot_provider`).
 
 ### Internal — MCP server split by tool group (A4a)
 
