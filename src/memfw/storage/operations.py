@@ -1474,7 +1474,10 @@ def _open_question_issues(
         # it, so the SUPERSEDE event log (``successors``) is what remembers it.
         successor = None
         if head is not None:
-            successor = head.superseded_by or (successors or {}).get(head.id)
+            successor = head.superseded_by
+            if successor is None and head.valid_to is not None:
+                # Only a tail that is still ended: a human may have restored it.
+                successor = (successors or {}).get(head.id)
         broken_chain = successor is not None and successor not in by_id
         if answer is None or head is None or answer_id == doc.id or broken_chain:
             report(

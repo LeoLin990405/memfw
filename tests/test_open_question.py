@@ -763,3 +763,15 @@ def test_valid_block_on_another_type_is_ignored(tmp_path: Path) -> None:
     # The stray key does not block gated edits.
     updated = repository.update("legacy-note", body="new body", epistemic="fact")
     assert updated.epistemic == "fact"
+
+
+def test_lint_accepts_an_answer_restored_after_its_successor_was_deleted(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    question = _question(repository)
+    answer = repository.add("answer", "x")
+    repository.resolve_open_question(question.id, answer.id)
+    revised = repository.supersede(answer.id, "answer v2", "x2")
+    repository.delete(revised.id)
+    assert _kinds(repository) == ["open_question_dangling_resolution"]
+    repository.update(answer.id, valid_to=None, superseded_by=None)
+    assert _kinds(repository) == []
