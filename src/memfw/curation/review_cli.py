@@ -8,6 +8,7 @@ from typing import Annotated, Any
 
 import typer
 
+from memfw.core import invocation
 from memfw.core.errors import IntegrityError
 from memfw.core.repository import Repository, open_vault
 
@@ -23,7 +24,13 @@ def _emit(value: Any) -> None:
 def _repository(root: str | Path) -> Repository:
     # The core opener shares --now, --id-seed and pending-transaction
     # validation with the root commands without importing memfw.cli.
-    return open_vault(Path(root), error=typer.BadParameter)
+    path = Path(root)
+    return open_vault(
+        path,
+        clock=invocation.clock(),
+        id_factory=invocation.id_factory(path),
+        error=typer.BadParameter,
+    )
 
 
 def review_command(

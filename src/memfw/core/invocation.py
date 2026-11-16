@@ -1,9 +1,11 @@
-"""Per-invocation time and id overrides (``memfw --now`` / ``memfw --id-seed``).
+"""Per-invocation time and id overrides (``memfw --now`` / ``memfw --id-seed``). CLI-only.
 
-The root CLI callback records the two options here once per command; every
-command and sub-app that opens a vault reads them through this module (and
-:func:`memfw.core.repository.open_vault`) instead of reaching into
-``memfw.cli``. Stdlib only, so any layer may read it.
+The root CLI callback records the two options here once per command. CLI
+commands and sub-apps read them from this module (instead of reaching into
+``memfw.cli``) and pass them explicitly, e.g. to
+:func:`memfw.core.repository.open_vault`. Library code must not read this
+process-wide state; it takes a clock and an id factory as parameters.
+Stdlib only.
 """
 
 from __future__ import annotations
@@ -11,7 +13,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 _NOW: datetime | None = None
@@ -36,6 +38,12 @@ def injected_id_seed() -> str | None:
     """The ``--id-seed`` value, or ``None`` when ids are random."""
 
     return _ID_SEED
+
+
+def clock() -> Callable[[], datetime]:
+    """A clock returning ``--now`` when set, else the wall clock (read on every call)."""
+
+    return lambda: _NOW or datetime.now(UTC)
 
 
 def id_factory(root: Path) -> Callable[[], str]:
@@ -64,4 +72,4 @@ def id_factory(root: Path) -> Callable[[], str]:
     return next_id
 
 
-__all__ = ["id_factory", "injected_id_seed", "injected_now", "set_invocation"]
+__all__ = ["clock", "id_factory", "injected_id_seed", "injected_now", "set_invocation"]

@@ -23,7 +23,6 @@ from ..permissions import PermissionMode, PermissionPolicy
 from ..storage.markdown import MarkdownStorageMixin
 from ..storage.operations import MemoryOperationsMixin, lookup_current
 from ..storage.transactions import TransactionMixin, _serialized
-from . import invocation
 from .common import sha256_text as sha256_text
 from .epistemic import (
     EPISTEMIC_FIELDS,
@@ -1469,22 +1468,28 @@ def open_vault(
     root: Path,
     *,
     allow_pending: bool = False,
+    clock: Callable[[], datetime] = utc_now,
+    id_factory: Callable[[], str] | None = None,
     error: Callable[[str], Exception] = VaultOpenError,
 ) -> Repository:
-    """Open the vault at ``root`` for one CLI invocation.
+    """Open the existing vault at ``root``, refusing one that cannot be used yet.
 
-    The clock is ``--now`` when given (else the wall clock, read per call) and
-    ids come from :func:`memfw.core.invocation.id_factory`. Refuses a path
-    with neither ``events.jsonl`` nor ``vault.yaml``, and a vault with a
-    pending transaction unless ``allow_pending``. ``error`` builds the raised
-    exception from the message; interfaces pass their own (the CLI passes
-    ``typer.BadParameter``).
+    Refuses a path with neither ``events.jsonl`` nor ``vault.yaml``, and a
+    vault with a pending transaction unless ``allow_pending``. ``clock`` and
+    ``id_factory`` are passed to :class:`Repository` (defaults: the wall clock
+    and random UUID4 ids); this function reads no process-wide state.
+    ``error`` builds the raised exception from the message; interfaces pass
+    their own (the CLI passes ``typer.BadParameter``).
+
+    The ``memfw --now`` / ``--id-seed`` overrides are CLI-only: CLI commands
+    pass ``clock=invocation.clock()`` and
+    ``id_factory=invocation.id_factory(root)`` (:mod:`memfw.core.invocation`).
     """
 
     repository = Repository(
         root,
-        clock=lambda: invocation.injected_now() or datetime.now(UTC),
-        id_factory=invocation.id_factory(root),
+        clock=clock,
+        id_factory=id_factory if id_factory is not None else (lambda: str(uuid.uuid4())),
     )
     if not repository.events_path.exists() and not repository.config_path.exists():
         raise error(f"Not a memfw vault: {root}; run `memfw init {root}` first")

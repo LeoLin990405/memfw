@@ -10,6 +10,7 @@ from typing import Annotated, Literal, cast
 
 import typer
 
+from ..core import invocation
 from ..core.errors import IntegrityError
 from ..core.models import EventKind, Layer, Tier
 from ..core.repository import Repository, open_vault
@@ -22,7 +23,13 @@ app = typer.Typer(help="Review staged capture candidates")
 
 
 def _repository(root: str | Path) -> Repository:
-    return open_vault(Path(root), error=typer.BadParameter)
+    path = Path(root)
+    return open_vault(
+        path,
+        clock=invocation.clock(),
+        id_factory=invocation.id_factory(path),
+        error=typer.BadParameter,
+    )
 
 
 def _read_pending_candidates(repository: Repository) -> dict[str, CaptureCandidate]:

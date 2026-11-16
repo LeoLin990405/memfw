@@ -107,8 +107,8 @@ interface:
 
 | Edge | Fix |
 |---|---|
-| `capture -> cli`, `curation.review_cli -> cli` | the vault opener is `memfw.core.repository.open_vault` (the caller passes its exception type; `memfw.cli._repo` is an alias) |
-| `capture.cli -> cli` | `--now` / `--id-seed` live in `memfw.core.invocation` (stdlib only); the root callback sets them |
+| `capture -> cli`, `curation.review_cli -> cli` | the vault opener is `memfw.core.repository.open_vault`; it takes the clock, id factory and exception type as parameters and reads no global state (`memfw.cli._repo` is an alias) |
+| `capture.cli -> cli` | `--now` / `--id-seed` live in `memfw.core.invocation` (stdlib only, CLI-only); the root callback sets them and CLI commands pass them explicitly |
 | `okf -> capture` | the candidate staging writer is `memfw.storage.candidate_staging` and the candidate file reader `memfw.storage.candidate_files`; `memfw.capture.staging` / `memfw.capture.review` re-export them |
 
 OKF import keeps its Markdown candidates under `_candidates/remember/` rather than

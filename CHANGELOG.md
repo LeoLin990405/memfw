@@ -57,14 +57,18 @@ allowlist entries are gone (17 -> 13), so A2 is done:
 
 - `capture -> cli`, `curation.review_cli -> cli`: the vault opener moved from
   `memfw.cli._repo` into `memfw.core.repository.open_vault` (same checks and
-  messages; the caller passes the exception type, the CLI passes
-  `typer.BadParameter`). `memfw capture confirm` and `memfw review` use it
-  directly; `memfw.cli._repo` stays as an alias.
+  messages). It takes `clock`, `id_factory` and the exception type as
+  parameters and reads no process-wide state; the CLI passes
+  `typer.BadParameter` and the `--now` / `--id-seed` overrides.
+  `memfw capture confirm` and `memfw review` use it directly;
+  `memfw.cli._repo` stays as an alias.
 - `capture.cli -> cli`: the `--now` / `--id-seed` overrides moved from the
   `memfw.cli._NOW` / `_ID_SEED` globals into `memfw.core.invocation`
   (`set_invocation`, `injected_now`, `injected_id_seed`, `id_factory`; stdlib
-  only). The root callback records them there; `memfw.cli._id_factory` stays
-  as an alias. The `memfw.cli._NOW` / `_ID_SEED` globals are removed.
+  only; `clock()` wraps `--now`). The overrides are CLI-only: the root
+  callback records them there and CLI commands pass them explicitly; library
+  code takes a clock and id factory instead. `memfw.cli._id_factory` stays as
+  an alias. The `memfw.cli._NOW` / `_ID_SEED` globals are removed.
 - `okf -> capture`: the candidate staging writer moved from
   `memfw.capture.staging` to `memfw.storage.candidate_staging`, and the
   candidate file reader (`read_candidate`, `candidate_is_expired`,
@@ -76,6 +80,9 @@ allowlist entries are gone (17 -> 13), so A2 is done:
   `memfw.ports.staging.stage_candidates`: that contract writes JSON under
   `_candidates/<ingestor>/`, while OKF candidates are Markdown under
   `_candidates/remember/` that `memfw candidate-apply` reads.
+- Unchanged, noted here: `memfw okf export` and `memfw okf import` ignore
+  `--now`; the bundle's generated stamp and a staged candidate's `created_at`
+  use the wall clock, as before.
 
 ### Internal — composition root, recall slice (A3a)
 

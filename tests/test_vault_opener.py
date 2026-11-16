@@ -59,8 +59,24 @@ def test_seeded_id_factory_matches_seeded_id_gen_and_resumes(tmp_path: Path) -> 
     assert SeededIdGen("s", start=6).new_id() == hashlib.sha256(b"s:7").hexdigest()[:32]
 
 
-def test_open_vault_uses_injected_clock_per_call(tmp_path: Path) -> None:
-    repository = open_vault(_vault(tmp_path / "v").root)
+def test_open_vault_reads_no_invocation_state(tmp_path: Path) -> None:
+    root = _vault(tmp_path / "v").root
+    invocation.set_invocation(now=NOW, id_seed="s")
+    repository = open_vault(root)
+    assert repository._now() != NOW
+    assert repository.id_factory() != SeededIdGen("s").new_id()
+
+
+def test_open_vault_uses_the_given_clock_and_ids(tmp_path: Path) -> None:
+    root = _vault(tmp_path / "v").root
+    ids = SeededIdGen("x")
+    repository = open_vault(root, clock=lambda: NOW, id_factory=ids.new_id)
+    assert repository._now() == NOW
+    assert repository.id_factory() == SeededIdGen("x").new_id()
+
+
+def test_invocation_clock_reads_now_per_call(tmp_path: Path) -> None:
+    repository = open_vault(_vault(tmp_path / "v").root, clock=invocation.clock())
     assert repository._now() != NOW
     invocation.set_invocation(now=NOW, id_seed=None)
     assert repository._now() == NOW
@@ -81,11 +97,14 @@ def test_open_vault_raises_the_callers_error_type(tmp_path: Path) -> None:
         open_vault(tmp_path / "missing", error=typer.BadParameter)
 
 
-def test_cli_aliases_delegate_to_core(tmp_path: Path) -> None:
+def test_cli_aliases_pass_the_invocation_overrides(tmp_path: Path) -> None:
     with pytest.raises(typer.BadParameter, match="Not a memfw vault"):
         cli._repo(tmp_path / "missing")
-    invocation.set_invocation(now=None, id_seed="s")
+    invocation.set_invocation(now=NOW, id_seed="s")
     assert cli._id_factory(tmp_path)() == SeededIdGen("s").new_id()
+    repository = cli._repo(_vault(tmp_path / "v").root)
+    assert repository._now() == NOW
+    assert repository.id_factory() == SeededIdGen("s").new_id()
 
 
 def test_capture_modules_re_export_the_storage_objects() -> None:

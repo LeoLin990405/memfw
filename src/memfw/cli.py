@@ -1038,7 +1038,13 @@ def main(
 def _repo(root: Path, *, allow_pending: bool = False) -> Repository:
     # The opener lives in core (A2b) so sub-apps share it without importing
     # this module; kept here under its old name for the root commands.
-    return open_vault(root, allow_pending=allow_pending, error=typer.BadParameter)
+    return open_vault(
+        root,
+        allow_pending=allow_pending,
+        clock=invocation.clock(),
+        id_factory=invocation.id_factory(root),
+        error=typer.BadParameter,
+    )
 
 
 def _id_factory(root: Path) -> Callable[[], str]:
@@ -1104,7 +1110,7 @@ def init(
         return
     Repository(
         path,
-        clock=lambda: invocation.injected_now() or datetime.now(UTC),
+        clock=invocation.clock(),
         id_factory=_id_factory(path),
     ).init()
     typer.echo(f"Initialized {path.expanduser().resolve()}")
