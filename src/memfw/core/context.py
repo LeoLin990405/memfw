@@ -12,6 +12,7 @@ from typing import Any, Protocol
 
 from filelock import FileLock
 
+from .epistemic import CausalLevel, CausalRecord, EpistemicType, ExperiencePoint
 from .models import Event, EventKind, Layer, MemoryDocument, Tier
 
 
@@ -168,6 +169,9 @@ class RepositoryHost(Protocol):
         memory_id: str | None = None,
         layer: Layer = Layer.CURRENT,
         tier: Tier = Tier.HOT,
+        memory_type: str | None = None,
+        tenant: str = "",
+        related: builtins.list[str] | None = None,
         source: str = "manual",
         provenance: str = "human-authored",
         anchor: str | None = None,
@@ -175,6 +179,12 @@ class RepositoryHost(Protocol):
         actor: str = "human",
         agent_id: str | None = None,
         signature: str | None = None,
+        epistemic: EpistemicType | None = None,
+        causal: CausalLevel = "none",
+        causal_record: CausalRecord | builtins.dict[str, Any] | None = None,
+        limitations: builtins.list[str] | None = None,
+        experience: ExperiencePoint | builtins.dict[str, Any] | None = None,
+        evidence: builtins.list[str] | None = None,
     ) -> MemoryDocument: ...
 
     def add_many(

@@ -19,12 +19,14 @@ from .capture.confirm import confirm_command
 from .capture.review import list_staged_candidates
 from .code_retrieval import CodeIndex, index_code
 from .conversations.cli import app as conversations_app
+from .core.epistemic import validate_epistemic_write
 from .core.errors import IntegrityError, MemfwError
 from .core.models import Layer, Tier
 from .core.repository import Repository
 from .curation.engine import enforce_budget, plan_forget, run_forget
 from .curation.review_cli import review_command as run_review
 from .dream.cli import app as dream_app
+from .experience.cli import experience_app
 from .handoff.cli import handoff as handoff_command
 from .history.cli import app as history_app
 from .index import MemoryIndex
@@ -77,6 +79,7 @@ layer_alias_app = typer.Typer(help="Layer classification commands")
 okf_app = typer.Typer(help="Export and validate an OKF v0.2 knowledge bundle")
 notes_app = typer.Typer(help="Index and search a Markdown notes tree (derived, rebuildable)")
 code_app = typer.Typer(help="Local code retrieval: lexical + optional semantic + structure")
+eval_app = typer.Typer(help="Local evaluation harnesses (no network, no model calls)")
 app.add_typer(index_app, name="index")
 app.add_typer(okf_app, name="okf")
 app.add_typer(notes_app, name="notes")
@@ -91,6 +94,8 @@ app.add_typer(capture_app, name="capture")
 app.add_typer(concepts_app, name="concepts")
 app.add_typer(history_app, name="history")
 app.add_typer(dream_app, name="dream")
+app.add_typer(experience_app, name="experience")
+app.add_typer(eval_app, name="eval")
 app.add_typer(conversations_app, name="conversations")
 app.command("handoff")(handoff_command)
 capture_app.command(name="confirm")(confirm_command)
@@ -923,6 +928,28 @@ _NOW: datetime | None = None
 _ID_SEED: str | None = None
 
 
+def _json_option(raw: str | None, option: str) -> Any:
+    """Parse an inline JSON object or a path to a JSON file for a CLI option."""
+
+    if raw is None:
+        return None
+    text = raw
+    if not raw.lstrip().startswith("{"):
+        try:
+            candidate = Path(raw).expanduser()
+            if candidate.is_file():
+                text = candidate.read_text(encoding="utf-8")
+        except OSError:
+            pass
+    try:
+        parsed = json.loads(text)
+    except ValueError as exc:
+        raise typer.BadParameter(f"{option} must be a JSON object or a JSON file") from exc
+    if not isinstance(parsed, dict):
+        raise typer.BadParameter(f"{option} must be a JSON object")
+    return parsed
+
+
 def _parse_now(raw: str | None) -> datetime | None:
     if raw is None:
         return None
@@ -1066,9 +1093,38 @@ def add(
     memory_id: Annotated[str | None, typer.Option("--id")] = None,
     layer: Annotated[Layer, typer.Option()] = Layer.CURRENT,
     tier: Annotated[Tier, typer.Option()] = Tier.HOT,
+    memory_type: Annotated[
+        str | None, typer.Option("--type", help="Free-form memory type, e.g. experience-point")
+    ] = None,
+    epistemic: Annotated[
+        str | None,
+        typer.Option("--epistemic", help="experience, fact, judgment, or inference"),
+    ] = None,
+    causal: Annotated[
+        str, typer.Option("--causal", help="none, association, hypothesis, or verified")
+    ] = "none",
+    causal_record: Annotated[
+        str | None, typer.Option("--causal-record", help="JSON object or JSON file")
+    ] = None,
+    limitation: Annotated[
+        list[str] | None, typer.Option("--limitation", help="Known limitation (repeatable)")
+    ] = None,
+    evidence: Annotated[
+        list[str] | None, typer.Option("--evidence", help="Raw-data/design pointer (repeatable)")
+    ] = None,
+    experience: Annotated[
+        str | None,
+        typer.Option(
+            "--experience",
+            help="Experience-point record as a JSON object or JSON file "
+            "(requires --type experience-point --epistemic experience)",
+        ),
+    ] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run/--apply")] = False,
 ) -> None:
     """Add a Markdown memory."""
+    record = _json_option(causal_record, "--causal-record")
+    experience_record = _json_option(experience, "--experience")
     try:
         if dry_run:
             if root.exists() and (root / "vault.yaml").exists():
@@ -1077,6 +1133,21 @@ def add(
                     repository._check_id(memory_id)
                     if any(event.memory_id == memory_id for event in repository.events()):
                         raise IntegrityError(f"Memory id already used: {memory_id}")
+            validate_epistemic_write(
+                {
+                    "type": memory_type,
+                    "epistemic": epistemic,
+                    "causal": causal,
+                    "causal_record": record,
+                    "limitations": limitation or [],
+                    "experience": experience_record,
+                    "evidence": evidence or [],
+                    "body": body,
+                    "source": "manual",
+                    "provenance": "human-authored",
+                },
+                actor="human",
+            )
             typer.echo(
                 json.dumps(
                     {
@@ -1084,12 +1155,27 @@ def add(
                         "memory_id": memory_id,
                         "layer": layer.value,
                         "tier": tier.value,
+                        "epistemic": epistemic,
+                        "causal": causal,
                     }
                 )
             )
             return
         repository = _repo(root)
-        doc = repository.add(title, body, memory_id=memory_id, layer=layer, tier=tier)
+        doc = repository.add(
+            title,
+            body,
+            memory_id=memory_id,
+            layer=layer,
+            tier=tier,
+            memory_type=memory_type,
+            epistemic=epistemic,  # type: ignore[arg-type]
+            causal=causal,  # type: ignore[arg-type]
+            causal_record=record,
+            limitations=limitation,
+            experience=experience_record,
+            evidence=evidence,
+        )
         _enforce_after_write(repository)
     except MemfwError as exc:
         raise typer.BadParameter(str(exc)) from exc
@@ -1137,11 +1223,25 @@ def update(
     evidence: Annotated[
         list[str] | None, typer.Option("--evidence", help="history ref (repeatable)")
     ] = None,
+    epistemic: Annotated[
+        str | None,
+        typer.Option("--epistemic", help="experience, fact, judgment, or inference"),
+    ] = None,
+    causal: Annotated[
+        str | None, typer.Option("--causal", help="none, association, hypothesis, or verified")
+    ] = None,
+    causal_record: Annotated[
+        str | None, typer.Option("--causal-record", help="JSON object or JSON file")
+    ] = None,
+    limitation: Annotated[
+        list[str] | None, typer.Option("--limitation", help="Known limitation (repeatable)")
+    ] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run/--apply")] = False,
 ) -> None:
     """Update selected memory fields; --dry-run validates without writing."""
     if status is not None and status not in {"confirmed", "unconfirmed", "disputed"}:
         raise typer.BadParameter("--status must be confirmed, unconfirmed or disputed")
+    record = _json_option(causal_record, "--causal-record")
     changes: dict[str, Any] = {
         key: value
         for key, value in {
@@ -1151,6 +1251,10 @@ def update(
             "tier": tier,
             "status": status,
             "evidence": evidence,
+            "epistemic": epistemic,
+            "causal": causal,
+            "causal_record": record,
+            "limitations": limitation,
         }.items()
         if value is not None
     }
@@ -1158,6 +1262,10 @@ def update(
         repository = _repo(root)
         if dry_run:
             old = repository.get(memory_id)
+            if set(changes) & {"epistemic", "causal", "causal_record", "limitations", "body"}:
+                values = old.model_dump()
+                values.update(changes)
+                validate_epistemic_write(values, actor="human", previous_causal=old.causal)
             typer.echo(
                 json.dumps(
                     {
@@ -1752,6 +1860,46 @@ def stats(root: Annotated[Path, typer.Option("--root", "-r")] = Path(".")) -> No
         json.dumps(
             measure_runtime(repository, now=repository._now()).as_dict(), sort_keys=True, indent=2
         )
+    )
+
+
+@eval_app.command("causal")
+def eval_causal(
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Print the full report as JSON")
+    ] = False,
+    fixtures: Annotated[
+        Path | None, typer.Option("--fixtures", help="Synthetic fixture directory")
+    ] = None,
+    workdir: Annotated[
+        Path | None, typer.Option("--workdir", help="Scratch directory (temporary by default)")
+    ] = None,
+) -> None:
+    """Measure whether associations are promoted to causal conclusions.
+
+    Two layers, reported separately: the write gate (false accepts and false
+    rejects over the synthetic materials) and retrieval (labels on hits, and
+    whether the answer template states a hypothesis as a conclusion). It runs
+    locally: no network and no model calls.
+    """
+
+    from .memory_eval import run_causal_promotion_eval
+
+    try:
+        report = run_causal_promotion_eval(fixtures, workdir=workdir)
+    except (OSError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    payload = report.as_dict()
+    if json_output:
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+    typer.echo(f"materials: {payload['materials']}")
+    typer.echo(f"spurious_promotions: {payload['spurious_promotions']}")
+    typer.echo(f"false_accepts: {payload['false_accepts']}")
+    typer.echo(f"false_rejects: {payload['false_rejects']}")
+    typer.echo(f"missing_labels: {payload['retrieval_layer']['missing_labels']}")
+    typer.echo(
+        "hypothesis_as_conclusion: " f"{payload['retrieval_layer']['hypothesis_as_conclusion']}"
     )
 
 

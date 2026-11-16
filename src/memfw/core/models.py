@@ -8,6 +8,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
+from .epistemic import CausalLevel, CausalRecord, EpistemicType, ExperiencePoint
+
 
 class Layer(StrEnum):
     CURRENT = "current"
@@ -155,6 +157,15 @@ class MemoryDocument(BaseModel):
     # unconfirmed with no evidence, and render without the keys.
     status: VerificationStatus = "unconfirmed"
     evidence: list[str] = Field(default_factory=list)
+    # Epistemic type and causal grade. Absent in older files: they parse with no
+    # epistemic type and ``causal=none``, and render without the keys. See
+    # ``core.epistemic`` for the write gate and the meaning of each level.
+    epistemic: EpistemicType | None = None
+    causal: CausalLevel = "none"
+    causal_record: CausalRecord | None = None
+    limitations: list[str] = Field(default_factory=list)
+    # Only for ``type: experience-point``: what a human accepted, in scope.
+    experience: ExperiencePoint | None = None
     created_at: datetime
     updated_at: datetime
     # Transaction time: when memfw itself wrote this memory, from the server
@@ -198,7 +209,7 @@ class MemoryDocument(BaseModel):
             return [value]
         return value
 
-    @field_validator("about", "applies_to", mode="before")
+    @field_validator("about", "applies_to", "limitations", mode="before")
     @classmethod
     def alias_targets_are_lists(cls, value: Any) -> Any:
         if value is None or value == "":

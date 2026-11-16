@@ -88,7 +88,12 @@ INSTRUCTIONS = (
 TOOLS: list[dict[str, Any]] = [
     {
         "name": "memory_search",
-        "description": "Search the local memfw vault with its rebuildable FTS5 index.",
+        "description": (
+            "Search the local memfw vault with its rebuildable FTS5 index. Each hit carries "
+            "epistemic (experience|fact|judgment|inference, absent on old memories) and causal "
+            "(none|association|hypothesis|verified) labels; treat a hypothesis as a hypothesis, "
+            "never as a conclusion."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -108,7 +113,11 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "memory_get",
-        "description": "Read one memory by id (read-only).",
+        "description": (
+            "Read one memory by id (read-only), including its epistemic type, causal grade, "
+            "causal_record, limitations and (for an experience point) the reviewed experience "
+            "record."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {"memory_id": {"type": "string"}},
@@ -595,6 +604,25 @@ def _recorded_at_of(path: Path) -> str | None:
     return result
 
 
+def _epistemic_labels_of(path: Path) -> tuple[str | None, str]:
+    """``(epistemic, causal)`` from one memory file's frontmatter.
+
+    The search fast path does not parse every hit through ``MemoryDocument``,
+    so the two labels are read from the same frontmatter prefix scan. A missing
+    ``epistemic`` stays ``None`` (old files had no such field); a missing
+    ``causal`` means ``none`` because that is the field's default.
+    """
+
+    try:
+        with path.open("rb") as handle:
+            raw = handle.read(_FRONTMATTER_SCAN_BYTES)
+    except OSError:
+        return None, "none"
+    return _frontmatter_scalar(raw, "epistemic") or None, (
+        _frontmatter_scalar(raw, "causal") or "none"
+    )
+
+
 def _content_hash(path: Path) -> str:
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -718,6 +746,9 @@ def _annotate_hit(row: dict[str, Any], document: Any, item: dict[str, Any], *, w
         sot_version=document.version,
         why=why,
     )
+    # Retrieval labels: an answer must be able to say "this is a hypothesis".
+    row["epistemic"] = document.epistemic
+    row["causal"] = document.causal
     projection_hash = str(item.get("projection_hash") or "")
     if projection_hash:
         row["projection_hash"] = projection_hash
@@ -990,6 +1021,11 @@ class Gateway:
                         "" if checked and not consistent else (live_hash or indexed_hash)
                     ),
                 }
+                # The two labels an answering agent must see. An old file has no
+                # epistemic type; ``causal`` defaults to ``none``.
+                epistemic_label, causal_label = _epistemic_labels_of(memory_path)
+                row["epistemic"] = epistemic_label
+                row["causal"] = causal_label
                 shared_readonly().read_path.annotate(
                     row,
                     provenance=str(item.get("provenance") or ""),
@@ -1083,6 +1119,20 @@ class Gateway:
             "source": document.source,
             "provenance": document.provenance,
             "tags": list(document.tags),
+            # So a caller can see that a causal claim is only a hypothesis.
+            "epistemic": document.epistemic,
+            "causal": document.causal,
+            "causal_record": (
+                document.causal_record.model_dump(mode="json")
+                if document.causal_record is not None
+                else None
+            ),
+            "limitations": list(document.limitations),
+            "experience": (
+                document.experience.model_dump(mode="json")
+                if document.experience is not None
+                else None
+            ),
         }
 
     def remember(
@@ -1186,6 +1236,8 @@ class Gateway:
                     "type": document.type,
                     "layer": document.layer.value,
                     "anchor": document.anchor,
+                    "epistemic": document.epistemic,
+                    "causal": document.causal,
                     "text": text,
                 }
             )

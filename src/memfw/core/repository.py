@@ -24,6 +24,7 @@ from ..storage.markdown import MarkdownStorageMixin
 from ..storage.operations import MemoryOperationsMixin
 from ..storage.transactions import TransactionMixin, _serialized
 from .common import sha256_text as sha256_text
+from .epistemic import EPISTEMIC_FIELDS, validate_proposed_write
 from .errors import IntegrityError, NotFoundError
 from .models import CaptureState, Event, EventKind, Layer, MemoryDocument, Tier, utc_now
 
@@ -235,6 +236,25 @@ class Repository(
                 "after_config_hash": hashlib.sha256(candidate).hexdigest(),
             },
         )
+
+    def _validate_proposed_epistemic(
+        self, memory_id: str, changes: dict[str, Any], *, actor: str
+    ) -> None:
+        """Run the shared epistemic gate against current state plus a proposal.
+
+        Agent, mechanism, and dream writes may edit an already-verified
+        document, but only a write that *turns* it into ``causal=verified`` is
+        refused here: ``human_decision`` is false. A missing target is
+        validated as a create-shaped payload.
+        """
+
+        if not set(changes) & EPISTEMIC_FIELDS:
+            return
+        try:
+            current: dict[str, Any] | None = self.get(memory_id).model_dump()
+        except (NotFoundError, IntegrityError):
+            current = None
+        validate_proposed_write(current, changes, actor=actor)
 
     @staticmethod
     def _payload_hash(memory_id: str, operation: str, changes: dict[str, Any]) -> str:
@@ -665,6 +685,14 @@ class Repository(
             "last_access_interval_days",
             "manually_marked",
             "group_key",
+            # Epistemic type and causal grade: proposals may claim a hypothesis,
+            # never ``verified``. The shared gate rejects that below.
+            "evidence",
+            "epistemic",
+            "causal",
+            "causal_record",
+            "limitations",
+            "experience",
         }
         if operation != "delete" and (not changes or set(changes) - allowed):
             raise IntegrityError("Proposal changes contain unsupported fields")
@@ -676,6 +704,7 @@ class Repository(
                     if hasattr(normalized[key], "value")
                     else str(normalized[key])
                 )
+        self._validate_proposed_epistemic(memory_id, normalized, actor=f"agent:{agent_id}")
         payload_hash = self._payload_hash(memory_id, operation, normalized)
         try:
             before_hash = hashlib.sha256(self._current_path(memory_id).read_bytes()).hexdigest()
@@ -722,6 +751,15 @@ class Repository(
             raise IntegrityError("Proposal payload hash does not match output")
         for target_id in proposal.target_ids:
             self._check_id(target_id)
+            self._validate_proposed_epistemic(
+                target_id,
+                {
+                    key: value
+                    for key, value in proposal.output.items()
+                    if key in EPISTEMIC_FIELDS
+                },
+                actor=proposal.actor,
+            )
             target = self.get(target_id)
             if proposal.target_hashes:
                 expected = proposal.target_hashes.get(target_id)

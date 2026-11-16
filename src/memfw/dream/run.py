@@ -14,6 +14,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
+from memfw.core.epistemic import EPISTEMIC_FIELDS, validate_proposed_write
+from memfw.core.errors import MemfwError
 from memfw.core.models import MemoryDocument
 from memfw.core.repository import Repository
 from memfw.history import (
@@ -205,6 +207,39 @@ def run_dream(
     promoted = budget_candidates(budget)
     candidates = verified + curated + distilled + promoted
     candidates.sort(key=lambda item: (item.oid, item.operation, item.action, item.memory_ids))
+    # A dream stages proposals, so it may propose at most ``causal=hypothesis``.
+    # The shared gate refuses a staged ``causal=verified`` (and any structurally
+    # incomplete causal claim) before a human can ever see it as a candidate.
+    # One refused candidate is skipped and reported: it must never abort the run
+    # (a memory that a human had already verified used to do exactly that).
+    accepted: list[Candidate] = []
+    skipped: list[dict[str, Any]] = []
+    for candidate in candidates:
+        proposed = {
+            key: value for key, value in candidate.changes.items() if key in EPISTEMIC_FIELDS
+        }
+        if not proposed:
+            accepted.append(candidate)
+            continue
+        try:
+            for memory_id in candidate.memory_ids:
+                try:
+                    current: dict[str, Any] | None = repository.get(memory_id).model_dump()
+                except (MemfwError, OSError):
+                    current = None
+                validate_proposed_write(current, proposed, actor="mechanism")
+        except MemfwError as exc:
+            skipped.append(
+                {
+                    "operation": candidate.operation,
+                    "action": candidate.action,
+                    "memory_ids": list(candidate.memory_ids),
+                    "reason": str(exc),
+                }
+            )
+            continue
+        accepted.append(candidate)
+    candidates = accepted
     dream_id = _dream_id(repository, options, now)
     counts: dict[str, int] = {}
     for candidate in candidates:
@@ -220,6 +255,7 @@ def run_dream(
         "verify": stats.as_dict(),
         "distill": distill_stats.as_dict(),
         "candidates": counts,
+        "skipped_candidates": skipped,
         "budget": [
             {"path": item.path, "lines": item.lines, "bytes": item.bytes, "over": item.over}
             for item in budget

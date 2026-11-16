@@ -268,6 +268,10 @@ def _decide(
     contradicts = [item for item in evidence if item[1].polarity == "contradict"]
     oid = concept_key(document)
     ref_strings = sorted({item.ref for item in refs})
+    # Append, never replace: a verified memory's raw-data evidence must survive a
+    # dream confirmation, otherwise the shared gate would refuse the candidate
+    # (and an agent-verified claim would lose its justification).
+    evidence_strings = sorted(set(document.evidence) | set(ref_strings))
     if not contradicts:
         if document.status == "confirmed" and set(document.evidence) >= set(ref_strings):
             return None
@@ -279,7 +283,7 @@ def _decide(
             reason=f"{len(supports)} transcript entr{'y' if len(supports) == 1 else 'ies'} "
             "support this memory",
             evidence=refs,
-            changes={"status": "confirmed", "evidence": ref_strings},
+            changes={"status": "confirmed", "evidence": evidence_strings},
         )
     newest = evidence[-1]
     stated = values(f"{document.title}\n{document.body}")
@@ -303,7 +307,11 @@ def _decide(
                 reason=f"the newest transcript evidence states {new} where this memory "
                 f"states {old}; {len(contradicts)} contradicting, {len(supports)} supporting",
                 evidence=refs,
-                changes={"body": corrected, "status": "confirmed", "evidence": ref_strings},
+                changes={
+                    "body": corrected,
+                    "status": "confirmed",
+                    "evidence": evidence_strings,
+                },
             )
     detail = (
         "contradicting evidence without a single replacement value"
@@ -319,5 +327,5 @@ def _decide(
         oid=oid,
         reason=f"{detail}: {len(contradicts)} contradicting, {len(supports)} supporting",
         evidence=refs,
-        changes={"status": "disputed", "evidence": ref_strings},
+        changes={"status": "disputed", "evidence": evidence_strings},
     )

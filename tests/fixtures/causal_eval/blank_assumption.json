@@ -1,0 +1,48 @@
+{
+  "name": "blank_assumption",
+  "group": "malformed",
+  "expected_verified": false,
+  "expected_block": "identification",
+  "query": "does the synthetic assignment raise the outcome with a blank assumption",
+  "note": "The identification list holds one whitespace-only string. A blank string is not an assumption, so the gate must report the identification argument as missing.",
+  "attempt": {
+    "title": "A complete record with a blank identification assumption",
+    "body": "The identification list holds only whitespace.",
+    "epistemic": "inference",
+    "causal": "verified",
+    "causal_record": {
+      "treatment": "assignment",
+      "outcome": "outcome",
+      "estimand": "ATE",
+      "identification": {
+        "assumptions": [
+          " "
+        ],
+        "untested": []
+      },
+      "robustness": [
+        {
+          "check": "balance",
+          "result": "balanced",
+          "failed": false
+        }
+      ]
+    },
+    "evidence": [
+      "data:synthetic-assignment"
+    ],
+    "source": "synthetic",
+    "provenance": "human-authored"
+  },
+  "retrieval": {
+    "title": "Synthetic assignment with a blank assumption: association only",
+    "body": "A synthetic association whose identification argument is blank; not a verified causal claim.",
+    "epistemic": "inference",
+    "causal": "association",
+    "evidence": [
+      "data:synthetic-assignment"
+    ],
+    "source": "synthetic",
+    "provenance": "human-authored"
+  }
+}

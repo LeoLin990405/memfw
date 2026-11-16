@@ -10,6 +10,15 @@ from typing import Any
 
 from ..core.common import sha256_text
 from ..core.context import RepositoryHost
+from ..core.epistemic import (
+    EPISTEMIC_FIELDS,
+    EXPERIENCE_POINT_TYPE,
+    CausalLevel,
+    CausalRecord,
+    EpistemicType,
+    ExperiencePoint,
+    validate_epistemic_write,
+)
 from ..core.errors import DeletedContentUnavailable, IntegrityError, NotFoundError
 from ..core.models import EventKind, Layer, MemoryDocument, Tier, fold_temporal_aliases
 from ..storage.transactions import _serialized
@@ -41,6 +50,12 @@ class MemoryOperationsMixin:
         actor: str = "human",
         agent_id: str | None = None,
         signature: str | None = None,
+        epistemic: EpistemicType | None = None,
+        causal: CausalLevel = "none",
+        causal_record: CausalRecord | dict[str, Any] | None = None,
+        limitations: builtins.list[str] | None = None,
+        experience: ExperiencePoint | dict[str, Any] | None = None,
+        evidence: builtins.list[str] | None = None,
     ) -> MemoryDocument:
         anchor_always_hot = (
             self.read_config().get("anchor_always_hot", True) if self.config_path.exists() else True
@@ -51,6 +66,21 @@ class MemoryOperationsMixin:
             actor, layer=layer, anchor=anchor, signature=signature, agent_id=agent_id
         ):
             raise IntegrityError("Actor lacks permission or a required agent signature")
+        validate_epistemic_write(
+            {
+                "type": memory_type,
+                "epistemic": epistemic,
+                "causal": causal,
+                "causal_record": causal_record,
+                "limitations": limitations or [],
+                "experience": experience,
+                "evidence": evidence or [],
+                "source": source,
+                "provenance": provenance,
+                "body": body,
+            },
+            actor=actor,
+        )
         self.init()
         identifier = self._check_id(memory_id or self.id_factory())
         path = self._current_path(identifier)
@@ -75,6 +105,12 @@ class MemoryOperationsMixin:
             provenance=provenance,
             anchor=anchor,
             tags=tags or [],
+            epistemic=epistemic,
+            causal=causal,
+            causal_record=causal_record,
+            limitations=limitations or [],
+            experience=experience,
+            evidence=list(evidence or []),
             created_at=now,
             updated_at=now,
             recorded_at=now,
@@ -200,6 +236,12 @@ class MemoryOperationsMixin:
             # Verification state, set by a human approving a dream candidate.
             "status",
             "evidence",
+            # Epistemic type and causal grade, gated by ``validate_epistemic_write``.
+            "epistemic",
+            "causal",
+            "causal_record",
+            "limitations",
+            "experience",
         }
         if (
             actor != "human"
@@ -221,6 +263,13 @@ class MemoryOperationsMixin:
         folded_changes = fold_temporal_aliases(dict(changes))
         values = old.model_dump()
         values.update(folded_changes)
+        # One gate for every write path. A human approval of an agent proposal
+        # counts as a human decision; a bare agent write can edit an
+        # already-verified document but cannot turn one into verified.
+        if set(folded_changes) & EPISTEMIC_FIELDS:
+            validate_epistemic_write(
+                values, actor=actor, human_decision=approved, previous_causal=old.causal
+            )
         config = self.read_config()
         is_anchored = values.get("layer") == Layer.ANCHOR or bool(values.get("anchor"))
         if config.get("anchor_always_hot", True) and old.is_stub and is_anchored and anchor_change:
@@ -294,14 +343,23 @@ class MemoryOperationsMixin:
         old = self.get(memory_id)
         if old.valid_to is not None:
             raise IntegrityError(f"Memory is already superseded: {memory_id}")
+        # A replacement is still the same epistemic object: keep the experience
+        # record (and the causal grade) instead of silently dropping it.
         new = self.add(
             title,
             body,
             memory_id=memory_id_new,
+            memory_type=old.type if old.type == EXPERIENCE_POINT_TYPE else None,
             source=source or old.source,
             provenance=provenance or f"supersedes:{memory_id}",
             tags=tags if tags is not None else old.tags,
             actor="human",
+            epistemic=old.epistemic,
+            causal=old.causal,
+            causal_record=old.causal_record,
+            limitations=old.limitations,
+            experience=old.experience,
+            evidence=old.evidence,
         )
         # One instant for both sides of the handoff. Taking a fresh ``_now()``
         # here would stamp ``valid_to`` a little after the replacement's own

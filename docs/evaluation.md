@@ -128,3 +128,37 @@ claim; read the report's limitations before citing numbers.
   beyond the single frozen conversation (`python eval/stepG_multiconv.py`).
 - **Reproduce:** `python eval/stepG_pipeline.py --stage all` (local Ollama models required; see the
   report for the exact environment). Implementation: [`eval/stepG_runner.py`](../eval/stepG_runner.py).
+
+## Causal promotion experiment (synthetic)
+
+`memfw eval causal --json` measures whether an association can be promoted to a causal
+conclusion. It is not a benchmark of causal-inference correctness: it exercises the write
+gate and the retrieval labels on synthetic materials that are known by construction.
+
+Materials live in `tests/fixtures/causal_eval/`, one JSON file each, in four groups of
+two so that each rule is exercised more than once:
+
+1. `identified` — two correct analyses with a complete identification argument, robustness
+   checks, and replayable evidence; the gate must accept both;
+2. `confounded` — an unadjusted confounder and a pure Simpson's-paradox reversal; both are
+   refused because an identification assumption is still untested;
+3. `narrative` — a chat-only "because … therefore …" memory and a structurally complete
+   record whose only evidence is a chat-share URL; both are refused on the evidence rule,
+   not on a structural check;
+4. `malformed` — an empty evidence pointer (`data:`) and a whitespace-only identification
+   assumption; both are refused, and the error names the missing item.
+
+Two layers are reported separately:
+
+* **write layer** — each material is written through the real `Repository.add` path with
+  `causal: verified`. `false_accepts` counts materials the gate accepted although they do
+  not deserve `verified`; `false_rejects` counts materials it refused although they do;
+  `spurious_promotions` counts writes that ended up labelled `verified` when they should
+  have been capped. The gate should report zero false accepts and zero false rejects.
+* **retrieval layer** — correctly labelled documents are searched with the local FTS
+  retriever (no model, no network). `missing_labels` counts hits without an `epistemic`/
+  `causal` label, and `hypothesis_as_conclusion` counts hypothesis-level hits that a
+  deterministic answer template placed in its conclusion section. It should be zero.
+
+The experiment is synthetic and small; it shows the gate and the labels behave as
+specified on these cases, not that they generalise to real arguments.

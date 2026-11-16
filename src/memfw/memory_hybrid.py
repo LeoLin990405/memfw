@@ -138,6 +138,16 @@ class MemoryHybridRetriever:
         return read_manifest(self.manifest_path)
 
     @staticmethod
+    def _epistemic_labels(document: MemoryDocument) -> dict[str, Any]:
+        """The two labels every retrieval row carries, so an answer can see them.
+
+        ``epistemic`` is absent on documents written before the field existed;
+        ``causal`` is always present and defaults to ``none``.
+        """
+
+        return {"epistemic": document.epistemic, "causal": document.causal}
+
+    @staticmethod
     def _visible(
         document: MemoryDocument,
         *,
@@ -254,6 +264,7 @@ class MemoryHybridRetriever:
                         "title": document.title,
                         "score": hit.score,
                         "source": document.source,
+                        **self._epistemic_labels(document),
                         "path": f"memories/{document.id}.md",
                         "index_version": index_version,
                         "projection_hash": projection_hash,
@@ -277,6 +288,7 @@ class MemoryHybridRetriever:
                     "title": document.title,
                     "score": 0.0,
                     "source": document.source,
+                    **self._epistemic_labels(document),
                     "path": f"memories/{document.id}.md",
                     "index_version": index_version,
                     "projection_hash": projection_hash,
@@ -351,6 +363,7 @@ class MemoryHybridRetriever:
                             "title": document.title,
                             "score": hit.score,
                             "source": document.source,
+                            **self._epistemic_labels(document),
                             "path": f"memories/{document.id}.md",
                             "index_version": index_version,
                             "projection_hash": projection_hash,
@@ -404,6 +417,7 @@ class MemoryHybridRetriever:
                         "title": document.title,
                         "score": 0.0,
                         "source": document.source,
+                        **self._epistemic_labels(document),
                         "path": f"memories/{document.id}.md",
                         "why": "related",
                     }

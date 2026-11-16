@@ -263,6 +263,18 @@ class MarkdownStorageMixin:
             ordered["status"] = metadata["status"]
         if metadata.get("evidence"):
             ordered["evidence"] = metadata["evidence"]
+        # Epistemic/causal fields are absent from older files and stay off the
+        # file while they hold their defaults, so existing bytes do not change.
+        if metadata.get("epistemic"):
+            ordered["epistemic"] = metadata["epistemic"]
+        if metadata.get("causal", "none") != "none":
+            ordered["causal"] = metadata["causal"]
+        if metadata.get("causal_record"):
+            ordered["causal_record"] = metadata["causal_record"]
+        if metadata.get("limitations"):
+            ordered["limitations"] = metadata["limitations"]
+        if metadata.get("experience"):
+            ordered["experience"] = metadata["experience"]
         # Files written before ``type``, ``tenant``, ``related`` and the temporal
         # fields existed keep their bytes too: the default carries no
         # information, so it stays off the file exactly like ``recorded_at`` and
