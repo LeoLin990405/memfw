@@ -185,6 +185,10 @@ class RepositoryHost(Protocol):
         limitations: builtins.list[str] | None = None,
         experience: ExperiencePoint | builtins.dict[str, Any] | None = None,
         evidence: builtins.list[str] | None = None,
+        about: builtins.list[str] | None = None,
+        applies_to: builtins.list[str] | None = None,
+        group_key: str | None = None,
+        manually_marked: bool = False,
     ) -> MemoryDocument: ...
 
     def add_many(

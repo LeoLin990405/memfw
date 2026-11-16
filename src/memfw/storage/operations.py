@@ -6,6 +6,7 @@ import builtins
 import hashlib
 import logging
 import shutil
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
@@ -13,7 +14,6 @@ from ..core.common import sha256_text
 from ..core.context import RepositoryHost
 from ..core.epistemic import (
     EPISTEMIC_FIELDS,
-    EXPERIENCE_POINT_TYPE,
     CausalLevel,
     CausalRecord,
     EpistemicType,
@@ -59,6 +59,10 @@ class MemoryOperationsMixin:
         limitations: builtins.list[str] | None = None,
         experience: ExperiencePoint | dict[str, Any] | None = None,
         evidence: builtins.list[str] | None = None,
+        about: builtins.list[str] | None = None,
+        applies_to: builtins.list[str] | None = None,
+        group_key: str | None = None,
+        manually_marked: bool = False,
     ) -> MemoryDocument:
         anchor_always_hot = (
             self.read_config().get("anchor_always_hot", True) if self.config_path.exists() else True
@@ -103,11 +107,15 @@ class MemoryOperationsMixin:
             tier=tier,
             type=memory_type,
             tenant=tenant,
-            related=related or [],
+            related=list(related or []),
+            about=list(about or []),
+            applies_to=list(applies_to or []),
             source=source,
             provenance=provenance,
             anchor=anchor,
             tags=tags or [],
+            manually_marked=manually_marked,
+            group_key=group_key,
             epistemic=epistemic,
             causal=causal,
             causal_record=causal_record,
@@ -343,35 +351,119 @@ class MemoryOperationsMixin:
         tags: builtins.list[str] | None = None,
         source: str | None = None,
         provenance: str | None = None,
+        overrides: Mapping[str, Any] | None = None,
     ) -> MemoryDocument:
         """Create a replacement and mark the old version historical.
 
         The old Markdown is never deleted. Its valid_to/superseded_by fields are
         updated in place and a supersede event links the two records. Only a human
         actor may apply this operation.
+
+        A replacement is a new version of the same memory, so it keeps the
+        predecessor's scope and classification and starts fresh bookkeeping:
+
+        ==========================  ==========================================
+        Field                       Replacement value
+        ==========================  ==========================================
+        title, body                 the caller's (required arguments)
+        tenant                      inherited, never overridable: a supersede
+                                    cannot move a memory between tenants
+                                    (``update`` is the explicit way to do that)
+        layer, tier, type           inherited (``anchor_always_hot`` still
+                                    forces an anchored replacement hot)
+        related, about, applies_to  inherited
+        anchor                      inherited
+        group_key                   unset: budget consolidation groups by
+                                    ``group_key`` and keeps the most salient or
+                                    most recently updated member, which would be
+                                    the just-superseded predecessor; the current
+                                    replacement would then be planned for
+                                    forgetting
+        manually_marked             inherited (a human pin, not usage data)
+        source, tags                inherited unless ``source``/``tags`` given
+        provenance                  ``provenance`` or ``supersedes:<old id>``
+        epistemic, causal,          inherited, through the same epistemic write
+        causal_record, limitations, gate as ``add``
+        experience, evidence
+        status                      reset to ``unconfirmed``: verification
+                                    applied to the old body, not the new one
+        id, version                 new id (or ``memory_id_new``), version 1
+        created_at, updated_at,     fresh; ``created_at`` is the handoff instant
+        recorded_at                 that also becomes the old ``valid_to``
+        valid_from                  unset, so readers start validity at
+                                    ``created_at`` (the handoff); the old
+                                    ``valid_from`` describes the old version
+        valid_to, superseded_by     unset (the replacement is current)
+        summary                     unset: it is derived from the old body
+        is_stub, archive_ref,       unset: they describe the old file's cold
+        archived_hash               archive, not the replacement's body
+        strength, reference_count,  defaults: access statistics belong to the
+        last_access_interval_days   record that was accessed; copying them would
+                                    invent a usage history for the new body
+                                    (``manually_marked`` and ``anchor`` carry the
+                                    human protections against forgetting)
+        ==========================  ==========================================
+
+        ``overrides`` may set any of ``layer``, ``tier``, ``type``, ``related``,
+        ``about``, ``applies_to``, ``anchor``, ``group_key``, ``manually_marked``,
+        ``epistemic``, ``causal``, ``causal_record``, ``limitations``,
+        ``experience`` and ``evidence``. ``tenant`` cannot be overridden.
+
+        ``fsck`` reports ``supersede_scope_mismatch`` whenever a replacement's
+        tenant differs from its predecessor's. That includes a deliberate move
+        with ``update`` after the supersede: the finding stays reported, as
+        there is no way to acknowledge it yet.
         """
         if actor != "human":
             raise IntegrityError("Supersede requires a human actor")
         old = self.get(memory_id)
         if old.valid_to is not None:
             raise IntegrityError(f"Memory is already superseded: {memory_id}")
-        # A replacement is still the same epistemic object: keep the experience
-        # record (and the causal grade) instead of silently dropping it.
+        inherited: dict[str, Any] = {
+            "layer": old.layer,
+            "tier": old.tier,
+            "type": old.type,
+            "related": list(old.related),
+            "about": list(old.about),
+            "applies_to": list(old.applies_to),
+            "anchor": old.anchor,
+            # Not inherited: see the table above.
+            "group_key": None,
+            "manually_marked": old.manually_marked,
+            # A replacement is still the same epistemic object: keep the
+            # experience record (and the causal grade) instead of dropping it.
+            "epistemic": old.epistemic,
+            "causal": old.causal,
+            "causal_record": old.causal_record,
+            "limitations": list(old.limitations),
+            "experience": old.experience,
+            "evidence": list(old.evidence),
+        }
+        if overrides:
+            if "tenant" in overrides:
+                raise IntegrityError(
+                    "Supersede cannot override tenant: a replacement stays in its "
+                    "predecessor's tenant"
+                )
+            unknown = sorted(set(overrides) - set(inherited))
+            if unknown:
+                raise IntegrityError(
+                    f"Supersede override not accepted: {', '.join(unknown)}; "
+                    f"accepted fields: {', '.join(sorted(inherited))}"
+                )
+            inherited.update(overrides)
+        memory_type = inherited.pop("type")
         new = self.add(
             title,
             body,
             memory_id=memory_id_new,
-            memory_type=old.type if old.type == EXPERIENCE_POINT_TYPE else None,
+            memory_type=memory_type,
+            tenant=old.tenant,
             source=source or old.source,
             provenance=provenance or f"supersedes:{memory_id}",
-            tags=tags if tags is not None else old.tags,
+            tags=tags if tags is not None else list(old.tags),
             actor="human",
-            epistemic=old.epistemic,
-            causal=old.causal,
-            causal_record=old.causal_record,
-            limitations=old.limitations,
-            experience=old.experience,
-            evidence=old.evidence,
+            **inherited,
         )
         # One instant for both sides of the handoff. Taking a fresh ``_now()``
         # here would stamp ``valid_to`` a little after the replacement's own
@@ -1057,9 +1149,16 @@ def _check_supersession_target(host: RepositoryHost, memory_id: str, target: str
 def _supersession_issues(
     documents: builtins.list[MemoryDocument],
 ) -> builtins.list[dict[str, str | None]]:
-    """Report ``superseded_by`` links to missing memories and supersession cycles."""
+    """Report broken ``superseded_by`` links and replacements in another tenant.
+
+    ``supersede_scope_mismatch`` is read-only: before the supersede fix a
+    replacement was always written in the default tenant, whatever the
+    predecessor's. fsck names such replacements so an operator can decide;
+    it never rewrites them.
+    """
     links = {doc.id: doc.superseded_by for doc in documents if doc.superseded_by is not None}
-    present = {doc.id for doc in documents}
+    by_id = {doc.id: doc for doc in documents}
+    present = set(by_id)
     issues: builtins.list[dict[str, str | None]] = []
     for memory_id, target in sorted(links.items()):
         if target not in present:
@@ -1073,6 +1172,29 @@ def _supersession_issues(
                 }
             )
             continue
+        predecessor_tenant = by_id[memory_id].tenant
+        replacement_tenant = by_id[target].tenant
+        if predecessor_tenant != replacement_tenant:
+            # Later replacements of a mis-scoped one were written in its tenant
+            # too, so the fix must cover every id down the chain.
+            chain = [target]
+            following = links.get(target)
+            while following is not None and following in present and following not in chain:
+                chain.append(following)
+                following = links.get(following)
+            issues.append(
+                {
+                    "memory_id": target,
+                    "kind": "supersede_scope_mismatch",
+                    "expected_hash": None,
+                    "actual_hash": None,
+                    "message": (
+                        f"replacement of {memory_id} has tenant {replacement_tenant!r}, "
+                        f"its predecessor {predecessor_tenant!r}; not rewritten. "
+                        f"Fix the whole chain: {', '.join(chain)}"
+                    ),
+                }
+            )
         seen = [memory_id]
         current: str | None = target
         while current is not None and current not in seen:
