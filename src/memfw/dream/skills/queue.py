@@ -73,6 +73,12 @@ class EpisodeFeed(Protocol):
     (tests). ``open`` returns ``(processable, queue, store)``: whether the
     share policy still lets the worker process an app, the queue, and the
     read-only transcript reader.
+
+    An implementation must apply the vault's ``conversation_share`` policy:
+    ``processable`` is ``SharePolicy.from_config(config).processable``
+    (false for opted-out, hidden or ``process: false`` apps), so sessions the
+    share withholds are never read. The only shipped implementation is
+    :class:`memfw.conversations.feed.WorkerEpisodeFeed`.
     """
 
     def open(

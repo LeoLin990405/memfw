@@ -1109,7 +1109,8 @@ class ConversationWorker:
                 except Exception:
                     continue
             else:
-                assert self.verifier is not None  # checked in __init__
+                if self.verifier is None:  # checked in __init__; attributes are public
+                    raise ConversationError("claim verification needs a claim verifier or judge")
                 polarity = self.verifier.polarity(claim, text)
             if polarity == "contradict":
                 return None

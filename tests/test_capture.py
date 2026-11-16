@@ -318,6 +318,11 @@ def test_stage_intent_recovers_partial_jsonl_append(
         path.write_bytes(path.read_bytes()[:-7])
         raise OSError("simulated partial append")
 
+    # ``memfw.capture._append_stage_record`` is an alias of
+    # ``memfw.storage.capture_stage.append_stage_record`` (A2a). The fault is
+    # injected into the capture-module name that ``CaptureSession.feed`` calls;
+    # ``recover_pending`` calls the storage function directly, so recovery below
+    # never runs the torn append even before the patch is undone.
     monkeypatch.setattr(capture_module, "_append_stage_record", append_then_tear)
     with pytest.raises(OSError, match="partial append"):
         session.feed(

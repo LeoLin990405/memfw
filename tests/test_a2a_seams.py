@@ -134,6 +134,45 @@ def test_worker_episode_feed_is_an_episode_feed(tmp_path: Path) -> None:
     assert isinstance(feed.queue(config, tmp_path, state=state), EpisodeQueue)
 
 
+def test_worker_episode_feed_withholds_hidden_apps(tmp_path: Path) -> None:
+    """The shipped feed applies ``conversation_share``: hidden apps are never read."""
+
+    from datetime import UTC, datetime
+
+    from memfw.conversations.adapter import SqliteStoreSource
+    from memfw.conversations.feed import WorkerEpisodeFeed
+    from memfw.conversations.worker import WorkState
+    from memfw.dream.skills.queue import collect_queue
+
+    store = write_store(tmp_path / "conversations.sqlite", standard_rows())
+    state = WorkState(tmp_path / "work.sqlite")
+    with state.open() as connection:
+        for app, session in (("codex", "s-alpha"), ("claude", "s-beta"), ("cursor", "s-gamma")):
+            connection.execute(
+                "INSERT INTO episodes (episode_id, app, session_id, fingerprint, intent, outcome,"
+                " first_offset, last_offset, created_at) VALUES"
+                " (?, ?, ?, 'f', '', 'unknown', 0, 0, '2026-01-05T00:00:00Z')",
+                (f"ep-{app}", app, session),
+            )
+    config = {"conversation_share": {"enabled": True, "apps": {"cursor": {"readable": False}}}}
+    feed = WorkerEpisodeFeed()
+    processable, _queue, _source = feed.open(config, tmp_path, state=state)
+    assert not processable("cursor") and processable("codex")
+    batch = collect_queue(
+        config,
+        tmp_path,
+        feed=feed,
+        dry_run=True,
+        state=state,
+        source=SqliteStoreSource(store),
+        now=datetime(2026, 1, 6, tzinfo=UTC),
+    )
+    assert batch.counts["sessions_not_processable"] == 1
+    assert batch.counts["sessions_read"] == 2
+    assert batch.episodes
+    assert {episode.agent for episode in batch.episodes} <= {"codex", "claude"}
+
+
 def test_from_queue_without_a_feed_is_refused(tmp_path: Path) -> None:
     from datetime import UTC, datetime
 
