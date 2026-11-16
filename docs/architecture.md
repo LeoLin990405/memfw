@@ -54,7 +54,9 @@ unit-level edge:
 4. **No library code reaches into `scripts/`.** This is a heuristic: an import of a
    `scripts` module, or a non-docstring string constant with `scripts` as a path component
    (`"scripts"`, `"scripts/x.py"`, `"../../scripts"`) or naming a script module
-   (`memfw_readonly_service`).
+   (`memfw_readonly_service`). `tests/test_no_scripts_import.py` (from A1) guards the same
+   rule independently and more strictly (it also flags `exec`, `sys.path` mutation and
+   similar); the two overlap on purpose and both stay.
 5. **No unreadable loader calls.** `import_module`, `__import__`, `spec_from_file_location`
    and `resolve_name` on a name that is not a string constant (or a module-level name bound
    to one) is a violation, except in the modules of `DYNAMIC_IMPORT_ALLOWED`
@@ -73,7 +75,7 @@ through `importlib.metadata`, and attribute access on a `memfw` binding.
 
 Violations that existed when the guard landed are in
 [`tests/architecture/allowlist.py`](../tests/architecture/allowlist.py). Each entry names the
-step that removes it (A1 readonly service into `memfw.index`; A2 cycle breaking; A3
+step that removes it (A1, done in #38: readonly service into `memfw.index.readonly`; A2 cycle breaking; A3
 composition root; A4 MCP split; A5 package split) and records every importing module with its
 number of import lines on that edge. The test fails when:
 

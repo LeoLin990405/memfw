@@ -10,8 +10,8 @@ from git history with ``ast.literal_eval``.
 
 Steps:
 
-* A1: the readonly service moves into ``memfw.index``; no library code loads
-  ``scripts/``.
+* A1 (done, #38): the readonly service moved into ``memfw.index.readonly``;
+  no library code loads ``scripts/``.
 * A2: cycles and upward/same-layer edges are cut with protocols or by moving
   shared helpers down.
 * A3: ``memfw.runtime`` (the composition root) builds providers, indexes and
@@ -34,15 +34,6 @@ from typing import Final
 Sites = dict[str, int]
 
 ALLOWLIST: Final[dict[tuple[str, str], tuple[str, Sites]]] = {
-    # --- scripts/ (A1) ---------------------------------------------------------
-    ("memfw.memory_hybrid", "<scripts>"): (
-        "A1: shared_readonly() loads scripts/memfw_readonly_service.py by file path",
-        {"memfw.memory_hybrid": 3},
-    ),
-    ("memfw.memory_hybrid", "<dynamic-import>"): (
-        "A1: shared_readonly() loads the service with spec_from_file_location on a computed path",
-        {"memfw.memory_hybrid": 1},
-    ),
     # --- package root ----------------------------------------------------------
     ("memfw", "memfw.related"): (
         "A5: root __init__ re-exports RelatedIndex, so every `import memfw.x` loads"

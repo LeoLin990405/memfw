@@ -23,7 +23,7 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   re-exports and memfw module names held in strings), unlisted same-layer
   imports, library references to `scripts/`, unreadable loader calls and new
   cycles fail the build. A new top-level module that is not in the map fails too.
-- `tests/architecture/allowlist.py`: the 27 violations present today with their
+- `tests/architecture/allowlist.py`: the 25 violations present today with their
   exact import sites, each naming the step (A1–A5) that removes it. The list can
   only shrink: new sites, stale entries or sites, and growth against the
   merge-base (new keys, per-module sites, totals) fail. CI checks out full

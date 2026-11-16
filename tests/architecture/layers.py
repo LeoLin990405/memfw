@@ -182,11 +182,12 @@ RESTRICTED: Final[dict[str, frozenset[str]]] = {
 }
 
 #: Modules allowed to call a loader on a name only known at run time, with the
-#: exact number of such call sites. Each loads an operator-configured
+#: exact number of such call sites. Most load an operator-configured
 #: ``module:function`` plug-in (off unless configured). A new dynamic loader
 #: elsewhere is a violation; a changed count fails until this is updated.
 DYNAMIC_IMPORT_ALLOWED: Final[dict[str, tuple[str, int]]] = {
     "memfw.conversations.backends": ("operator-configured summarizer `module:factory`", 1),
     "memfw.dream.run": ("operator-configured judge `module:function`", 1),
     "memfw.dream.skills.draft": ("operator-configured drafter `module:function`", 1),
+    "memfw.index.readonly": ("standalone script loads sibling read_path.py", 1),
 }
