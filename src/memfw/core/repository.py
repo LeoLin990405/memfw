@@ -21,10 +21,15 @@ from ..knowledge import KnowledgeStoreMixin
 from ..log.store import EventLogMixin
 from ..permissions import PermissionMode, PermissionPolicy
 from ..storage.markdown import MarkdownStorageMixin
-from ..storage.operations import MemoryOperationsMixin
+from ..storage.operations import MemoryOperationsMixin, lookup_current
 from ..storage.transactions import TransactionMixin, _serialized
 from .common import sha256_text as sha256_text
-from .epistemic import EPISTEMIC_FIELDS, validate_proposed_write
+from .epistemic import (
+    EPISTEMIC_FIELDS,
+    OPEN_QUESTION_TYPE,
+    validate_proposed_open_question,
+    validate_proposed_write,
+)
 from .errors import IntegrityError, NotFoundError
 from .models import (
     CaptureState,
@@ -69,6 +74,9 @@ _PROPOSAL_FIELDS = frozenset(
         "causal_record",
         "limitations",
         "experience",
+        # Only together: resolving an open question sets both (see below).
+        "open_question",
+        "valid_to",
     }
 )
 
@@ -293,6 +301,9 @@ class Repository(
         except (NotFoundError, IntegrityError):
             current = None
         validate_proposed_write(current, changes, actor=actor)
+        validate_proposed_open_question(
+            current, changes, lookup=lambda ref: lookup_current(self, ref), actor=actor
+        )
 
     @staticmethod
     def _payload_hash(memory_id: str, operation: str, changes: dict[str, Any]) -> str:
@@ -759,6 +770,16 @@ class Repository(
             raise NotFoundError(f"Memory not found: {memory_id}")
         if operation != "delete" and (not changes or set(changes) - _PROPOSAL_FIELDS):
             raise IntegrityError("Proposal changes contain unsupported fields")
+        if "valid_to" in changes:
+            # ``valid_to`` is proposable only as part of a resolution, so an
+            # "open-question change" can never quietly expire another memory.
+            block = changes.get("open_question")
+            is_question = self.get(memory_id).type == OPEN_QUESTION_TYPE
+            if not (is_question and isinstance(block, dict) and block.get("resolved_by")):
+                raise IntegrityError(
+                    "A proposal may set valid_to only to resolve an open question: the target "
+                    "must be type=open-question and open_question.resolved_by must be set"
+                )
         if operation != "delete":
             # Refuse what approval would later fail on (``layer: bogus``), so a
             # human decision is never recorded for a proposal that cannot apply.
@@ -888,7 +909,7 @@ class Repository(
                 {
                     key: value
                     for key, value in proposal.output.items()
-                    if key in EPISTEMIC_FIELDS
+                    if key in EPISTEMIC_FIELDS or key == "valid_to"
                 },
                 actor=proposal.actor,
             )

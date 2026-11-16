@@ -14,14 +14,24 @@ from ..core.common import sha256_text
 from ..core.context import RepositoryHost
 from ..core.epistemic import (
     EPISTEMIC_FIELDS,
+    OPEN_QUESTION_TYPE,
     CausalLevel,
     CausalRecord,
     EpistemicType,
     ExperiencePoint,
+    OpenQuestion,
     validate_epistemic_write,
+    validate_open_question_references,
 )
 from ..core.errors import DeletedContentUnavailable, IntegrityError, NotFoundError
-from ..core.models import EventKind, Layer, MemoryDocument, Tier, fold_temporal_aliases
+from ..core.models import (
+    EventKind,
+    Layer,
+    MemoryDocument,
+    Tier,
+    _same_instant,
+    fold_temporal_aliases,
+)
 from ..storage.transactions import _serialized
 
 _LOG = logging.getLogger(__name__)
@@ -63,6 +73,7 @@ class MemoryOperationsMixin:
         applies_to: builtins.list[str] | None = None,
         group_key: str | None = None,
         manually_marked: bool = False,
+        open_question: OpenQuestion | dict[str, Any] | None = None,
     ) -> MemoryDocument:
         anchor_always_hot = (
             self.read_config().get("anchor_always_hot", True) if self.config_path.exists() else True
@@ -73,23 +84,35 @@ class MemoryOperationsMixin:
             actor, layer=layer, anchor=anchor, signature=signature, agent_id=agent_id
         ):
             raise IntegrityError("Actor lacks permission or a required agent signature")
-        validate_epistemic_write(
-            {
-                "type": memory_type,
-                "epistemic": epistemic,
-                "causal": causal,
-                "causal_record": causal_record,
-                "limitations": limitations or [],
-                "experience": experience,
-                "evidence": evidence or [],
-                "source": source,
-                "provenance": provenance,
-                "body": body,
-            },
-            actor=actor,
-        )
+        gate_values: dict[str, Any] = {
+            "id": memory_id,
+            "type": memory_type,
+            "tenant": tenant,
+            "epistemic": epistemic,
+            "causal": causal,
+            "causal_record": causal_record,
+            "limitations": limitations or [],
+            "experience": experience,
+            "open_question": open_question,
+            "evidence": evidence or [],
+            "source": source,
+            "provenance": provenance,
+            "body": body,
+        }
+        validate_epistemic_write(gate_values, actor=actor)
+        if memory_type == OPEN_QUESTION_TYPE and actor != "human":
+            # Mechanisms (dream, the conversation worker) and agents stage an
+            # open question as a candidate; a human applies it.
+            raise IntegrityError(
+                "type=" + OPEN_QUESTION_TYPE + " is created by a human or through a "
+                "reviewed candidate, not by actor " + actor
+            )
         self.init()
         identifier = self._check_id(memory_id or self.id_factory())
+        if memory_type == OPEN_QUESTION_TYPE:
+            validate_open_question_references(
+                {**gate_values, "id": identifier}, lookup=lambda ref: lookup_current(self, ref)
+            )
         path = self._current_path(identifier)
         known_ids = getattr(self._mutation_local, "event_memory_ids", None)
         if path.exists() or (
@@ -121,6 +144,7 @@ class MemoryOperationsMixin:
             causal_record=causal_record,
             limitations=limitations or [],
             experience=experience,
+            open_question=open_question,
             evidence=list(evidence or []),
             created_at=now,
             updated_at=now,
@@ -256,6 +280,7 @@ class MemoryOperationsMixin:
             "causal_record",
             "limitations",
             "experience",
+            "open_question",
         }
         if (
             actor != "human"
@@ -289,6 +314,57 @@ class MemoryOperationsMixin:
                 actor=actor,
                 human_decision=approved or (_human_decision and actor == "human"),
                 previous_causal=old.causal,
+            )
+        if OPEN_QUESTION_TYPE in (values.get("type"), old.type):
+            # Turning a memory into or out of an open question, and resolving
+            # or reopening one, are human decisions: a human actor or an
+            # approved proposal. A mechanism or a FULL-permission agent may
+            # still edit an open question's other fields.
+            if not (actor == "human" or approved):
+                old_answer = old.open_question.resolved_by if old.open_question else None
+                new_block = values.get("open_question")
+                if isinstance(new_block, OpenQuestion):
+                    new_answer = new_block.resolved_by
+                elif isinstance(new_block, dict):
+                    new_answer = new_block.get("resolved_by")
+                else:
+                    new_answer = None
+                if (values.get("type") == OPEN_QUESTION_TYPE) != (old.type == OPEN_QUESTION_TYPE):
+                    raise IntegrityError(
+                        "Only a human or an approved proposal may change type to or from "
+                        + OPEN_QUESTION_TYPE
+                    )
+                if new_answer != old_answer:
+                    raise IntegrityError(
+                        "Only a human or an approved proposal may resolve or reopen an open "
+                        "question"
+                    )
+                if old.type == OPEN_QUESTION_TYPE and not _same_instant(
+                    values.get("valid_to"), old.valid_to
+                ):
+                    raise IntegrityError(
+                        "Only a human or an approved proposal may change valid_to of an open "
+                        "question"
+                    )
+                if old.valid_to is not None and old.open_question is not None:
+                    if isinstance(new_block, OpenQuestion):
+                        new_conflicts = new_block.conflicts
+                    elif isinstance(new_block, dict):
+                        new_conflicts = OpenQuestion.model_validate(new_block).conflicts
+                    else:
+                        new_conflicts = []
+                    if new_conflicts != old.open_question.conflicts:
+                        raise IntegrityError(
+                            "Only a human or an approved proposal may change the conflicts of "
+                            "an open question that is no longer current"
+                        )
+            # Runs on every write to an open question, not only gated fields:
+            # a tenant change must not leave conflicts in another tenant.
+            validate_open_question_references(
+                values,
+                lookup=lambda ref: lookup_current(self, ref),
+                previous=old.model_dump(),
+                actor=actor,
             )
         config = self.read_config()
         is_anchored = values.get("layer") == Layer.ANCHOR or bool(values.get("anchor"))
@@ -385,6 +461,8 @@ class MemoryOperationsMixin:
         epistemic, causal,          inherited, through the same epistemic write
         causal_record, limitations, gate as ``add``
         experience, evidence
+        open_question               inherited for an open question, with
+                                    ``resolved_by`` cleared
         status                      reset to ``unconfirmed``: verification
                                     applied to the old body, not the new one
         id, version                 new id (or ``memory_id_new``), version 1
@@ -407,7 +485,8 @@ class MemoryOperationsMixin:
         ``overrides`` may set any of ``layer``, ``tier``, ``type``, ``related``,
         ``about``, ``applies_to``, ``anchor``, ``group_key``, ``manually_marked``,
         ``epistemic``, ``causal``, ``causal_record``, ``limitations``,
-        ``experience`` and ``evidence``. ``tenant`` cannot be overridden.
+        ``experience``, ``evidence`` and ``open_question``. ``tenant`` cannot be
+        overridden.
 
         ``fsck`` reports ``supersede_scope_mismatch`` whenever a replacement's
         tenant differs from its predecessor's. That includes a deliberate move
@@ -419,6 +498,24 @@ class MemoryOperationsMixin:
         old = self.get(memory_id)
         if old.valid_to is not None:
             raise IntegrityError(f"Memory is already superseded: {memory_id}")
+        question_block: OpenQuestion | None = None
+        dropped_conflicts: builtins.list[str] = []
+        if old.type == OPEN_QUESTION_TYPE and old.open_question is not None:
+            # An open question stays an open question, still unresolved
+            # (resolving one is ``resolve_open_question``). A conflict deleted
+            # (or moved to another tenant) since the question was asked cannot
+            # carry over; it is dropped and named in the SUPERSEDE event instead
+            # of blocking the rewrite.
+            kept: builtins.list[str] = []
+            for conflict in old.open_question.conflicts:
+                target = lookup_current(self, conflict)
+                if target is None or target.tenant != old.tenant:
+                    dropped_conflicts.append(conflict)
+                else:
+                    kept.append(conflict)
+            question_block = old.open_question.model_copy(
+                update={"resolved_by": None, "conflicts": kept}
+            )
         inherited: dict[str, Any] = {
             "layer": old.layer,
             "tier": old.tier,
@@ -438,6 +535,7 @@ class MemoryOperationsMixin:
             "limitations": list(old.limitations),
             "experience": old.experience,
             "evidence": list(old.evidence),
+            "open_question": question_block,
         }
         if overrides:
             if "tenant" in overrides:
@@ -482,9 +580,56 @@ class MemoryOperationsMixin:
             EventKind.SUPERSEDE,
             memory_id,
             actor="human",
-            details={"new_memory_id": new.id, "old_memory_id": memory_id},
+            details={
+                "new_memory_id": new.id,
+                "old_memory_id": memory_id,
+                **({"dropped_conflicts": dropped_conflicts} if dropped_conflicts else {}),
+            },
         )
+        if dropped_conflicts:
+            _LOG.warning(
+                "supersede of open question %s dropped conflicts that no longer resolve: %s",
+                memory_id,
+                ", ".join(dropped_conflicts),
+            )
         return new
+
+    @_serialized
+    def resolve_open_question(
+        self: RepositoryHost,
+        /,
+        question_id: str,
+        answer_id: str,
+        *,
+        actor: str = "human",
+    ) -> MemoryDocument:
+        """Close an open question with the memory that answered it.
+
+        An ordinary update of the question: ``open_question.resolved_by`` names
+        the answer and ``valid_to`` ends the question's validity. The question
+        file is kept, and the unresolved version stays in the history. The
+        answer must exist, share the question's tenant and be current. Only a
+        human may resolve a question.
+        """
+        if actor != "human":
+            raise IntegrityError("Resolving an open question requires a human actor")
+        question = self.get(question_id)
+        if question.type != OPEN_QUESTION_TYPE or question.open_question is None:
+            raise IntegrityError(f"Not an open question: {question_id}")
+        if question.open_question.resolved_by is not None:
+            raise IntegrityError(
+                f"Open question is already resolved by {question.open_question.resolved_by}: "
+                + question_id
+            )
+        if question.valid_to is not None:
+            raise IntegrityError(f"Open question is no longer current: {question_id}")
+        block = question.open_question.model_copy(update={"resolved_by": answer_id})
+        return self.update(
+            question_id,
+            actor="human",
+            open_question=block.model_dump(mode="json"),
+            valid_to=self._now(),
+        )
 
     @_serialized
     def cold_archive(
@@ -943,6 +1088,8 @@ class MemoryOperationsMixin:
         restored = old_doc.model_dump(
             exclude={"id", "created_at", "recorded_at", "version", "updated_at"}
         )
+        # An absent block is left out of the dump; restore that absence too.
+        restored.setdefault("open_question", None)
         stale_target = restored.get("superseded_by")
         if (
             stale_target is not None
@@ -1121,7 +1268,16 @@ class MemoryOperationsMixin:
                         "message": f"cleared superseded_by to deleted memory {stale}",
                     }
                 )
-        issues.extend(_supersession_issues(_current_documents(self)))
+        current_documents = _current_documents(self)
+        issues.extend(_supersession_issues(current_documents))
+        successors = {
+            str(event.details["old_memory_id"]): str(event.details["new_memory_id"])
+            for event in self.events()
+            if event.kind == EventKind.SUPERSEDE
+            and event.details.get("old_memory_id")
+            and event.details.get("new_memory_id")
+        }
+        issues.extend(_open_question_issues(current_documents, successors=successors))
         if registered_deletions:
             self.validate_knowledge_cards()
         return issues
@@ -1210,6 +1366,172 @@ def _supersession_issues(
                     "message": "supersession cycle: " + " -> ".join([*seen, memory_id]),
                 }
             )
+    return issues
+
+
+def lookup_current(host: RepositoryHost, memory_id: str) -> MemoryDocument | None:
+    """The current document for ``memory_id``, or ``None`` when there is none."""
+    if not host._current_path(memory_id).exists():
+        return None
+    try:
+        return host.get(memory_id)
+    except NotFoundError:
+        return None
+
+
+def _open_question_issues(
+    documents: builtins.list[MemoryDocument],
+    *,
+    successors: dict[str, str] | None = None,
+) -> builtins.list[dict[str, str | None]]:
+    """Lint ``type: open-question`` memories against the rest of the vault.
+
+    * ``open_question_missing_block`` / ``open_question_wrong_type``: the type
+      and the block come together or not at all;
+    * ``open_question_self_conflict``: ``conflicts`` names the question;
+    * ``open_question_dangling_conflict`` / ``open_question_cross_tenant_conflict``;
+    * ``open_question_dangling_resolution`` (also when the answer's supersession
+      chain ends at a deleted memory) / ``open_question_superseded_resolution``
+      / ``open_question_cross_tenant_resolution``: ``resolved_by`` must name an
+      existing, current memory in the same tenant;
+    * ``open_question_resolved_but_current``: a resolved question has ``valid_to``;
+    * ``open_question_multiple_unresolved``: one question (a supersession chain
+      of open-question versions) has at most one unresolved version without
+      ``valid_to``.
+    """
+    by_id = {doc.id: doc for doc in documents}
+    issues: builtins.list[dict[str, str | None]] = []
+
+    def report(memory_id: str, kind: str, message: str) -> None:
+        issues.append(
+            {
+                "memory_id": memory_id,
+                "kind": kind,
+                "expected_hash": None,
+                "actual_hash": None,
+                "message": message,
+            }
+        )
+
+    questions = [doc for doc in documents if doc.type == OPEN_QUESTION_TYPE]
+    for doc in documents:
+        if doc.type != OPEN_QUESTION_TYPE and (
+            doc.open_question is not None or doc.stray_open_question == "block"
+        ):
+            report(
+                doc.id,
+                "open_question_wrong_type",
+                "open_question requires type=open-question (the key was ignored)",
+            )
+        elif doc.type != OPEN_QUESTION_TYPE and "open_question" in doc.ignored_keys:
+            report(
+                doc.id,
+                "open_question_invalid_block",
+                "an unrelated open_question key was ignored (the file is unchanged)",
+            )
+    for doc in questions:
+        block = doc.open_question
+        if block is None:
+            report(doc.id, "open_question_missing_block", "type=open-question has no open_question")
+            continue
+        for conflict in block.conflicts:
+            target = by_id.get(conflict)
+            if conflict == doc.id:
+                report(doc.id, "open_question_self_conflict", "conflicts names the question itself")
+            elif doc.valid_to is not None:
+                # A historical version records what was in conflict back then;
+                # later deletes and tenant moves are not its defects.
+                continue
+            elif target is None:
+                report(
+                    doc.id,
+                    "open_question_dangling_conflict",
+                    f"conflicts names a missing memory: {conflict}",
+                )
+            elif target.tenant != doc.tenant:
+                report(
+                    doc.id,
+                    "open_question_cross_tenant_conflict",
+                    f"conflicts names a memory in another tenant: {conflict}",
+                )
+        answer_id = block.resolved_by
+        if answer_id is None:
+            continue
+        answer = by_id.get(answer_id)
+        # The answer may itself be revised later: follow its supersession chain
+        # and judge the version that is in force now.
+        head = answer
+        seen: set[str] = set()
+        while (
+            head is not None
+            and head.superseded_by is not None
+            and head.superseded_by in by_id
+            and head.id not in seen
+        ):
+            seen.add(head.id)
+            head = by_id[head.superseded_by]
+        # A deleted successor breaks the chain. ``delete`` clears the pointer to
+        # it, so the SUPERSEDE event log (``successors``) is what remembers it.
+        successor = None
+        if head is not None:
+            successor = head.superseded_by
+            if successor is None and head.valid_to is not None:
+                # Only a tail that is still ended: a human may have restored it.
+                successor = (successors or {}).get(head.id)
+        broken_chain = successor is not None and successor not in by_id
+        if answer is None or head is None or answer_id == doc.id or broken_chain:
+            report(
+                doc.id,
+                "open_question_dangling_resolution",
+                f"resolved_by names a missing memory: {answer_id}",
+            )
+        elif head.valid_to is not None or head.superseded_by is not None:
+            report(
+                doc.id,
+                "open_question_superseded_resolution",
+                f"resolved_by names a memory whose current version is not in force: {answer_id}",
+            )
+        elif head.tenant != doc.tenant:
+            report(
+                doc.id,
+                "open_question_cross_tenant_resolution",
+                f"resolved_by names a memory in another tenant: {answer_id}",
+            )
+        if doc.valid_to is None:
+            report(
+                doc.id,
+                "open_question_resolved_but_current",
+                "a resolved question must have valid_to",
+            )
+    # One question is one supersession chain of open-question versions.
+    parent = {doc.id: doc.id for doc in questions}
+
+    def root(memory_id: str) -> str:
+        while parent[memory_id] != memory_id:
+            parent[memory_id] = parent[parent[memory_id]]
+            memory_id = parent[memory_id]
+        return memory_id
+
+    for doc in questions:
+        if doc.superseded_by in parent:
+            parent[root(doc.id)] = root(str(doc.superseded_by))
+    open_versions: dict[str, builtins.list[str]] = {}
+    for doc in questions:
+        if (
+            doc.open_question is not None
+            and doc.open_question.resolved_by is None
+            and doc.valid_to is None
+        ):
+            open_versions.setdefault(root(doc.id), []).append(doc.id)
+    for ids in open_versions.values():
+        if len(ids) > 1:
+            for memory_id in sorted(ids):
+                report(
+                    memory_id,
+                    "open_question_multiple_unresolved",
+                    "one question has several unresolved current versions: "
+                    + ", ".join(sorted(ids)),
+                )
     return issues
 
 

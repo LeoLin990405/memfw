@@ -6,9 +6,18 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
-from .epistemic import CausalLevel, CausalRecord, EpistemicType, ExperiencePoint
+from .epistemic import CausalLevel, CausalRecord, EpistemicType, ExperiencePoint, OpenQuestion
 
 
 class Layer(StrEnum):
@@ -166,6 +175,10 @@ class MemoryDocument(BaseModel):
     limitations: list[str] = Field(default_factory=list)
     # Only for ``type: experience-point``: what a human accepted, in scope.
     experience: ExperiencePoint | None = None
+    # Only for ``type: open-question``: what is unknown, which memories
+    # conflict on it, and what answered it. Absent in older files; rendered
+    # only when present, so their bytes do not change.
+    open_question: OpenQuestion | None = None
     created_at: datetime
     updated_at: datetime
     # Transaction time: when memfw itself wrote this memory, from the server
@@ -180,12 +193,21 @@ class MemoryDocument(BaseModel):
     #: come from ``parse`` (a fresh document), so ``render`` applies its normal
     #: omission rule. Parsed documents always record the full observed set.
     _observed_default_fields: tuple[str, ...] = PrivateAttr(default=())
+    #: ``"block"`` or ``"invalid"`` when the source file carried an
+    #: ``open_question`` key on a memory that is not an open question (ignored).
+    _stray_open_question: str | None = PrivateAttr(default=None)
 
     @property
     def ignored_keys(self) -> tuple[str, ...]:
         """Frontmatter keys this version did not know and ignored when parsing."""
 
         return self._ignored_keys
+
+    @property
+    def stray_open_question(self) -> str | None:
+        """Whether an ignored ``open_question`` key was a well-formed block."""
+
+        return self._stray_open_question
 
     @property
     def observed_default_fields(self) -> tuple[str, ...]:
@@ -222,6 +244,21 @@ class MemoryDocument(BaseModel):
     @classmethod
     def timestamps_are_utc(cls, value: datetime | None) -> datetime | None:
         return None if value is None else _as_utc(value)
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_open_question(self, handler: SerializerFunctionWrapHandler) -> Any:
+        """Leave ``open_question`` out of a dump while it is absent.
+
+        The key arrived with U1. Proposal and agent snapshot hashes, and other
+        consumers, take ``model_dump`` of a memory; omitting the empty key keeps
+        every memory that is not an open question dumping (and hashing) exactly
+        as before.
+        """
+
+        data = handler(self)
+        if isinstance(data, dict) and data.get("open_question", ...) is None:
+            data.pop("open_question")
+        return data
 
 
 class Event(BaseModel):

@@ -12,6 +12,7 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
+from .epistemic import OPEN_QUESTION_TYPE, OpenQuestion
 from .errors import IntegrityError
 from .models import MemoryDocument
 
@@ -79,9 +80,27 @@ def parse_memory_markdown(markdown: str, *, expected_id: str | None = None) -> M
     # can write them back instead of dropping a default that the file's own
     # writer chose to spell out.
     observed = tuple(key for key in _OPTIONAL_DEFAULT_FIELDS if key in metadata)
+    # ``open_question`` became a known key with U1. On a memory that is not an
+    # open question the key means nothing to this version: an older file may
+    # carry an unrelated key of that name. It is ignored like any unknown key
+    # (the memory stays visible and editable) and ``fsck`` reports it:
+    # ``open_question_wrong_type`` when it is a well-formed block,
+    # ``open_question_invalid_block`` otherwise.
+    pre_ignored: tuple[str, ...] = ()
+    stray: str | None = None
+    if metadata.get("type") != OPEN_QUESTION_TYPE and "open_question" in metadata:
+        try:
+            OpenQuestion.model_validate(metadata["open_question"])
+            stray = "block"
+        except ValueError:
+            stray = "invalid"
+        metadata = {key: value for key, value in metadata.items() if key != "open_question"}
+        pre_ignored = ("open_question",)
     try:
         document = MemoryDocument.model_validate({**metadata, "body": body})
         document._observed_default_fields = observed
+        document._ignored_keys = pre_ignored
+        document._stray_open_question = stray
         return document
     except ValidationError as exc:
         # Forward compatibility: a newer memfw may write frontmatter keys this
@@ -98,7 +117,8 @@ def parse_memory_markdown(markdown: str, *, expected_id: str | None = None) -> M
         known = {key: value for key, value in metadata.items() if str(key) not in unknown}
         try:
             document = MemoryDocument.model_validate({**known, "body": body})
-            document._ignored_keys = tuple(sorted(unknown))
+            document._ignored_keys = tuple(sorted(unknown | set(pre_ignored)))
+            document._stray_open_question = stray
             document._observed_default_fields = observed
             return document
         except Exception as retry:

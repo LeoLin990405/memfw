@@ -322,6 +322,8 @@ class MarkdownStorageMixin:
             ordered["limitations"] = metadata["limitations"]
         if metadata.get("experience"):
             ordered["experience"] = metadata["experience"]
+        if metadata.get("open_question"):
+            ordered["open_question"] = metadata["open_question"]
         # Files written before ``type``, ``tenant``, ``related`` and the temporal
         # fields existed keep their bytes too: the default carries no
         # information, so it stays off the file exactly like ``recorded_at`` and
