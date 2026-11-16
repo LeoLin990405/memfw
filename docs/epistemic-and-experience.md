@@ -95,6 +95,45 @@ robustness). A dream confirmation therefore appends its transcript refs to the e
 evidence instead of replacing it, and a candidate that would break the invariants is
 skipped and reported (`skipped_candidates`) instead of aborting `memfw dream run`.
 
+## Open questions
+
+A `type: open-question` memory says what is *not* known. It never states a fact, so it
+carries no `epistemic`, has `causal: none`, and has no `causal_record` or `experience`.
+Its block is required for the type and refused on any other type:
+
+```yaml
+type: open-question
+about: [concept:service-port]        # the existing about field
+open_question:
+  question: Which port does the service listen on?   # 1-300 characters
+  conflicts: [mem-a, mem-b]          # memory ids, deduplicated, at most 20
+  missing: the deployed config file  # 0-300 characters
+  resolved_by: null                  # the answering memory, once resolved
+```
+
+* **Write gate.** Every path (`add`, `update`, rollback, agent proposals, dream
+  candidates) runs the same contract. Each `conflicts` id must exist and share the
+  question's tenant, and none may be the question itself. Only a human creates an
+  open question directly; mechanisms and agents stage candidates.
+* **Resolution.** `Repository.resolve_open_question(question_id, answer_id)` (human only)
+  is an ordinary update that sets `open_question.resolved_by` and `valid_to`. The answer
+  must exist, share the tenant, be current, and not be another open question. The
+  question file is kept, so `as_of` before that instant still shows it open.
+  `supersede` of an unresolved question keeps the type, block, tenant and `about`.
+* **Lint.** `fsck` reports `open_question_dangling_conflict`,
+  `open_question_self_conflict`, `open_question_cross_tenant_conflict`,
+  `open_question_dangling_resolution`, `open_question_superseded_resolution`,
+  `open_question_cross_tenant_resolution`, `open_question_resolved_but_current`,
+  `open_question_multiple_unresolved` (two unresolved versions without `valid_to` in one
+  supersession chain), `open_question_missing_block` and `open_question_wrong_type`.
+* **Compatibility.** Files without the block keep their bytes. memfw 0.2.0 does not
+  reject an open question: it reads the file, keeps `type: open-question`, and lists
+  `open_question` in `ignored_keys`. A write by 0.2.0 drops the block; this version then
+  refuses gated writes to that memory until the block is restored, and `fsck` reports
+  `open_question_missing_block`.
+
+Recall does not treat open questions specially yet.
+
 ## Retrieval and export
 
 * `MemoryHybridRetriever` rows and the MCP `memory_search` result rows carry

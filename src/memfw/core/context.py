@@ -12,7 +12,7 @@ from typing import Any, Protocol
 
 from filelock import FileLock
 
-from .epistemic import CausalLevel, CausalRecord, EpistemicType, ExperiencePoint
+from .epistemic import CausalLevel, CausalRecord, EpistemicType, ExperiencePoint, OpenQuestion
 from .models import Event, EventKind, Layer, MemoryDocument, Tier
 
 
@@ -189,6 +189,7 @@ class RepositoryHost(Protocol):
         applies_to: builtins.list[str] | None = None,
         group_key: str | None = None,
         manually_marked: bool = False,
+        open_question: OpenQuestion | builtins.dict[str, Any] | None = None,
     ) -> MemoryDocument: ...
 
     def add_many(

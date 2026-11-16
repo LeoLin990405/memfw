@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
-from .epistemic import CausalLevel, CausalRecord, EpistemicType, ExperiencePoint
+from .epistemic import CausalLevel, CausalRecord, EpistemicType, ExperiencePoint, OpenQuestion
 
 
 class Layer(StrEnum):
@@ -166,6 +166,10 @@ class MemoryDocument(BaseModel):
     limitations: list[str] = Field(default_factory=list)
     # Only for ``type: experience-point``: what a human accepted, in scope.
     experience: ExperiencePoint | None = None
+    # Only for ``type: open-question``: what is unknown, which memories
+    # conflict on it, and what answered it. Absent in older files; rendered
+    # only when present, so their bytes do not change.
+    open_question: OpenQuestion | None = None
     created_at: datetime
     updated_at: datetime
     # Transaction time: when memfw itself wrote this memory, from the server

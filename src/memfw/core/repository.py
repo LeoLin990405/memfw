@@ -21,10 +21,14 @@ from ..knowledge import KnowledgeStoreMixin
 from ..log.store import EventLogMixin
 from ..permissions import PermissionMode, PermissionPolicy
 from ..storage.markdown import MarkdownStorageMixin
-from ..storage.operations import MemoryOperationsMixin
+from ..storage.operations import MemoryOperationsMixin, lookup_current
 from ..storage.transactions import TransactionMixin, _serialized
 from .common import sha256_text as sha256_text
-from .epistemic import EPISTEMIC_FIELDS, validate_proposed_write
+from .epistemic import (
+    EPISTEMIC_FIELDS,
+    validate_proposed_open_question,
+    validate_proposed_write,
+)
 from .errors import IntegrityError, NotFoundError
 from .models import (
     CaptureState,
@@ -293,6 +297,9 @@ class Repository(
         except (NotFoundError, IntegrityError):
             current = None
         validate_proposed_write(current, changes, actor=actor)
+        validate_proposed_open_question(
+            current, changes, lookup=lambda ref: lookup_current(self, ref)
+        )
 
     @staticmethod
     def _payload_hash(memory_id: str, operation: str, changes: dict[str, Any]) -> str:

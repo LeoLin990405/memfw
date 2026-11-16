@@ -18,10 +18,11 @@ pass the gate is rejected before anything is written.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import re
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from .errors import IntegrityError
 
@@ -33,6 +34,18 @@ EPISTEMIC_VALUES: tuple[str, ...] = ("experience", "fact", "judgment", "inferenc
 CAUSAL_VALUES: tuple[str, ...] = ("none", "association", "hypothesis", "verified")
 
 EXPERIENCE_POINT_TYPE = "experience-point"
+
+#: A memory that states what is *not* known: one question, the memories that
+#: conflict on it, and what evidence is missing. It never states a fact, so it
+#: carries no epistemic type and no causal claim (see ``OpenQuestion``).
+OPEN_QUESTION_TYPE = "open-question"
+
+#: Most memories one open question may list as conflicting.
+MAX_OPEN_QUESTION_CONFLICTS = 20
+#: Longest ``question`` and ``missing`` text, in characters.
+MAX_OPEN_QUESTION_TEXT = 300
+
+_MEMORY_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
 #: Written into every experience-point body. The gate refuses an experience
 #: point without it, so the disclaimer cannot be dropped by an edit.
@@ -49,6 +62,7 @@ EPISTEMIC_FIELDS: frozenset[str] = frozenset(
         "causal_record",
         "limitations",
         "experience",
+        "open_question",
         "evidence",
         "source",
         "provenance",
@@ -131,6 +145,65 @@ class ExperiencePoint(BaseModel):
     version: int = 1
     counterexamples: list[str] = Field(default_factory=list)
     invalidated_when: list[str] = Field(default_factory=list)
+
+
+def _check_memory_id(value: str, *, field: str) -> str:
+    if not isinstance(value, str) or not _MEMORY_ID_RE.fullmatch(value):
+        raise ValueError(f"{field} must be a memory id, got {value!r}")
+    return value
+
+
+class OpenQuestion(BaseModel):
+    """What one ``type: open-question`` memory says is unknown.
+
+    ``conflicts`` lists memories that contradict each other on the question
+    (order kept, duplicates dropped). ``resolved_by`` names the memory that
+    answered it; a resolved question also has ``valid_to`` set and its file is
+    kept, so ``as_of`` still shows the question as it stood.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(min_length=1, max_length=MAX_OPEN_QUESTION_TEXT)
+    conflicts: list[str] = Field(default_factory=list)
+    missing: str = Field(default="", max_length=MAX_OPEN_QUESTION_TEXT)
+    resolved_by: str | None = None
+
+    @field_validator("question")
+    @classmethod
+    def question_is_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("question must not be blank")
+        return value
+
+    @field_validator("missing", mode="before")
+    @classmethod
+    def missing_none_is_empty(cls, value: Any) -> Any:
+        return "" if value is None else value
+
+    @field_validator("conflicts", mode="before")
+    @classmethod
+    def conflicts_are_unique_ids(cls, value: Any) -> Any:
+        if value is None:
+            return []
+        if isinstance(value, str) or not isinstance(value, Sequence):
+            raise ValueError("conflicts must be a list of memory ids")
+        unique: list[str] = []
+        for item in value:
+            identifier = _check_memory_id(item, field="conflicts")
+            if identifier not in unique:
+                unique.append(identifier)
+        if len(unique) > MAX_OPEN_QUESTION_CONFLICTS:
+            raise ValueError(
+                f"conflicts lists at most {MAX_OPEN_QUESTION_CONFLICTS} memories, "
+                + f"got {len(unique)}"
+            )
+        return unique
+
+    @field_validator("resolved_by")
+    @classmethod
+    def resolved_by_is_an_id(cls, value: str | None) -> str | None:
+        return None if value is None else _check_memory_id(value, field="resolved_by")
 
 
 # --- evidence source classification -------------------------------------------
@@ -269,6 +342,15 @@ def _coerce_experience(raw: Any) -> ExperiencePoint:
         raise IntegrityError(f"experience is invalid: {exc}") from exc
 
 
+def _coerce_open_question(raw: Any) -> OpenQuestion:
+    if isinstance(raw, OpenQuestion):
+        return raw
+    try:
+        return OpenQuestion.model_validate(raw)
+    except ValidationError as exc:
+        raise IntegrityError(f"open_question is invalid: {exc}") from exc
+
+
 def _strings(value: Any) -> list[str]:
     if value is None:
         return []
@@ -325,6 +407,23 @@ def validate_epistemic_write(
         raise IntegrityError("causal must be one of: " + ", ".join(CAUSAL_VALUES))
 
     record = _coerce_causal_record(raw_record) if raw_record is not None else None
+
+    # An open question states what is unknown; it never carries a claim.
+    raw_question = values.get("open_question")
+    if document_type == OPEN_QUESTION_TYPE:
+        if raw_question is None:
+            raise IntegrityError("type=" + OPEN_QUESTION_TYPE + " requires an open_question block")
+        question = _coerce_open_question(raw_question)
+        _validate_open_question(
+            question,
+            memory_id=values.get("id"),
+            epistemic=epistemic,
+            causal=str(causal),
+            has_causal_record=record is not None,
+            has_experience=values.get("experience") is not None,
+        )
+    elif raw_question is not None:
+        raise IntegrityError("open_question requires type=" + OPEN_QUESTION_TYPE)
 
     # An experience point never carries a causal claim.
     if document_type == EXPERIENCE_POINT_TYPE:
@@ -419,6 +518,17 @@ def validate_epistemic_write(
         )
 
 
+def _merge_proposal(
+    current: Mapping[str, Any] | None, changes: Mapping[str, Any], *, keys: frozenset[str]
+) -> dict[str, Any]:
+    values: dict[str, Any] = dict(current) if current is not None else {}
+    values.setdefault("causal", "none")
+    values.update({key: value for key, value in changes.items() if key in keys})
+    if values.get("causal") in (None, ""):
+        values["causal"] = "none"
+    return values
+
+
 def validate_proposed_write(
     current: Mapping[str, Any] | None,
     changes: Mapping[str, Any],
@@ -442,12 +552,145 @@ def validate_proposed_write(
     previous_causal: str | None = None
     if current is not None:
         previous_causal = str(current.get("causal") or "none")
-    values: dict[str, Any] = dict(current) if current is not None else {}
-    values.setdefault("causal", "none")
-    values.update({key: value for key, value in changes.items() if key in EPISTEMIC_FIELDS})
-    if values.get("causal") in (None, ""):
-        values["causal"] = "none"
+    values = _merge_proposal(current, changes, keys=EPISTEMIC_FIELDS)
     validate_epistemic_write(values, actor=actor, previous_causal=previous_causal)
+
+
+def validate_proposed_open_question(
+    current: Mapping[str, Any] | None,
+    changes: Mapping[str, Any],
+    *,
+    lookup: Callable[[str], Any],
+) -> None:
+    """Check a proposal-shaped change to an open question against the vault.
+
+    The vault half of the gate for agent proposals and dream candidates, run
+    after :func:`validate_proposed_write`: the same checks a direct write gets
+    (:func:`validate_open_question_references`). ``lookup`` maps a memory id to
+    its current document or ``None``.
+    """
+
+    if not set(changes) & EPISTEMIC_FIELDS:
+        return
+    values = _merge_proposal(current, changes, keys=EPISTEMIC_FIELDS | {"tenant"})
+    validate_open_question_references(values, lookup=lookup, previous=current)
+
+
+def _validate_open_question(
+    question: OpenQuestion,
+    *,
+    memory_id: Any,
+    epistemic: Any,
+    causal: str,
+    has_causal_record: bool,
+    has_experience: bool,
+) -> None:
+    """The open-question contract: no claim of any kind, and no self-reference."""
+
+    forbidden: list[str] = []
+    if epistemic is not None:
+        forbidden.append("epistemic (must be absent)")
+    if causal != "none":
+        forbidden.append("causal (must be none)")
+    if has_causal_record:
+        forbidden.append("causal_record (must be absent)")
+    if has_experience:
+        forbidden.append("experience (must be absent)")
+    if forbidden:
+        raise IntegrityError(
+            f"type={OPEN_QUESTION_TYPE} states what is unknown and cannot carry: "
+            + ", ".join(forbidden)
+        )
+    if memory_id:
+        if str(memory_id) in question.conflicts:
+            raise IntegrityError(
+                f"open_question.conflicts cannot name the question itself: {memory_id}"
+            )
+        if question.resolved_by == str(memory_id):
+            raise IntegrityError(
+                f"open_question.resolved_by cannot name the question itself: {memory_id}"
+            )
+
+
+def validate_open_question_references(
+    values: Mapping[str, Any],
+    *,
+    lookup: Callable[[str], Any],
+    previous: Mapping[str, Any] | None = None,
+) -> None:
+    """Check an open question against the vault: what it names must exist.
+
+    ``values`` is the complete prospective document state, already through
+    :func:`validate_epistemic_write`. ``lookup`` returns the current document
+    for a memory id, or ``None`` when no such memory exists. ``previous`` is the
+    stored state before this write (``None`` for a new memory); references it
+    already carried are not re-checked unless the question's tenant or type
+    changes, so an edit is not blocked by a later change elsewhere (``fsck``
+    reports those).
+
+    * every ``conflicts`` id must exist and share the question's tenant;
+    * ``resolved_by`` requires ``valid_to`` on the question, and the answer must
+      exist, share the tenant, be current (no ``valid_to``/``superseded_by``)
+      and not be another open question.
+    """
+
+    raw_question = values.get("open_question")
+    if values.get("type") != OPEN_QUESTION_TYPE or raw_question is None:
+        # A missing block is the shared gate's (and ``fsck``'s) to report.
+        return
+    question = _coerce_open_question(raw_question)
+    memory_id = str(values.get("id") or "")
+    tenant = str(values.get("tenant") or "")
+    if memory_id:
+        _validate_open_question(
+            question,
+            memory_id=memory_id,
+            epistemic=None,
+            causal="none",
+            has_causal_record=False,
+            has_experience=False,
+        )
+    old: OpenQuestion | None = None
+    recheck_all = True
+    if previous is not None and previous.get("type") == OPEN_QUESTION_TYPE:
+        raw_old = previous.get("open_question")
+        if raw_old is not None:
+            old = _coerce_open_question(raw_old)
+            recheck_all = str(previous.get("tenant") or "") != tenant
+    known = set() if recheck_all or old is None else set(old.conflicts)
+    for conflict in question.conflicts:
+        if conflict in known:
+            continue
+        target = lookup(conflict)
+        if target is None:
+            raise IntegrityError(f"open_question.conflicts names a missing memory: {conflict}")
+        if str(getattr(target, "tenant", "") or "") != tenant:
+            raise IntegrityError(
+                f"open_question.conflicts names a memory in another tenant: {conflict}"
+            )
+    answer_id = question.resolved_by
+    if answer_id is None:
+        return
+    if values.get("valid_to") in (None, ""):
+        raise IntegrityError(
+            "open_question.resolved_by requires valid_to: a resolved question stops being "
+            "current when it is answered"
+        )
+    if not recheck_all and old is not None and old.resolved_by == answer_id:
+        return
+    answer = lookup(answer_id)
+    if answer is None:
+        raise IntegrityError(f"open_question.resolved_by names a missing memory: {answer_id}")
+    if str(getattr(answer, "tenant", "") or "") != tenant:
+        raise IntegrityError(
+            f"open_question.resolved_by names a memory in another tenant: {answer_id}"
+        )
+    if getattr(answer, "valid_to", None) is not None or getattr(answer, "superseded_by", None):
+        raise IntegrityError(f"open_question.resolved_by names a superseded memory: {answer_id}")
+    if getattr(answer, "type", None) == OPEN_QUESTION_TYPE:
+        raise IntegrityError(
+            "open_question.resolved_by must name an answer, not another open question: " + answer_id
+        )
 
 
 def _validate_experience_point(
@@ -482,6 +725,9 @@ __all__ = [
     "EPISTEMIC_VALUES",
     "EXPERIENCE_DISCLAIMER",
     "EXPERIENCE_POINT_TYPE",
+    "MAX_OPEN_QUESTION_CONFLICTS",
+    "MAX_OPEN_QUESTION_TEXT",
+    "OPEN_QUESTION_TYPE",
     "CausalLevel",
     "CausalRecord",
     "Confounders",
@@ -491,8 +737,11 @@ __all__ = [
     "ExperienceReview",
     "ExperienceVerdict",
     "Identification",
+    "OpenQuestion",
     "RobustnessCheck",
     "evidence_source_class",
     "validate_epistemic_write",
+    "validate_open_question_references",
+    "validate_proposed_open_question",
     "validate_proposed_write",
 ]

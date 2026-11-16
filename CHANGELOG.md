@@ -103,6 +103,11 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   summaries now also covers `original_event_digest` and `lossless`. Once this
   version compacts a vault's event log, memfw ≤ 0.2.0 can no longer read that
   log. Vaults that were never compacted by this version stay readable by 0.2.0.
+- **`open_question` is new frontmatter.** memfw 0.2.0 reads an open-question
+  file without error, keeps `type: open-question`, and lists `open_question` in
+  `ignored_keys`; a write by 0.2.0 drops the block, after which this version
+  refuses gated writes to that memory and `fsck` reports
+  `open_question_missing_block`. Files without the block keep their bytes.
 ### Breaking for memfw-http/2 clients
 
 - `/related` without a `tenant` now only sees empty-tenant memories: asking
@@ -243,6 +248,15 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   idle on first sight; it waits `idle_minutes` after it last saw it change.
 ### Added
 
+- `type: open-question` memories with an `open_question` block (`question`,
+  `conflicts`, `missing`, `resolved_by`): what is unknown and which memories
+  conflict on it. The shared write gate refuses `epistemic`, a causal grade,
+  `causal_record` and `experience` on them, and refuses `conflicts` that are
+  missing, in another tenant, or the question itself; only a human creates one
+  directly. `Repository.resolve_open_question` sets `resolved_by` and
+  `valid_to` and keeps the file. `fsck` reports `open_question_*` findings.
+  `Repository.add` accepts `about` and `open_question`. See
+  `docs/epistemic-and-experience.md`.
 - `memfw okf import <bundle> --root <vault> [--dry-run/--apply] [--json]`: an
   OKF Ingestor that path-checks and validates the bundle, then stages each
   concept as a candidate under `_candidates/remember/` (never the vault) with a

@@ -14,7 +14,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
-from memfw.core.epistemic import EPISTEMIC_FIELDS, validate_proposed_write
+from memfw.core.epistemic import (
+    EPISTEMIC_FIELDS,
+    validate_proposed_open_question,
+    validate_proposed_write,
+)
 from memfw.core.errors import MemfwError
 from memfw.core.models import MemoryDocument
 from memfw.core.repository import Repository
@@ -25,6 +29,7 @@ from memfw.history import (
     default_db,
     sources_from_config,
 )
+from memfw.storage.operations import lookup_current
 
 from .budget import budget_candidates, check_budget
 from .curate import curate
@@ -228,6 +233,9 @@ def run_dream(
                 except (MemfwError, OSError):
                     current = None
                 validate_proposed_write(current, proposed, actor="mechanism")
+                validate_proposed_open_question(
+                    current, proposed, lookup=lambda ref: lookup_current(repository, ref)
+                )
         except MemfwError as exc:
             skipped.append(
                 {
