@@ -35,6 +35,14 @@ class MemoryHybridRetriever:
 
     A single retriever is bound to one repository, so tenant/source isolation is
     the vault boundary; an optional source filter narrows results further.
+
+    ``record_access`` (default true) appends one ``memory_access`` event per
+    returned hit, as the direct ``hybrid``/``vector``/``fts`` paths always
+    have. A caller that filters the hits afterwards (the ``two_stage`` recall
+    provider) passes false and records access itself for what it returns, so
+    a hit it later drops is never logged. Building or refreshing the
+    disposable ``.memory-hybrid.sqlite`` index on first search is an index
+    projection, not an event: it writes no event either way.
     """
 
     def __init__(
@@ -50,9 +58,11 @@ class MemoryHybridRetriever:
         entity_dictionary: Path | str | None = None,
         tenant: str = "",
         allowed_sources: tuple[str, ...] = (),
+        record_access: bool = True,
     ) -> None:
         self.repository = repository
         self.embedder = embedder
+        self.record_access = record_access
         self.notes_index = NotesIndex(
             index_path or (repository.root / ".memory-hybrid.sqlite"),
             embedder=embedder,
@@ -216,11 +226,12 @@ class MemoryHybridRetriever:
                 if document.is_stub or document.tier == Tier.COLD:
                     self.repository.autowarm(document.id, actor="mechanism")
                     document = self.repository.get(document.id)
-                self.repository.capture_event(
-                    EventKind.MEMORY_ACCESS,
-                    actor="mechanism",
-                    details={"memory_id": document.id, "operation": "fts_retrieve"},
-                )
+                if self.record_access:
+                    self.repository.capture_event(
+                        EventKind.MEMORY_ACCESS,
+                        actor="mechanism",
+                        details={"memory_id": document.id, "operation": "fts_retrieve"},
+                    )
                 index_version, projection_hash = self._projection_stamp(document.id)
                 results.append(
                     {
@@ -235,7 +246,9 @@ class MemoryHybridRetriever:
                     }
                 )
             return results, errors
-        legacy = VaultRetriever(self.repository).retrieve(query, limit=max(0, limit))
+        legacy = VaultRetriever(self.repository, record_access=self.record_access).retrieve(
+            query, limit=max(0, limit)
+        )
         results = []
         for memory_id in legacy:
             document = self.repository.get(memory_id)
@@ -315,11 +328,12 @@ class MemoryHybridRetriever:
                         continue
                     if not self._visible(document, include_history=include_history, as_of=as_of_dt):
                         continue
-                    self.repository.capture_event(
-                        EventKind.MEMORY_ACCESS,
-                        actor="mechanism",
-                        details={"memory_id": memory_id, "operation": "hybrid_retrieve"},
-                    )
+                    if self.record_access:
+                        self.repository.capture_event(
+                            EventKind.MEMORY_ACCESS,
+                            actor="mechanism",
+                            details={"memory_id": memory_id, "operation": "hybrid_retrieve"},
+                        )
                     index_version, projection_hash = self._projection_stamp(document.id)
                     results.append(
                         {

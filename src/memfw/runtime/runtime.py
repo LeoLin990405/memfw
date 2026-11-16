@@ -24,7 +24,7 @@ from memfw.context import (
     core_context_v1,
     slots_request,
 )
-from memfw.core.models import MemoryDocument
+from memfw.core.models import EventKind, MemoryDocument
 from memfw.core.repository import Repository
 from memfw.ports.context import ContextPack, ContextSlotProvider, SlotRequest
 from memfw.recall.coordinator import InflightRegistry
@@ -65,6 +65,17 @@ class RecallOutcome:
 
     result: RecallResult
     observed: dict[str, Observed] = field(default_factory=dict)
+
+
+def _record_access(repository: Repository, memory_ids: Sequence[str]) -> None:
+    """One ``memory_access`` event per returned memory id, in hit order."""
+
+    for memory_id in dict.fromkeys(memory_ids):
+        repository.capture_event(
+            EventKind.MEMORY_ACCESS,
+            actor="mechanism",
+            details={"memory_id": memory_id, "operation": "two_stage_retrieve"},
+        )
 
 
 class Runtime:
@@ -192,6 +203,12 @@ class Runtime:
         ``ValueError`` (fail closed) before a provider runs. Providers: FTS
         always, plus hybrid when an embedder is configured. Call
         ``ensure_index`` first: the coordinator's deadline starts here.
+
+        Providers are read-only: none appends an event. After the filter and
+        fusion, one ``memory_access`` event (``operation: two_stage_retrieve``,
+        the same shape the direct hybrid path writes) is appended per returned
+        hit, so a hit the policy dropped (privacy, tenant, source, validity)
+        is never access-logged.
         """
 
         if policy_name not in RECALL_POLICIES:
@@ -238,6 +255,7 @@ class Runtime:
         )
         result = coordinator.search(query, limit=limit, policy=filter_policy)
         result = _with_open_question_labels(repository, result, filter_policy, now=moment)
+        _record_access(repository, [hit.memory_id for hit in result.hits])
         answered = set(result.labels.providers)
         seen = {name: captured[name] for name in list(captured) if name in answered}
         return RecallOutcome(result=result, observed=seen)

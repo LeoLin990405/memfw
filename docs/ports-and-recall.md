@@ -383,6 +383,12 @@ When the hybrid retriever falls back to FTS internally, `HybridProvider` raises
 `ProviderUnavailable("fell_back_to_fts")`: the FTS provider answers instead. Its
 `projection_version` is the embedder's `fingerprint`.
 
+**Read-only.** No built-in provider appends an event. `HybridProvider` builds its retriever
+with `record_access=False`, so neither its hybrid/vector hits nor the retriever's internal FTS
+fallback write `memory_access` events. On first use it may build or refresh the disposable
+`.memory-hybrid.sqlite` index (and, with entities on, `.memory-entities.sqlite`): an index
+projection, not an event. Access is recorded by the caller for what it returns (§4.1).
+
 **`prepare`.** `FtsProvider` and `MultihopProvider` accept `prepare: Callable[[Repository],
 None]`, run before each search, so the wiring PR can pass the MCP server's index staleness
 check. Without it, a missing `index.sqlite3` makes the provider unavailable.
@@ -409,6 +415,10 @@ index and builds the rows.
   call's `source`, `include_history` and (FTS only) `scope`. Each provider may take 3 s;
   all providers and resolvers together get **4 s** (the total deadline). The index staleness
   check (`Runtime.ensure_index`) runs before the deadline starts. Resolvers are `default_resolvers(root)`.
+- **Access events.** After the filter and fusion, `Runtime.recall` appends one
+  `memory_access` event (`operation: two_stage_retrieve`) per returned hit, in hit order.
+  A candidate the policy drops (privacy, tenant, source, validity, lifecycle) is never
+  access-logged, so it feeds no strength, reinforcement or tier signal.
 - **One thread per hung provider.** Every call on one `Runtime` (one Runtime per Gateway)
   shares its `InflightRegistry`, so `max_inflight` (1) holds across calls: a provider that hangs holds
   one worker thread, and later calls report it as `busy` instead of starting another.

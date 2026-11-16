@@ -11,6 +11,20 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
+### Fixed — `two_stage` access events follow the filter
+
+- `memory_search` `mode=two_stage` with an embedder logged one `memory_access`
+  event per hybrid-provider hit before the coordinator's `FilterPolicy` ran, so
+  hits the policy later dropped (privacy under `strict`, another tenant) were
+  still access-logged and fed strength/tier signals. Recall providers are now
+  read-only: `HybridProvider` builds `MemoryHybridRetriever` with the new
+  `record_access=False` (also covering its internal FTS fallback and
+  `VaultRetriever`'s new `record_access` knob), and `Runtime.recall` appends
+  one `memory_access` event (`operation: two_stage_retrieve`) per hit it
+  returns, after filtering. `two_stage` without an embedder now logs access for
+  its returned hits too. The direct `hybrid`, `vector` and `fts` paths are
+  unchanged: their access events are identical to before.
+
 ### Internal — swap drills: every port has two implementations (A5a)
 
 - New `memfw.ports.reference` (stdlib only, imports only `memfw.ports`): `InMemoryRecallProvider`

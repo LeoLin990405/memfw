@@ -10,9 +10,11 @@ the adapter between it and today's vault and retrievers.
 - ``FtsProvider``: the shared ``search_vault`` that MCP ``memory_search``
   ``mode=fts`` and HTTP ``/search`` use.
 - ``HybridProvider``: ``MemoryHybridRetriever`` in ``hybrid`` or ``vector``
-  mode. Unavailable without an embedder or ``sqlite-vec``; when the retriever
-  falls back to FTS internally the provider reports itself unavailable, so
-  the FTS provider is the one that answers.
+  mode, with ``record_access=False``: it appends no ``memory_access`` event
+  (it may build the disposable ``.memory-hybrid.sqlite`` index on first use,
+  which is a projection, not an event). Unavailable without an embedder or
+  ``sqlite-vec``; when the retriever falls back to FTS internally the provider
+  reports itself unavailable, so the FTS provider is the one that answers.
 - ``MultihopProvider``: ``search_multihop``.
 - ``open_question_index`` / ``open_question_labels_for``: the U2 labels
   (``open_question:<id>``, ``conflicted``) from the vault's visible,
@@ -482,6 +484,9 @@ class HybridProvider:
             tenant=tenant,
             entity_enabled=self.entity_enabled,
             allowed_sources=self.allowed_sources,
+            # Read-only provider: the coordinator filters these hits later, so
+            # the Runtime records access only for the ones it returns.
+            record_access=False,
         )
         result = retriever.search(
             query,
