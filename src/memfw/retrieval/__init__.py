@@ -46,7 +46,7 @@ class VaultRetriever:
     def retrieve(self, query: str, *, limit: int = 20) -> list[str]:
         with self.repository._locked():
             started = self.timer()
-            if not self.index.path.exists():
+            if not self.index.schema_is_current():
                 self.index.rebuild(self.repository)
             rows = (
                 self.index.ranked_search(query, limit=max(0, limit), ranking=self.ranking)

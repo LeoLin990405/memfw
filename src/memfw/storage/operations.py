@@ -230,6 +230,10 @@ class MemoryOperationsMixin:
         values["version"] = old.version + 1
         values["updated_at"] = self._now()
         new_doc = MemoryDocument.model_validate(values)
+        # ``values`` came from ``model_dump``, which materialises every default.
+        # Carry the source file's optional-field spelling across the rebuild so a
+        # write does not silently drop lines the file already had.
+        new_doc._observed_default_fields = old._observed_default_fields
         if new_doc.is_stub:
             from ..curation.engine import _with_archived_body
 
@@ -299,11 +303,17 @@ class MemoryOperationsMixin:
             tags=tags if tags is not None else old.tags,
             actor="human",
         )
-        now = self._now()
+        # One instant for both sides of the handoff. Taking a fresh ``_now()``
+        # here would stamp ``valid_to`` a little after the replacement's own
+        # ``created_at`` (the add above is stamped first, then finishes its
+        # writes), and an ``as_of`` lookup inside that window would report both
+        # records as current. The replacement takes effect exactly when the old
+        # record becomes historical, so the two validity intervals stay disjoint.
+        handoff = new.created_at
         self.update(
             memory_id,
             actor="human",
-            valid_to=now,
+            valid_to=handoff,
             superseded_by=new.id,
         )
         self._append_event(

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -12,6 +14,7 @@ from memfw.core.errors import DeletedContentUnavailable, IntegrityError
 from memfw.core.models import CaptureState, EventKind, Layer, MemoryDocument, Tier
 from memfw.core.repository import Repository, sha256_text
 from memfw.index import MemoryIndex
+from memfw.retrieval import VaultRetriever
 
 
 def fixed_repo(root: Path) -> Repository:
@@ -299,3 +302,167 @@ def test_cli_quickstart_commands(tmp_path: Path) -> None:
     for command in commands:
         result = runner.invoke(app, command)
         assert result.exit_code == 0, f"{command}: {result.output}"
+
+
+_FIELDS_ADDED_ON_2026_11_06 = (
+    "type:",
+    "tenant:",
+    "related:",
+    "valid_from:",
+    "valid_to:",
+    "superseded_by:",
+)
+
+
+def _as_written_after_2026_11_06(rendered: str) -> str:
+    """Reproduce the bytes memfw wrote between 2026-11-06 and this fix.
+
+    For that period ``render`` stamped the six fields this version now omits at
+    their default, in the same fixed order (type/tenant/related after ``tier``,
+    then valid_from/valid_to/superseded_by, then ``recorded_at``). The live
+    vault is full of files in that shape, so the round trip has to work in this
+    direction too, not only for pre-2026-11-06 files.
+    """
+
+    out: list[str] = []
+    for line in rendered.splitlines(keepends=True):
+        if line.startswith("tier:"):
+            out.append(line)
+            out.extend(("type: null\n", "tenant: ''\n", "related: []\n"))
+            continue
+        if line.startswith("recorded_at:"):
+            out.extend(("valid_from: null\n", "valid_to: null\n", "superseded_by: null\n"))
+        out.append(line)
+    return "".join(out)
+
+
+def test_file_written_after_2026_11_06_round_trips_byte_identically(tmp_path: Path) -> None:
+    """The other direction: a newer file's explicit defaults must survive."""
+
+    repo = fixed_repo(tmp_path / "vault")
+    repo.init()
+    repo.add("Main era", "body", memory_id="mem-main")
+    path = repo.memories_dir / "mem-main.md"
+    written = _as_written_after_2026_11_06(path.read_text(encoding="utf-8"))
+    path.write_text(written, encoding="utf-8")
+
+    document = repo.get("mem-main")
+    assert document.observed_default_fields == (
+        "type",
+        "tenant",
+        "related",
+        "valid_from",
+        "valid_to",
+        "superseded_by",
+    )
+    assert repo.render(document) == written
+
+
+def test_update_keeps_the_default_lines_a_newer_file_carried(tmp_path: Path) -> None:
+    """A write to a 2026-11-06+ file must not drop its six lines (hash churn)."""
+
+    repo = fixed_repo(tmp_path / "vault")
+    repo.init()
+    repo.add("Main era", "body", memory_id="mem-main")
+    path = repo.memories_dir / "mem-main.md"
+    path.write_text(
+        _as_written_after_2026_11_06(path.read_text(encoding="utf-8")), encoding="utf-8"
+    )
+
+    repo.update("mem-main", actor="human", tags=["kept"])
+
+    after = path.read_text(encoding="utf-8")
+    for line in ("type: null", "tenant: ''", "related: []", "valid_from: null"):
+        assert line in after
+    assert after.count("superseded_by: null") == 1
+
+
+def test_legacy_file_without_later_default_fields_keeps_its_bytes(tmp_path: Path) -> None:
+    """A file written before 2026-11-06, when these fields were added, stays as is."""
+
+    repo = fixed_repo(tmp_path / "vault")
+    repo.init()
+    repo.add("Legacy", "old body", memory_id="mem-legacy")
+    path = repo.memories_dir / "mem-legacy.md"
+    legacy = "".join(
+        line
+        for line in path.read_text(encoding="utf-8").splitlines(keepends=True)
+        if not line.startswith(_FIELDS_ADDED_ON_2026_11_06)
+    )
+    path.write_text(legacy, encoding="utf-8")
+
+    document = repo.get("mem-legacy")
+    assert repo.render(document) == legacy
+
+
+def test_later_default_fields_are_still_written_when_set(tmp_path: Path) -> None:
+    repo = fixed_repo(tmp_path / "vault")
+    repo.init()
+    repo.add(
+        "Typed",
+        "body",
+        memory_id="mem-typed",
+        memory_type="fact",
+        tenant="acme",
+        related=["mem-legacy"],
+    )
+
+    rendered = repo.render(repo.get("mem-typed"))
+    assert "type: fact" in rendered
+    assert "tenant: acme" in rendered
+    assert "related:" in rendered
+    assert "valid_from:" not in rendered
+
+
+def test_stale_index_schema_is_rebuilt_before_search(tmp_path: Path) -> None:
+    """An index without memory_temporal is rebuilt before searching."""
+
+    repo = fixed_repo(tmp_path / "vault")
+    repo.init()
+    repo.add("Hot note", "findable body", memory_id="hot-note")
+    MemoryIndex(repo.index_path).rebuild(repo)
+    with sqlite3.connect(repo.index_path) as connection:
+        connection.execute("DROP TABLE memory_temporal")
+        connection.commit()
+
+    index = MemoryIndex(repo.index_path)
+    assert index.schema_is_current() is False
+    assert VaultRetriever(repo, index).retrieve("findable") == ["hot-note"]
+    assert index.schema_is_current() is True
+
+
+def test_index_generation_change_is_rebuilt_even_with_current_tables(tmp_path: Path) -> None:
+    """Table names alone are not a schema: a generation bump forces a rebuild."""
+
+    repo = fixed_repo(tmp_path / "vault")
+    repo.init()
+    repo.add("Hot note", "findable body", memory_id="hot-note")
+    index = MemoryIndex(repo.index_path)
+    index.rebuild(repo)
+    assert index.schema_is_current() is True
+
+    with sqlite3.connect(repo.index_path) as connection:
+        connection.execute("PRAGMA user_version = 0")
+        connection.commit()
+    assert index.schema_is_current() is False
+
+    assert VaultRetriever(repo, index).retrieve("findable") == ["hot-note"]
+    assert index.schema_is_current() is True
+    with sqlite3.connect(repo.index_path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] != 0
+
+
+def test_dry_run_search_reports_rebuild_for_stale_index(tmp_path: Path) -> None:
+    repo = fixed_repo(tmp_path / "vault")
+    repo.init()
+    repo.add("Hot note", "findable body", memory_id="hot-note")
+    MemoryIndex(repo.index_path).rebuild(repo)
+    with sqlite3.connect(repo.index_path) as connection:
+        connection.execute("DROP TABLE memory_temporal")
+        connection.commit()
+
+    result = CliRunner().invoke(
+        app, ["index", "search", "findable", "--root", str(repo.root), "--dry-run"]
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == {"would_rebuild": True, "writes": False, "results": []}
