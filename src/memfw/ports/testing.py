@@ -363,6 +363,8 @@ def check_id_gen(id_gen: IdGen, *, samples: int = 1000) -> list[str]:
         ids.append(value)
     _require(len(set(ids)) == len(ids), "new_id() repeated an id")
     return ids
+
+
 def check_context_pack(
     pack: object,
     *,

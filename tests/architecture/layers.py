@@ -122,6 +122,8 @@ UNITS: Final[dict[str, str]] = {
     "memfw.export": "L3-capability",
     "memfw.code_retrieval": "L3-capability",
     "memfw.memory_eval": "L3-capability",
+    # Session-start context packs (C1); filters are injected, no capability imports.
+    "memfw.context": "L3-capability",
     # --- L4 runtime: the composition root (A3a: recall wiring).
     "memfw.runtime": "L4-runtime",
     # --- L5 interfaces: protocol translation only.

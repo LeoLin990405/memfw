@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from memfw.context import build_core_pack, context_request
+from memfw.context import context_request
 from memfw.core.models import Layer, Tier
 from memfw.core.repository import Repository
 from memfw.mcp.server import TOOLS, Gateway
@@ -76,6 +76,18 @@ def _vault(tmp_path: Path) -> Repository:
         tenant="tenant-b",
     )
     return repository
+
+
+def _pack(
+    repository: Repository,
+    *,
+    policy: str = "compat_fts",
+    limit_tokens: int = 2000,
+    now: datetime = NOW,
+    tenant: str = "",
+) -> ContextPack:
+    runtime = Gateway(repository.root, tenant=tenant).runtime
+    return runtime.context_pack(repository, policy_name=policy, limit_tokens=limit_tokens, now=now)
 
 
 def _core(payload: dict) -> dict:
@@ -161,7 +173,7 @@ def test_v2_returns_a_valid_pack_with_the_v1_selection(tmp_path: Path) -> None:
     for entry in core["entries"]:
         assert entry["version"] >= 1
         assert entry["content_hash"].startswith("sha256:")
-    pack = build_core_pack(repository, tenant="", allowed_sources=(), limit_tokens=2000, now=NOW)
+    pack = _pack(repository, limit_tokens=2000)
     check_context_pack(pack, slots=["core"], max_tokens=2000, forbidden=[PRIVATE_BODY])
     assert pack.pack_version == payload["pack_version"]
 
@@ -180,22 +192,14 @@ def test_content_hash_matches_memory_search(tmp_path: Path) -> None:
 
 
 def _version(repository: Repository, **kwargs: object) -> str:
-    return build_core_pack(
-        repository, tenant="", allowed_sources=(), limit_tokens=2000, now=NOW, **kwargs
-    ).pack_version  # type: ignore[arg-type]
+    return _pack(repository, **kwargs).pack_version  # type: ignore[arg-type]
 
 
 def test_pack_version_is_stable_across_runs_and_time(tmp_path: Path) -> None:
     repository = _vault(tmp_path)
     first = _version(repository)
     assert _version(repository) == first
-    later = build_core_pack(
-        repository,
-        tenant="",
-        allowed_sources=(),
-        limit_tokens=2000,
-        now=datetime(2030, 1, 1, tzinfo=UTC),
-    )
+    later = _pack(repository, now=datetime(2030, 1, 1, tzinfo=UTC))
     assert later.pack_version == first  # generated_at is not part of the key
     assert Gateway(repository.root).context(v=2)["pack_version"] == first
 
@@ -223,8 +227,8 @@ def test_pack_version_depends_on_policy_and_cut(tmp_path: Path) -> None:
     assert _version(repository) != _version(repository, policy="strict")
     # 100 vs 112 characters: the same memories are cut (p-1 part-way, p-cold
     # left out), only the length carried differs.
-    short = build_core_pack(repository, tenant="", allowed_sources=(), limit_tokens=25, now=NOW)
-    longer = build_core_pack(repository, tenant="", allowed_sources=(), limit_tokens=28, now=NOW)
+    short = _pack(repository, limit_tokens=25)
+    longer = _pack(repository, limit_tokens=28)
     assert short.slots[0].truncated_ids == longer.slots[0].truncated_ids == ("p-1", "p-cold")
     assert short.pack_version != longer.pack_version
 
@@ -255,6 +259,31 @@ def test_strict_drops_local_private_unknown_privacy_and_archived(tmp_path: Path)
     assert PRIVATE_BODY not in json.dumps(strict_payload)
     # The dropped memories are filtered out, not reported as overflow.
     assert _core(strict_payload)["truncated_ids"] == []
+
+
+@pytest.mark.parametrize(
+    "tags",
+    [
+        ["Sensitivity:Private"],
+        ["sensitivity:secret"],
+        ["sensitivity:local-private"],
+        ["SENSITIVITY:PRIVATE"],
+        ["privacy:none", "privacy:local-private"],
+        ["Privacy:Local-Private"],
+    ],
+)
+def test_strict_drops_every_sensitive_tag_form(tmp_path: Path, tags: list[str]) -> None:
+    """With the fail-closed recall metadata (#44): any case, strictest tag wins."""
+
+    repository = _vault(tmp_path)
+    body = "sensitive tagged body for the strict check"
+    repository.add("Tagged", body, memory_id="a-tagged", layer=Layer.ANCHOR, tags=tags)
+    gateway = Gateway(repository.root)
+    assert "a-tagged" in {entry["id"] for entry in _core(gateway.context(v=2))["entries"]}
+    strict_payload = gateway.context(v=2, policy="strict")
+    assert "a-tagged" not in {entry["id"] for entry in _core(strict_payload)["entries"]}
+    assert body not in json.dumps(strict_payload)
+    assert "a-tagged" not in _core(strict_payload)["truncated_ids"]
 
 
 def test_strict_drops_superseded_and_lifecycle_tagged(tmp_path: Path) -> None:
@@ -313,7 +342,7 @@ def test_truncation_reports_overflow_and_truncated_ids(tmp_path: Path) -> None:
     # Room for everything: no overflow.
     roomy = _core(gateway.context(limit_tokens=100, v=2))
     assert roomy["overflow"] == 0 and roomy["truncated_ids"] == []
-    pack = build_core_pack(repository, tenant="", allowed_sources=(), limit_tokens=1, now=NOW)
+    pack = _pack(repository, limit_tokens=1)
     check_context_pack(pack, slots=["core"], max_tokens=25)
 
 
@@ -337,6 +366,14 @@ def test_argument_validation(tmp_path: Path, args: dict, message: str) -> None:
     gateway = Gateway(_vault(tmp_path).root)
     with pytest.raises(ValueError, match=message):
         gateway.handlers()["memory_context"](args)
+
+
+def test_runtime_context_pack_fails_closed_on_an_unknown_policy(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    runtime = Gateway(repository.root).runtime
+    for name in ("", "loose", "STRICT"):
+        with pytest.raises(ValueError, match="unknown policy"):
+            runtime.context_pack(repository, policy_name=name, limit_tokens=2000)
 
 
 def test_policy_defaults() -> None:
@@ -429,7 +466,7 @@ def test_contract_kit_rejects_a_version_that_carries_content() -> None:
 
 
 def test_context_capability_does_not_import_interface_layers() -> None:
-    """L3 ``memfw.context`` may use core, recall and ports, never MCP/HTTP/CLI."""
+    """L3 ``memfw.context`` uses only core and ports: no other capability, no interface."""
 
     import ast
 
@@ -445,9 +482,9 @@ def test_context_capability_does_not_import_interface_layers() -> None:
             for name in names:
                 if name.split(".")[0] != "memfw":
                     continue
-                assert name.startswith(
-                    ("memfw.core", "memfw.recall", "memfw.ports", "memfw.context")
-                ), f"{path.name} imports {name}"
+                assert name.startswith(("memfw.core", "memfw.ports", "memfw.context")), (
+                    f"{path.name} imports {name}"
+                )
 
 
 # --- review follow-ups -------------------------------------------------------------
@@ -480,7 +517,7 @@ def test_v2_entry_text_version_and_hash_come_from_one_read(
     stale = repository.list()  # p-1 at version 1
     repository.update("p-1", body="the newer procedure body")
     monkeypatch.setattr(Repository, "list", lambda self: stale)
-    pack = build_core_pack(repository, tenant="", allowed_sources=(), limit_tokens=2000, now=NOW)
+    pack = _pack(repository, limit_tokens=2000)
     entry = next(entry for entry in pack.slots[0].entries if entry.id == "p-1")
     raw = (repository.memories_dir / "p-1.md").read_bytes()
     import hashlib
@@ -498,7 +535,7 @@ def test_v2_skips_a_memory_that_no_longer_qualifies_when_re_read(
     stale = repository.list()
     repository.update("p-1", type="semantic")
     monkeypatch.setattr(Repository, "list", lambda self: stale)
-    pack = build_core_pack(repository, tenant="", allowed_sources=(), limit_tokens=2000, now=NOW)
+    pack = _pack(repository, limit_tokens=2000)
     assert "p-1" not in {entry.id for entry in pack.slots[0].entries}
     assert pack.slots[0].skipped == 1
 

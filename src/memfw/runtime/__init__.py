@@ -5,7 +5,10 @@
 themselves. A3a covers recall: ``Runtime.recall`` assembles the
 ``mode=two_stage`` providers, resolvers and filter policy and runs the
 coordinator, with one ``InflightRegistry`` per Runtime (one Runtime per
-Gateway); ``Runtime.ensure_index`` is the index staleness check.
+Gateway); ``Runtime.ensure_index`` is the index staleness check. C1 adds the
+``memory_context`` wiring: ``Runtime.context_v1`` and ``Runtime.context_pack``
+build the ``memfw.context`` core slot with the visibility predicate
+(``Runtime.context_keep``: tenant/source, or the recall strict policy).
 
 There is no ``runtime:`` section in ``vault.yaml`` yet; the default assembly
 is exactly what the MCP server built before (byte-identical output except

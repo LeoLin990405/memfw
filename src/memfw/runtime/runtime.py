@@ -1,14 +1,17 @@
-"""``Runtime`` and ``build_runtime``: recall wiring for the interfaces (A3a)."""
+"""``Runtime`` and ``build_runtime``: recall (A3a) and context (C1) wiring for the interfaces."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from memfw.context import Keep, build_core_pack, context_request, core_context_v1
+from memfw.core.models import MemoryDocument
 from memfw.core.repository import Repository
+from memfw.ports.context import ContextPack
 from memfw.recall.coordinator import InflightRegistry
 
 from .index import ensure_search_index
@@ -224,6 +227,73 @@ class Runtime:
         answered = set(result.labels.providers)
         seen = {name: captured[name] for name in list(captured) if name in answered}
         return RecallOutcome(result=result, observed=seen)
+
+    # --- memory_context (C1) ---------------------------------------------------
+
+    @staticmethod
+    def context_request(v: object, policy: object) -> tuple[int, str]:
+        """Validate ``memory_context`` ``v`` and ``policy`` (see ``memfw.context``)."""
+
+        return context_request(v, policy)
+
+    def _visible(self, document: MemoryDocument) -> bool:
+        """v1's rule: the bound tenant and, when set, an allowed source."""
+
+        if document.tenant != self.tenant:
+            return False
+        return not self.allowed_sources or document.source in self.allowed_sources
+
+    def context_keep(self, policy_name: str, *, now: datetime) -> Keep:
+        """Who may see a memory in a context pack under ``policy_name``.
+
+        ``compat_fts`` is v1's tenant/source rule (what
+        ``FilterPolicy.compat_fts`` checks when the slot does its own temporal
+        filtering). ``strict`` is the recall strict ``FilterPolicy`` evaluated on
+        ``meta_from_document``: privacy clearance ``none`` (fail-closed tag
+        reading), status, lifecycle, supersession, validity and archive. Any
+        other name raises ``ValueError`` (fail closed).
+        """
+
+        if policy_name not in RECALL_POLICIES:
+            raise ValueError("unknown policy")
+        if policy_name == "compat_fts":
+            return self._visible
+        # Imported here so callers that never use strict never load them.
+        from memfw.recall import FilterPolicy, evaluate
+        from memfw.recall.builtin import meta_from_document
+
+        rules = FilterPolicy(tenant=self.tenant, allowed_sources=tuple(self.allowed_sources))
+
+        def keep(document: MemoryDocument) -> bool:
+            return evaluate(meta_from_document(document), rules, now=now).kept
+
+        return keep
+
+    def context_v1(self, repository: Repository, *, limit_tokens: Any) -> dict[str, Any]:
+        """The original ``memory_context`` payload for the caller's open vault."""
+
+        return core_context_v1(repository, keep=self._visible, limit_tokens=limit_tokens)
+
+    def context_pack(
+        self,
+        repository: Repository,
+        *,
+        policy_name: str,
+        limit_tokens: int,
+        now: datetime | None = None,
+    ) -> ContextPack:
+        """The ``memory_context`` v2 pack (one ``core`` slot) for the caller's open vault.
+
+        ``repository`` is the caller's per-call ``Repository`` (never one opened
+        from ``self.root``). ``policy_name`` is ``compat_fts`` or ``strict``;
+        anything else raises ``ValueError`` before the vault is read.
+        """
+
+        moment = now if now is not None else datetime.now(UTC)
+        keep = self.context_keep(policy_name, now=moment)
+        return build_core_pack(
+            repository, keep=keep, policy=policy_name, limit_tokens=limit_tokens, now=moment
+        )
 
 
 def build_runtime(

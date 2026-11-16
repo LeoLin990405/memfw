@@ -1327,27 +1327,16 @@ class Gateway:
     ) -> dict[str, Any]:
         """``memory_context``. v1 (default): the original payload, unchanged.
 
-        ``v=2`` returns a ``ContextPack`` (``memfw.context``) filtered with
-        ``policy`` (``compat_fts`` default, or ``strict``).
+        ``v=2`` returns a ``ContextPack`` filtered with ``policy``
+        (``compat_fts`` default, or ``strict``); the Runtime builds it.
         """
 
-        from memfw.context import build_core_pack, context_request, core_context_v1
-
-        version, policy_name = context_request(v, policy)
+        version, policy_name = self.runtime.context_request(v, policy)
         repository = self._repo()
         if version == 1:
-            return core_context_v1(
-                repository,
-                tenant=self.tenant,
-                allowed_sources=tuple(self.allowed_sources),
-                limit_tokens=limit_tokens,
-            )
-        pack = build_core_pack(
-            repository,
-            tenant=self.tenant,
-            allowed_sources=tuple(self.allowed_sources),
-            limit_tokens=int(limit_tokens),
-            policy=policy_name,
+            return self.runtime.context_v1(repository, limit_tokens=limit_tokens)
+        pack = self.runtime.context_pack(
+            repository, policy_name=policy_name, limit_tokens=int(limit_tokens)
         )
         return {"v": 2, "limit_tokens": limit_tokens, **pack.as_dict()}
 

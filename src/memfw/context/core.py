@@ -7,24 +7,20 @@ adds what v1 left out: each entry's ``version`` and ``content_hash``, how
 many memories did not fit (``overflow``/``truncated_ids``) and a
 ``pack_version`` key.
 
-Filtering goes through ``memfw.recall.policy.evaluate``:
-
-- ``compat_fts`` (default): tenant and source only, exactly what v1 applied
-  (``FilterPolicy.compat_fts`` with ``include_history`` set, because the
-  slot keeps its own ``valid_to`` rule below instead of the index's
-  temporal clause);
-- ``strict``: the two-stage strict rules: privacy clearance ``none``
-  (``local-private`` and unknown privacy are dropped), status, lifecycle,
-  supersession, validity and archive (cold tier or stub).
-
-Both keep v1's own rule that a memory with ``valid_to`` set is never
-resident context.
+Which memories a caller may see is injected as ``keep`` (one predicate per
+call). This package is an L3 capability and must not import another
+capability (``memfw.recall`` included), so the composition root builds the
+predicate: ``memfw.runtime`` (``Runtime.context_keep``), from the recall
+``FilterPolicy`` (``compat_fts``: tenant and source, as v1; ``strict``: the
+two-stage strict rules). On top of ``keep`` the slot always
+applies v1's own rule that a memory with ``valid_to`` set is never resident
+context.
 """
 
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -34,8 +30,9 @@ from memfw.core.models import Layer, MemoryDocument
 from memfw.core.repository import Repository
 from memfw.ports.context import ContextEntry, ContextPack, ContextSlot
 from memfw.ports.types import MEMORY_ID_RE
-from memfw.recall.builtin import meta_from_document
-from memfw.recall.policy import FilterPolicy, evaluate
+
+#: Whether the caller may see one memory (tenant, source, privacy, ...).
+Keep = Callable[[MemoryDocument], bool]
 
 #: ``memory_context`` ``policy`` values.
 CONTEXT_POLICIES: tuple[str, ...] = ("compat_fts", "strict")
@@ -83,30 +80,17 @@ def context_request(v: object, policy: object) -> tuple[int, str]:
     return v, policy
 
 
-def filter_policy(name: str, *, tenant: str, allowed_sources: Sequence[str]) -> FilterPolicy:
-    allowed = tuple(allowed_sources)
-    if name == "compat_fts":
-        return FilterPolicy.compat_fts(tenant=tenant, allowed_sources=allowed, include_history=True)
-    if name == "strict":
-        return FilterPolicy(tenant=tenant, allowed_sources=allowed)
-    raise ValueError("unknown policy")
-
-
 def _is_core(document: MemoryDocument) -> bool:
     return document.layer == Layer.ANCHOR or bool(document.anchor) or document.type == "procedural"
 
 
-def select_core(
-    documents: Sequence[MemoryDocument], policy: FilterPolicy, *, now: datetime
-) -> list[MemoryDocument]:
+def select_core(documents: Sequence[MemoryDocument], keep: Keep) -> list[MemoryDocument]:
     """The slot's memories in slot order. ``documents`` is the whole vault."""
 
     selected = [
         document
         for document in documents
-        if document.valid_to is None
-        and _is_core(document)
-        and evaluate(meta_from_document(document), policy, now=now).kept
+        if document.valid_to is None and _is_core(document) and keep(document)
     ]
     selected.sort(
         key=lambda document: (
@@ -158,15 +142,16 @@ def _cut(selected: Sequence[MemoryDocument], budget: int) -> _Cut:
 def core_context_v1(
     repository: Repository,
     *,
-    tenant: str,
-    allowed_sources: Sequence[str],
+    keep: Keep,
     limit_tokens: Any,
 ) -> dict[str, Any]:
-    """The original ``memory_context`` payload, byte for byte."""
+    """The original ``memory_context`` payload, byte for byte.
+
+    ``keep`` is v1's visibility rule (tenant and allowed sources).
+    """
 
     budget = limit_chars(limit_tokens)  # before list(): v1 raised here first
-    policy = filter_policy("compat_fts", tenant=tenant, allowed_sources=allowed_sources)
-    selected = select_core(repository.list(), policy, now=datetime.now(UTC))
+    selected = select_core(repository.list(), keep)
     cut = _cut(selected, budget)
     entries = [
         {
@@ -212,13 +197,12 @@ def _snapshot(
 def build_core_pack(
     repository: Repository,
     *,
-    tenant: str,
-    allowed_sources: Sequence[str],
+    keep: Keep,
+    policy: str,
     limit_tokens: int,
-    policy: str = "compat_fts",
     now: datetime | None = None,
 ) -> ContextPack:
-    """A one-slot (``core``) pack under ``policy``.
+    """A one-slot (``core``) pack; ``keep`` applies ``policy`` (its name goes in the pack).
 
     ``content_hash`` is the sha256 of the memory file, the same value
     ``memory_search`` reports. Each selected memory's file is read once more
@@ -230,7 +214,9 @@ def build_core_pack(
     ``skipped``, never carried and never overflow: an id outside the memory
     id pattern (a hand-placed file such as ``memories/a.dot.md``, which v1
     still returns), an unreadable or unparsable file, or one that no longer
-    qualifies when re-read.
+    qualifies when re-read. Because ``skipped`` is the difference between the
+    two selections, a memory that changed between the two reads (for example
+    retagged or moved out of the slot) is counted too.
 
     Because the hash covers the whole file, a frontmatter-only change
     (``updated_at``, ``strength``, ``reference_count`` ...) changes
@@ -239,8 +225,9 @@ def build_core_pack(
 
     budget = limit_chars(limit_tokens)
     moment = now if now is not None else datetime.now(UTC)
-    rules = filter_policy(policy, tenant=tenant, allowed_sources=allowed_sources)
-    candidates = select_core(repository.list(), rules, now=moment)
+    if policy not in CONTEXT_POLICIES:
+        raise ValueError("unknown policy")
+    candidates = select_core(repository.list(), keep)
     hashes: dict[str, str] = {}
     snapshots: list[MemoryDocument] = []
     for document in candidates:
@@ -249,7 +236,7 @@ def build_core_pack(
             continue
         hashes[snapshot[0].id] = snapshot[1]
         snapshots.append(snapshot[0])
-    selected = select_core(snapshots, rules, now=moment)
+    selected = select_core(snapshots, keep)
     skipped = len(candidates) - len(selected)
     cut = _cut(selected, budget)
     entries = tuple(
@@ -286,7 +273,6 @@ __all__ = [
     "context_request",
     "core_context_v1",
     "estimate_tokens",
-    "filter_policy",
     "limit_chars",
     "select_core",
 ]

@@ -447,8 +447,12 @@ index and builds the rows.
 
 `memory_context` is the session-start (CAG) context: anchors first, then procedural
 memories, by id, cut to a character budget (`limit_tokens * 4`, at least 100 characters).
-The logic lives in the capability package `memfw.context` (L3); the MCP tool only parses
-arguments and serialises. Without new arguments (or with `v=1`) the payload is byte-identical
+The slot logic lives in the capability package `memfw.context` (L3), which imports only
+`memfw.core` and `memfw.ports`: who may see a memory is injected as a `keep` predicate,
+because an L3 capability may not import another (`memfw.recall`). The composition root
+`memfw.runtime` builds `keep` (`Runtime.context_keep`) and the pack (`Runtime.context_v1`,
+`Runtime.context_pack`, which take the caller's per-call `Repository`); the MCP tool only
+parses arguments, asks the Runtime and serialises. Without new arguments (or with `v=1`) the payload is byte-identical
 to earlier versions: `limit_tokens`, `used_chars`, `entries`.
 
 `v=2` returns a `ContextPack` (`memfw.ports.context`, stdlib only) as JSON:
@@ -472,13 +476,17 @@ to earlier versions: `limit_tokens`, `used_chars`, `entries`.
   concurrent write never pairs one version's text with another's hash. `skipped` counts
   selected memories the pack cannot represent: an id outside the memory id pattern (a
   hand-placed `memories/a.dot.md`, which v1 still returns), an unreadable or unparsable file,
-  or one that no longer qualifies when re-read. They are not overflow.
+  or one that no longer qualifies when re-read. They are not overflow. `skipped` is the
+  difference between the two selections, so it also counts a memory that changed between the
+  two reads (retagged, or moved out of the slot).
 - **`policy`** (v=2 only). `compat_fts` (default) applies v1's filters, tenant and source
   (`FilterPolicy.compat_fts` with `include_history`, since the slot keeps v1's own rule that a
   memory with `valid_to` is never resident). `strict` is the default `FilterPolicy`: privacy
   clearance `none` (`local-private` and unrecognised privacy are dropped), status, lifecycle
   (`lifecycle:retired` and other non-active tags), supersession, validity and archive (cold
-  tier or stub). Both run `memfw.recall.policy.evaluate` on `meta_from_document`. Absent,
+  tier or stub), evaluated with `memfw.recall.policy.evaluate` on `meta_from_document`, so it
+  uses recall's fail-closed tag reading (any case, strictest tag wins: `Sensitivity:Private`
+  and `sensitivity:secret` are dropped too). `compat_fts` is v1's own visibility check. Absent,
   `null` and `""` mean `compat_fts`; a non-string or unknown value is an error, and so is a
   `policy` other than `compat_fts` with `v=1`. `v` must be the integer 1 or 2. These are new
   errors for v1 callers: a v1 call that passes `policy` (other than `compat_fts`), or a `v`
