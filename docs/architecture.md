@@ -23,7 +23,7 @@ vault facade, assembled from `storage`, `log` and `knowledge` mixins), `memfw.co
 | 4 | `L1-projection` | `index`, `stats`, `entities`, `related`, `related_annotation`, `projection`, `notes`, `history` |
 | 5 | `L1-read` | `retrieval`, `memory_hybrid` |
 | 6 | `L3-capability` | `recall`, `recall.builtin`, `capture`, `conversations`, `dream`, `curation`, `handoff`, `okf`, `experience`, `export`, `code_retrieval`, `memory_eval` |
-| 7 | `L4-runtime` | reserved for `memfw.runtime` (A3) |
+| 7 | `L4-runtime` | `memfw.runtime` (the composition root; A3a: recall wiring) |
 | 8 | `L5-interface` | `memfw.cli`, `memfw.mcp`, every `*/cli.py`, `curation.review_cli`, `notes.mcp` |
 
 The spec's L-number is kept in each name. Projections (L1) rank above the kernel (L2)
@@ -50,7 +50,7 @@ unit-level edge:
    list; never for L3 capabilities, which talk through a port).
 3. **Restricted units:** `memfw.ports` imports only the standard library; `memfw.recall`
    imports only `memfw.ports` (internals go through `recall/builtin.py`); `memfw.mcp`
-   imports only `memfw.ports` (and `memfw.runtime` once it exists).
+   imports only `memfw.ports` and `memfw.runtime`.
 4. **No library code reaches into `scripts/`.** This is a heuristic: an import of a
    `scripts` module, or a non-docstring string constant with `scripts` as a path component
    (`"scripts"`, `"scripts/x.py"`, `"../../scripts"`) or naming a script module
@@ -97,6 +97,46 @@ is plain Python literals because the merge-base check reads the old version from
 sets `fetch-depth: 0` so `origin/main` and the merge-base exist for this check and for
 harness comparisons against `origin/main`. Another CI setup needs the same (or
 `git fetch origin main`).
+
+## A3: the composition root
+
+`memfw.runtime` (L4) builds capability objects for the interfaces: one Runtime per Gateway.
+`build_runtime(root, *, tenant, allowed_sources, embedder, entity_enabled, provider_timeout=3.0,
+total_timeout=4.0)` keeps `root` as configured (`expanduser` only, never resolved) and takes
+the other values the interface already resolved. Calls take the caller's open `Repository` and
+use its (per call resolved) root, so a symlinked or relative vault root is followed per call by
+every mode; there is no `runtime:` section in `vault.yaml` yet, so the default
+assembly is today's behaviour, byte-identical except timing fields.
+
+**A3a (done).** `Runtime.recall(repository, query, *, limit, policy_name, source, include_history, as_of,
+scope) -> RecallOutcome` owns the `memory_search mode=two_stage` wiring: the providers
+(`FtsProvider`, plus `HybridProvider` with an embedder; the `Runtime._two_stage_providers`
+test seam), `default_resolvers`, the `compat_fts`/`strict` `FilterPolicy` (any other
+`policy_name` raises `ValueError`: fail closed), the `InflightRegistry` (one per Runtime) and
+the coordinator call. `RecallOutcome.observed` carries the raw index rows of the providers
+that answered, from which the MCP server builds rows as before. `Runtime.ensure_index(repository)`
+(`memfw.runtime.ensure_search_index`) is the index staleness check the MCP server runs before
+every FTS-backed search, before the coordinator's deadline starts; without a repository it
+opens `Runtime.root` only if a vault exists there (`ValueError` otherwise, never creates one). In-flight slots are counted
+per provider name and shared by every caller of one Runtime: a hung provider shows as `busy`
+across tools until it returns. The MCP server no longer imports `memfw.recall` or
+`memfw.recall.builtin` (two allowlist entries removed).
+
+**Still to do (A3b and later).**
+
+- Resolve settings (tenant, allowed sources, entity flag, embedder from
+  `MEMFW_EMBEDDING_*`) in `build_runtime` instead of `Gateway.__init__`; that removes
+  `memfw.mcp -> memfw.notes`.
+- `Repository` opening from the runtime (`memfw.mcp -> memfw.core.repository`); the
+  `memfw.index` edge goes once `readonly` is reached through the runtime too.
+- The other `memory_search` modes: `MemoryHybridRetriever` (`memfw.memory_hybrid`),
+  `search_multihop` (`memfw.retrieval`), `RelatedIndex` (`memfw.related`).
+- The two_stage input checks (`check_query_text`, `as_of` parsing) and row building move
+  below L5 so the server only translates.
+- The CLI gets its capability objects from the `Runtime` too; a `runtime:` config section
+  (fail closed on unknown names) and `build_runtime(test_config)` for tests.
+- A4 entries (`core`, `capture`, `conversations`, `dream`, `history`, `ontology`) go with
+  the MCP split, not A3.
 
 ## Byte-identical harness
 

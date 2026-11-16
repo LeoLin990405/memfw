@@ -28,14 +28,12 @@ import hashlib
 import json
 import os
 import re
-import sqlite3
 import stat
 import sys
 import threading
 import time
 import uuid
 from collections.abc import Callable, Sequence
-from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -60,12 +58,12 @@ from memfw.dream.run import DreamOptions, run_dream
 from memfw.dream.stage import DREAM_DIR
 from memfw.history import HistoryLimits, TranscriptIndex, default_db, sources_from_config
 from memfw.history.index import split_ref
-from memfw.index import MemoryIndex, readonly
+from memfw.index import readonly
 from memfw.memory_hybrid import MemoryHybridRetriever
 from memfw.notes import HttpEmbeddingProvider
-from memfw.recall.coordinator import InflightRegistry
 from memfw.related import RelatedIndex
 from memfw.retrieval.multihop import search_multihop
+from memfw.runtime import build_runtime
 
 SERVER_INFO = {"name": "memfw", "version": "0.2.0"}
 DREAM_MAX_LIMIT = 1000
@@ -472,50 +470,6 @@ _open_candidate_directory = open_candidate_directory
 _publish_candidate = publish_candidate
 
 
-def _indexed_ids(path: Path) -> set[str] | None:
-    """Memory ids in the index, or None when it cannot be read."""
-
-    try:
-        with closing(sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)) as db:
-            return {str(row[0]) for row in db.execute("SELECT id FROM memory_rows")}
-    except (OSError, sqlite3.Error):
-        return None
-
-
-def _ensure_search_index(repository: Repository) -> None:
-    """Rebuild the disposable memory index when it is stale.
-
-    Stale means: missing, built by an earlier schema generation (an index
-    written by memfw 0.1.x has no ``memory_temporal`` projection and would
-    answer every FTS query with nothing), older than a Markdown file, or
-    holding a different set of memories than ``memories/`` once that directory
-    changed after the index was built. The last check catches a file copied
-    in with its old mtime kept (``rsync -a``, Syncthing, ``cp -p``) and a file
-    deleted outside memfw: neither leaves a surviving file newer than the
-    index. A file that cannot be parsed is skipped by the rebuild, so it only
-    triggers one rebuild per directory change, never one per search.
-    """
-
-    path = repository.index_path
-    stale = not path.is_file() or not MemoryIndex(path).schema_is_current()
-    if not stale and repository.memories_dir.is_dir():
-        indexed_at = path.stat().st_mtime
-        stems: set[str] = set()
-        with os.scandir(repository.memories_dir) as entries:
-            for item in entries:
-                if not item.name.endswith(".md"):
-                    continue
-                stems.add(item.name[: -len(".md")])
-                if item.stat(follow_symlinks=False).st_mtime > indexed_at:
-                    stale = True
-                    break
-        if not stale and repository.memories_dir.stat().st_mtime > indexed_at:
-            stale = _indexed_ids(path) != stems
-    if stale:
-        repository.init()
-        MemoryIndex(path).rebuild(repository)
-
-
 _FRONTMATTER_SCAN_BYTES = 64 * 1024
 
 
@@ -803,13 +757,6 @@ def _document_row(
 
 _MAX_SCOPE_CHARS = 512
 
-#: Per-provider wait in ``mode=two_stage`` (the coordinator's total deadline
-#: still applies). Above the 1.5 s port default so a cold SQLite page does not
-#: count as a timeout.
-_TWO_STAGE_PROVIDER_TIMEOUT = 3.0
-#: Total wait for all ``mode=two_stage`` providers and resolvers together.
-_TWO_STAGE_TOTAL_TIMEOUT = 4.0
-
 
 def _checked_scope(scope: object) -> str:
     """Same rule as HTTP ``/search``: optional string of at most 512 characters."""
@@ -858,9 +805,17 @@ class Gateway:
                     dimension=int(os.environ.get("MEMFW_EMBEDDING_DIMENSION", "1024")),
                 )
         self.embedder = embedder
-        # Shared by every ``mode=two_stage`` call, so a hung provider holds at
-        # most ``max_inflight`` worker threads per gateway, not one per call.
-        self._recall_inflight = InflightRegistry()
+        # The composition root owns the recall wiring and the index check: one
+        # Runtime per Gateway, one InflightRegistry per Runtime. Every
+        # ``mode=two_stage`` call shares it, so a hung provider holds at most
+        # ``max_inflight`` worker threads per Runtime, not one per call.
+        self.runtime = build_runtime(
+            self.root,
+            tenant=self.tenant,
+            allowed_sources=self.allowed_sources,
+            embedder=self.embedder,
+            entity_enabled=self.entity_enabled,
+        )
         self.dream_clock: Callable[[], datetime] = lambda: datetime.now(UTC)
         self._last_staged: float | None = None
         self.history_refresh_seconds = float(
@@ -1004,7 +959,7 @@ class Gateway:
         expand = concepts.is_dir() and not concepts.is_symlink()
         if mode == "multihop":
             page = max(1, min(limit, 50))
-            _ensure_search_index(repository)
+            self.runtime.ensure_index(repository)
             parsed_as_of = None
             if as_of:
                 parsed_as_of = datetime.fromisoformat(as_of)
@@ -1023,7 +978,7 @@ class Gateway:
             )
         elif mode == "fts":
             page = max(1, min(int(limit), 50))
-            _ensure_search_index(repository)
+            self.runtime.ensure_index(repository)
             # With an allow-list and no explicit source, ask the shared reader
             # once per allowed source so the SQL filters by source before the
             # page cap: filtering one capped page afterwards could return
@@ -1124,53 +1079,6 @@ class Gateway:
             payload["route"] = result["route"]
         return payload
 
-    def _two_stage_providers(
-        self,
-        repository: Repository,
-        *,
-        source: str,
-        include_history: bool,
-        scope: str,
-        observe: Callable[[str], Any],
-    ) -> tuple[list[Any], dict[str, Any]]:
-        """The ``two_stage`` providers and their configs for one call.
-
-        ``observe(name)`` returns the hook that records that provider's raw
-        rows for this call only. A seam for tests, which add stub providers.
-        """
-
-        from memfw.ports import RecallBudget
-        from memfw.recall import ProviderConfig
-        from memfw.recall.builtin import FtsProvider, HybridProvider
-
-        allowed = tuple(self.allowed_sources)
-        budget = RecallBudget(timeout_seconds=_TWO_STAGE_PROVIDER_TIMEOUT)
-        providers: list[Any] = [
-            FtsProvider(
-                repository.root,
-                source=source,
-                include_history=include_history,
-                scope=scope,
-                allowed_sources=allowed,
-                observe=observe("fts"),
-            )
-        ]
-        configs: dict[str, Any] = {"fts": ProviderConfig(budget=budget)}
-        if self.embedder:
-            providers.append(
-                HybridProvider(
-                    repository.root,
-                    embedder=self.embedder,
-                    source=source,
-                    include_history=include_history,
-                    allowed_sources=allowed,
-                    entity_enabled=self.entity_enabled,
-                    observe=observe("hybrid"),
-                )
-            )
-            configs["hybrid"] = ProviderConfig(budget=budget)
-        return providers, configs
-
     def _search_two_stage(
         self,
         repository: Repository,
@@ -1199,10 +1107,6 @@ class Gateway:
         codes.
         """
 
-        # Imported here so the other modes never load the built-in providers.
-        from memfw.recall import Coordinator, FilterPolicy
-        from memfw.recall.builtin import default_resolvers
-
         # The same input rules as ``search_vault`` (``mode=fts``), and the same
         # errors, before any provider runs.
         needle = query.strip()
@@ -1213,54 +1117,19 @@ class Gateway:
             datetime.fromisoformat(readonly.normalise_as_of(as_of)) if as_of is not None else None
         )
         # Before the coordinator starts its deadline: a rebuild may take a while.
-        _ensure_search_index(repository)
-        captured: dict[str, tuple[dict[str, dict[str, Any]], list[Any]]] = {}
-
-        def observe(name: str) -> Callable[[Any, Any], None]:
-            def record(items: Any, payloads: Any) -> None:
-                # One assignment, so a late (timed-out) worker never leaves
-                # a half-written entry.
-                captured[name] = (
-                    {str(item.get("id") or ""): dict(item) for item in items},
-                    [dict(payload) for payload in payloads],
-                )
-
-            return record
-
-        providers, configs = self._two_stage_providers(
+        self.runtime.ensure_index(repository)
+        outcome = self.runtime.recall(
             repository,
+            query,
+            limit=page,
+            policy_name=policy,
             source=source,
             include_history=include_history,
+            as_of=parsed_as_of,
             scope=scope,
-            observe=observe,
         )
-        allowed = tuple(self.allowed_sources)
-        if policy == "strict":
-            filter_policy = FilterPolicy(
-                tenant=self.tenant,
-                allowed_sources=allowed,
-                source=source,
-                as_of=parsed_as_of,
-                include_history=include_history,
-            )
-        else:
-            filter_policy = FilterPolicy.compat_fts(
-                tenant=self.tenant,
-                allowed_sources=allowed,
-                source=source,
-                as_of=parsed_as_of,
-                include_history=include_history,
-            )
-        coordinator = Coordinator(
-            providers,
-            resolvers=default_resolvers(repository.root),
-            configs=configs,
-            inflight=self._recall_inflight,
-            total_timeout=_TWO_STAGE_TOTAL_TIMEOUT,
-        )
-        result = coordinator.search(query, limit=page, policy=filter_policy)
-        answered = set(result.labels.providers)
-        seen = {name: captured[name] for name in list(captured) if name in answered}
+        result = outcome.result
+        seen = outcome.observed
         rows: list[dict[str, Any]] = []
         for hit in result.hits:
             item: dict[str, Any] | None = None

@@ -396,15 +396,18 @@ order, as `Gateway.search(mode="fts")`. This is checked across tenants, limits, 
 ### 4.1 MCP `memory_search` `mode=two_stage`
 
 `mode=two_stage` runs the query through a `Coordinator` and builds the rows from the fused
-hits. It is opt-in; nothing else changes.
+hits. It is opt-in; nothing else changes. The wiring (providers, resolvers, policy choice,
+`InflightRegistry`, the coordinator call) lives in the composition root,
+`memfw.runtime.Runtime.recall` (A3a); the MCP server validates the input, refreshes the
+index and builds the rows.
 
 - **Providers.** `FtsProvider` always; `HybridProvider` (`mode=hybrid`) only when the server
   has an embedder (`MEMFW_EMBEDDING_URL`). Both get the server's `allowed_sources`, the
   call's `source`, `include_history` and (FTS only) `scope`. Each provider may take 3 s;
   all providers and resolvers together get **4 s** (the total deadline). The index staleness
-  check runs before the deadline starts. Resolvers are `default_resolvers(root)`.
-- **One thread per hung provider.** Every call on one `Gateway` shares an
-  `InflightRegistry`, so `max_inflight` (1) holds across calls: a provider that hangs holds
+  check (`Runtime.ensure_index`) runs before the deadline starts. Resolvers are `default_resolvers(root)`.
+- **One thread per hung provider.** Every call on one `Runtime` (one Runtime per Gateway)
+  shares its `InflightRegistry`, so `max_inflight` (1) holds across calls: a provider that hangs holds
   one worker thread, and later calls report it as `busy` instead of starting another.
   Concurrent `two_stage` calls on one gateway can therefore see a provider as `busy`.
 - **`policy`.** `compat_fts` (default) is `FilterPolicy.compat_fts(...)`: tenant, source and
