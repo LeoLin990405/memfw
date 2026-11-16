@@ -11,6 +11,28 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
+### Fixed — budget enforcement keeps version history
+
+- With `forget_action: hard`, the `fifo`, `lru`, `decay` and `salience`
+  policies no longer hard-delete historical records (`valid_to` or
+  `superseded_by` set). Before, budget pressure could delete the predecessor
+  of a version chain (`a-old` in `a-old -> z-new`): the event log kept its
+  events, but the file was gone, so `as_of` queries and `.history`
+  reconstruction lost it. Historical candidates are now skipped from the
+  hard-forget plan with the decision reason `protected_history`; they still
+  count toward usage, so the selector moves on to current records.
+- When only historical records (and anchors) are left and the budget is still
+  over, the result is reported as unmet with the new reason code
+  `history_floor` (`anchor_floor` keeps precedence when anchors block), a
+  `budget_unsatisfiable` event, and the new `blocking_history_ids` field in
+  the result and its JSON.
+- Soft forgetting is unchanged: cooling moves a historical record into the
+  cold archive, which keeps its original bytes. An explicit human
+  `delete` of a historical memory is unchanged too. Plans for vaults without
+  historical records are byte-identical to before; `Policy.plan` takes a new
+  keyword `protect_historical` (default `False`), which the engine sets for
+  hard forgetting.
+
 ### Fixed — recall privacy tags fail closed (security)
 
 - `memfw.recall.builtin.meta_from_document` recognised only the exact, lower-case `sensitivity:private` tag, so under `policy=strict` (`memory_search mode=two_stage`) a memory tagged `Sensitivity:Private`, `sensitivity:local-private` or `sensitivity:secret` was kept. It now classes `sensitivity:*` tags exactly like the projection (`tag_privacy_class`): any case, only `sensitivity:private` is `local-private`, any other value is `unknown`, and both are dropped without clearance. `privacy:` and `lifecycle:` tag prefixes are matched in any case too, and with several such tags the strictest wins instead of the first (privacy: unknown > local-private > none; lifecycle: retired > superseded > other non-active > active), so tag order or case can never widen access. Before, `privacy:none` followed by `privacy:local-private` was kept under `strict`. `MemoryMeta` gains an optional `sensitivity_class`; callers that set only `sensitivity_private` behave as before. `policy=compat_fts` does not check privacy, so its output is unchanged.

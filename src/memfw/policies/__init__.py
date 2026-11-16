@@ -164,6 +164,7 @@ class Policy(Protocol):
         budget: BudgetLimits,
         *,
         now: datetime,
+        protect_historical: bool = False,
     ) -> PolicyPlan: ...
 
 
@@ -238,11 +239,27 @@ class _BasePolicy:
         budget: BudgetLimits,
         *,
         now: datetime,
+        protect_historical: bool = False,
     ) -> PolicyPlan:
+        """Select forget candidates until the budget fits.
+
+        Anchors are never selected. With ``protect_historical`` (the engine sets
+        it for ``forget_action: hard``), historical versions (``valid_to`` or
+        ``superseded_by`` set) are never selected either: hard deletion would
+        remove the predecessor file of a version chain, which ``as_of`` queries
+        and ``.history`` reconstruction need. They stay retained with reason
+        ``protected_history`` and still count toward usage, so the selector
+        moves on to current candidates; if those run out, the plan is reported
+        unsatisfied instead of deleting history. Soft forgetting leaves the flag
+        off: cooling moves a historical version into the cold archive, which
+        keeps its original bytes. A human can still delete a historical memory
+        explicitly with ``Repository.delete``.
+        """
         current = _utc(now)
         items = _normalize(candidates)
         forgotten: list[PolicyCandidate] = []
-        ranked = self._rank(items, current) if not _fits(items, budget) else []
+        over_budget = not _fits(items, budget)
+        ranked = self._rank(items, current) if over_budget else []
         # Knowledge citations add an opt-in, strategy-independent protection
         # tier. Preserve each policy's ordering within both tiers. Anchors
         # remain absolute via the existing skip below.
@@ -257,12 +274,12 @@ class _BasePolicy:
             ranked = [entry for _, entry in prioritized]
 
         # An already-fitting set creates no churn and no speculative proposals.
-        if not _fits(items, budget):
+        if over_budget:
             retained = list(items)
             for candidate, _, _ in ranked:
                 if _fits(retained, budget):
                     break
-                if candidate.is_anchor:
+                if candidate.is_anchor or (protect_historical and candidate.historical):
                     continue
                 retained.remove(candidate)
                 forgotten.append(candidate)
@@ -285,6 +302,8 @@ class _BasePolicy:
                     if item.id in forgotten_ids
                     else "protected_anchor"
                     if item.is_anchor
+                    else "protected_history"
+                    if protect_historical and item.historical and over_budget
                     else "budget_fits_or_candidate_not_selected"
                 ),
                 score=reason_map[item.id][1] if item.id in forgotten_ids else None,

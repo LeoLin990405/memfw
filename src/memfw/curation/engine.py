@@ -152,8 +152,13 @@ def plan_forget(
     now: datetime | None = None,
     scope: str = "hot",
     memory_ids: set[str] | None = None,
+    protect_historical: bool = False,
 ) -> PolicyPlan:
-    """Create a pure plan. ``hot`` measures only active hot bodies."""
+    """Create a pure plan. ``hot`` measures only active hot bodies.
+
+    ``protect_historical`` keeps historical versions out of the forget set (see
+    ``_BasePolicy.plan``); ``run_forget`` sets it for hard forgetting.
+    """
 
     if scope not in {"hot", "all"}:
         raise ValueError("scope must be 'hot' or 'all'")
@@ -163,7 +168,21 @@ def plan_forget(
         documents = [doc for doc in documents if doc.tier == Tier.HOT and not doc.is_stub]
     if memory_ids is not None:
         documents = [doc for doc in documents if doc.id in memory_ids]
-    return make_policy(policy).plan(candidates_for(repository, documents), limits, now=current)
+    return make_policy(policy).plan(
+        candidates_for(repository, documents),
+        limits,
+        now=current,
+        protect_historical=protect_historical,
+    )
+
+
+def _is_historical(document: Any) -> bool:
+    """A superseded or closed version: part of a version chain's audit trail."""
+    return document.valid_to is not None or bool(document.superseded_by)
+
+
+def _protected_history_ids(plan: PolicyPlan) -> tuple[str, ...]:
+    return tuple(row.memory_id for row in plan.decisions if row.reason == "protected_history")
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,6 +205,8 @@ class ForgetResult:
     blocking_anchor_ids: tuple[str, ...] = ()
     pending_proposal_ids: tuple[str, ...] = ()
     would_propose: tuple[str, ...] = ()
+    #: Historical versions a hard forget kept although the budget was unmet.
+    blocking_history_ids: tuple[str, ...] = ()
     physical_breakdown_before: dict[str, int] = field(default_factory=dict)
     physical_breakdown_after: dict[str, int] = field(default_factory=dict)
     physical_overage_bytes: int = 0
@@ -270,6 +291,7 @@ class ForgetResult:
             "unsatisfied_reason": self.unsatisfied_reason,
             "unsatisfied_reason_code": self.unsatisfied_reason_code,
             "blocking_anchor_ids": list(self.blocking_anchor_ids),
+            "blocking_history_ids": list(self.blocking_history_ids),
             "pending_proposal_ids": list(self.pending_proposal_ids),
             "would_propose": list(self.would_propose),
         }
@@ -485,7 +507,9 @@ def _enforce_total_budget(
         budget_bytes = default_budget_bytes
     ranked_candidates = candidates_for(repository, eligible)
     ranking_limits = BudgetLimits(max_count=0)
-    ranking_plan = make_policy(policy).plan(ranked_candidates, ranking_limits, now=point)
+    ranking_plan = make_policy(policy).plan(
+        ranked_candidates, ranking_limits, now=point, protect_historical=action == "hard"
+    )
     if (
         dry_run
         and PolicyName(policy) == PolicyName.CONSOLIDATE_THEN_FORGET
@@ -601,11 +625,16 @@ def _enforce_total_budget(
                 for doc in documents_by_id.values()
                 if doc.layer != Layer.ANCHOR and not doc.anchor
             ]
+            history_left = action == "hard" and any(
+                _is_historical(doc) for doc in non_anchor_documents
+            )
             reason = (
                 "approval_required"
                 if pending_source_proposals
                 else (
-                    "policy_exhausted"
+                    "history_floor"
+                    if history_left and all(_is_historical(doc) for doc in non_anchor_documents)
+                    else "policy_exhausted"
                     if non_anchor_documents
                     else ("anchor_floor" if anchors else "metadata_floor")
                 )
@@ -617,6 +646,9 @@ def _enforce_total_budget(
             reason = "policy_exhausted"
             break
         if document.layer == Layer.ANCHOR or document.anchor:
+            continue
+        if action == "hard" and _is_historical(document):
+            # Budget enforcement never hard-deletes a version chain's history.
             continue
         # Match run_forget's audited operation semantics without rebuilding a plan
         # or reparsing all Markdown to select this already-ranked single target.
@@ -717,6 +749,21 @@ def _enforce_total_budget(
         ),
         blocking_anchor_ids=anchors if reason == "anchor_floor" else (),
         pending_proposal_ids=tuple(pending_source_proposals),
+        blocking_history_ids=(
+            tuple(
+                sorted(
+                    doc.id
+                    for doc in documents_by_id.values()
+                    if _is_historical(doc) and doc.layer != Layer.ANCHOR and not doc.anchor
+                )
+            )
+            if action == "hard"
+            and (
+                current_bytes > budget_bytes
+                or (limits.max_count is not None and current_count > limits.max_count)
+            )
+            else ()
+        ),
     )
 
 
@@ -784,7 +831,15 @@ def run_forget(
         ]
     initial_evaluation = evaluate_budget(candidates_for(repository, input_documents), limits)
     initial_usage = initial_evaluation.usage
-    plan = plan_forget(repository, policy, limits, now=now, scope=scope, memory_ids=memory_ids)
+    plan = plan_forget(
+        repository,
+        policy,
+        limits,
+        now=now,
+        scope=scope,
+        memory_ids=memory_ids,
+        protect_historical=action == "hard",
+    )
     is_consolidation = PolicyName(policy) == PolicyName.CONSOLIDATE_THEN_FORGET
     eligible_documents = [doc for doc in repository.list() if not doc.is_stub]
     if scope == "hot":
@@ -898,6 +953,8 @@ def run_forget(
             raise IntegrityError(f"Forget target disappeared after planning: {memory_id}")
         if doc.layer == Layer.ANCHOR or bool(doc.anchor):
             raise IntegrityError(f"Refusing to forget protected anchor: {memory_id}")
+        if action == "hard" and _is_historical(doc):
+            raise IntegrityError(f"Refusing to hard-forget historical version: {memory_id}")
     actionable = []
     for memory_id in plan.forgotten_ids:
         document = documents[memory_id]
@@ -998,12 +1055,15 @@ def run_forget(
         )
     )
     unsatisfied_reason = None
+    blocking_history = _protected_history_ids(plan) if not actual.within_budget else ()
     if not actual.within_budget:
         unsatisfied_reason = (
             "approval_required"
             if pending_source_proposals
             else "anchor_floor"
             if blocking_anchors
+            else "history_floor"
+            if blocking_history
             else "policy_exhausted"
         )
         _record_budget_unsatisfied(
@@ -1031,6 +1091,7 @@ def run_forget(
         unsatisfied_reason=unsatisfied_reason,
         blocking_anchor_ids=blocking_anchors if unsatisfied_reason == "anchor_floor" else (),
         pending_proposal_ids=tuple(pending_source_proposals),
+        blocking_history_ids=blocking_history,
     )
 
 
