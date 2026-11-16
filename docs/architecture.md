@@ -39,7 +39,11 @@ depends on another when it imports it (at any depth, including inside functions 
 `__init__` re-exports (`from memfw import RelatedIndex` counts as `memfw.related`, so the
 root cannot launder an upward import), or when it holds a string constant naming a memfw
 module (`"memfw.cli"`, `"memfw.cli:app"`: the input of `importlib.import_module`,
-`__import__` or `pkgutil.resolve_name`). Checked per unit-level edge:
+`__import__` or `pkgutil.resolve_name`), or names one through a loader call
+(`import_module(".x", "memfw")`, `__import__("memfw", fromlist=["x"])`,
+`spec_from_file_location(name, "src/memfw/x.py")`). The entry-point group name
+`"memfw.adapters"` in `ports/registry.py` is exempt (`NOT_MODULE_NAMES`). Checked per
+unit-level edge:
 
 1. **No upward imports.**
 2. **Same-layer imports only when listed** in `SAME_LAYER_ALLOWED` (a reviewed, acyclic
@@ -77,18 +81,20 @@ number of import lines on that edge. The test fails when:
 - an allowlisted edge gains an importing module or an import line (fix it);
 - an entry or a site count no longer occurs (delete or lower it, and lower `ALLOWLIST_SIZE`
   in the test);
-- the list has more entries, or more sites in total, than at the merge-base with
-  `origin/main` (override the ref with `MEMFW_ARCH_BASE_REF`). This check skips, with the
-  reason, when the ref or the merge-base is not available or the file did not exist there.
+- compared with the allowlist at the merge-base with `origin/main` (override the ref with
+  `MEMFW_ARCH_BASE_REF`), it has a key the base lacks (a renamed or swapped entry counts),
+  a module with more sites than at the base, more entries, or more sites in total. The check
+  skips when the file did not exist at the merge-base. When the ref or the merge-base is not
+  available it skips locally and fails in CI (`CI` set).
 
 So the list can only get shorter, and it is empty when the A series is done. The allowlist
 is plain Python literals because the merge-base check reads the old version from git with
 `ast.literal_eval`.
 
-**CI history.** `actions/checkout` fetches one commit by default, so the merge-base check
-and any harness comparison against `origin/main` skip or fail for lack of history. A refactor
-PR that relies on them sets `fetch-depth: 0` on the checkout step (or runs
-`git fetch origin main` first).
+**CI history.** `actions/checkout` fetches one commit by default; `.github/workflows/ci.yml`
+sets `fetch-depth: 0` so `origin/main` and the merge-base exist for this check and for
+harness comparisons against `origin/main`. Another CI setup needs the same (or
+`git fetch origin main`).
 
 ## Byte-identical harness
 

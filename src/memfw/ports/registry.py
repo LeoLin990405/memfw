@@ -28,6 +28,8 @@ from typing import Any, Literal, get_args
 from .protocols import Deriver, Ingestor, Projector, RecallProvider
 from .types import Availability, check_name
 
+# An entry-point group name, not a module: tests/architecture/scan.py exempts it
+# (NOT_MODULE_NAMES) so it never becomes an import edge.
 ENTRY_POINT_GROUP = "memfw.adapters"
 
 AdapterKind = Literal["recall", "projector", "ingestor", "deriver"]

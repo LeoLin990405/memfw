@@ -26,7 +26,8 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 - `tests/architecture/allowlist.py`: the 27 violations present today with their
   exact import sites, each naming the step (A1–A5) that removes it. The list can
   only shrink: new sites, stale entries or sites, and growth against the
-  merge-base fail.
+  merge-base (new keys, per-module sites, totals) fail. CI checks out full
+  history (`fetch-depth: 0`) so that comparison runs.
 - `memfw.ports`: `Clock` and `IdGen` protocols with `SystemClock` (wall clock,
   never returns an earlier time), `FixedClock`,
   `UuidIdGen` and `SeededIdGen`; `memfw.ports.testing.check_clock` and

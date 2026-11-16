@@ -10,7 +10,11 @@ on another when it
   root package cannot launder an upward import;
 * holds a string constant naming a memfw module (``"memfw.cli"`` or
   ``"memfw.cli:app"``), the usual input of ``importlib.import_module``,
-  ``__import__``, ``pkgutil.resolve_name`` or entry-point style factories.
+  ``__import__``, ``pkgutil.resolve_name`` or entry-point style factories (pairs in
+  ``NOT_MODULE_NAMES`` are exempt);
+* names a memfw module through a loader call: ``import_module(".x",
+  "memfw")``, ``__import__("memfw", fromlist=["x"])``, or
+  ``spec_from_file_location(name, "src/memfw/x.py")``.
 
 Two pseudo-targets mark what the AST cannot resolve:
 
@@ -53,6 +57,9 @@ SCRIPT_MODULES = ("memfw_readonly_service",)
 #: Call names (last dotted component) that load a module from a string or path.
 LOADERS = frozenset({"import_module", "__import__", "spec_from_file_location", "resolve_name"})
 MODULE_STRING = re.compile(r"^memfw(\.\w+)+(:\w+)?$")
+#: (module, string) pairs that look like module names but are not. The
+#: entry-point group stays a plain name even if ``memfw/adapters/`` appears.
+NOT_MODULE_NAMES = frozenset({("memfw.ports.registry", "memfw.adapters")})
 _PATH_PARTS = re.compile(r"[\\/]")
 
 
@@ -171,6 +178,69 @@ def _through_reexports(base: str, name: str, exported: Mapping[str, Mapping[str,
     return target
 
 
+def _literal(node: ast.expr, constants: Mapping[str, str]) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name):
+        return constants.get(node.id)
+    return None
+
+
+def _module_from_path(text: str, known: set[str]) -> str | None:
+    """``"src/memfw/cli.py"`` -> ``memfw.cli`` (the last ``memfw`` path component wins)."""
+
+    parts = [part for part in _PATH_PARTS.split(text) if part and part != "."]
+    if PACKAGE not in parts or not parts[-1].endswith(".py"):
+        return None
+    tail = parts[len(parts) - 1 - parts[::-1].index(PACKAGE) :]
+    tail[-1] = tail[-1][: -len(".py")]
+    if tail[-1] == "__init__":
+        tail = tail[:-1]
+    return _deepest_module(".".join(tail), known) if len(tail) > 1 else None
+
+
+def _loader_targets(
+    name: str,
+    node: ast.Call,
+    literal: list[str | None],
+    constants: Mapping[str, str],
+    known: set[str],
+) -> list[str]:
+    """memfw modules a loader call names in forms the plain string rule misses."""
+
+    found: list[str] = []
+    first = literal[0] if literal else None
+    if name == "import_module" and first and first.startswith("."):
+        package = literal[1] if len(literal) > 1 else None
+        for keyword in node.keywords:
+            if keyword.arg == "package":
+                package = _literal(keyword.value, constants)
+        if package:
+            level = len(first) - len(first.lstrip("."))
+            base = package.split(".")
+            if level - 1 < len(base):
+                base = base[: len(base) - (level - 1)]
+                rest = first[level:]
+                resolved = ".".join([*base, rest] if rest else base)
+                if (target := _deepest_module(resolved, known)) is not None:
+                    found.append(target)
+    if name == "__import__" and first:
+        fromlist: ast.expr | None = node.args[3] if len(node.args) > 3 else None
+        for keyword in node.keywords:
+            if keyword.arg == "fromlist":
+                fromlist = keyword.value
+        if isinstance(fromlist, ast.List | ast.Tuple):
+            for element in fromlist.elts:
+                item = _literal(element, constants)
+                if item and (target := _deepest_module(f"{first}.{item}", known)):
+                    found.append(target)
+    if name == "spec_from_file_location":
+        for text in literal[1:]:
+            if text and (target := _module_from_path(text, known)) is not None:
+                found.append(target)
+    return found
+
+
 def _module_constants(tree: ast.Module) -> dict[str, str]:
     """Module-level ``NAME = "text"`` bindings (so ``import_module(NAME)`` resolves)."""
 
@@ -223,16 +293,17 @@ def scan_file(
                     target = _through_reexports(base, alias.name, exported)
                 found.append(Import(module, target, node.lineno))
         elif isinstance(node, ast.Call) and _call_name(node.func) in LOADERS:
-            literal = [
-                arg.value if isinstance(arg, ast.Constant) else constants[arg.id]
-                for arg in node.args[:2]
-                if (isinstance(arg, ast.Constant) and isinstance(arg.value, str))
-                or (isinstance(arg, ast.Name) and arg.id in constants)
-            ]
             name = _call_name(node.func)
-            dynamic = len(literal) < 2 if name == "spec_from_file_location" else not literal
+            literal = [_literal(arg, constants) for arg in node.args[:2]]
+            texts = [value for value in literal if value is not None]
+            if name == "spec_from_file_location":
+                dynamic = len(texts) < 2
+            else:
+                dynamic = not literal or literal[0] is None
             if dynamic:
                 found.append(Import(module, DYNAMIC, node.lineno))
+            for target in _loader_targets(name, node, literal, constants, known_set):
+                found.append(Import(module, target, node.lineno))
         elif (
             isinstance(node, ast.Constant)
             and isinstance(node.value, str)
@@ -241,7 +312,7 @@ def scan_file(
             value = node.value
             if _mentions_scripts(value):
                 found.append(Import(module, SCRIPTS, node.lineno))
-            if MODULE_STRING.fullmatch(value):
+            if MODULE_STRING.fullmatch(value) and (module, value) not in NOT_MODULE_NAMES:
                 named = _deepest_module(value.partition(":")[0], known_set)
                 if named is not None:
                     found.append(Import(module, named, node.lineno))

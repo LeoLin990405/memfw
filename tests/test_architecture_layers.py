@@ -257,28 +257,91 @@ def parse_allowlist(source: str) -> dict[Edge, object]:
     raise ValueError("no ALLOWLIST assignment")
 
 
-def test_allowlist_is_not_longer_than_at_the_merge_base() -> None:
-    """Shrink-only across PRs: entries and total sites never exceed the merge-base's."""
+def growth_since_base(before: dict[Edge, object], after: dict[Edge, object]) -> list[str]:
+    """Every way ``after`` is not a shrink of ``before`` (empty: it only shrank).
+
+    Keys must be a subset (a renamed or swapped entry is growth), each entry's
+    per-module site counts may not exceed the base's, and neither may the
+    entry count or total site count. Base entries in the old ``reason``-only
+    format have no sites, so only their keys are compared.
+    """
+
+    problems = [f"new entry {edge}" for edge in sorted(set(after) - set(before))]
+    for edge in sorted(set(after) & set(before)):
+        old, new = before[edge], after[edge]
+        if not (isinstance(old, tuple) and isinstance(new, tuple)):
+            continue
+        old_sites, new_sites = old[1], new[1]
+        for module, count in sorted(new_sites.items()):
+            if count > old_sites.get(module, 0):
+                problems.append(
+                    f"{edge}: {module} has {count} sites, {old_sites.get(module, 0)} at the base"
+                )
+    if len(after) > len(before):
+        problems.append(f"entries grew from {len(before)} to {len(after)}")
+    before_sites, after_sites = _total_sites(before), _total_sites(after)
+    if before_sites is not None and after_sites is not None and after_sites > before_sites:
+        problems.append(f"total sites grew from {before_sites} to {after_sites}")
+    return problems
+
+
+def _skip_or_fail(reason: str) -> None:
+    """Locally a missing base ref skips; in CI (``CI`` set) it is a failure."""
+
+    if os.environ.get("CI"):
+        pytest.fail(f"{reason}; CI must fetch it (actions/checkout fetch-depth: 0)")
+    pytest.skip(reason)
+
+
+def test_allowlist_only_shrinks_against_the_merge_base() -> None:
+    """Shrink-only across PRs: no entry, module or site count beyond the merge-base's."""
 
     if _git("rev-parse", "--verify", "--quiet", f"{BASE_REF}^{{commit}}").returncode != 0:
-        pytest.skip(f"{BASE_REF} is not available (shallow checkout?); set MEMFW_ARCH_BASE_REF")
+        _skip_or_fail(f"{BASE_REF} is not available (shallow checkout?); set MEMFW_ARCH_BASE_REF")
     merge_base = _git("merge-base", "HEAD", BASE_REF)
     if merge_base.returncode != 0:
-        pytest.skip(f"no merge-base between HEAD and {BASE_REF} (shallow history?)")
+        _skip_or_fail(f"no merge-base between HEAD and {BASE_REF} (shallow history?)")
     base = merge_base.stdout.strip()
     shown = _git("show", f"{base}:{ALLOWLIST_PATH}")
     if shown.returncode != 0:
         pytest.skip(f"{ALLOWLIST_PATH} does not exist at merge-base {base[:12]}")
-    before = parse_allowlist(shown.stdout)
-    assert len(allowlist.ALLOWLIST) <= len(before), (
-        f"allowlist grew from {len(before)} (merge-base {base[:12]}) to {len(allowlist.ALLOWLIST)}"
+    problems = growth_since_base(parse_allowlist(shown.stdout), dict(allowlist.ALLOWLIST))
+    assert not problems, f"allowlist grew since merge-base {base[:12]}:\n" + "\n".join(
+        f"  {problem}" for problem in problems
     )
-    before_sites = _total_sites(before)
-    after_sites = _total_sites(dict(allowlist.ALLOWLIST))
-    if before_sites is not None and after_sites is not None:
-        assert after_sites <= before_sites, (
-            f"allowlisted import sites grew from {before_sites} to {after_sites}"
-        )
+
+
+def test_growth_since_base_catches_renames_swaps_and_site_growth() -> None:
+    base: dict[Edge, object] = {
+        ("a", "b"): ("A2: x", {"a.m": 2}),
+        ("c", "d"): ("A3: y", {"c.n": 1}),
+    }
+    assert growth_since_base(base, dict(base)) == []
+    assert growth_since_base(base, {("a", "b"): ("A2: x", {"a.m": 1})}) == []
+    # Swap one entry for another: same count, still growth.
+    swapped = {("a", "b"): base[("a", "b")], ("c", "e"): ("A3: y", {"c.n": 1})}
+    assert growth_since_base(base, swapped) == ["new entry ('c', 'e')"]
+    # Move a site to another module: same total, still growth.
+    moved = {("a", "b"): ("A2: x", {"a.m": 1, "a.o": 1}), ("c", "d"): base[("c", "d")]}
+    assert growth_since_base(base, moved) == ["('a', 'b'): a.o has 1 sites, 0 at the base"]
+    grown = {("a", "b"): ("A2: x", {"a.m": 3}), ("c", "d"): base[("c", "d")]}
+    problems = growth_since_base(base, grown)
+    assert "('a', 'b'): a.m has 3 sites, 2 at the base" in problems
+    assert "total sites grew from 3 to 4" in problems
+    old_format: dict[Edge, object] = {("a", "b"): "A2: x"}
+    assert growth_since_base(old_format, {("a", "b"): ("A2: x", {"a.m": 9})}) == []
+    assert growth_since_base(old_format, {("z", "y"): ("A2: x", {"z.m": 1})}) == [
+        "new entry ('z', 'y')"
+    ]
+
+
+def test_skip_or_fail_fails_in_ci(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CI", "true")
+    with pytest.raises(pytest.fail.Exception):
+        _skip_or_fail("no base")
+    monkeypatch.delenv("CI")
+    with pytest.raises(pytest.skip.Exception):
+        _skip_or_fail("no base")
 
 
 def test_parse_allowlist_reads_the_literal_only() -> None:
@@ -403,6 +466,54 @@ def test_scanner_resolves_relative_imports_reexports_and_strings(tmp_path: Path)
     assert ("memfw.sub.b", "os") in pairs
     assert ("memfw.sub.b", scan.DYNAMIC) in pairs
     assert sorted({item.line for item in found if item.target == scan.SCRIPTS}) == [8]
+
+
+def test_entry_point_group_name_is_never_an_edge(tmp_path: Path) -> None:
+    root = tmp_path / "src"
+    (root / "memfw" / "ports").mkdir(parents=True)
+    (root / "memfw" / "adapters").mkdir()
+    for name in ("__init__.py", "ports/__init__.py", "adapters/__init__.py"):
+        (root / "memfw" / name).write_text("", encoding="utf-8")
+    group = 'ENTRY_POINT_GROUP = "memfw.adapters"\n'
+    (root / "memfw" / "ports" / "registry.py").write_text(group, encoding="utf-8")
+    (root / "memfw" / "ports" / "other.py").write_text(group, encoding="utf-8")
+    pairs = {(item.source, item.target) for item in scan.scan_tree(root, "memfw")}
+    assert ("memfw.ports.registry", "memfw.adapters") not in pairs
+    assert ("memfw.ports.other", "memfw.adapters") in pairs  # the exemption is per module
+    assert ("memfw.ports.registry", "memfw.adapters") in scan.NOT_MODULE_NAMES
+    registry = (scan.SRC / "memfw" / "ports" / "registry.py").read_text(encoding="utf-8")
+    assert 'ENTRY_POINT_GROUP = "memfw.adapters"' in registry
+
+
+@pytest.mark.parametrize(
+    ("code", "target"),
+    [
+        ("import importlib\nimportlib.import_module('.cli', 'memfw')\n", "memfw.cli"),
+        (
+            "import importlib\nimportlib.import_module('..cli', package='memfw.core')\n",
+            "memfw.cli",
+        ),
+        ("__import__('memfw', fromlist=['cli'])\n", "memfw.cli"),
+        ("__import__('memfw.mcp', None, None, ['server'])\n", "memfw.mcp.server"),
+        (
+            "from importlib.util import spec_from_file_location\n"
+            "spec_from_file_location('x', 'src/memfw/cli.py')\n",
+            "memfw.cli",
+        ),
+        (
+            "from importlib.util import spec_from_file_location\n"
+            "spec_from_file_location('x', '../memfw/mcp/__init__.py')\n",
+            "memfw.mcp",
+        ),
+    ],
+)
+def test_loader_call_forms_resolve(tmp_path: Path, code: str, target: str) -> None:
+    path = tmp_path / "mutant.py"
+    path.write_text(code, encoding="utf-8")
+    modules = scan.discover_modules()
+    found = scan.scan_file(path, "memfw.core.mutant", modules, scan.reexports(modules))
+    assert target in {item.target for item in found}
+    assert scan.DYNAMIC not in {item.target for item in found}
 
 
 def test_unit_of_prefers_the_longest_key() -> None:
