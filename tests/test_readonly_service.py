@@ -1966,6 +1966,26 @@ def test_checkout_script_uses_the_checkout_library() -> None:
     assert Path(service._library.__file__) == _DEPLOY_FILES["readonly.py"]
 
 
+def test_checkout_candidate_needs_a_scripts_directory(tmp_path: Path) -> None:
+    # A deploy directory next to an unrelated ``src/`` checkout never picks it up.
+    home = tmp_path / "home"
+    unrelated = home / "src" / "memfw" / "index" / "readonly.py"
+    unrelated.parent.mkdir(parents=True)
+    unrelated.write_text("raise SystemExit('unrelated checkout')\n", encoding="utf-8")
+    deployed = home / "memfw-remote" / "memfw_readonly_service.py"
+    assert service._library_candidates(deployed) == [deployed.with_name("readonly.py")]
+    checkout = tmp_path / "repo" / "scripts" / "memfw_readonly_service.py"
+    assert service._library_candidates(checkout) == [
+        checkout.with_name("readonly.py"),
+        tmp_path / "repo" / "src" / "memfw" / "index" / "readonly.py",
+    ]
+
+
+def test_script_at_the_filesystem_root_has_only_the_sibling_candidate() -> None:
+    script = Path("/memfw_readonly_service.py")
+    assert service._library_candidates(script) == [Path("/readonly.py")]
+
+
 def test_script_alone_falls_back_to_the_installed_package(tmp_path: Path) -> None:
     import importlib.util
 

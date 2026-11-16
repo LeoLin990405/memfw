@@ -44,6 +44,11 @@ file; file content is stripped). A token file must be mode ``0600``. The read
 and write tokens must differ. A ``--host`` that resolves to a wildcard
 address (``0.0.0.0``, ``::``, ``0``, an empty host) is refused. Each request
 socket times out after 5 seconds.
+
+The read side is ``memfw.index.readonly``. This script loads its own copy of
+that file as module ``memfw_readonly_library`` (beside the script, the
+checkout's ``src/``, or the installed package), so ``ServiceError`` raised
+here is a different class from ``memfw.index.readonly.ServiceError``.
 """
 
 from __future__ import annotations
@@ -91,19 +96,21 @@ def _installed_readonly() -> Path | None:
     return None
 
 
-def _library_candidates() -> list[Path]:
-    """Where the read side is loaded from, first match wins.
+def _library_candidates(script: Path | None = None) -> list[Path]:
+    """Files to try for the read side, in order; the first that exists wins.
 
-    1. ``readonly.py`` beside this file (a deployed copy);
-    2. ``src/memfw/index/readonly.py`` of the checkout this file sits in;
-    3. the installed ``memfw`` package.
+    1. ``readonly.py`` beside ``script`` (default: this file), a deployed copy;
+    2. ``src/memfw/index/readonly.py`` of the checkout, only when the script
+       sits in that checkout's ``scripts/`` directory.
+
+    ``_load_library`` falls back to the installed ``memfw`` package after these.
     """
 
-    here = Path(__file__).resolve()
-    return [
-        here.with_name("readonly.py"),
-        here.parents[1] / "src" / "memfw" / "index" / "readonly.py",
-    ]
+    here = (script if script is not None else Path(__file__)).resolve()
+    candidates = [here.with_name("readonly.py")]
+    if len(here.parents) > 1 and here.parent.name == "scripts":
+        candidates.append(here.parents[1] / "src" / "memfw" / "index" / "readonly.py")
+    return candidates
 
 
 def _load_library() -> Any:
