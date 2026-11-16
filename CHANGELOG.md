@@ -15,7 +15,6 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 - `_current_body_by_hash` and the archive lookup compared the body hash only after YAML-parsing each file, so every write parsed up to the whole vault and the cost depended on the filesystem's directory order (a perf guard passed on macOS and failed on Linux CI with 109 parses). They now hash first and parse only a matching file; the result is the same first file in glob order that both matches and parses. A non-matching file with invalid UTF-8 no longer raises; a matching one is skipped like any file that fails to parse. A delete in a 200-memory vault now parses 6 files in any directory order (was 6–204).
 
-||||||| parent of 77040be (A0: architecture guards (layer map, shrinking allowlist, Clock/IdGen ports, byte-identical harness))
 ### Added — architecture guards (A0)
 
 - `tests/test_architecture_layers.py`: every `memfw` module is placed in a layer
