@@ -12,10 +12,12 @@ Steps:
 
 * A1 (done, #38): the readonly service moved into ``memfw.index.readonly``;
   no library code loads ``scripts/``.
-* A2: cycles and upward/same-layer edges are cut with protocols or by moving
-  shared helpers down. A2a (done): the conversations/dream and stats/curation
+* A2 (done): cycles and upward/same-layer edges are cut with protocols or by
+  moving shared helpers down. A2a: the conversations/dream and stats/curation
   cycles and the kernel/handoff edges (cold-archive read and capture stage
   recovery moved into storage, transcript reader into history, claim ports).
+  A2b: the library-to-CLI edges (vault opener into ``memfw.core``) and
+  ``okf -> capture`` (candidate files and staging writer into storage).
 * A3: ``memfw.runtime`` (the composition root) builds providers, indexes and
   repositories; interfaces get them from the ``Runtime``.
 * A4: ``mcp/server.py`` is split by tool group; each group depends on the
@@ -41,24 +43,6 @@ ALLOWLIST: Final[dict[tuple[str, str], tuple[str, Sites]]] = {
         "A5: root __init__ re-exports RelatedIndex, so every `import memfw.x` loads"
         " the vault (lazy __getattr__ re-export)",
         {"memfw": 1},
-    ),
-    # --- library -> CLI (spec section 1: capture -> cli, curation -> cli) ------
-    ("memfw.capture", "memfw.cli"): (
-        "A2: capture.confirm uses memfw.cli._repo (move the vault opener to core)",
-        {"memfw.capture.confirm": 1},
-    ),
-    ("memfw.capture.cli", "memfw.cli"): (
-        "A2: capture sub-app uses memfw.cli internals",
-        {"memfw.capture.cli": 1},
-    ),
-    ("memfw.curation.review_cli", "memfw.cli"): (
-        "A2: review sub-app uses memfw.cli._repo (move the vault opener to core)",
-        {"memfw.curation.review_cli": 1},
-    ),
-    # --- found by A0, not in spec section 1 ------------------------------------
-    ("memfw.okf", "memfw.capture"): (
-        "A2: OKF import stages through capture.review/staging (memfw.ports staging contract)",
-        {"memfw.okf.importer": 2},
     ),
     # --- MCP server depends on implementations (spec sections 1 and 9) ---------
     ("memfw.mcp", "memfw.core.repository"): (

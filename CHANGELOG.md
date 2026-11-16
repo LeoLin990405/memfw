@@ -44,6 +44,46 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   `Policy.plan` takes a new keyword `protected_history_ids` (default empty);
   `memfw.policies.live_chain_ids` computes it.
 
+### Internal — library-to-CLI edges and `okf -> capture` removed (A2b)
+
+CLI output is unchanged: `memfw okf import` (dry run, `--apply`, re-import,
+rollback when a publish fails, a refused bundle, a missing vault),
+`memfw capture simulate` (seeded and unseeded), `memfw capture confirm`
+(list, dry run, keep/discard apply, bad choice, missing vault, pending
+transaction) and `memfw review` plus the review sub-app (`list`, `decide`,
+`apply`, `batch`) give the same output and vault bytes as the previous commit
+(checked side by side with injected `--now`/`--id-seed`). The last four A2
+allowlist entries are gone (17 -> 13), so A2 is done:
+
+- `capture -> cli`, `curation.review_cli -> cli`: the vault opener moved from
+  `memfw.cli._repo` into `memfw.core.repository.open_vault` (same checks and
+  messages). It takes `clock`, `id_factory` and the exception type as
+  parameters and reads no process-wide state; the CLI passes
+  `typer.BadParameter` and the `--now` / `--id-seed` overrides.
+  `memfw capture confirm` and `memfw review` use it directly;
+  `memfw.cli._repo` stays as an alias.
+- `capture.cli -> cli`: the `--now` / `--id-seed` overrides moved from the
+  `memfw.cli._NOW` / `_ID_SEED` globals into `memfw.core.invocation`
+  (`set_invocation`, `injected_now`, `injected_id_seed`, `id_factory`; stdlib
+  only; `clock()` wraps `--now`). The overrides are CLI-only: the root
+  callback records them there and CLI commands pass them explicitly; library
+  code takes a clock and id factory instead. `memfw.cli._id_factory` stays as
+  an alias. The `memfw.cli._NOW` / `_ID_SEED` globals are removed.
+- `okf -> capture`: the candidate staging writer moved from
+  `memfw.capture.staging` to `memfw.storage.candidate_staging`, and the
+  candidate file reader (`read_candidate`, `candidate_is_expired`,
+  `staged_candidate_paths`, ...) from `memfw.capture.review` to
+  `memfw.storage.candidate_files`. The OKF importer imports them from storage.
+  `memfw.capture.staging` and `memfw.capture.review` re-export the same
+  objects; `list_staged_candidates` (and its logger name) stays in
+  `memfw.capture.review`. The importer does not use
+  `memfw.ports.staging.stage_candidates`: that contract writes JSON under
+  `_candidates/<ingestor>/`, while OKF candidates are Markdown under
+  `_candidates/remember/` that `memfw candidate-apply` reads.
+- Unchanged, noted here: `memfw okf export` and `memfw okf import` ignore
+  `--now`; the bundle's generated stamp and a staged candidate's `created_at`
+  use the wall clock, as before.
+
 ### Internal — composition root, recall slice (A3a)
 
 - New `memfw.runtime` (layer L4): `build_runtime(...) -> Runtime`, one Runtime per Gateway.

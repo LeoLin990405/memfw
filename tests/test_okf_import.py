@@ -396,7 +396,7 @@ def test_symlinked_subdirectory_is_never_followed(tmp_path: Path) -> None:
 def test_keyboard_interrupt_mid_publish_stages_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, after_link: bool
 ) -> None:
-    import memfw.capture.staging as staging
+    import memfw.storage.candidate_staging as staging
 
     bundle = _bundle(tmp_path)
     target = _vault(tmp_path / "target")

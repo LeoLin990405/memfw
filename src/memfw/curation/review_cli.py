@@ -8,8 +8,9 @@ from typing import Annotated, Any
 
 import typer
 
+from memfw.core import invocation
 from memfw.core.errors import IntegrityError
-from memfw.core.repository import Repository
+from memfw.core.repository import Repository, open_vault
 
 from .review import apply_approved, approve_batch, decide_proposal, list_pending
 
@@ -21,11 +22,15 @@ def _emit(value: Any) -> None:
 
 
 def _repository(root: str | Path) -> Repository:
-    # Runtime import avoids the CLI/review_cli import cycle and shares --now,
-    # --id-seed, and pending-transaction validation with other root commands.
-    from memfw.cli import _repo
-
-    return _repo(Path(root))
+    # The core opener shares --now, --id-seed and pending-transaction
+    # validation with the root commands without importing memfw.cli.
+    path = Path(root)
+    return open_vault(
+        path,
+        clock=invocation.clock(),
+        id_factory=invocation.id_factory(path),
+        error=typer.BadParameter,
+    )
 
 
 def review_command(

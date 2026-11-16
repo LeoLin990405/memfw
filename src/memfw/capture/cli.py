@@ -11,6 +11,7 @@ from typing import Annotated, cast
 import typer
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from ..core import invocation
 from ..core.models import CaptureState
 from ..core.repository import Repository
 from . import CaptureEvent, CaptureSession, TimedSignal
@@ -157,10 +158,8 @@ def simulate(
                 raise ValueError("--vault is required unless --dry-run is set")
             # Reuse the root CLI's injected seed when present. Otherwise derive event
             # IDs from the stream and current event count so replay is still stable.
-            from .. import cli as root_cli
-
-            if root_cli._ID_SEED is not None:
-                id_factory = root_cli._id_factory(config_repository.root)
+            if invocation.injected_id_seed() is not None:
+                id_factory = invocation.id_factory(config_repository.root)
             else:
                 event_path = config_repository.events_path
                 sequence = (
@@ -176,7 +175,7 @@ def simulate(
 
             repository = Repository(
                 config_repository.root,
-                clock=lambda: root_cli._NOW or datetime(2000, 1, 1, tzinfo=UTC),
+                clock=lambda: invocation.injected_now() or datetime(2000, 1, 1, tzinfo=UTC),
                 id_factory=id_factory,
             )
             repository.init()

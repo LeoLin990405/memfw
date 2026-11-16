@@ -10,9 +10,10 @@ from typing import Annotated, Literal, cast
 
 import typer
 
+from ..core import invocation
 from ..core.errors import IntegrityError
 from ..core.models import EventKind, Layer, Tier
-from ..core.repository import Repository
+from ..core.repository import Repository, open_vault
 from ..storage.capture_stage import ensure_raw_stage_locked as _ensure_raw_stage_locked
 from ..storage.capture_stage import read_stage_records as _read_stage_records
 from . import CaptureCandidate, CaptureSession
@@ -22,9 +23,13 @@ app = typer.Typer(help="Review staged capture candidates")
 
 
 def _repository(root: str | Path) -> Repository:
-    from memfw.cli import _repo
-
-    return _repo(Path(root))
+    path = Path(root)
+    return open_vault(
+        path,
+        clock=invocation.clock(),
+        id_factory=invocation.id_factory(path),
+        error=typer.BadParameter,
+    )
 
 
 def _read_pending_candidates(repository: Repository) -> dict[str, CaptureCandidate]:

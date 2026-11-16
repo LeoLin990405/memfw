@@ -19,10 +19,11 @@ from .capture.confirm import confirm_command
 from .capture.review import Candidate, list_staged_candidates
 from .code_retrieval import CodeIndex, index_code
 from .conversations.cli import app as conversations_app
+from .core import invocation
 from .core.epistemic import validate_epistemic_write
 from .core.errors import IntegrityError, MemfwError, NotFoundError
 from .core.models import Layer, Tier
-from .core.repository import Repository
+from .core.repository import Repository, open_vault
 from .curation.engine import enforce_budget, plan_forget, run_forget
 from .curation.review_cli import review_command as run_review
 from .dream.cli import app as dream_app
@@ -972,10 +973,6 @@ def review(
     typer.echo(json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2))
 
 
-_NOW: datetime | None = None
-_ID_SEED: str | None = None
-
-
 def _json_option(raw: str | None, option: str) -> Any:
     """Parse an inline JSON object or a path to a JSON file for a CLI option."""
 
@@ -1035,41 +1032,23 @@ def main(
     ] = False,
 ) -> None:
     """Manage a Markdown memory vault."""
-    global _NOW, _ID_SEED
-    _NOW = _parse_now(now)
-    _ID_SEED = id_seed
+    invocation.set_invocation(now=_parse_now(now), id_seed=id_seed)
 
 
 def _repo(root: Path, *, allow_pending: bool = False) -> Repository:
-    repository = Repository(
-        root, clock=lambda: _NOW or datetime.now(UTC), id_factory=_id_factory(root)
+    # The opener lives in core (A2b) so sub-apps share it without importing
+    # this module; kept here under its old name for the root commands.
+    return open_vault(
+        root,
+        allow_pending=allow_pending,
+        clock=invocation.clock(),
+        id_factory=invocation.id_factory(root),
+        error=typer.BadParameter,
     )
-    if not repository.events_path.exists() and not repository.config_path.exists():
-        raise typer.BadParameter(f"Not a memfw vault: {root}; run `memfw init {root}` first")
-    if repository.pending_path.exists() and not allow_pending:
-        raise typer.BadParameter("Vault has a pending transaction; run `memfw recover` first")
-    return repository
 
 
 def _id_factory(root: Path) -> Callable[[], str]:
-    if _ID_SEED is None:
-        import uuid
-
-        return lambda: str(uuid.uuid4())
-    sequence = 0
-    event_log = root / "events.jsonl"
-    if event_log.exists():
-        try:
-            sequence = len([line for line in event_log.read_bytes().splitlines() if line]) * 2
-        except OSError:
-            sequence = 0
-
-    def next_id() -> str:
-        nonlocal sequence
-        sequence += 1
-        return hashlib.sha256(f"{_ID_SEED}:{sequence}".encode()).hexdigest()[:32]
-
-    return next_id
+    return invocation.id_factory(root)
 
 
 def _config(repository: Repository) -> dict[str, Any]:
@@ -1129,7 +1108,11 @@ def init(
             )
         )
         return
-    Repository(path, clock=lambda: _NOW or datetime.now(UTC), id_factory=_id_factory(path)).init()
+    Repository(
+        path,
+        clock=invocation.clock(),
+        id_factory=_id_factory(path),
+    ).init()
     typer.echo(f"Initialized {path.expanduser().resolve()}")
 
 
@@ -2161,7 +2144,7 @@ def projection_export(
             ),
             lifecycle_source=lifecycle_source,
             previous=previous,
-            now=_NOW,
+            now=invocation.injected_now(),
         )
     except (MemfwError, OSError) as exc:
         _projection_fail(exc)

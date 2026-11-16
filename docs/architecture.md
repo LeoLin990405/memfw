@@ -75,7 +75,7 @@ through `importlib.metadata`, and attribute access on a `memfw` binding.
 
 Violations that existed when the guard landed are in
 [`tests/architecture/allowlist.py`](../tests/architecture/allowlist.py). Each entry names the
-step that removes it (A1, done in #38: readonly service into `memfw.index.readonly`; A2 cycle breaking; A3
+step that removes it (A1, done in #38: readonly service into `memfw.index.readonly`; A2 cycle breaking, done in A2a/A2b; A3
 composition root; A4 MCP split; A5 package split) and records every importing module with its
 number of import lines on that edge. The test fails when:
 
@@ -103,8 +103,19 @@ interface:
 | `conversations -> dream` | `memfw.ports.claims` (`ClaimVerifier`, `ClaimStager`, contract checks in `memfw.ports.testing`); `memfw.dream.claims` implements them, `memfw conversations worker` injects them |
 | `dream -> conversations` | `EpisodeFeed` protocol in `memfw.dream.skills.queue`; `memfw.conversations.feed.WorkerEpisodeFeed` implements it, `memfw dream skills --from-queue` injects it |
 
-Left for A2b: the library-to-CLI edges (`capture -> cli`, `capture.cli -> cli`,
-`curation.review_cli -> cli`) and `okf -> capture`. The allowlist
+**A2b (done)** removed the last four A2 entries (17 -> 13); A2 is complete:
+
+| Edge | Fix |
+|---|---|
+| `capture -> cli`, `curation.review_cli -> cli` | the vault opener is `memfw.core.repository.open_vault`; it takes the clock, id factory and exception type as parameters and reads no global state (`memfw.cli._repo` is an alias) |
+| `capture.cli -> cli` | `--now` / `--id-seed` live in `memfw.core.invocation` (stdlib only, CLI-only); the root callback sets them and CLI commands pass them explicitly |
+| `okf -> capture` | the candidate staging writer is `memfw.storage.candidate_staging` and the candidate file reader `memfw.storage.candidate_files`; `memfw.capture.staging` / `memfw.capture.review` re-export them |
+
+OKF import keeps its Markdown candidates under `_candidates/remember/` rather than
+`memfw.ports.staging.stage_candidates` (JSON under `_candidates/<ingestor>/`), so its
+staged bytes and `memfw candidate-apply` are unchanged.
+
+The allowlist
 is plain Python literals because the merge-base check reads the old version from git with
 `ast.literal_eval`.
 

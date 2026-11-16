@@ -30,7 +30,7 @@ from .epistemic import (
     validate_proposed_open_question,
     validate_proposed_write,
 )
-from .errors import IntegrityError, NotFoundError
+from .errors import IntegrityError, MemfwError, NotFoundError
 from .models import (
     CaptureState,
     Event,
@@ -1458,3 +1458,41 @@ class Repository(
         if "tier" in normalized:
             normalized["tier"] = Tier(normalized["tier"])
         return self.update(memory_id, actor="human", proposal_id=proposal_id, **normalized)
+
+
+class VaultOpenError(MemfwError):
+    """The path is not an openable vault (not initialised, or a pending transaction)."""
+
+
+def open_vault(
+    root: Path,
+    *,
+    allow_pending: bool = False,
+    clock: Callable[[], datetime] = utc_now,
+    id_factory: Callable[[], str] | None = None,
+    error: Callable[[str], Exception] = VaultOpenError,
+) -> Repository:
+    """Open the existing vault at ``root``, refusing one that cannot be used yet.
+
+    Refuses a path with neither ``events.jsonl`` nor ``vault.yaml``, and a
+    vault with a pending transaction unless ``allow_pending``. ``clock`` and
+    ``id_factory`` are passed to :class:`Repository` (defaults: the wall clock
+    and random UUID4 ids); this function reads no process-wide state.
+    ``error`` builds the raised exception from the message; interfaces pass
+    their own (the CLI passes ``typer.BadParameter``).
+
+    The ``memfw --now`` / ``--id-seed`` overrides are CLI-only: CLI commands
+    pass ``clock=invocation.clock()`` and
+    ``id_factory=invocation.id_factory(root)`` (:mod:`memfw.core.invocation`).
+    """
+
+    repository = Repository(
+        root,
+        clock=clock,
+        id_factory=id_factory if id_factory is not None else (lambda: str(uuid.uuid4())),
+    )
+    if not repository.events_path.exists() and not repository.config_path.exists():
+        raise error(f"Not a memfw vault: {root}; run `memfw init {root}` first")
+    if repository.pending_path.exists() and not allow_pending:
+        raise error("Vault has a pending transaction; run `memfw recover` first")
+    return repository
