@@ -5,7 +5,8 @@ The layer map is ``tests/architecture/layers.py``; today's known violations are
 allowlist can only shrink: a new violation fails, a new import site on an
 allowlisted edge fails, a fixed site or edge fails until the entry is updated,
 and (when git history is available) the list may not be longer than at the
-merge-base.
+merge-base (debt is counted per edge per unit; refactors may redistribute it
+inside the unit).
 """
 
 from __future__ import annotations
@@ -260,10 +261,13 @@ def parse_allowlist(source: str) -> dict[Edge, object]:
 def growth_since_base(before: dict[Edge, object], after: dict[Edge, object]) -> list[str]:
     """Every way ``after`` is not a shrink of ``before`` (empty: it only shrank).
 
-    Keys must be a subset (a renamed or swapped entry is growth), each entry's
-    per-module site counts may not exceed the base's, and neither may the
-    entry count or total site count. Base entries in the old ``reason``-only
-    format have no sites, so only their keys are compared.
+    Debt is counted per edge per unit: a refactor may redistribute an edge's
+    sites among modules of the edge's source unit, but keys must be a subset
+    (a renamed or swapped entry is growth), each entry's total site count may
+    not exceed the base's, every importing module must belong to the source
+    unit, and neither the entry count nor the overall site count may grow.
+    Base entries in the old ``reason``-only format have no sites, so only their
+    keys are compared.
     """
 
     problems = [f"new entry {edge}" for edge in sorted(set(after) - set(before))]
@@ -272,11 +276,12 @@ def growth_since_base(before: dict[Edge, object], after: dict[Edge, object]) -> 
         if not (isinstance(old, tuple) and isinstance(new, tuple)):
             continue
         old_sites, new_sites = old[1], new[1]
-        for module, count in sorted(new_sites.items()):
-            if count > old_sites.get(module, 0):
-                problems.append(
-                    f"{edge}: {module} has {count} sites, {old_sites.get(module, 0)} at the base"
-                )
+        for module in sorted(new_sites):
+            if _unit(module) != edge[0]:
+                problems.append(f"{edge}: {module} is outside the source unit {edge[0]}")
+        old_total, new_total = sum(old_sites.values()), sum(new_sites.values())
+        if new_total > old_total:
+            problems.append(f"{edge}: {new_total} sites, {old_total} at the base")
     if len(after) > len(before):
         problems.append(f"entries grew from {len(before)} to {len(after)}")
     before_sites, after_sites = _total_sites(before), _total_sites(after)
@@ -294,7 +299,7 @@ def _skip_or_fail(reason: str) -> None:
 
 
 def test_allowlist_only_shrinks_against_the_merge_base() -> None:
-    """Shrink-only across PRs: no entry, module or site count beyond the merge-base's."""
+    """Shrink-only across PRs: no new entry, no edge total beyond the merge-base's."""
 
     if _git("rev-parse", "--verify", "--quiet", f"{BASE_REF}^{{commit}}").returncode != 0:
         _skip_or_fail(f"{BASE_REF} is not available (shallow checkout?); set MEMFW_ARCH_BASE_REF")
@@ -312,24 +317,37 @@ def test_allowlist_only_shrinks_against_the_merge_base() -> None:
 
 
 def test_growth_since_base_catches_renames_swaps_and_site_growth() -> None:
+    mcp, capture = ("memfw.mcp", "memfw.dream"), ("memfw.capture", "memfw.core")
     base: dict[Edge, object] = {
-        ("a", "b"): ("A2: x", {"a.m": 2}),
-        ("c", "d"): ("A3: y", {"c.n": 1}),
+        mcp: ("A4: x", {"memfw.mcp.server": 2}),
+        capture: ("A4: y", {"memfw.capture.staging": 1}),
     }
     assert growth_since_base(base, dict(base)) == []
-    assert growth_since_base(base, {("a", "b"): ("A2: x", {"a.m": 1})}) == []
+    assert growth_since_base(base, {mcp: ("A4: x", {"memfw.mcp.server": 1})}) == []
     # Swap one entry for another: same count, still growth.
-    swapped = {("a", "b"): base[("a", "b")], ("c", "e"): ("A3: y", {"c.n": 1})}
-    assert growth_since_base(base, swapped) == ["new entry ('c', 'e')"]
-    # Move a site to another module: same total, still growth.
-    moved = {("a", "b"): ("A2: x", {"a.m": 1, "a.o": 1}), ("c", "d"): base[("c", "d")]}
-    assert growth_since_base(base, moved) == ["('a', 'b'): a.o has 1 sites, 0 at the base"]
-    grown = {("a", "b"): ("A2: x", {"a.m": 3}), ("c", "d"): base[("c", "d")]}
-    problems = growth_since_base(base, grown)
-    assert "('a', 'b'): a.m has 3 sites, 2 at the base" in problems
-    assert "total sites grew from 3 to 4" in problems
-    old_format: dict[Edge, object] = {("a", "b"): "A2: x"}
-    assert growth_since_base(old_format, {("a", "b"): ("A2: x", {"a.m": 9})}) == []
+    swapped = {mcp: base[mcp], ("memfw.capture", "memfw.dream"): base[capture]}
+    assert growth_since_base(base, swapped) == ["new entry ('memfw.capture', 'memfw.dream')"]
+    # Move sites to other modules of the same unit: same total, allowed.
+    split = {**base, mcp: ("A4: x", {"memfw.mcp.tools_dream": 1, "memfw.mcp.base": 1})}
+    assert growth_since_base(base, split) == []
+    # A module of another unit on that edge fails, even at the same total.
+    other = {**base, mcp: ("A4: x", {"memfw.mcp.server": 1, "memfw.capture.staging": 1})}
+    assert growth_since_base(base, other) == [
+        "('memfw.mcp', 'memfw.dream'): memfw.capture.staging is outside the source unit memfw.mcp"
+    ]
+    # Total growth on an edge fails, in one module or spread over the unit.
+    grown = {**base, mcp: ("A4: x", {"memfw.mcp.server": 3})}
+    assert growth_since_base(base, grown) == [
+        "('memfw.mcp', 'memfw.dream'): 3 sites, 2 at the base",
+        "total sites grew from 3 to 4",
+    ]
+    spread = {**base, mcp: ("A4: x", {"memfw.mcp.server": 2, "memfw.mcp.tools_dream": 1})}
+    assert growth_since_base(base, spread) == [
+        "('memfw.mcp', 'memfw.dream'): 3 sites, 2 at the base",
+        "total sites grew from 3 to 4",
+    ]
+    old_format: dict[Edge, object] = {mcp: "A4: x"}
+    assert growth_since_base(old_format, {mcp: ("A4: x", {"memfw.mcp.server": 9})}) == []
     assert growth_since_base(old_format, {("z", "y"): ("A2: x", {"z.m": 1})}) == [
         "new entry ('z', 'y')"
     ]

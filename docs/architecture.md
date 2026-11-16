@@ -85,7 +85,13 @@ number of import lines on that edge. The test fails when:
   in the test);
 - compared with the allowlist at the merge-base with `origin/main` (override the ref with
   `MEMFW_ARCH_BASE_REF`), it has a key the base lacks (a renamed or swapped entry counts),
-  a module with more sites than at the base, more entries, or more sites in total. The check
+  an edge with more sites in total than at the base, an importing module outside the
+  edge's source unit, more entries, or more sites in total.
+
+Debt is counted per edge per unit; refactors may redistribute it inside the unit. Against
+the merge-base, an edge's sites may move between modules of its source unit (A4a moved the
+`memfw.mcp` sites from `memfw.mcp.server` into the tool-group modules); the per-module
+counts in the current allowlist must still match the code exactly. The check
   skips when the file did not exist at the merge-base. When the ref or the merge-base is not
   available it skips locally and fails in CI (`CI` set).
 
@@ -191,7 +197,8 @@ one mixin per group; each mixin subclasses `GatewayBase`.
 
 Each import line moved with the code that uses it, so the allowlist's `memfw.mcp` entries keep
 their keys and site totals but now name the group module (`memfw.mcp.base`,
-`memfw.mcp.tools_*`) instead of `memfw.mcp.server`. Names other code imported from
+`memfw.mcp.tools_*`) instead of `memfw.mcp.server`. The merge-base check allows this because sites
+stay inside the `memfw.mcp` unit and no edge total grew. Names other code imported from
 `memfw.mcp.server` are still importable there; a monkeypatch must target the module that
 reads the name (`memfw.mcp.tools_dream.DREAM_MAX_STAGED`,
 `memfw.mcp.tools_search.search_multihop`). The probe `tests.harness.probes:mcp_all_tools`

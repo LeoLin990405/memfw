@@ -20,7 +20,10 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   `tools/list` included, is byte-identical to before (timing fields masked;
   new harness probe `mcp_all_tools`).
 - Allowlist: the `memfw.mcp` entries name the group modules that now hold each
-  import; keys and site totals are unchanged.
+  import; keys and site totals are unchanged. The merge-base check now counts debt per
+  edge per unit: an edge's sites may move between modules of its source unit
+  if its total does not grow; a new key, a larger total or an importing module
+  outside the source unit still fails.
 - Module-level names stay importable from `memfw.mcp.server`; tests that
   monkeypatch `DREAM_*` or `search_multihop` now patch `memfw.mcp.tools_dream`
   and `memfw.mcp.tools_search`, where the code reads them.

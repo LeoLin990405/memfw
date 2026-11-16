@@ -27,7 +27,11 @@ Steps:
 
 ``tests/test_architecture_layers.py`` fails when a violation is missing here,
 when an entry or site here no longer occurs, and (with git history) when this
-list has more entries or sites than at the merge-base. Delete an entry in the
+list has more entries or sites than at the merge-base. Debt is counted per edge
+per unit; refactors may redistribute it inside the unit: against the
+merge-base, an edge's sites may move between modules of its source unit (A4a
+split ``memfw.mcp.server``) as long as the edge's total does not grow, while a
+new key, a larger total or an importing module outside the source unit fails. Delete an entry in the
 PR that fixes it and lower ``ALLOWLIST_SIZE`` in that test.
 """
 
