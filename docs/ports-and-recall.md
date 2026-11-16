@@ -443,6 +443,79 @@ index and builds the rows.
   `allowed_sources`, `include_history` and `as_of` (`tests/test_mcp_two_stage.py`). With an
   embedder, the hybrid provider is fused in and the order differs by design.
 
+### 4.2 MCP `memory_context` `v=2` (ContextPack)
+
+`memory_context` is the session-start (CAG) context: anchors first, then procedural
+memories, by id, cut to a character budget (`limit_tokens * 4`, at least 100 characters).
+The slot logic lives in the capability package `memfw.context` (L3), which imports only
+`memfw.core` and `memfw.ports`: who may see a memory is injected as a `keep` predicate,
+because an L3 capability may not import another (`memfw.recall`). The composition root
+`memfw.runtime` builds `keep` (`Runtime.context_keep`) and the pack (`Runtime.context_v1`,
+`Runtime.context_pack`, which take the caller's per-call `Repository`); the MCP tool only
+parses arguments, asks the Runtime and serialises. Without new arguments (or with `v=1`) the payload is byte-identical
+to earlier versions: `limit_tokens`, `used_chars`, `entries`.
+
+`v=2` returns a `ContextPack` (`memfw.ports.context`, stdlib only) as JSON:
+
+```json
+{"v": 2, "limit_tokens": 2000, "pack_version": "<64 hex>", "policy": "compat_fts",
+ "generated_at": "2026-11-16T09:00:00+00:00",
+ "slots": [{"name": "core", "entries": [{"id": "...", "title": "...", "type": "procedural",
+   "layer": "current", "anchor": null, "epistemic": null, "causal": "none", "text": "...",
+   "version": 1, "content_hash": "sha256:..."}],
+   "used_tokens_est": 12, "overflow": 0, "truncated_ids": [], "skipped": 0}]}
+```
+
+- **One slot, `core`,** with the same selection, order and text as v1 under `compat_fts`.
+  `content_hash` is the sha256 of the memory file, the value `memory_search` reports.
+  `used_tokens_est` is the characters carried divided by four, rounded up. The budget never
+  drops below 100 characters, so with a very small `limit_tokens` (under 25) `used_tokens_est`
+  can exceed `limit_tokens`.
+- **One read per entry.** Each selected memory's file is read once more and its entry (body,
+  `version`, `content_hash`) is built from those bytes, then selected and ordered again, so a
+  concurrent write never pairs one version's text with another's hash. `skipped` counts
+  selected memories the pack cannot represent: an id outside the memory id pattern (a
+  hand-placed `memories/a.dot.md`, which v1 still returns), an unreadable or unparsable file,
+  or one that no longer qualifies when re-read. They are not overflow. `skipped` is the
+  difference between the two selections, so it also counts a memory that changed between the
+  two reads (retagged, or moved out of the slot).
+- **`policy`** (v=2 only). `compat_fts` (default) applies v1's filters, tenant and source
+  (`FilterPolicy.compat_fts` with `include_history`, since the slot keeps v1's own rule that a
+  memory with `valid_to` is never resident). `strict` is the default `FilterPolicy`: privacy
+  clearance `none` (`local-private` and unrecognised privacy are dropped), status, lifecycle
+  (`lifecycle:retired` and other non-active tags), supersession, validity and archive (cold
+  tier or stub), evaluated with `memfw.recall.policy.evaluate` on `meta_from_document`, so it
+  uses recall's fail-closed tag reading (any case, strictest tag wins: `Sensitivity:Private`
+  and `sensitivity:secret` are dropped too). `compat_fts` is v1's own visibility check. Absent,
+  `null` and `""` mean `compat_fts`; a non-string or unknown value is an error, and so is a
+  `policy` other than `compat_fts` with `v=1`. `v` must be the integer 1 or 2. These are new
+  errors for v1 callers: a v1 call that passes `policy` (other than `compat_fts`), or a `v`
+  that is not the integer 1 or 2, used to have the argument ignored and now fails.
+- **Overflow.** `overflow` is how many selected memories the slot did not carry in full and
+  `truncated_ids` names them in order: the memory cut part-way (its entry is the last one
+  carried, with a prefix of the body) first, then every memory left out once the budget ran
+  out. Fetch them with `memory_get` or `memory_search(mode=two_stage)`. Memories the policy
+  dropped are not overflow, and a memory with an empty body is never counted.
+- **`pack_version`** is a sha256 over a canonical JSON encoding (`memfw-context-pack/1`) of the
+  policy name and, per slot, its name, each entry's `[id, version, content_hash, chars]`
+  (`chars` = characters carried, so two cuts of the same memory differ) and `truncated_ids`.
+  No body text, title or query goes in (`pack_version_payload` returns the exact bytes), and
+  `generated_at` is not part of it. The key changes when a carried memory changes (body, version
+  or hash), when the selection or cut changes, or with the policy; it does not change when an
+  unrelated memory does. Because `content_hash` covers the whole file, a frontmatter-only
+  change (`updated_at`, `strength`, `reference_count`, ...) also changes the key, even when the
+  carried text is the same: expect that churn when caching (C3). `ContextPack` rejects a
+  `pack_version` that does not match its slots.
+  TODO (C3): the design also puts the projection version into `pack_version`; C1 does not yet.
+- **Contract kit.** `check_context_pack(pack, *, slots=None, max_tokens=None, forbidden=())`
+  (in `memfw.ports.testing`) checks the type, the recomputed version, `overflow ==
+  len(truncated_ids)`, at most one partial entry, which must be the last carried entry and be
+  listed in `truncated_ids` (their order is the producer's; `core` uses selection order), the
+  token cap, that no string in the version payload contains an entry's text or title (8+
+  characters, other than one equal to an id, slot name or the policy) or any `forbidden`
+  string, and that `as_dict()` is JSON serialisable (else `ContractError`). A `forbidden` string
+  under 8 characters is a usage error (`ValueError`).
+
 ## 5. Adapter rules
 
 From the compat framework spec, §5:
@@ -628,6 +701,7 @@ def test_search_matches_recorded_contract(monkeypatch):
 | `check_deriver(deriver, *, vault, request, vault_exclude=())` | vault unchanged; `DerivedView` is read-only, names the deriver and kind, and cites only requested memories |
 | `check_clock(clock, *, samples=32)` | `Clock` protocol; every `now()` is a timezone-aware `datetime`; no sample earlier than the previous one |
 | `check_id_gen(id_gen, *, samples=1000)` | `IdGen` protocol; every `new_id()` is a `str` valid as a memory id; no id repeated |
+| `check_context_pack(pack, *, slots=None, max_tokens=None, forbidden=())` | exactly a `ContextPack`; `pack_version` recomputes; overflow matches `truncated_ids`; one partial entry at most, carried last and listed in `truncated_ids`; no content in the version payload; `as_dict()` serialisable (§4.2) |
 
 `tree_digest(root, *, exclude=())` is the helper they use to compare file trees.
 

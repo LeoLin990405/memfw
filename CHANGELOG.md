@@ -96,6 +96,31 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   tree (or another ref) and diff the output; self-tested with MCP `memory_search`.
 - `docs/architecture.md`.
 
+### Added — `ContextPack` contract and `memory_context` v2 (C1)
+
+- `memfw.ports.context` (stdlib only): `ContextEntry`, `ContextSlot` and `ContextPack`,
+  frozen and validated like the other port types. `pack_version` is a sha256 over the
+  policy name and each entry's id, version, content hash and carried length (never body
+  text, titles or queries); `pack_version_payload` returns the exact bytes. The contract
+  kit gains `check_context_pack`.
+- New capability package `memfw.context` (L3, in the A0 layer map) builds the `core`
+  slot; it imports only core and ports, and the visibility filter is injected.
+  `memfw.runtime` composes it (`Runtime.context_keep`, `context_v1`, `context_pack`;
+  strict uses the recall `FilterPolicy`, fail closed on an unknown policy). MCP
+  `memory_context` only parses, asks the Runtime and serialises; no allowlist entry.
+- MCP `memory_context` takes optional `v` (1 default, or 2) and `policy` (`compat_fts`
+  default, or `strict`; v=2 only). Without them the payload is byte-identical to before
+  (checked against the previous release on fixture vaults). `v=2` returns a `ContextPack`
+  with one `core` slot, each entry's `version` and `content_hash`, and `overflow` /
+  `truncated_ids` naming the memories that did not fit. `strict` filters through the recall
+  `FilterPolicy`: no `local-private` or unrecognised-privacy memories, no retired,
+  superseded, expired or archived ones. See `docs/ports-and-recall.md` §4.2.
+- v2 builds each entry from a single read of its file (body, version and hash agree) and
+  reports `skipped` for memories it cannot represent (e.g. a hand-placed file whose id is
+  outside the memory id pattern) instead of failing.
+- New errors for v1 callers: `policy` other than `compat_fts`, or `v` not the integer 1 or 2,
+  used to be ignored and now fail.
+
 ### Fixed — tenant isolation on supersede (security)
 
 - `supersede` (API and CLI) writes the replacement in the predecessor's

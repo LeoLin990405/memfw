@@ -241,7 +241,7 @@ memfw dream skills --root /path/to/vault --from-queue          # 用 worker 排�
 | `memory_get` | 按 id 读取一条记忆 |
 | `memory_remember` | 把候选暂存到 `_candidates/remember/`，附标签、关联 id 和建议 |
 | `memory_related` | 派生的记忆关联边（按租户隔离） |
-| `memory_context` | 按 token 预算给出常驻上下文，锚点和流程类记忆优先 |
+| `memory_context` | 按 token 预算给出常驻上下文，锚点和流程类记忆优先；`v=2` 返回带版本键的 `ContextPack`，标出溢出条目，可选 `strict` 策略 |
 | `memory_status` | vault 大小、层与层级计数、日志摘要 |
 | `history_list`、`history_search`、`history_read` | 会话记录索引：带谱系的会话、带引用的脱敏片段、限长窗口 |
 | `conversations_list`、`conversations_search`、`conversations_get` | 共享会话库，按调用方应用的可见性过滤 |

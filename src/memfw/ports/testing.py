@@ -13,6 +13,7 @@ re-runs the same contract.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import threading
@@ -21,6 +22,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .clock import Clock, IdGen
+from .context import ContextPack, compute_pack_version, pack_version_payload
 from .protocols import Deriver, Ingestor, Projector, RecallProvider
 from .staging import CANDIDATES_DIR
 from .types import (
@@ -363,9 +365,96 @@ def check_id_gen(id_gen: IdGen, *, samples: int = 1000) -> list[str]:
     return ids
 
 
+def check_context_pack(
+    pack: object,
+    *,
+    slots: Sequence[str] | None = None,
+    max_tokens: int | None = None,
+    forbidden: Sequence[str] = (),
+) -> ContextPack:
+    """A well-formed pack whose version key carries no content.
+
+    - ``pack`` is exactly a ``ContextPack`` and its ``pack_version`` is the
+      recomputed digest (so a field changed after construction is caught);
+    - ``slots``, when given, is the expected slot order;
+    - per slot: ``overflow == len(truncated_ids)``; at most one entry is both
+      carried and truncated, and it is the slot's last entry (the order of
+      ``truncated_ids`` is the producer's, see ``ContextSlot``); with
+      ``max_tokens``, ``used_tokens_est`` stays within it;
+    - no string in the version payload contains an entry's text or title
+      (8 characters or more; a title or text equal to an id, slot name or the
+      policy name is not content) or any ``forbidden`` string (e.g. the query
+      or a private body the caller knows about). A ``forbidden`` string
+      shorter than 8 characters is a usage error (``ValueError``): it would
+      match ids and hashes by chance;
+    - ``as_dict()`` is JSON serialisable.
+    """
+
+    short = [text for text in forbidden if not isinstance(text, str) or len(text) < 8]
+    if short:
+        raise ValueError("forbidden strings must be at least 8 characters")
+    _require(type(pack) is ContextPack, "context pack must be exactly memfw.ports.ContextPack")
+    assert isinstance(pack, ContextPack)
+    _require(pack.generated_at.tzinfo is not None, "generated_at must include a timezone")
+    _require(
+        pack.pack_version == compute_pack_version(pack.slots, pack.policy),
+        "pack_version does not match the pack contents",
+    )
+    names = [slot.name for slot in pack.slots]
+    if slots is not None:
+        _require(names == list(slots), f"slots are {names}, expected {list(slots)}")
+    _require(len(set(names)) == len(names), "slot names must be unique")
+    for slot in pack.slots:
+        _require(
+            slot.overflow == len(slot.truncated_ids),
+            f"slot {slot.name}: overflow differs from truncated_ids",
+        )
+        carried = [entry.id for entry in slot.entries]
+        partial = [memory_id for memory_id in slot.truncated_ids if memory_id in carried]
+        _require(len(partial) <= 1, f"slot {slot.name}: more than one partial entry")
+        if partial:
+            _require(
+                carried[-1] == partial[0], f"slot {slot.name}: partial entry is not the last one"
+            )
+        if max_tokens is not None:
+            _require(
+                slot.used_tokens_est <= max_tokens,
+                f"slot {slot.name}: used_tokens_est exceeds {max_tokens}",
+            )
+    leaves = _string_leaves(json.loads(pack_version_payload(pack.slots, pack.policy)))
+    structural = {pack.policy, *names}
+    structural.update(entry.id for slot in pack.slots for entry in slot.entries)
+    structural.update(memory_id for slot in pack.slots for memory_id in slot.truncated_ids)
+    content = [entry.text for slot in pack.slots for entry in slot.entries]
+    content += [entry.title for slot in pack.slots for entry in slot.entries]
+    candidates = [
+        text
+        for text in content
+        if isinstance(text, str) and len(text) >= 8 and text not in structural
+    ]
+    for text in [*candidates, *forbidden]:
+        _require(not any(text in leaf for leaf in leaves), "pack_version input contains content")
+    try:
+        json.dumps(pack.as_dict())
+    except (TypeError, ValueError) as error:
+        raise ContractError(f"as_dict() is not JSON serialisable: {error}") from error
+    return pack
+
+
+def _string_leaves(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [leaf for item in value.values() for leaf in _string_leaves(item)]
+    if isinstance(value, list):
+        return [leaf for item in value for leaf in _string_leaves(item)]
+    return []
+
+
 __all__ = [
     "ContractError",
     "check_clock",
+    "check_context_pack",
     "check_deriver",
     "check_id_gen",
     "check_ingestor",

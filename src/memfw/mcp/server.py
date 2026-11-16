@@ -174,10 +174,27 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "memory_context",
-        "description": "Return a token-budgeted context: anchors and procedural memories first.",
+        "description": (
+            "Return a token-budgeted context: anchors and procedural memories first. "
+            "v=2 returns a ContextPack: slots (core) with overflow and truncated_ids, "
+            "a pack_version cache key (ids, versions and hashes only) and the filter policy."
+        ),
         "inputSchema": {
             "type": "object",
-            "properties": {"limit_tokens": {"type": "integer", "default": 2000}},
+            "properties": {
+                "limit_tokens": {"type": "integer", "default": 2000},
+                "v": {"type": "integer", "enum": [1, 2], "default": 1},
+                "policy": {
+                    "type": "string",
+                    "enum": ["compat_fts", "strict"],
+                    "default": "compat_fts",
+                    "description": (
+                        "Filter policy for v=2 only. compat_fts keeps the v1 filters "
+                        "(tenant, source); strict adds the privacy (clearance none), "
+                        "status, lifecycle, validity and archive checks."
+                    ),
+                },
+            },
         },
     },
     {
@@ -1305,51 +1322,23 @@ class Gateway:
         visible = [row for row in rows if self._same_tenant_neighbour(repository, row)]
         return {"memory_id": memory_id, "related": visible[:bounded]}
 
-    def context(self, limit_tokens: int = 2000) -> dict[str, Any]:
+    def context(
+        self, limit_tokens: int = 2000, *, v: int | None = 1, policy: str | None = "compat_fts"
+    ) -> dict[str, Any]:
+        """``memory_context``. v1 (default): the original payload, unchanged.
+
+        ``v=2`` returns a ``ContextPack`` filtered with ``policy``
+        (``compat_fts`` default, or ``strict``); the Runtime builds it.
+        """
+
+        version, policy_name = self.runtime.context_request(v, policy)
         repository = self._repo()
-        limit_chars = max(100, min(int(limit_tokens), 100_000) * 4)
-        selected = [
-            document
-            for document in repository.list()
-            if document.valid_to is None
-            and self._visible(document)
-            and (document.layer == Layer.ANCHOR or document.anchor or document.type == "procedural")
-        ]
-        selected.sort(
-            key=lambda document: (
-                0 if document.layer == Layer.ANCHOR or document.anchor else 1,
-                0 if document.type == "procedural" else 1,
-                document.id,
-            )
+        if version == 1:
+            return self.runtime.context_v1(repository, limit_tokens=limit_tokens)
+        pack = self.runtime.context_pack(
+            repository, policy_name=policy_name, limit_tokens=int(limit_tokens)
         )
-        entries = []
-        used = 0
-        for document in selected:
-            text = document.body or ""
-            if used + len(text) > limit_chars:
-                text = text[: max(0, limit_chars - used)]
-            if not text:
-                continue
-            entries.append(
-                {
-                    "id": document.id,
-                    "title": document.title,
-                    "type": document.type,
-                    "layer": document.layer.value,
-                    "anchor": document.anchor,
-                    "epistemic": document.epistemic,
-                    "causal": document.causal,
-                    "text": text,
-                }
-            )
-            used += len(text)
-            if used >= limit_chars:
-                break
-        return {
-            "limit_tokens": limit_tokens,
-            "used_chars": used,
-            "entries": entries,
-        }
+        return {"v": 2, "limit_tokens": limit_tokens, **pack.as_dict()}
 
     def status(self) -> dict[str, Any]:
         repository = self._repo()
@@ -1705,7 +1694,11 @@ class Gateway:
             "memory_related": lambda args: self.related(
                 str(args.get("memory_id") or ""), int(args.get("limit") or 10)
             ),
-            "memory_context": lambda args: self.context(int(args.get("limit_tokens") or 2000)),
+            "memory_context": lambda args: self.context(
+                int(args.get("limit_tokens") or 2000),
+                v=args.get("v"),
+                policy=args.get("policy"),
+            ),
             "memory_status": lambda _args: self.status(),
             "dream_run": lambda args: self.dream_run(
                 dry_run=_flag(args, "dry_run", True),
