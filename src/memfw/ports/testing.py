@@ -14,11 +14,13 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import threading
 from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
 
+from .clock import Clock, IdGen
 from .protocols import Deriver, Ingestor, Projector, RecallProvider
 from .staging import CANDIDATES_DIR
 from .types import (
@@ -324,9 +326,48 @@ def check_deriver(
     return view
 
 
+#: The memory id rule ``Repository`` enforces (``memfw.core.repository._ID_RE``).
+_ID_RULE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+
+
+def check_clock(clock: Clock, *, samples: int = 32) -> list[datetime]:
+    """``now()`` is timezone-aware and never goes backwards; returns the samples."""
+
+    _require(samples >= 2, "check_clock needs at least two samples")
+    _require(isinstance(clock, Clock), "clock does not implement Clock")
+    seen: list[datetime] = []
+    for _ in range(samples):
+        value = clock.now()
+        _require(isinstance(value, datetime), "now() must return a datetime")
+        _require(
+            value.tzinfo is not None and value.utcoffset() is not None,
+            "now() must be timezone-aware",
+        )
+        _require(not seen or value >= seen[-1], "now() went backwards")
+        seen.append(value)
+    return seen
+
+
+def check_id_gen(id_gen: IdGen, *, samples: int = 1000) -> list[str]:
+    """``new_id()`` returns distinct ids valid as memory ids; returns the samples."""
+
+    _require(samples >= 2, "check_id_gen needs at least two samples")
+    _require(isinstance(id_gen, IdGen), "id generator does not implement IdGen")
+    ids: list[str] = []
+    for _ in range(samples):
+        value = id_gen.new_id()
+        _require(isinstance(value, str), "new_id() must return a str")
+        _require(bool(_ID_RULE.fullmatch(value)), f"new_id() returned an invalid id: {value!r}")
+        ids.append(value)
+    _require(len(set(ids)) == len(ids), "new_id() repeated an id")
+    return ids
+
+
 __all__ = [
     "ContractError",
+    "check_clock",
     "check_deriver",
+    "check_id_gen",
     "check_ingestor",
     "check_projector",
     "check_recall_provider",

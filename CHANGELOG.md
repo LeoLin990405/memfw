@@ -15,6 +15,25 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 - `_current_body_by_hash` and the archive lookup compared the body hash only after YAML-parsing each file, so every write parsed up to the whole vault and the cost depended on the filesystem's directory order (a perf guard passed on macOS and failed on Linux CI with 109 parses). They now hash first and parse only a matching file; the result is the same first file in glob order that both matches and parses. A non-matching file with invalid UTF-8 no longer raises; a matching one is skipped like any file that fails to parse. A delete in a 200-memory vault now parses 6 files in any directory order (was 6–204).
 
+### Added — architecture guards (A0)
+
+- `tests/test_architecture_layers.py`: every `memfw` module is placed in a layer
+  (`tests/architecture/layers.py`); upward imports (including through root
+  re-exports and memfw module names held in strings), unlisted same-layer
+  imports, library references to `scripts/`, unreadable loader calls and new
+  cycles fail the build. A new top-level module that is not in the map fails too.
+- `tests/architecture/allowlist.py`: the 25 violations present today with their
+  exact import sites, each naming the step (A1–A5) that removes it. The list can
+  only shrink: new sites, stale entries or sites, and growth against the
+  merge-base (new keys, per-module sites, totals) fail. CI checks out full
+  history (`fetch-depth: 0`) so that comparison runs.
+- `memfw.ports`: `Clock` and `IdGen` protocols with `SystemClock` (wall clock,
+  never returns an earlier time), `FixedClock`,
+  `UuidIdGen` and `SeededIdGen`; `memfw.ports.testing.check_clock` and
+  `check_id_gen`. Core does not use them yet (A3).
+- `tests/harness/byte_identical.py`: run a probe on a git ref and on the working
+  tree (or another ref) and diff the output; self-tested with MCP `memory_search`.
+- `docs/architecture.md`.
 
 ### Fixed — tenant isolation on supersede (security)
 

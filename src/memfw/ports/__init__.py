@@ -7,10 +7,13 @@ plugs in through one of four ports (see ``docs/ports-and-recall.md``):
 - ``Projector``: vault → external format, with a manifest
 - ``Ingestor``: external → staged candidates under ``_candidates/``
 - ``Deriver``: vault → read-only view with citations and an epistemic cap
+
+plus the ``Clock`` and ``IdGen`` ports the kernel takes time and ids from.
 """
 
 from __future__ import annotations
 
+from .clock import Clock, FixedClock, IdGen, SeededIdGen, SystemClock, UuidIdGen
 from .protocols import Deriver, Ingestor, Projector, RecallProvider
 from .registry import (
     ADAPTER_KINDS,
@@ -68,10 +71,13 @@ __all__ = [
     "Availability",
     "Candidate",
     "Citation",
+    "Clock",
     "DeriveRequest",
     "DerivedView",
     "Deriver",
     "ExtraValue",
+    "FixedClock",
+    "IdGen",
     "IngestItem",
     "Ingestor",
     "Manifest",
@@ -81,8 +87,11 @@ __all__ = [
     "RecallBudget",
     "RecallProvider",
     "RefKind",
+    "SeededIdGen",
     "StageResult",
     "StagingError",
+    "SystemClock",
+    "UuidIdGen",
     "candidate_directory",
     "candidate_id",
     "check_name",
