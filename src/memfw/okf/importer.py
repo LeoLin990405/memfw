@@ -3,7 +3,7 @@
 The importer is the inverse of :mod:`memfw.okf.export`, with one rule the
 export does not need: **it never writes the authoritative vault.** Every
 concept becomes a candidate under ``<vault>/_candidates/remember/``, written by
-the shared staging writer (:mod:`memfw.capture.staging`), and a human applies
+the shared staging writer (:mod:`memfw.storage.candidate_staging`), and a human applies
 it with ``memfw candidate-apply`` like any other candidate.
 
 Bundle content is untrusted data. The bundle is read once, through directory
@@ -38,12 +38,14 @@ import yaml
 from yaml.events import AliasEvent
 from yaml.nodes import Node
 
-from memfw.capture.review import (
+from memfw.core.errors import MemfwError
+from memfw.core.repository import Repository
+from memfw.storage.candidate_files import (
     candidate_is_expired,
     read_candidate,
     staged_candidate_paths,
 )
-from memfw.capture.staging import (
+from memfw.storage.candidate_staging import (
     CANDIDATE_DIR,
     MAX_CANDIDATE_BYTES,
     PublishedCandidate,
@@ -52,8 +54,6 @@ from memfw.capture.staging import (
     publish_candidate,
     unpublish_candidate,
 )
-from memfw.core.errors import MemfwError
-from memfw.core.repository import Repository
 
 from .export import FRONTMATTER_RE, RESERVED, OkfValidation, validate_okf_bundle
 

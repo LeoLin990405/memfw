@@ -23,6 +23,7 @@ from ..permissions import PermissionMode, PermissionPolicy
 from ..storage.markdown import MarkdownStorageMixin
 from ..storage.operations import MemoryOperationsMixin, lookup_current
 from ..storage.transactions import TransactionMixin, _serialized
+from . import invocation
 from .common import sha256_text as sha256_text
 from .epistemic import (
     EPISTEMIC_FIELDS,
@@ -30,7 +31,7 @@ from .epistemic import (
     validate_proposed_open_question,
     validate_proposed_write,
 )
-from .errors import IntegrityError, NotFoundError
+from .errors import IntegrityError, MemfwError, NotFoundError
 from .models import (
     CaptureState,
     Event,
@@ -1458,3 +1459,35 @@ class Repository(
         if "tier" in normalized:
             normalized["tier"] = Tier(normalized["tier"])
         return self.update(memory_id, actor="human", proposal_id=proposal_id, **normalized)
+
+
+class VaultOpenError(MemfwError):
+    """The path is not an openable vault (not initialised, or a pending transaction)."""
+
+
+def open_vault(
+    root: Path,
+    *,
+    allow_pending: bool = False,
+    error: Callable[[str], Exception] = VaultOpenError,
+) -> Repository:
+    """Open the vault at ``root`` for one CLI invocation.
+
+    The clock is ``--now`` when given (else the wall clock, read per call) and
+    ids come from :func:`memfw.core.invocation.id_factory`. Refuses a path
+    with neither ``events.jsonl`` nor ``vault.yaml``, and a vault with a
+    pending transaction unless ``allow_pending``. ``error`` builds the raised
+    exception from the message; interfaces pass their own (the CLI passes
+    ``typer.BadParameter``).
+    """
+
+    repository = Repository(
+        root,
+        clock=lambda: invocation.injected_now() or datetime.now(UTC),
+        id_factory=invocation.id_factory(root),
+    )
+    if not repository.events_path.exists() and not repository.config_path.exists():
+        raise error(f"Not a memfw vault: {root}; run `memfw init {root}` first")
+    if repository.pending_path.exists() and not allow_pending:
+        raise error("Vault has a pending transaction; run `memfw recover` first")
+    return repository

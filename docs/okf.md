@@ -35,7 +35,8 @@ non-empty `type`, and that the manifest concept count matches the bundle.
 `memfw okf import` is an Ingestor: it turns an OKF bundle into **staged candidates** under
 `<vault>/_candidates/remember/` and never writes the authoritative vault. A human applies each
 candidate with `memfw candidate-apply`, exactly like a candidate from `memory_remember`; both go
-through the same staging writer (`memfw.capture.staging`).
+through the same staging writer (`memfw.storage.candidate_staging`, re-exported as
+`memfw.capture.staging`).
 
 ```sh
 memfw okf import ./okf-bundle --root ./vault            # dry run (default): report only

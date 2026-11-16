@@ -44,6 +44,39 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   `Policy.plan` takes a new keyword `protected_history_ids` (default empty);
   `memfw.policies.live_chain_ids` computes it.
 
+### Internal — library-to-CLI edges and `okf -> capture` removed (A2b)
+
+CLI output is unchanged: `memfw okf import` (dry run, `--apply`, re-import,
+rollback when a publish fails, a refused bundle, a missing vault),
+`memfw capture simulate` (seeded and unseeded), `memfw capture confirm`
+(list, dry run, keep/discard apply, bad choice, missing vault, pending
+transaction) and `memfw review` plus the review sub-app (`list`, `decide`,
+`apply`, `batch`) give the same output and vault bytes as the previous commit
+(checked side by side with injected `--now`/`--id-seed`). The last four A2
+allowlist entries are gone (17 -> 13), so A2 is done:
+
+- `capture -> cli`, `curation.review_cli -> cli`: the vault opener moved from
+  `memfw.cli._repo` into `memfw.core.repository.open_vault` (same checks and
+  messages; the caller passes the exception type, the CLI passes
+  `typer.BadParameter`). `memfw capture confirm` and `memfw review` use it
+  directly; `memfw.cli._repo` stays as an alias.
+- `capture.cli -> cli`: the `--now` / `--id-seed` overrides moved from the
+  `memfw.cli._NOW` / `_ID_SEED` globals into `memfw.core.invocation`
+  (`set_invocation`, `injected_now`, `injected_id_seed`, `id_factory`; stdlib
+  only). The root callback records them there; `memfw.cli._id_factory` stays
+  as an alias. The `memfw.cli._NOW` / `_ID_SEED` globals are removed.
+- `okf -> capture`: the candidate staging writer moved from
+  `memfw.capture.staging` to `memfw.storage.candidate_staging`, and the
+  candidate file reader (`read_candidate`, `candidate_is_expired`,
+  `staged_candidate_paths`, ...) from `memfw.capture.review` to
+  `memfw.storage.candidate_files`. The OKF importer imports them from storage.
+  `memfw.capture.staging` and `memfw.capture.review` re-export the same
+  objects; `list_staged_candidates` (and its logger name) stays in
+  `memfw.capture.review`. The importer does not use
+  `memfw.ports.staging.stage_candidates`: that contract writes JSON under
+  `_candidates/<ingestor>/`, while OKF candidates are Markdown under
+  `_candidates/remember/` that `memfw candidate-apply` reads.
+
 ### Internal — composition root, recall slice (A3a)
 
 - New `memfw.runtime` (layer L4): `build_runtime(...) -> Runtime`, one Runtime per Gateway.

@@ -24,7 +24,7 @@ import pytest
 from tests.architecture import allowlist, layers, scan
 
 #: ``len(allowlist.ALLOWLIST)``. Lower it when an entry is removed; never raise it.
-ALLOWLIST_SIZE = 17
+ALLOWLIST_SIZE = 13
 
 STEP = re.compile(r"^A[1-5]\b")
 ALLOWLIST_PATH = "tests/architecture/allowlist.py"
@@ -424,13 +424,29 @@ def test_mutations_are_caught(tmp_path: Path, code: str, edge: Edge | None) -> N
 
 
 def test_new_site_on_an_allowlisted_edge_is_caught(tmp_path: Path) -> None:
-    found = _mutant(tmp_path, "memfw.capture.mutant", "from memfw.cli import _repo\n")
-    edge = ("memfw.capture", "memfw.cli")
+    found = _mutant(tmp_path, "memfw.mcp.mutant", "from memfw.capture import CaptureSession\n")
+    edge = ("memfw.mcp", "memfw.capture")
     assert edge in found
     merged = dict(_current()[edge][1])
     for module, count in found[edge][1].items():
         merged[module] = merged.get(module, 0) + count
     assert merged != allowlist.ALLOWLIST[edge][1]
+
+
+@pytest.mark.parametrize(
+    "edge",
+    [
+        ("memfw.capture", "memfw.cli"),
+        ("memfw.capture.cli", "memfw.cli"),
+        ("memfw.curation.review_cli", "memfw.cli"),
+        ("memfw.okf", "memfw.capture"),
+    ],
+)
+def test_a2b_edges_are_gone(edge: Edge) -> None:
+    """A2b removed these: the vault opener is in core, candidate files in storage."""
+
+    assert edge not in _current()
+    assert edge not in allowlist.ALLOWLIST
 
 
 # --- the scanner -------------------------------------------------------------

@@ -116,7 +116,7 @@ class UuidIdGen:
 class SeededIdGen:
     """Deterministic ids: ``sha256(f"{seed}:{n}")[:32]`` for n = start+1, start+2, ...
 
-    The same scheme as ``memfw --id-seed`` (``memfw.cli._id_factory``), so a
+    The same scheme as ``memfw --id-seed`` (``memfw.core.invocation.id_factory``), so a
     test can predict the ids a seeded CLI run produces. That factory resumes an
     existing vault at ``start = 2 * (non-empty lines in events.jsonl)``; pass
     the same ``start`` to continue its sequence.

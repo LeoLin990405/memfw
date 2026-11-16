@@ -93,8 +93,9 @@ def test_seeded_id_gen_matches_the_cli_seed_scheme(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import memfw.cli as cli
+    from memfw.core import invocation
 
-    monkeypatch.setattr(cli, "_ID_SEED", "fixture-seed")
+    monkeypatch.setattr(invocation, "_ID_SEED", "fixture-seed")
     from_cli = cli._id_factory(tmp_path / "no-vault-yet")
     ours = SeededIdGen("fixture-seed")
     assert [ours.new_id() for _ in range(5)] == [from_cli() for _ in range(5)]
