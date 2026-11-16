@@ -423,6 +423,10 @@ def _validate_merge(repository: Repository, proposal: Proposal) -> tuple[Any, li
         raise IntegrityError("Cold stubs must be restored before a reviewed merge")
     if any(document.anchor or document.layer == Layer.ANCHOR for document in documents):
         raise IntegrityError("Anchored duplicate memories cannot be removed or merged away")
+    if any(document.tenant != representative.tenant for document in documents):
+        # A merge copies duplicate bodies into the representative: across
+        # tenants that would publish one tenant's text to another.
+        raise IntegrityError("Merge targets must all belong to the representative's tenant")
     return representative, documents
 
 

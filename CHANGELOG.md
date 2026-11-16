@@ -11,6 +11,23 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
+### Fixed — tenant isolation on supersede (security)
+
+- `supersede` (API and CLI) writes the replacement in the predecessor's
+  tenant. Before, it was always written in the default tenant `""`: visible to
+  untenanted callers and invisible to its owner. The replacement now also keeps
+  `layer`, `tier`, `type`, `related`, `about`, `applies_to`, `anchor`,
+  `group_key` and `manually_marked`; `status` resets to `unconfirmed` and
+  access statistics, `summary`, validity and archive fields start fresh (the
+  full table is in the `Repository.supersede` docstring). A new `overrides`
+  argument replaces inherited fields, never `tenant`.
+- A reviewed merge refuses duplicates from a tenant other than the
+  representative's, since it copies their bodies into the representative.
+- Vaults may already hold replacements written in tenant `""`. `fsck` reports
+  each one as `supersede_scope_mismatch` (the replacement's tenant differs from
+  its predecessor's) and does not rewrite it; an operator decides, for example
+  by setting `tenant` with `Repository.update`.
+
 ### Fixed — vault integrity
 
 - Frontmatter ends only at a closing `---` line, so a tag, title or summary
