@@ -170,6 +170,36 @@ labels for `labels: true`. The MCP server only parses the flag; no import edge w
 - A4 entries (`core`, `capture`, `conversations`, `dream`, `history`, `ontology`) go with
   the MCP split, not A3.
 
+## A4: the MCP split
+
+**A4a (done).** `memfw/mcp/server.py` is split by tool group, a pure move: every tool's
+output, `tools/list` included, is byte-identical (timing fields masked) to the code before it.
+`Gateway` (still in `server.py`, with `serve`, `main` and the tool table `handlers()`) composes
+one mixin per group; each mixin subclasses `GatewayBase`.
+
+| Module | Holds |
+|---|---|
+| `mcp/base.py` | `GatewayBase`: `__init__` (root, tenant, sources, embedder, Runtime), `_repo`, `_visible` |
+| `mcp/schema.py` | `TOOLS`, `SERVER_INFO`, `PROTOCOL`, `INSTRUCTIONS`, `SEARCH_POLICIES` |
+| `mcp/protocol.py` | `ProtocolMixin` (`handle`, `respond`), `_rpc_error`, `client_endpoint_fields`, `_client_message`, `_flag` |
+| `mcp/tools_search.py` | `memory_search` (all modes), row building and freshness (`_RawHashCache`) |
+| `mcp/tools_memory.py` | `memory_get`, `memory_remember`, `memory_related`, `memory_status` |
+| `mcp/tools_context.py` | `memory_context` |
+| `mcp/tools_history.py` | `history_list`, `history_search`, `history_read` |
+| `mcp/tools_conversations.py` | the share the `conversations_*` tools read |
+| `mcp/tools_dream.py` | `dream_run`, `dream_list` and the `DREAM_*` limits |
+
+Each import line moved with the code that uses it, so the allowlist's `memfw.mcp` entries keep
+their keys and site totals but now name the group module (`memfw.mcp.base`,
+`memfw.mcp.tools_*`) instead of `memfw.mcp.server`. Names other code imported from
+`memfw.mcp.server` are still importable there; a monkeypatch must target the module that
+reads the name (`memfw.mcp.tools_dream.DREAM_MAX_STAGED`,
+`memfw.mcp.tools_search.search_multihop`). The probe `tests.harness.probes:mcp_all_tools`
+sends every MCP method and tool (116 messages) to one fixture vault.
+
+**A4b (next).** Each group reaches its capability through the `Runtime` or a protocol, and
+its allowlist entries go.
+
 ## Byte-identical harness
 
 [`tests/harness/byte_identical.py`](../tests/harness/byte_identical.py) runs one probe against

@@ -431,7 +431,7 @@ def test_returned_hit_compares_live_bytes_to_the_indexed_hash(
             ],
         }
 
-    monkeypatch.setattr("memfw.mcp.server.search_multihop", indexed)
+    monkeypatch.setattr("memfw.mcp.tools_search.search_multihop", indexed)
     hit = Gateway(repository.root, tenant="alpha", entity_enabled=False).search(
         "alpha keyword",
         mode="multihop",
