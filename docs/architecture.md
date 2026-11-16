@@ -100,27 +100,32 @@ harness comparisons against `origin/main`. Another CI setup needs the same (or
 
 ## A3: the composition root
 
-`memfw.runtime` (L4) builds capability objects for the interfaces. `build_runtime(root, *,
-tenant, allowed_sources, embedder, entity_enabled)` takes values the interface already
-resolved and returns a `Runtime`; there is no `runtime:` section in `vault.yaml` yet, so the
-default assembly is today's behaviour, byte for byte.
+`memfw.runtime` (L4) builds capability objects for the interfaces: one Runtime per Gateway.
+`build_runtime(root, *, tenant, allowed_sources, embedder, entity_enabled, provider_timeout=3.0,
+total_timeout=4.0)` resolves `root` once (as `Repository` does) and takes the other values the
+interface already resolved; there is no `runtime:` section in `vault.yaml` yet, so the default
+assembly is today's behaviour, byte-identical except timing fields.
 
-**A3a (done).** `Runtime.recall(root, query, *, limit, policy_name, source, include_history,
-as_of, scope) -> RecallOutcome` owns the `memory_search mode=two_stage` wiring: the providers
+**A3a (done).** `Runtime.recall(query, *, limit, policy_name, source, include_history, as_of,
+scope) -> RecallOutcome` owns the `memory_search mode=two_stage` wiring: the providers
 (`FtsProvider`, plus `HybridProvider` with an embedder; the `Runtime._two_stage_providers`
-test seam), `default_resolvers`, the `compat_fts`/`strict` `FilterPolicy`, the per-runtime
-`InflightRegistry` and the coordinator call. `RecallOutcome.observed` carries the raw index
-rows of the providers that answered, from which the MCP server builds rows as before. The
-MCP server no longer imports `memfw.recall` or `memfw.recall.builtin` (two allowlist entries
-removed).
+test seam), `default_resolvers`, the `compat_fts`/`strict` `FilterPolicy` (any other
+`policy_name` raises `ValueError`: fail closed), the `InflightRegistry` (one per Runtime) and
+the coordinator call. `RecallOutcome.observed` carries the raw index rows of the providers
+that answered, from which the MCP server builds rows as before. `Runtime.ensure_index()`
+(`memfw.runtime.ensure_search_index`) is the index staleness check the MCP server runs before
+every FTS-backed search, before the coordinator's deadline starts. In-flight slots are counted
+per provider name and shared by every caller of one Runtime: a hung provider shows as `busy`
+across tools until it returns. The MCP server no longer imports `memfw.recall` or
+`memfw.recall.builtin` (two allowlist entries removed).
 
 **Still to do (A3b and later).**
 
 - Resolve settings (tenant, allowed sources, entity flag, embedder from
   `MEMFW_EMBEDDING_*`) in `build_runtime` instead of `Gateway.__init__`; that removes
   `memfw.mcp -> memfw.notes`.
-- `Repository` opening and the index staleness check (`_ensure_search_index`,
-  `MemoryIndex`) from the runtime: `memfw.mcp -> memfw.core.repository`, `memfw.index`.
+- `Repository` opening from the runtime (`memfw.mcp -> memfw.core.repository`); the
+  `memfw.index` edge goes once `readonly` is reached through the runtime too.
 - The other `memory_search` modes: `MemoryHybridRetriever` (`memfw.memory_hybrid`),
   `search_multihop` (`memfw.retrieval`), `RelatedIndex` (`memfw.related`).
 - The two_stage input checks (`check_query_text`, `as_of` parsing) and row building move

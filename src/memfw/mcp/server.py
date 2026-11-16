@@ -28,14 +28,12 @@ import hashlib
 import json
 import os
 import re
-import sqlite3
 import stat
 import sys
 import threading
 import time
 import uuid
 from collections.abc import Callable, Sequence
-from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -60,7 +58,7 @@ from memfw.dream.run import DreamOptions, run_dream
 from memfw.dream.stage import DREAM_DIR
 from memfw.history import HistoryLimits, TranscriptIndex, default_db, sources_from_config
 from memfw.history.index import split_ref
-from memfw.index import MemoryIndex, readonly
+from memfw.index import readonly
 from memfw.memory_hybrid import MemoryHybridRetriever
 from memfw.notes import HttpEmbeddingProvider
 from memfw.related import RelatedIndex
@@ -472,50 +470,6 @@ _open_candidate_directory = open_candidate_directory
 _publish_candidate = publish_candidate
 
 
-def _indexed_ids(path: Path) -> set[str] | None:
-    """Memory ids in the index, or None when it cannot be read."""
-
-    try:
-        with closing(sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)) as db:
-            return {str(row[0]) for row in db.execute("SELECT id FROM memory_rows")}
-    except (OSError, sqlite3.Error):
-        return None
-
-
-def _ensure_search_index(repository: Repository) -> None:
-    """Rebuild the disposable memory index when it is stale.
-
-    Stale means: missing, built by an earlier schema generation (an index
-    written by memfw 0.1.x has no ``memory_temporal`` projection and would
-    answer every FTS query with nothing), older than a Markdown file, or
-    holding a different set of memories than ``memories/`` once that directory
-    changed after the index was built. The last check catches a file copied
-    in with its old mtime kept (``rsync -a``, Syncthing, ``cp -p``) and a file
-    deleted outside memfw: neither leaves a surviving file newer than the
-    index. A file that cannot be parsed is skipped by the rebuild, so it only
-    triggers one rebuild per directory change, never one per search.
-    """
-
-    path = repository.index_path
-    stale = not path.is_file() or not MemoryIndex(path).schema_is_current()
-    if not stale and repository.memories_dir.is_dir():
-        indexed_at = path.stat().st_mtime
-        stems: set[str] = set()
-        with os.scandir(repository.memories_dir) as entries:
-            for item in entries:
-                if not item.name.endswith(".md"):
-                    continue
-                stems.add(item.name[: -len(".md")])
-                if item.stat(follow_symlinks=False).st_mtime > indexed_at:
-                    stale = True
-                    break
-        if not stale and repository.memories_dir.stat().st_mtime > indexed_at:
-            stale = _indexed_ids(path) != stems
-    if stale:
-        repository.init()
-        MemoryIndex(path).rebuild(repository)
-
-
 _FRONTMATTER_SCAN_BYTES = 64 * 1024
 
 
@@ -851,9 +805,10 @@ class Gateway:
                     dimension=int(os.environ.get("MEMFW_EMBEDDING_DIMENSION", "1024")),
                 )
         self.embedder = embedder
-        # The composition root owns the recall wiring. Its InflightRegistry is
-        # shared by every ``mode=two_stage`` call, so a hung provider holds at
-        # most ``max_inflight`` worker threads per gateway, not one per call.
+        # The composition root owns the recall wiring and the index check: one
+        # Runtime per Gateway, one InflightRegistry per Runtime. Every
+        # ``mode=two_stage`` call shares it, so a hung provider holds at most
+        # ``max_inflight`` worker threads per Runtime, not one per call.
         self.runtime = build_runtime(
             self.root,
             tenant=self.tenant,
@@ -1004,7 +959,7 @@ class Gateway:
         expand = concepts.is_dir() and not concepts.is_symlink()
         if mode == "multihop":
             page = max(1, min(limit, 50))
-            _ensure_search_index(repository)
+            self.runtime.ensure_index(repository)
             parsed_as_of = None
             if as_of:
                 parsed_as_of = datetime.fromisoformat(as_of)
@@ -1023,7 +978,7 @@ class Gateway:
             )
         elif mode == "fts":
             page = max(1, min(int(limit), 50))
-            _ensure_search_index(repository)
+            self.runtime.ensure_index(repository)
             # With an allow-list and no explicit source, ask the shared reader
             # once per allowed source so the SQL filters by source before the
             # page cap: filtering one capped page afterwards could return
@@ -1162,9 +1117,8 @@ class Gateway:
             datetime.fromisoformat(readonly.normalise_as_of(as_of)) if as_of is not None else None
         )
         # Before the coordinator starts its deadline: a rebuild may take a while.
-        _ensure_search_index(repository)
+        self.runtime.ensure_index(repository)
         outcome = self.runtime.recall(
-            repository.root,
             query,
             limit=page,
             policy_name=policy,

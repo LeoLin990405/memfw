@@ -8,17 +8,23 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from memfw.core.repository import Repository
 from memfw.recall.coordinator import InflightRegistry
+
+from .index import ensure_search_index
 
 if TYPE_CHECKING:
     from memfw.recall import RecallResult
 
-#: Per-provider wait in ``mode=two_stage`` (the coordinator's total deadline
-#: still applies). Above the 1.5 s port default so a cold SQLite page does not
-#: count as a timeout.
+#: Default per-provider wait in ``mode=two_stage`` (the coordinator's total
+#: deadline still applies). Above the 1.5 s port default so a cold SQLite page
+#: does not count as a timeout.
 TWO_STAGE_PROVIDER_TIMEOUT = 3.0
-#: Total wait for all ``mode=two_stage`` providers and resolvers together.
+#: Default total wait for all ``mode=two_stage`` providers and resolvers together.
 TWO_STAGE_TOTAL_TIMEOUT = 4.0
+
+#: The ``policy_name`` values ``Runtime.recall`` accepts.
+RECALL_POLICIES = ("compat_fts", "strict")
 
 #: What one provider's ``observe`` hook recorded: its raw index rows keyed by
 #: memory id, and its raw page payloads.
@@ -39,12 +45,17 @@ class RecallOutcome:
 
 
 class Runtime:
-    """Capability objects for one vault, built once per interface instance.
+    """Capability objects for one vault: one Runtime per Gateway.
 
-    Holds the settings the interface resolved (tenant, allowed sources,
-    embedder, entity flag) and the ``InflightRegistry`` shared by every recall
-    call, so a hung provider holds at most ``max_inflight`` worker threads per
-    runtime, not one per call.
+    ``root`` is the resolved vault root (``build_runtime`` resolves it, the
+    same way ``Repository`` does), the one root every call uses. Holds the
+    settings the interface resolved (tenant, allowed sources, embedder, entity
+    flag), the two_stage timeouts, and one ``InflightRegistry`` per Runtime.
+
+    In-flight slots are counted per provider name and shared by every caller
+    of this Runtime: a hung provider holds at most ``max_inflight`` worker
+    threads per Runtime, not one per call, and while it hangs every later call
+    on this Runtime (from any tool) reports that provider as ``busy``.
     """
 
     def __init__(
@@ -55,13 +66,26 @@ class Runtime:
         allowed_sources: tuple[str, ...],
         embedder: Any,
         entity_enabled: bool,
+        provider_timeout: float = TWO_STAGE_PROVIDER_TIMEOUT,
+        total_timeout: float = TWO_STAGE_TOTAL_TIMEOUT,
     ) -> None:
         self.root = root
         self.tenant = tenant
         self.allowed_sources = allowed_sources
         self.embedder = embedder
         self.entity_enabled = entity_enabled
+        self.provider_timeout = provider_timeout
+        self.total_timeout = total_timeout
         self.recall_inflight = InflightRegistry()
+
+    def ensure_index(self, repository: Repository | None = None) -> None:
+        """Rebuild the memory index when it is stale (see ``ensure_search_index``).
+
+        ``repository`` is the caller's open vault for this root; without one
+        the Runtime opens ``Repository(self.root)``.
+        """
+
+        ensure_search_index(repository if repository is not None else Repository(self.root))
 
     def _two_stage_providers(
         self,
@@ -83,7 +107,7 @@ class Runtime:
         from memfw.recall.builtin import FtsProvider, HybridProvider
 
         allowed = tuple(self.allowed_sources)
-        budget = RecallBudget(timeout_seconds=TWO_STAGE_PROVIDER_TIMEOUT)
+        budget = RecallBudget(timeout_seconds=self.provider_timeout)
         providers: list[Any] = [
             FtsProvider(
                 root,
@@ -112,7 +136,6 @@ class Runtime:
 
     def recall(
         self,
-        root: Path,
         query: str,
         *,
         limit: int,
@@ -124,12 +147,17 @@ class Runtime:
     ) -> RecallOutcome:
         """Run the ``two_stage`` providers through the coordinator.
 
-        ``root`` is the opened vault's (resolved) root. ``limit`` is the page
-        size, already clamped by the caller; ``as_of`` is already parsed.
-        ``policy_name`` ``"strict"`` selects the strict filter; anything else
-        is ``compat_fts`` (the interface validates the name). Providers: FTS
-        always, plus hybrid when an embedder is configured.
+        ``limit`` is the page size, already clamped by the caller; ``as_of``
+        is already parsed. ``policy_name`` is ``"compat_fts"`` or ``"strict"``;
+        any other value raises ``ValueError`` (fail closed) before a provider
+        runs. Providers: FTS always, plus hybrid when an embedder is
+        configured. Call ``ensure_index`` first: the coordinator's deadline
+        starts here.
         """
+
+        if policy_name not in RECALL_POLICIES:
+            raise ValueError("unknown policy")
+        root = self.root
 
         # Imported here so callers that never recall never load them.
         from memfw.recall import Coordinator, FilterPolicy
@@ -177,7 +205,7 @@ class Runtime:
             resolvers=default_resolvers(root),
             configs=configs,
             inflight=self.recall_inflight,
-            total_timeout=TWO_STAGE_TOTAL_TIMEOUT,
+            total_timeout=self.total_timeout,
         )
         result = coordinator.search(query, limit=limit, policy=filter_policy)
         answered = set(result.labels.providers)
@@ -192,23 +220,29 @@ def build_runtime(
     allowed_sources: tuple[str, ...] = (),
     embedder: Any = None,
     entity_enabled: bool = False,
+    provider_timeout: float = TWO_STAGE_PROVIDER_TIMEOUT,
+    total_timeout: float = TWO_STAGE_TOTAL_TIMEOUT,
 ) -> Runtime:
     """The default assembly: today's behaviour, no ``runtime:`` config yet.
 
-    Values are taken as given; resolving them from the environment stays with
-    the interface for now (A3 follow-up).
+    ``root`` is resolved here (``expanduser().resolve()``, as ``Repository``
+    does). Other values are taken as given; resolving them from the
+    environment stays with the interface for now (A3 follow-up).
     """
 
     return Runtime(
-        Path(root).expanduser(),
+        Path(root).expanduser().resolve(),
         tenant=tenant,
         allowed_sources=tuple(allowed_sources),
         embedder=embedder,
         entity_enabled=entity_enabled,
+        provider_timeout=provider_timeout,
+        total_timeout=total_timeout,
     )
 
 
 __all__ = [
+    "RECALL_POLICIES",
     "TWO_STAGE_PROVIDER_TIMEOUT",
     "TWO_STAGE_TOTAL_TIMEOUT",
     "Observed",

@@ -17,6 +17,7 @@ from memfw.notes import HashEmbeddingProvider
 from memfw.recall import Coordinator, FilterPolicy, InflightRegistry, ProviderConfig
 from memfw.recall.builtin import FtsProvider, HybridProvider, default_resolvers
 from memfw.runtime import (
+    RECALL_POLICIES,
     TWO_STAGE_PROVIDER_TIMEOUT,
     TWO_STAGE_TOTAL_TIMEOUT,
     RecallOutcome,
@@ -109,7 +110,7 @@ def test_build_runtime_takes_values_as_given(tmp_path: Path) -> None:
         tmp_path, tenant="alpha", allowed_sources=("nas",), embedder=embedder, entity_enabled=True
     )
     assert isinstance(runtime, Runtime)
-    assert runtime.root == tmp_path
+    assert runtime.root == tmp_path.resolve()
     assert (runtime.tenant, runtime.allowed_sources) == ("alpha", ("nas",))
     assert runtime.embedder is embedder and runtime.entity_enabled is True
     assert isinstance(runtime.recall_inflight, InflightRegistry)
@@ -143,7 +144,6 @@ def test_recall_matches_the_old_inline_wiring(
         )
         for query in QUERIES:
             outcome = runtime.recall(
-                repository.root,
                 query,
                 limit=10,
                 policy_name=policy,
@@ -208,7 +208,6 @@ def test_inflight_registry_is_shared_per_runtime(tmp_path: Path) -> None:
         patch.setattr(Coordinator, "__init__", record)
         for runtime in (first, first, second):
             runtime.recall(
-                repository.root,
                 "backup",
                 limit=5,
                 policy_name="compat_fts",
@@ -251,3 +250,103 @@ def test_importing_runtime_does_not_load_builtin_providers() -> None:
         [sys.executable, "-c", code], capture_output=True, text=True, check=True
     ).stdout.split()
     assert out == ["False", "False"]
+
+
+def _recall(runtime: Runtime, policy_name: str) -> RecallOutcome:
+    return runtime.recall(
+        "backup",
+        limit=5,
+        policy_name=policy_name,
+        source="",
+        include_history=False,
+        as_of=None,
+        scope="",
+    )
+
+
+@pytest.mark.parametrize("name", ["", "bogus", "STRICT", "compat-fts", None])
+def test_recall_fails_closed_on_an_unknown_policy(tmp_path: Path, name: Any) -> None:
+    repository = _vault(tmp_path)
+    runtime = build_runtime(repository.root)
+    calls: list[str] = []
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            Runtime,
+            "_two_stage_providers",
+            lambda self, *a, **k: calls.append("built") or ([], {}),
+        )
+        with pytest.raises(ValueError, match="unknown policy"):
+            _recall(runtime, name)
+    assert calls == []  # rejected before any provider is built
+    assert RECALL_POLICIES == ("compat_fts", "strict")
+    for good in RECALL_POLICIES:
+        assert isinstance(_recall(runtime, good), RecallOutcome)
+
+
+def test_mcp_keeps_its_policy_messages(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    gateway = Gateway(repository.root, tenant="", entity_enabled=False, allowed_sources=())
+    with pytest.raises(ValueError, match="^unknown policy$"):
+        gateway.search("backup", mode="two_stage", policy="bogus")
+    with pytest.raises(ValueError, match="^policy only applies to mode=two_stage$"):
+        gateway.search("backup", mode="fts", policy="strict")
+
+
+def test_root_is_resolved_once_and_matches_the_gateway_vault(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    link = tmp_path / "link"
+    link.symlink_to(repository.root, target_is_directory=True)
+    for root in (repository.root, link, tmp_path / "vault" / ".." / "vault"):
+        gateway = Gateway(root, tenant="", entity_enabled=False, allowed_sources=())
+        assert gateway.runtime.root == gateway._repo().root == repository.root
+    # recall has no root argument: it always uses Runtime.root.
+    assert "root" not in Runtime.recall.__code__.co_varnames[: Runtime.recall.__code__.co_argcount]
+
+
+def test_timeouts_are_runtime_parameters(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    default = build_runtime(repository.root)
+    assert (default.provider_timeout, default.total_timeout) == (3.0, 4.0)
+    tuned = build_runtime(repository.root, provider_timeout=0.5, total_timeout=1.25)
+    assert (tuned.provider_timeout, tuned.total_timeout) == (0.5, 1.25)
+    budgets: list[float] = []
+    totals: list[float] = []
+    original = Coordinator.__init__
+
+    def record(self: Coordinator, *args: Any, **kwargs: Any) -> None:
+        budgets.extend(c.budget.timeout_seconds for c in kwargs["configs"].values())
+        totals.append(kwargs["total_timeout"])
+        original(self, *args, **kwargs)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(Coordinator, "__init__", record)
+        _recall(tuned, "compat_fts")
+        _recall(default, "compat_fts")
+    assert budgets == [0.5, 3.0] and totals == [1.25, 4.0]
+
+
+def test_ensure_index_rebuilds_a_missing_index(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    runtime = build_runtime(repository.root)
+    repository.index_path.unlink()
+    runtime.ensure_index()  # opens Repository(runtime.root)
+    assert repository.index_path.is_file()
+    before = repository.index_path.stat().st_mtime_ns
+    runtime.ensure_index(repository)  # fresh: no rebuild
+    assert repository.index_path.stat().st_mtime_ns == before
+
+
+def test_mcp_checks_the_index_through_the_runtime_before_recall(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    gateway = Gateway(repository.root, tenant="", entity_enabled=False, allowed_sources=())
+    order: list[str] = []
+    ensure, recall = Runtime.ensure_index, Runtime.recall
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            Runtime, "ensure_index", lambda self, *a: order.append("index") or ensure(self, *a)
+        )
+        patch.setattr(
+            Runtime, "recall", lambda self, *a, **k: order.append("recall") or recall(self, *a, **k)
+        )
+        gateway.search("homelab backup", mode="two_stage")
+    assert order == ["index", "recall"]

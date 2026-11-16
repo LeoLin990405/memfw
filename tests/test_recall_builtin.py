@@ -11,7 +11,7 @@ from memfw.core.epistemic import CAUSAL_VALUES as CORE_CAUSAL
 from memfw.core.epistemic import EPISTEMIC_VALUES as CORE_EPISTEMIC
 from memfw.core.repository import Repository
 from memfw.index import MemoryIndex
-from memfw.mcp.server import Gateway, _ensure_search_index
+from memfw.mcp.server import Gateway
 from memfw.notes import HashEmbeddingProvider
 from memfw.ports.testing import check_recall_provider
 from memfw.ports.types import CAUSAL_VALUES, EPISTEMIC_VALUES, Candidate, RecallBudget
@@ -24,6 +24,7 @@ from memfw.recall.builtin import (
 )
 from memfw.recall.coordinator import MAX_LIMIT
 from memfw.retrieval.multihop import search_multihop
+from memfw.runtime import ensure_search_index
 
 QUERIES = (
     "homelab backup",
@@ -95,7 +96,7 @@ def _fts_coordinator(
         include_history=include_history,
         scope=scope,
         allowed_sources=allowed,
-        prepare=_ensure_search_index,
+        prepare=ensure_search_index,
     )
     return Coordinator([provider], resolvers=default_resolvers(root))
 
@@ -185,7 +186,7 @@ def test_fts_provider_availability_and_contract(tmp_path: Path) -> None:
     bare = Repository(tmp_path / "bare")
     bare.init()
     assert FtsProvider(bare.root).available().reason == "no_index"
-    assert FtsProvider(bare.root, prepare=_ensure_search_index).available().available
+    assert FtsProvider(bare.root, prepare=ensure_search_index).available().available
     repository = _vault(tmp_path)
     provider = FtsProvider(repository.root)
     seen = check_recall_provider(

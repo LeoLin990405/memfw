@@ -405,9 +405,9 @@ index and builds the rows.
   has an embedder (`MEMFW_EMBEDDING_URL`). Both get the server's `allowed_sources`, the
   call's `source`, `include_history` and (FTS only) `scope`. Each provider may take 3 s;
   all providers and resolvers together get **4 s** (the total deadline). The index staleness
-  check runs before the deadline starts. Resolvers are `default_resolvers(root)`.
-- **One thread per hung provider.** Every call on one `Gateway` (through its `Runtime`)
-  shares an `InflightRegistry`, so `max_inflight` (1) holds across calls: a provider that hangs holds
+  check (`Runtime.ensure_index`) runs before the deadline starts. Resolvers are `default_resolvers(root)`.
+- **One thread per hung provider.** Every call on one `Runtime` (one Runtime per Gateway)
+  shares its `InflightRegistry`, so `max_inflight` (1) holds across calls: a provider that hangs holds
   one worker thread, and later calls report it as `busy` instead of starting another.
   Concurrent `two_stage` calls on one gateway can therefore see a provider as `busy`.
 - **`policy`.** `compat_fts` (default) is `FilterPolicy.compat_fts(...)`: tenant, source and

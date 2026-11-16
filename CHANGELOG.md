@@ -46,12 +46,19 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ### Internal — composition root, recall slice (A3a)
 
-- New `memfw.runtime` (layer L4): `build_runtime(...) -> Runtime`. `Runtime.recall` now owns
-  the `memory_search mode=two_stage` wiring the MCP server built inline (built-in providers,
-  resolvers, `compat_fts`/`strict` filter policy, the per-gateway `InflightRegistry`, the
-  coordinator call); the server gets recall only from its `Gateway.runtime`. The test seam
+- New `memfw.runtime` (layer L4): `build_runtime(...) -> Runtime`, one Runtime per Gateway.
+  `Runtime.recall` now owns the `memory_search mode=two_stage` wiring the MCP server built
+  inline (built-in providers, resolvers, `compat_fts`/`strict` filter policy, the
+  `InflightRegistry` (one per Runtime), the coordinator call); the server gets recall only
+  from `Gateway.runtime`. `Runtime.recall` accepts exactly `compat_fts` or `strict` and
+  raises `ValueError` on any other policy (the MCP checks and messages are unchanged). The
+  root is resolved once in `build_runtime`; the two_stage timeouts are `Runtime` parameters
+  (defaults 3 s per provider, 4 s total). The index staleness check moved to
+  `memfw.runtime.ensure_search_index` / `Runtime.ensure_index`, still run before the
+  coordinator's deadline. Callers sharing one Runtime share its in-flight slots per provider
+  name, so a hung provider shows as `busy` across tools. The test seam
   `_two_stage_providers` moved from `Gateway` to `Runtime`. `memory_search` output is
-  byte-identical for every mode.
+  byte-identical for every mode except timing fields.
 - Architecture guard: `memfw.runtime` is mapped to `L4-runtime`, `memfw.mcp` may import
   `memfw.ports` and `memfw.runtime`, and the allowlist drops `memfw.mcp -> memfw.recall` and
   `memfw.mcp -> memfw.recall.builtin` (25 to 23 entries). Remaining A3 work is listed in
