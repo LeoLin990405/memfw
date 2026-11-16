@@ -86,14 +86,14 @@ number of import lines on that edge. The test fails when:
 - compared with the allowlist at the merge-base with `origin/main` (override the ref with
   `MEMFW_ARCH_BASE_REF`), it has a key the base lacks (a renamed or swapped entry counts),
   an edge with more sites in total than at the base, an importing module outside the
-  edge's source unit, more entries, or more sites in total.
+  edge's source unit, more entries, or more sites in total. The check skips when the file
+  did not exist at the merge-base. When the ref or the merge-base is not available it skips
+  locally and fails in CI (`CI` set).
 
 Debt is counted per edge per unit; refactors may redistribute it inside the unit. Against
 the merge-base, an edge's sites may move between modules of its source unit (A4a moved the
 `memfw.mcp` sites from `memfw.mcp.server` into the tool-group modules); the per-module
-counts in the current allowlist must still match the code exactly. The check
-  skips when the file did not exist at the merge-base. When the ref or the merge-base is not
-  available it skips locally and fails in CI (`CI` set).
+counts in the current allowlist must still match the code exactly.
 
 So the list can only get shorter, and it is empty when the A series is done.
 
@@ -202,7 +202,9 @@ stay inside the `memfw.mcp` unit and no edge total grew. Names other code import
 `memfw.mcp.server` are still importable there; a monkeypatch must target the module that
 reads the name (`memfw.mcp.tools_dream.DREAM_MAX_STAGED`,
 `memfw.mcp.tools_search.search_multihop`). The probe `tests.harness.probes:mcp_all_tools`
-sends every MCP method and tool (116 messages) to one fixture vault.
+sends every MCP method and all 15 tools (116 messages, error paths included) to one fixture
+vault; `tests/test_mcp_split.py` runs it against `MEMFW_ARCH_BASE_REF` when that is set
+(opt-in, skipped by default).
 
 **A4b (next).** Each group reaches its capability through the `Runtime` or a protocol, and
 its allowlist entries go.

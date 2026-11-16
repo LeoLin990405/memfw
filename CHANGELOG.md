@@ -18,7 +18,7 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   history, conversations, dream). `Gateway` in `server.py` composes them; its
   methods and attributes are unchanged. A pure move: every MCP tool's output,
   `tools/list` included, is byte-identical to before (timing fields masked;
-  new harness probe `mcp_all_tools`).
+  new harness probe `mcp_all_tools`: every MCP method and all 15 tools).
 - Allowlist: the `memfw.mcp` entries name the group modules that now hold each
   import; keys and site totals are unchanged. The merge-base check now counts debt per
   edge per unit: an edge's sites may move between modules of its source unit

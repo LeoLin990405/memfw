@@ -60,6 +60,8 @@ from memfw.mcp.tools_search import (
 )
 
 # Names that lived here before the A4a split stay importable from this module.
+# They are read-only re-exports: the code reads each name from its defining module
+# (``memfw.mcp.schema``, ``protocol``, ``tools_*``), so a test patches that module.
 __all__ = [
     "DREAM_LIST_MAX",
     "DREAM_MAX_CANDIDATES",
