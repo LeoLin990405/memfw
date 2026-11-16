@@ -77,3 +77,91 @@ def loaded_from(payload: dict[str, Any], workdir: Path) -> str:
     import memfw
 
     return str(Path(memfw.__file__).resolve().parents[1])
+
+
+#: Concept vault for ``mcp_memory_search_stable``: (id, title, body, about).
+CONCEPT_VAULT: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
+    ("m-port-a", "Port A", "the service port is 8080", ("concept:service-port",)),
+    ("m-port-b", "Port B", "the service port is 9090", ("concept:service-port",)),
+    (
+        "m-runbook",
+        "Port runbook",
+        "service port runbook and backup notes",
+        ("concept:service-port",),
+    ),
+    ("m-legacy", "Port legacy", "legacy service port notes", ()),
+)
+
+
+def _zero_timings(value: Any) -> Any:
+    """``total_ms`` and ``latency_ms`` differ per run: set them to 0."""
+
+    if isinstance(value, dict):
+        return {
+            key: 0 if key in {"total_ms", "latency_ms"} else _zero_timings(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_zero_timings(item) for item in value]
+    return value
+
+
+def mcp_memory_search_stable(payload: dict[str, Any], workdir: Path) -> str:
+    """``memory_search`` on the fixture vault plus concept memories, timings zeroed.
+
+    ``payload``: ``arguments`` (the tool arguments), ``open_question`` (add an
+    unresolved open question about ``concept:service-port`` listing
+    ``m-port-a`` and ``m-legacy`` in its conflicts) and ``embedder`` (a
+    ``HashEmbeddingProvider``). Uses only APIs present since U1.
+    """
+
+    from memfw.core.repository import Repository
+    from memfw.index import MemoryIndex
+    from memfw.mcp.server import Gateway
+    from memfw.notes import HashEmbeddingProvider
+
+    counter = iter(range(1, 1_000_000))
+    repository = Repository(
+        workdir / "vault", clock=lambda: T0, id_factory=lambda: f"id-{next(counter):06d}"
+    )
+    repository.init()
+    for memory_id, title, body, source, tags in VAULT:
+        repository.add(title, body, memory_id=memory_id, source=source, tags=list(tags))
+    for memory_id, title, body, about in CONCEPT_VAULT:
+        repository.add(title, body, memory_id=memory_id, about=list(about))
+    if payload.get("open_question"):
+        repository.add(
+            "Service port unknown",
+            "The memories disagree on the service port.",
+            memory_id="q-port",
+            memory_type="open-question",
+            about=["concept:service-port"],
+            open_question={
+                "question": "Which service port is used?",
+                "conflicts": ["m-port-a", "m-legacy"],
+            },
+        )
+    MemoryIndex(repository.index_path).rebuild(repository)
+    root = repository.root
+    embedder = HashEmbeddingProvider(dimension=64) if payload.get("embedder") else None
+    gateway = Gateway(root, tenant="", entity_enabled=False, allowed_sources=(), embedder=embedder)
+    sent: list[dict[str, Any]] = []
+    gateway.respond = sent.append  # type: ignore[method-assign]
+    gateway.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "memory_search", "arguments": payload["arguments"]},
+        }
+    )
+    for item in sent:
+        for block in item.get("result", {}).get("content", []):
+            try:
+                block["text"] = _zero_timings(json.loads(block["text"]))
+            except (TypeError, ValueError):
+                pass
+    text = "\n".join(
+        json.dumps(item, ensure_ascii=False, sort_keys=True, indent=1) for item in sent
+    )
+    return text.replace(str(root), "<vault>").replace(str(workdir), "<workdir>")

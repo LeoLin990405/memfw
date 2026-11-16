@@ -148,6 +148,12 @@ per provider name and shared by every caller of one Runtime: a hung provider sho
 across tools until it returns. The MCP server no longer imports `memfw.recall` or
 `memfw.recall.builtin` (two allowlist entries removed).
 
+**U2 labels.** `Runtime.recall` also appends the open-question labels to each hit
+(`memfw.recall.builtin.open_question_index`, built per call from the caller's `Repository`,
+with the same `FilterPolicy`), and `Runtime.open_question_labels(repository, ids, *,
+policy_name, source, include_history, as_of)` gives the other `memory_search` modes the same
+labels for `labels: true`. The MCP server only parses the flag; no import edge was added.
+
 **Still to do (A3b and later).**
 
 - Resolve settings (tenant, allowed sources, entity flag, embedder from

@@ -23,6 +23,12 @@ from .coordinator import (
     Router,
 )
 from .fusion import DEFAULT_RRF_K, FusedHit, rrf_fuse
+from .labels import (
+    CONFLICTED_LABEL,
+    OPEN_QUESTION_LABEL_PREFIX,
+    OpenQuestionIndex,
+    open_question_labels,
+)
 from .policy import (
     DEFAULT_CLEARANCE,
     DROP_REASONS,
@@ -37,6 +43,7 @@ from .resolve import MemoryPathResolver, PathResolver, Resolution, Resolver
 from .routing import AllProvidersRouter, DefaultRouter, RouteDecision, classify_query
 
 __all__ = [
+    "CONFLICTED_LABEL",
     "DEFAULT_CLEARANCE",
     "DEFAULT_RRF_K",
     "DEFAULT_TOTAL_TIMEOUT",
@@ -49,6 +56,8 @@ __all__ = [
     "InflightRegistry",
     "MemoryMeta",
     "MemoryPathResolver",
+    "OPEN_QUESTION_LABEL_PREFIX",
+    "OpenQuestionIndex",
     "PathResolver",
     "ProviderConfig",
     "ProviderReport",
@@ -64,6 +73,7 @@ __all__ = [
     "classify_privacy",
     "classify_query",
     "evaluate",
+    "open_question_labels",
     "parse_clearance",
     "rrf_fuse",
 ]

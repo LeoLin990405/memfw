@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -176,9 +176,10 @@ class Runtime:
         root = repository.root
 
         # Imported here so callers that never recall never load them.
-        from memfw.recall import Coordinator, FilterPolicy
+        from memfw.recall import Coordinator
         from memfw.recall.builtin import default_resolvers
 
+        moment = datetime.now(UTC)
         captured: dict[str, Observed] = {}
 
         def observe(name: str) -> Callable[[Any, Any], None]:
@@ -199,34 +200,95 @@ class Runtime:
             scope=scope,
             observe=observe,
         )
-        allowed = tuple(self.allowed_sources)
-        if policy_name == "strict":
-            filter_policy = FilterPolicy(
-                tenant=self.tenant,
-                allowed_sources=allowed,
-                source=source,
-                as_of=as_of,
-                include_history=include_history,
-            )
-        else:
-            filter_policy = FilterPolicy.compat_fts(
-                tenant=self.tenant,
-                allowed_sources=allowed,
-                source=source,
-                as_of=as_of,
-                include_history=include_history,
-            )
+        filter_policy = self._filter_policy(
+            policy_name, source=source, include_history=include_history, as_of=as_of
+        )
         coordinator = Coordinator(
             providers,
             resolvers=default_resolvers(root),
             configs=configs,
             inflight=self.recall_inflight,
             total_timeout=self.total_timeout,
+            # One instant for the whole call: the coordinator's filter and the
+            # open-question labels judge validity at the same ``now``.
+            clock=lambda: moment,
         )
         result = coordinator.search(query, limit=limit, policy=filter_policy)
+        result = _with_open_question_labels(repository, result, filter_policy, now=moment)
         answered = set(result.labels.providers)
         seen = {name: captured[name] for name in list(captured) if name in answered}
         return RecallOutcome(result=result, observed=seen)
+
+    def _filter_policy(
+        self,
+        policy_name: str,
+        *,
+        source: str,
+        include_history: bool,
+        as_of: datetime | None,
+    ) -> Any:
+        """The ``FilterPolicy`` for ``policy_name`` (already checked by the caller)."""
+
+        from memfw.recall import FilterPolicy
+
+        allowed = tuple(self.allowed_sources)
+        if policy_name == "strict":
+            return FilterPolicy(
+                tenant=self.tenant,
+                allowed_sources=allowed,
+                source=source,
+                as_of=as_of,
+                include_history=include_history,
+            )
+        return FilterPolicy.compat_fts(
+            tenant=self.tenant,
+            allowed_sources=allowed,
+            source=source,
+            as_of=as_of,
+            include_history=include_history,
+        )
+
+    def open_question_labels(
+        self,
+        repository: Repository,
+        memory_ids: Sequence[str],
+        *,
+        policy_name: str,
+        source: str,
+        include_history: bool,
+        as_of: datetime | None,
+        scope: str = "",
+        now: datetime | None = None,
+    ) -> dict[str, tuple[str, ...]]:
+        """U2 labels for hits of the other ``memory_search`` modes (``labels: true``).
+
+        The same labels and the same ``FilterPolicy`` as ``recall`` adds to
+        ``two_stage`` hits: ``open_question:<id>`` for each unresolved open
+        question the policy keeps whose ``about`` shares a concept with the
+        hit's, and ``conflicted`` when such a question lists the hit in its
+        ``conflicts``. ``repository`` is the caller's open vault. Ids without
+        labels are absent. Any other ``policy_name`` raises ``ValueError``.
+
+        ``scope`` is taken as ``mode=fts`` takes it: it only selects scoped
+        alias labels and filters no hit, and labels match ``about`` concept
+        ids, never aliases, so it changes no label. ``now`` defaults to the
+        current time. No ids means nothing is read; otherwise the index
+        staleness check runs first (the hybrid and vector paths do not run it).
+        """
+
+        if policy_name not in RECALL_POLICIES:
+            raise ValueError("unknown policy")
+        del scope  # see the docstring: no label depends on it
+        if not memory_ids:
+            return {}
+        from memfw.recall.builtin import open_question_labels_for
+
+        policy = self._filter_policy(
+            policy_name, source=source, include_history=include_history, as_of=as_of
+        )
+        self.ensure_index(repository)
+        moment = now if now is not None else datetime.now(UTC)
+        return open_question_labels_for(repository, memory_ids, policy, now=moment)
 
     # --- memory_context (C1) ---------------------------------------------------
 
@@ -294,6 +356,29 @@ class Runtime:
         return build_core_pack(
             repository, keep=keep, policy=policy_name, limit_tokens=limit_tokens, now=moment
         )
+
+
+def _with_open_question_labels(
+    repository: Repository, result: RecallResult, policy: Any, *, now: datetime
+) -> RecallResult:
+    """``result`` with each hit's open-question labels appended to its ``labels``."""
+
+    if not result.hits:
+        return result
+    from dataclasses import replace
+
+    from memfw.recall.builtin import open_question_labels_for
+
+    extra = open_question_labels_for(
+        repository, [hit.memory_id for hit in result.hits], policy, now=now
+    )
+    if not extra:
+        return result
+    hits = tuple(
+        replace(hit, labels=(*hit.labels, *extra[hit.memory_id])) if hit.memory_id in extra else hit
+        for hit in result.hits
+    )
+    return replace(result, hits=hits)
 
 
 def build_runtime(
