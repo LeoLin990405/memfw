@@ -265,9 +265,15 @@ backend only through exported files and the `resolve` interface.
   RRF → labels → metrics. Metrics never contain the query.
   `memfw.recall.builtin` holds the vault resolver and the FTS, hybrid and
   multihop providers. It wraps the existing code without changing it.
-- Not wired into MCP, HTTP or the CLI yet; search output is unchanged. A test
-  pins the FTS-only coordinator to the same ids and order as
-  `memory_search` `mode=fts`. See `docs/ports-and-recall.md`.
+- MCP `memory_search` gains the opt-in `mode=two_stage`: FTS (plus hybrid when
+  an embedder is configured) through the coordinator, with a `policy` of
+  `compat_fts` (default; same ids and order as `mode=fts` without an embedder)
+  or `strict` (adds privacy, status, lifecycle and archive checks). Rows add
+  `providers` and `recall_labels`; the payload adds `recall` and
+  `recall_metrics` (no query or body text). No ontology alias expansion in
+  this mode yet. `policy` with any other mode is an error. Every other mode,
+  and the default, is byte-identical to before. Not wired into HTTP or the
+  CLI. See `docs/ports-and-recall.md` §4.1.
 
 ## [0.2.0] — 2026-11-15
 

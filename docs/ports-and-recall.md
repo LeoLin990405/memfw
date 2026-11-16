@@ -14,9 +14,9 @@ memfw is an authoritative kernel plus a coordination layer. The kernel owns what
 well, or present them in another form. Their code never enters memfw: an adapter uses the
 external project's public interface, and the kernel uses the adapter only through a port.
 
-**Status in this release.** The coordinator is not wired into MCP, HTTP or the CLI. Existing
-search output is unchanged. A later PR wires it in as `mode=two_stage`, after the open fix
-branches merge.
+**Status in this release.** The coordinator is wired into MCP `memory_search` as the opt-in
+`mode=two_stage` (§4.1). It is not used by HTTP or the CLI. The default mode (`hybrid`) and
+`fts`, `vector` and `multihop` are unchanged: their output is byte-identical to before.
 
 ### 1.1 Packaging boundaries
 
@@ -363,6 +363,34 @@ All three built-in providers pass `memfw.ports.testing.check_recall_provider` (s
 with only `FtsProvider` and `FilterPolicy.compat_fts(...)` returns the same ids, in the same
 order, as `Gateway.search(mode="fts")`. This is checked across tenants, limits, `source`,
 `include_history`, `as_of` and `allowed_sources`.
+
+### 4.1 MCP `memory_search` `mode=two_stage`
+
+`mode=two_stage` runs the query through a `Coordinator` and builds the rows from the fused
+hits. It is opt-in; nothing else changes.
+
+- **Providers.** `FtsProvider` always; `HybridProvider` (`mode=hybrid`) only when the server
+  has an embedder (`MEMFW_EMBEDDING_URL`). Both get the server's `allowed_sources`, the
+  call's `source`, `include_history` and (FTS only) `scope`, and a 3 s per-provider budget
+  under the coordinator's total deadline. The index staleness check runs before the
+  coordinator starts. Resolvers are `default_resolvers(root)`.
+- **`policy`.** `compat_fts` (default) is `FilterPolicy.compat_fts(...)`: tenant, source and
+  the index's temporal clause, exactly what `mode=fts` applies. `strict` is the default
+  `FilterPolicy(...)` with the same tenant, sources, `as_of` and `include_history`: it adds
+  the privacy (clearance `none`), status, lifecycle and archive checks and the strict temporal
+  rule. `policy` is only accepted with `mode=two_stage`; any other mode rejects a value other
+  than `compat_fts`, and an unknown value is an error. `as_of` must carry a timezone, as for
+  `multihop`. `limit` is capped to 1..50.
+- **Rows.** Each hit is read from the vault and shaped like the other modes' rows, plus
+  `providers` (which providers returned it) and `recall_labels` (the filter labels).
+  `score` is the fused RRF score, so it is not comparable with `mode=fts` scores.
+- **Payload.** `mode: "two_stage"`, `policy`, `recall` (`RecallLabels.as_dict()`) and
+  `recall_metrics` (`RecallMetrics.as_dict()`). Neither contains the query or body text, and
+  provider exception messages never appear, only fixed codes. `degraded` is true when a
+  provider or resolver degraded or the call failed closed.
+- **No ontology alias expansion** in this mode yet: `concepts/` aliases add no rows.
+- **Parity.** With no embedder, `two_stage` + `compat_fts` returns the same ids in the same
+  order as `mode=fts` (`tests/test_mcp_two_stage.py`).
 
 ## 5. Adapter rules
 

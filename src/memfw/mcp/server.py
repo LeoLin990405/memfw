@@ -53,7 +53,7 @@ from memfw.capture.staging import (
 )
 from memfw.capture.suggestions import suggest_related
 from memfw.conversations import OPERATOR, ConversationShare, SharePolicy, open_share
-from memfw.core.errors import NotFoundError
+from memfw.core.errors import MemfwError, NotFoundError
 from memfw.core.models import Layer, MemoryDocument, Tier
 from memfw.core.repository import Repository
 from memfw.dream.run import DreamOptions, run_dream
@@ -95,6 +95,9 @@ INSTRUCTIONS = (
     "dream_list lists staged dreams."
 )
 
+#: ``memory_search`` ``policy`` values; meaningful only with ``mode=two_stage``.
+SEARCH_POLICIES = ("compat_fts", "strict")
+
 TOOLS: list[dict[str, Any]] = [
     {
         "name": "memory_search",
@@ -111,8 +114,18 @@ TOOLS: list[dict[str, Any]] = [
                 "limit": {"type": "integer", "default": 10},
                 "mode": {
                     "type": "string",
-                    "enum": ["fts", "hybrid", "vector", "multihop"],
+                    "enum": ["fts", "hybrid", "vector", "multihop", "two_stage"],
                     "default": "hybrid",
+                },
+                "policy": {
+                    "type": "string",
+                    "enum": list(SEARCH_POLICIES),
+                    "default": "compat_fts",
+                    "description": (
+                        "Filter policy for mode=two_stage only. compat_fts applies the "
+                        "mode=fts filters (tenant, source, validity); strict adds the "
+                        "privacy (clearance none), status, lifecycle and archive checks."
+                    ),
                 },
                 "rounds": {"type": "integer", "minimum": 1, "maximum": 2},
                 "source": {"type": "string"},
@@ -681,7 +694,41 @@ def _annotate_hit(row: dict[str, Any], document: Any, item: dict[str, Any], *, w
             row["stale"] = True
 
 
+def _document_row(
+    repository: Repository, document: MemoryDocument, item: dict[str, Any], *, why: str
+) -> dict[str, Any]:
+    """A ``memory_search`` row built from the vault document itself.
+
+    ``item`` carries the score and, optionally, ``why``, ``content_hash``,
+    ``index_version`` and ``projection_hash`` from the path that found it.
+    """
+
+    row = {
+        "id": document.id,
+        "title": document.title,
+        "layer": document.layer.value,
+        "tier": document.tier.value,
+        "updated_at": document.updated_at.isoformat(),
+        "valid_from": document.valid_from.isoformat() if document.valid_from else None,
+        "valid_to": document.valid_to.isoformat() if document.valid_to else None,
+        "superseded_by": document.superseded_by,
+        "recorded_at": (document.recorded_at or document.created_at).isoformat(),
+        "type": document.type,
+        "score": item["score"],
+        "source": document.source,
+        "content_hash": item.get("content_hash")
+        or _content_hash(repository.root / "memories" / f"{document.id}.md"),
+    }
+    _annotate_hit(row, document, item, why=str(item.get("why") or why))
+    return row
+
+
 _MAX_SCOPE_CHARS = 512
+
+#: Per-provider wait in ``mode=two_stage`` (the coordinator's total deadline
+#: still applies). Above the 1.5 s port default so a cold SQLite page does not
+#: count as a timeout.
+_TWO_STAGE_PROVIDER_TIMEOUT = 3.0
 
 
 def _checked_scope(scope: object) -> str:
@@ -842,15 +889,31 @@ class Gateway:
         rounds: int | None = None,
         judge: object | None = None,
         scope: str = "",
+        policy: str = "compat_fts",
     ) -> dict[str, Any]:
         # This delivery does not score hits. An injected judge is ignored.
         del judge
         if not query.strip():
             raise ValueError("query required")
+        if policy not in SEARCH_POLICIES:
+            raise ValueError("unknown policy")
+        if mode != "two_stage" and policy != "compat_fts":
+            raise ValueError("policy only applies to mode=two_stage")
         scope = _checked_scope(scope)
         if source and self.allowed_sources and source not in self.allowed_sources:
             raise ValueError("source is not allowed for this account")
         repository = self._repo()
+        if mode == "two_stage":
+            return self._search_two_stage(
+                repository,
+                query,
+                limit,
+                source=source,
+                include_history=include_history,
+                as_of=as_of,
+                scope=scope,
+                policy=policy,
+            )
         concepts = repository.root / "concepts"
         expand = concepts.is_dir() and not concepts.is_symlink()
         if mode == "multihop":
@@ -991,24 +1054,7 @@ class Gateway:
                 rows.append(row)
                 continue
             document = repository.get(item["id"])
-            row = {
-                "id": document.id,
-                "title": document.title,
-                "layer": document.layer.value,
-                "tier": document.tier.value,
-                "updated_at": document.updated_at.isoformat(),
-                "valid_from": document.valid_from.isoformat() if document.valid_from else None,
-                "valid_to": document.valid_to.isoformat() if document.valid_to else None,
-                "superseded_by": document.superseded_by,
-                "recorded_at": (document.recorded_at or document.created_at).isoformat(),
-                "type": document.type,
-                "score": item["score"],
-                "source": document.source,
-                "content_hash": item.get("content_hash")
-                or _content_hash(repository.root / "memories" / f"{document.id}.md"),
-            }
-            _annotate_hit(row, document, item, why=str(item.get("why") or why))
-            rows.append(row)
+            rows.append(_document_row(repository, document, item, why=why))
         if mode == "fts":
             ambiguities = list(result.get("ambiguity") or [])
             alias_note = None
@@ -1046,6 +1092,116 @@ class Gateway:
         if "route" in result:
             payload["route"] = result["route"]
         return payload
+
+    def _search_two_stage(
+        self,
+        repository: Repository,
+        query: str,
+        limit: int,
+        *,
+        source: str,
+        include_history: bool,
+        as_of: str | None,
+        scope: str,
+        policy: str,
+    ) -> dict[str, Any]:
+        """``mode=two_stage``: recall through the coordinator, then build rows.
+
+        Providers: FTS always, plus hybrid when an embedder is configured.
+        The coordinator resolves every candidate against the vault and filters
+        it with ``policy`` before fusing, so a row is built only for a memory
+        that passed the filter. Ontology alias expansion is not applied in
+        this mode (yet): ``concepts/`` aliases do not add rows here.
+        Provider exception messages never reach the payload; the coordinator
+        keeps only fixed codes.
+        """
+
+        # Imported here so the other modes do not load the recall layer.
+        from memfw.ports import RecallBudget
+        from memfw.recall import Coordinator, FilterPolicy, ProviderConfig
+        from memfw.recall.builtin import FtsProvider, HybridProvider, default_resolvers
+
+        page = max(1, min(int(limit), 50))
+        parsed_as_of = None
+        if as_of:
+            parsed_as_of = datetime.fromisoformat(as_of)
+            if parsed_as_of.tzinfo is None or parsed_as_of.utcoffset() is None:
+                raise ValueError("as_of must include a timezone")
+        # Before the coordinator starts its deadline: a rebuild may take a while.
+        _ensure_search_index(repository)
+        allowed = tuple(self.allowed_sources)
+        budget = RecallBudget(timeout_seconds=_TWO_STAGE_PROVIDER_TIMEOUT)
+        providers: list[Any] = [
+            FtsProvider(
+                repository.root,
+                source=source,
+                include_history=include_history,
+                scope=scope,
+                allowed_sources=allowed,
+            )
+        ]
+        configs = {"fts": ProviderConfig(budget=budget)}
+        if self.embedder:
+            providers.append(
+                HybridProvider(
+                    repository.root,
+                    embedder=self.embedder,
+                    source=source,
+                    include_history=include_history,
+                    allowed_sources=allowed,
+                    entity_enabled=self.entity_enabled,
+                )
+            )
+            configs["hybrid"] = ProviderConfig(budget=budget)
+        if policy == "strict":
+            filter_policy = FilterPolicy(
+                tenant=self.tenant,
+                allowed_sources=allowed,
+                source=source,
+                as_of=parsed_as_of,
+                include_history=include_history,
+            )
+        else:
+            filter_policy = FilterPolicy.compat_fts(
+                tenant=self.tenant,
+                allowed_sources=allowed,
+                source=source,
+                as_of=parsed_as_of,
+                include_history=include_history,
+            )
+        coordinator = Coordinator(
+            providers,
+            resolvers=default_resolvers(repository.root),
+            configs=configs,
+        )
+        result = coordinator.search(query, limit=page, policy=filter_policy)
+        rows: list[dict[str, Any]] = []
+        for hit in result.hits:
+            try:
+                document = repository.get(hit.memory_id)
+            except (MemfwError, OSError, ValueError):
+                continue  # removed or unreadable since it was resolved
+            if not self._visible(document):
+                continue  # the policy already checked; never widen on a race
+            item: dict[str, Any] = {"score": hit.score}
+            why = hit.extra.get("why")
+            if isinstance(why, str) and why:
+                item["why"] = why
+            row = _document_row(repository, document, item, why="lexical")
+            row["providers"] = list(hit.providers)
+            row["recall_labels"] = list(hit.labels)
+            rows.append(row)
+        labels = result.labels
+        return {
+            "mode": "two_stage",
+            "policy": policy,
+            "degraded": bool(labels.degraded or labels.resolvers_degraded or labels.fail_closed),
+            "errors": [],
+            "model_versions": {},
+            "results": rows,
+            "recall": labels.as_dict(),
+            "recall_metrics": result.metrics.as_dict(),
+        }
 
     def _visible(self, document: MemoryDocument) -> bool:
         """In the bound tenant and, when ``MEMFW_ALLOWED_SOURCES`` is set, an allowed source."""
@@ -1541,6 +1697,7 @@ class Gateway:
                 as_of=(str(args["as_of"]) if args.get("as_of") else None),
                 rounds=(int(args["rounds"]) if args.get("rounds") is not None else None),
                 scope=args.get("scope"),
+                policy=str(args.get("policy") or "compat_fts"),
             ),
             "memory_get": lambda args: self.get(str(args.get("memory_id") or "")),
             "memory_remember": lambda args: self.remember(
