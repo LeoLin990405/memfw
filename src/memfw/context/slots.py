@@ -15,12 +15,14 @@ injected callable, which the composition root (``memfw.runtime``) builds.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from memfw.core.errors import IntegrityError, MemfwError, NotFoundError
 from memfw.core.models import MemoryDocument
 from memfw.core.repository import Repository
 from memfw.ports.context import (
@@ -49,6 +51,14 @@ DEGRADED_ERROR = "error"
 DEGRADED_BUSY = "busy"
 DEGRADED_INVALID = "invalid"
 DEGRADED_UNAVAILABLE = "unavailable"
+#: The vault has a pending transaction (``memfw recover`` first).
+DEGRADED_PENDING_RECOVERY = "pending_recovery"
+#: Other vault errors (``memfw.core.errors``), by class.
+DEGRADED_INTEGRITY = "integrity"
+DEGRADED_NOT_FOUND = "not_found"
+DEGRADED_VAULT_ERROR = "vault_error"
+
+_log = logging.getLogger(__name__)
 
 #: How many characters of a session's goal a handoff item carries.
 HANDOFF_TEXT_CHARS = 280
@@ -58,8 +68,44 @@ HANDOFF_SESSIONS = 3
 HANDOFF_REFS = 3
 
 
-class SlotUnavailable(Exception):  # noqa: N818 - a signal, not a failure of the caller
+class SlotDegraded(Exception):  # noqa: N818 - a signal, not a failure of the caller
+    """Raised by a provider to degrade its slot with a specific ``reason`` code."""
+
+    def __init__(self, reason: str, message: str = "") -> None:
+        super().__init__(message or reason)
+        self.reason = reason
+
+
+class SlotUnavailable(SlotDegraded):
     """Raised by a provider whose backing store is not there (``degraded: unavailable``)."""
+
+    def __init__(self, message: str = "") -> None:
+        super().__init__(DEGRADED_UNAVAILABLE, message)
+
+
+def degraded_reason(exc: BaseException) -> str:
+    """The reason code for a provider failure: specific for vault errors, else ``error``."""
+
+    if isinstance(exc, SlotDegraded):
+        return exc.reason
+    if isinstance(exc, NotFoundError):
+        return DEGRADED_NOT_FOUND
+    if isinstance(exc, IntegrityError):
+        return DEGRADED_INTEGRITY
+    if isinstance(exc, MemfwError):
+        return DEGRADED_VAULT_ERROR
+    return DEGRADED_ERROR
+
+
+def _vault_read(repository: Repository, build: Callable[[], ContextSlot]) -> ContextSlot:
+    """Run ``build``; a vault error with a pending transaction is ``pending_recovery``."""
+
+    try:
+        return build()
+    except IntegrityError as exc:
+        if repository.pending_path.exists():
+            raise SlotDegraded(DEGRADED_PENDING_RECOVERY) from exc
+        raise
 
 
 def slots_request(v: int, slots: object) -> tuple[str, ...]:
@@ -97,6 +143,16 @@ class CoreSlotProvider:
     name: str = CORE_SLOT
 
     def build(self, request: SlotRequest) -> ContextSlot:
+        return _vault_read(
+            self.repository,
+            lambda: build_core_slot(
+                self.repository, keep=self.keep, limit_tokens=request.limit_tokens
+            ),
+        )
+
+    def build_raw(self, request: SlotRequest) -> ContextSlot:
+        """``build`` without the reason mapping: vault errors propagate as in C1."""
+
         return build_core_slot(self.repository, keep=self.keep, limit_tokens=request.limit_tokens)
 
 
@@ -226,6 +282,9 @@ class TopicsSlotProvider:
     name: str = TOPICS_SLOT
 
     def build(self, request: SlotRequest) -> ContextSlot:
+        return _vault_read(self.repository, lambda: self._build(request))
+
+    def _build(self, request: SlotRequest) -> ContextSlot:
         catalogue = self.catalogue()
         counts: dict[str, int] = {}
         for document in self.repository.list():
@@ -308,23 +367,39 @@ def assemble_pack(
     def run(provider: ContextSlotProvider, finished: threading.Event) -> None:
         try:
             results[provider.name] = provider.build(request)
-        except SlotUnavailable:
-            results[provider.name] = DEGRADED_UNAVAILABLE
-        except Exception:  # noqa: BLE001 - any failure degrades this slot only
-            results[provider.name] = DEGRADED_ERROR
+        except Exception as exc:  # noqa: BLE001 - any failure degrades this slot only
+            reason = degraded_reason(exc)
+            # The class name only: a message can carry vault paths or content.
+            _log.warning(
+                "context slot %s degraded: %s (%s)", provider.name, reason, type(exc).__name__
+            )
+            results[provider.name] = reason
         finally:
             inflight.release(provider.name)
             finished.set()
 
     for provider in providers:
         if not inflight.acquire(provider.name):
+            _log.warning("context slot %s degraded: %s", provider.name, DEGRADED_BUSY)
             results[provider.name] = DEGRADED_BUSY
             continue
         finished = threading.Event()
-        done[provider.name] = finished
-        threading.Thread(
+        worker = threading.Thread(
             target=run, args=(provider, finished), name=f"memfw-slot-{provider.name}", daemon=True
-        ).start()
+        )
+        try:
+            worker.start()
+        except Exception as exc:  # noqa: BLE001 - e.g. RuntimeError: can't start new thread
+            inflight.release(provider.name)
+            _log.warning(
+                "context slot %s degraded: %s (%s)",
+                provider.name,
+                DEGRADED_ERROR,
+                type(exc).__name__,
+            )
+            results[provider.name] = DEGRADED_ERROR
+            continue
+        done[provider.name] = finished
 
     slots: list[ContextSlot] = []
     for provider in providers:
@@ -332,12 +407,14 @@ def assemble_pack(
         if name in done:
             deadline = started + float(timeouts.get(name, default_timeout))
             if not done[name].wait(max(0.0, deadline - time.monotonic())):
+                _log.warning("context slot %s degraded: %s", name, DEGRADED_TIMEOUT)
                 slots.append(ContextSlot.degraded_slot(name, DEGRADED_TIMEOUT))
                 continue
         outcome = results.get(name, DEGRADED_ERROR)
         if isinstance(outcome, str):
             slots.append(ContextSlot.degraded_slot(name, outcome))
         elif type(outcome) is not ContextSlot or outcome.name != name:
+            _log.warning("context slot %s degraded: %s", name, DEGRADED_INVALID)
             slots.append(ContextSlot.degraded_slot(name, DEGRADED_INVALID))
         else:
             slots.append(outcome)
@@ -348,9 +425,13 @@ __all__ = [
     "DEFAULT_SLOTS",
     "DEGRADED_BUSY",
     "DEGRADED_ERROR",
+    "DEGRADED_INTEGRITY",
     "DEGRADED_INVALID",
+    "DEGRADED_NOT_FOUND",
+    "DEGRADED_PENDING_RECOVERY",
     "DEGRADED_TIMEOUT",
     "DEGRADED_UNAVAILABLE",
+    "DEGRADED_VAULT_ERROR",
     "HANDOFF_SLOT",
     "SLOT_NAMES",
     "TOPICS_SLOT",
@@ -358,11 +439,13 @@ __all__ = [
     "HandoffSlotProvider",
     "SessionFeed",
     "SessionSummary",
+    "SlotDegraded",
     "SlotInflight",
     "SlotUnavailable",
     "TopicCatalogue",
     "TopicsSlotProvider",
     "assemble_pack",
     "cut_items",
+    "degraded_reason",
     "slots_request",
 ]

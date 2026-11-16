@@ -319,6 +319,15 @@ TOOLS: list[dict[str, Any]] = [
 #: The ``memory_context`` slots, also served as MCP resources (``memfw.context.SLOT_NAMES``).
 CONTEXT_SLOTS: tuple[str, ...] = ("core", "handoff", "topics")
 CONTEXT_RESOURCE_PREFIX = "memfw://context/"
+#: ``?policy=`` values a context resource accepts (``memory_context`` ``policy``).
+CONTEXT_POLICIES: tuple[str, ...] = ("compat_fts", "strict")
+#: A resource read without ``?policy=``: ``topics`` defaults to ``strict`` so its counts
+#: never include local-private memories; the others keep ``memory_context``'s default.
+RESOURCE_POLICIES: dict[str, str] = {
+    "core": "compat_fts",
+    "handoff": "compat_fts",
+    "topics": "strict",
+}
 _RESOURCE_TEXT = {
     "core": "Anchors, then procedural memories (memory_context v=2, slot core).",
     "handoff": (
@@ -327,11 +336,12 @@ _RESOURCE_TEXT = {
     ),
     "topics": (
         "Concepts with how many visible memories are about each, no body text "
-        "(memory_context v=2, slot topics)."
+        "(memory_context v=2, slot topics; policy strict unless ?policy=compat_fts)."
     ),
 }
 #: ``resources/list``: one resource per slot. Reading one returns that slot's pack
-#: (``pack_version`` included) under the default policy (compat_fts) and budget.
+#: (``pack_version`` included) under ``RESOURCE_POLICIES`` (or ``?policy=``) and the
+#: default budget.
 RESOURCES: list[dict[str, Any]] = [
     {
         "uri": CONTEXT_RESOURCE_PREFIX + name,

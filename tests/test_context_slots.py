@@ -626,10 +626,11 @@ def test_resources_list_and_read(tmp_path: Path) -> None:
         contents = _rpc(gateway, "resources/read", {"uri": uri})["result"]["contents"]
         assert len(contents) == 1 and contents[0]["uri"] == uri
         body = json.loads(contents[0]["text"])
-        tool = _ok(gateway, {"v": 2, "slots": [name]})
+        policy = "strict" if name == "topics" else "compat_fts"
+        tool = _ok(gateway, {"v": 2, "slots": [name], "policy": policy})
         del body["generated_at"], tool["generated_at"]
         assert body == tool  # the same pack as the tool, pack_version included
-        assert body["policy"] == "compat_fts" and len(body["pack_version"]) == 64
+        assert body["policy"] == policy and len(body["pack_version"]) == 64
 
 
 def test_resources_honour_the_caller(tmp_path: Path) -> None:
@@ -673,3 +674,138 @@ def test_tools_list_is_unchanged_but_for_slots() -> None:
     tool = next(tool for tool in TOOLS if tool["name"] == "memory_context")
     assert sorted(tool["inputSchema"]["properties"]) == ["limit_tokens", "policy", "slots", "v"]
     assert tool["inputSchema"]["properties"]["slots"]["default"] == ["core"]
+
+
+# --- review follow-ups (C2) ----------------------------------------------------------------
+
+PENDING = "A pending transaction needs explicit `memfw recover`"
+
+
+def _pending(repository: Repository) -> None:
+    repository.pending_path.write_text("{}", encoding="utf-8")
+
+
+def test_default_request_keeps_the_c1_error_on_a_pending_transaction(tmp_path: Path) -> None:
+    repository = _vault(tmp_path, SHARE)
+    _pending(repository)
+    gateway = Gateway(repository.root, app="claude")
+    for arguments in ({"v": 2}, {"v": 2, "slots": ["core"]}, {"v": 2, "policy": "strict"}, {}):
+        result = _call(gateway, arguments)
+        assert result["isError"], arguments
+        assert result["content"][0]["text"] == PENDING
+    response = _rpc(gateway, "resources/read", {"uri": "memfw://context/core"})
+    assert response["error"] == {"code": -32603, "message": PENDING}
+
+
+def test_multi_slot_request_names_the_vault_error(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    repository = _vault(tmp_path, SHARE)
+    _pending(repository)
+    with caplog.at_level("WARNING", logger="memfw.context.slots"):
+        payload = _ok(
+            Gateway(repository.root, app="claude"), {"v": 2, "slots": ["core", "handoff", "topics"]}
+        )
+    assert _slot(payload, "core")["degraded"] == "pending_recovery"
+    assert _slot(payload, "topics")["degraded"] == "pending_recovery"
+    assert "degraded" not in _slot(payload, "handoff") and _slot(payload, "handoff")["entries"]
+    logged = " | ".join(record.getMessage() for record in caplog.records)
+    assert "context slot core degraded: pending_recovery (SlotDegraded)" in logged
+    assert "explicit" not in logged and str(repository.root) not in logged
+
+
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        ("IntegrityError", "integrity"),
+        ("NotFoundError", "not_found"),
+        ("DeletedContentUnavailable", "vault_error"),
+        ("RuntimeError", "error"),
+    ],
+)
+def test_failures_map_to_reason_codes_and_log_the_class_only(
+    error: str, reason: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    from memfw.core import errors
+
+    exc_type = getattr(errors, error, RuntimeError)
+
+    class Failing:
+        name = "topics"
+
+        def build(self, request: SlotRequest) -> ContextSlot:
+            raise exc_type("/private/vault/path secret detail")
+
+    with caplog.at_level("WARNING", logger="memfw.context.slots"):
+        pack = assemble_pack([Failing()], REQUEST, timeouts={}, default_timeout=1.0)
+    assert pack.slot("topics").degraded == reason
+    logged = " | ".join(record.getMessage() for record in caplog.records)
+    assert f"context slot topics degraded: {reason} ({exc_type.__name__})" in logged
+    assert "secret detail" not in logged and "/private" not in logged
+
+
+def test_a_thread_that_cannot_start_degrades_and_frees_its_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inflight = SlotInflight(limit=1)
+
+    def refuse(self: threading.Thread) -> None:
+        raise RuntimeError("can't start new thread")
+
+    class Fine:
+        name = "topics"
+
+        def build(self, request: SlotRequest) -> ContextSlot:
+            return ContextSlot("topics", (), 0)
+
+    monkeypatch.setattr(threading.Thread, "start", refuse)
+    pack = assemble_pack([Fine()], REQUEST, timeouts={}, default_timeout=1.0, inflight=inflight)
+    monkeypatch.undo()
+    assert pack.slot("topics").degraded == "error"
+    assert inflight.running("topics") == 0
+    again = assemble_pack([Fine()], REQUEST, timeouts={}, default_timeout=1.0, inflight=inflight)
+    assert again.slot("topics").degraded is None
+
+
+def test_topics_resource_defaults_to_strict(tmp_path: Path) -> None:
+    repository = _vault(tmp_path, SHARE)
+    gateway = Gateway(repository.root)
+
+    def read(uri: str) -> dict[str, Any]:
+        response = _rpc(gateway, "resources/read", {"uri": uri})
+        body: dict[str, Any] = json.loads(response["result"]["contents"][0]["text"])
+        return body
+
+    def counts(body: dict[str, Any]) -> dict[str, int]:
+        return {entry["id"]: entry["count"] for entry in body["slots"][0]["entries"]}
+
+    default = read("memfw://context/topics")
+    assert default["policy"] == "strict"
+    # The local-private memory is not counted: its only topic is absent.
+    assert counts(default) == {"concept:service-port": 3, "concept:backup": 1}
+    compat = read("memfw://context/topics?policy=compat_fts")
+    assert compat["policy"] == "compat_fts" and counts(compat)["concept:secret-topic"] == 1
+    assert read("memfw://context/core")["policy"] == "compat_fts"
+    assert read("memfw://context/core?policy=strict")["policy"] == "strict"
+    assert read("memfw://context/handoff?policy=strict")["policy"] == "strict"
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "?policy=loose",
+        "?policy=",
+        "?policy",
+        "?",
+        "?policy=strict&policy=compat_fts",
+        "?limit_tokens=10",
+        "?Policy=strict",
+        "?policy=strict#x",
+    ],
+)
+def test_resource_query_fails_closed(tmp_path: Path, query: str) -> None:
+    repository = _vault(tmp_path, SHARE)
+    response = _rpc(
+        Gateway(repository.root), "resources/read", {"uri": "memfw://context/topics" + query}
+    )
+    assert response["error"] == {"code": -32602, "message": "invalid params"}

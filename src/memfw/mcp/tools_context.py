@@ -6,7 +6,17 @@ import json
 from typing import Any
 
 from memfw.mcp.base import GatewayBase
-from memfw.mcp.schema import CONTEXT_RESOURCE_PREFIX, CONTEXT_SLOTS, RESOURCES
+from memfw.mcp.schema import (
+    CONTEXT_POLICIES,
+    CONTEXT_RESOURCE_PREFIX,
+    CONTEXT_SLOTS,
+    RESOURCE_POLICIES,
+    RESOURCES,
+)
+
+
+class ResourceQueryError(ValueError):
+    """A ``resources/read`` URI with a query other than ``policy=<known policy>``."""
 
 
 class ContextTools(GatewayBase):
@@ -49,16 +59,28 @@ class ContextTools(GatewayBase):
     def read_resource(self, uri: str) -> dict[str, Any] | None:
         """``resources/read``: one slot's v=2 pack, or ``None`` for an unknown URI.
 
-        The same caller as ``memory_context`` (app, tenant, sources), the
-        default policy (``compat_fts``) and the default budget.
+        ``memfw://context/<slot>`` or ``memfw://context/<slot>?policy=<name>``
+        (``compat_fts`` or ``strict``; any other query raises
+        ``ResourceQueryError``: fail closed). Without a query the policy is
+        ``RESOURCE_POLICIES`` for the slot: ``strict`` for ``topics`` (its counts
+        would otherwise include local-private memories), ``compat_fts`` for the
+        others. The same caller as ``memory_context`` (app, tenant, sources)
+        and the default budget.
         """
 
         if not uri.startswith(CONTEXT_RESOURCE_PREFIX):
             return None
-        slot = uri[len(CONTEXT_RESOURCE_PREFIX) :]
+        rest = uri[len(CONTEXT_RESOURCE_PREFIX) :]
+        slot, has_query, query = rest.partition("?")
         if slot not in CONTEXT_SLOTS:
             return None
-        payload = self.context(v=2, slots=[slot])
+        policy = RESOURCE_POLICIES[slot]
+        if has_query:
+            key, has_value, value = query.partition("=")
+            if key != "policy" or not has_value or value not in CONTEXT_POLICIES:
+                raise ResourceQueryError("resource query must be policy=compat_fts or strict")
+            policy = value
+        payload = self.context(v=2, policy=policy, slots=[slot])
         return {
             "contents": [
                 {

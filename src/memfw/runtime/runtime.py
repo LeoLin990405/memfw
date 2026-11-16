@@ -405,7 +405,8 @@ class Runtime:
         in parallel and returned in this order; each has its deadline in
         ``context_slot_timeouts``, and one that raises, misses it or is still
         busy from an earlier call is returned ``degraded`` (the rest are not
-        affected). ``app`` is the calling app, for ``handoff``.
+        affected). The default ``("core",)`` alone runs inline with C1's error
+        behaviour: a vault error raises. ``app`` is the calling app, for ``handoff``.
         """
 
         moment = now if now is not None else datetime.now(UTC)
@@ -417,6 +418,14 @@ class Runtime:
             self.context_slot_provider(name, repository, keep=keep, app=app) for name in names
         ]
         request = SlotRequest(limit_tokens=int(limit_tokens), policy=policy_name, now=moment)
+        if names == DEFAULT_SLOTS:
+            # The default request keeps C1's semantics exactly: core runs in the
+            # caller's thread and a vault error (a pending transaction, say)
+            # propagates as the tool error it always was, never a degraded slot.
+            core = providers[0]
+            slot = core.build_raw(request) if isinstance(core, CoreSlotProvider) else None
+            if slot is not None:
+                return ContextPack.build((slot,), policy=policy_name, generated_at=moment)
         return assemble_pack(
             providers,
             request,

@@ -52,11 +52,15 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 - Slots are built in parallel, each with its own deadline (`core` 10 s, `handoff` and
   `topics` 3 s). A slot that raises, times out, is still running from an earlier call or
   returns another slot is returned empty with `degraded` (`error`, `timeout`, `busy`,
-  `invalid`, `unavailable`); the others are not affected. `degraded` is in `as_dict()` and
-  `pack_version` only when set.
+  `invalid`, `unavailable`; vault errors: `pending_recovery`, `integrity`, `not_found`,
+  `vault_error`); the others are not affected. `degraded` is in `as_dict()` and
+  `pack_version` only when set. Degrades are logged with the exception class only. The
+  default request (`["core"]`) runs inline and keeps C1's errors byte for byte (a pending
+  transaction is still the tool error, not a degraded slot).
 - MCP resources `memfw://context/<slot>` (`resources/list`, `resources/read`): the JSON
   body is that slot's v=2 pack, `pack_version` included, for the same caller (app, tenant,
-  sources) under `compat_fts`. `initialize` now advertises `resources`. `tools/list`
+  sources). `?policy=compat_fts|strict` selects the policy (any other query fails closed);
+  without it `topics` uses `strict`, `core` and `handoff` `compat_fts`. `initialize` now advertises `resources`. `tools/list`
   changes only by the optional `slots` property of `memory_context`; the all-tools probe
   comparison applies exactly these two changes to the base output and must then match.
 - Ports: `ContextSlotProvider` (name, `build(SlotRequest) -> ContextSlot`), `SlotRequest`,

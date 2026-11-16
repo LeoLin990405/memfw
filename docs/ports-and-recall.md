@@ -561,12 +561,20 @@ topics)` otherwise; the input is not echoed).
 - **Budget.** Each slot gets the `limit_tokens` budget on its own. Items are never cut
   part-way: an item that does not fit, and every one after it, is overflow (`truncated_ids`
   holds item ids).
-- **Degrade.** Providers run in parallel threads, each with a deadline
+- **Default request.** `slots` absent or exactly `["core"]` builds core inline in the
+  caller's thread with C1's semantics: a vault error (a pending transaction, say) is the
+  tool error it always was, byte for byte, never a degraded slot.
+- **Degrade.** For any other request, providers run in parallel threads, each with a deadline
   (`Runtime.context_slot_timeouts`: `core` 10 s, `handoff` and `topics` 3 s, from the start
   of the call). A provider that raises (`error`; the message is never returned), a missing
   store (`unavailable`), a missed deadline (`timeout`), another slot returned (`invalid`)
-  or two builds of that slot still running from earlier calls (`busy`) give an empty slot
-  with `degraded: <reason>`; the other slots are returned as usual. `degraded` appears in
+  two builds of that slot still running from earlier calls (`busy`), or a worker thread that
+  cannot start (`error`, its in-flight count released) give an empty slot with
+  `degraded: <reason>`. Vault errors get their own codes: a pending transaction
+  (`pending_recovery`, run `memfw recover`), `IntegrityError` (`integrity`),
+  `NotFoundError` (`not_found`), any other `MemfwError` (`vault_error`). Each degrade is
+  logged at WARNING on `memfw.context.slots` with the slot, the reason and the exception's
+  class name only (never its message); the other slots are returned as usual. `degraded` appears in
   `as_dict()` and in the `pack_version` payload only when set, so a healthy slot encodes
   exactly as in C1.
 - **`pack_version`** covers every slot in order. An item contributes `[id, kind,
@@ -580,8 +588,12 @@ topics)` otherwise; the input is not echoed).
 - **MCP resources.** `resources/list` lists `memfw://context/core`, `/handoff` and `/topics`
   (`application/json`). `resources/read {"uri": ...}` returns one `contents` item whose
   `text` is that slot's v=2 payload (`pack_version` included), for the same caller (app,
-  tenant, sources), `compat_fts` and the default budget. An unknown URI is error `-32002`,
-  a missing or non-string `uri` `-32602`, a failure `-32603` with the client-safe message.
+  tenant, sources) and the default budget. The policy is `?policy=compat_fts|strict` when
+  given (`memfw://context/core?policy=strict`); without it, `topics` uses `strict` (so its
+  counts never include local-private memories) and `core` and `handoff` use `compat_fts`.
+  Any other query (another key, an unknown or empty value, a repeat, a fragment) is
+  `-32602` (fail closed). An unknown URI is error `-32002`, a missing or non-string `uri`
+  `-32602`, a failure `-32603` with the client-safe message.
   `initialize` advertises `capabilities.resources = {"listChanged": false}`.
 
 ## 5. Adapter rules

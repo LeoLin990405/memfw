@@ -11,6 +11,7 @@ from typing import Any
 
 from memfw.mcp.base import GatewayBase
 from memfw.mcp.schema import INSTRUCTIONS, PROTOCOL, RESOURCES, SERVER_INFO, TOOLS
+from memfw.mcp.tools_context import ResourceQueryError
 
 _CONCEPT_ERROR = "alias expansion skipped: a concept file is invalid"
 
@@ -170,6 +171,9 @@ class ProtocolMixin(GatewayBase):
                 return
             try:
                 result = self.read_resource(uri)
+            except ResourceQueryError:
+                self.respond(_rpc_error(msg_id, -32602, "invalid params"))
+                return
             except Exception as exc:  # pragma: no cover - protocol boundary
                 text = _client_message(str(exc), self.root)[:500]
                 self.respond(_rpc_error(msg_id, -32603, text))
