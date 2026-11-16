@@ -176,17 +176,29 @@ rebuild it and the bytes are identical. It never writes the vault and never chan
 `epistemic` or `status`. Nothing else in memfw reads it yet.
 
 Per memory it records which (app, session) pairs mention it, from
-`conv:APP:SESSION@OFFSET` references in three places: the memory's own `evidence`; staged
-conversation-worker claims (`memory_claims`, under `_candidates/dream/`) whose claim equals
-the memory's title or summary after normalising case, whitespace and trailing
-punctuation; and reviewed experience points in the same tenant whose `related` lists it.
-Only ids, app names, counts and times are stored, no text.
+`conv:APP:SESSION@OFFSET` references in three places:
+
+* the memory's own `evidence`;
+* staged conversation-worker claims (`memory_claims`, under `_candidates/dream/`) whose
+  claim equals the memory's match key after normalising case, whitespace and trailing
+  punctuation. The key is the summary, else the title, and only one of at least 4 tokens
+  and 20 characters that no other memory (in any tenant) has as its title or summary.
+  The conversation store has no tenant, so claims credit only memories in the default
+  tenant `""`. The worker stages a claim once per app (it dedupes on app and claim), so
+  repeating a claim in later sessions of the same app adds nothing until the claim text
+  differs. Dream review records no rejected state: a rejected or stale candidate keeps
+  counting until it is removed from `_candidates/`;
+* experience points in the same tenant whose `related` lists it and whose review verdict
+  is `accepted` (`failed` is not support).
+
+Only ids, app names, counts and times are stored, no text. The file is created `0600`.
 
 Independence rules:
 
 * the same app in the same session counts once;
-* a carrier derived from the memory does not count: its evidence cites the memory id
-  (bare, `memory:` or `mem:`), or it is a dream candidate that names it in `memory_ids`;
+* a carrier derived from the memory does not count: its evidence (an experience point's
+  or a claim candidate's) cites the memory id (bare, `memory:` or `mem:`), or a candidate
+  names it in `memory_ids`;
 * a mention in a session where the memory was injected, at or after the injection, does
   not count. Injection is read from `memory_access` events that carry `session_id` (and
   `source`/`agent_id` as the app when present). **Gap:** memfw's retrieval and

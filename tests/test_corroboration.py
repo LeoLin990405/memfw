@@ -73,7 +73,13 @@ def _claims(repository: Repository, batch: str, claim: str, *refs: tuple[str, st
     )
 
 
-def _experience(repository: Repository, related: list[str], evidence: list[str], **kw: Any) -> str:
+def _experience(
+    repository: Repository,
+    related: list[str],
+    evidence: list[str],
+    verdict: str = "accepted",
+    **kw: Any,
+) -> str:
     document = repository.add(
         "Reviewed point",
         EXPERIENCE_DISCLAIMER + "\n\nran the synthetic checklist",
@@ -85,7 +91,7 @@ def _experience(repository: Repository, related: list[str], evidence: list[str],
             "task": "run the synthetic checklist",
             "conditions": ["fixture vault"],
             "actions": ["run the checklist"],
-            "review": {"reviewer": "synthetic-reviewer", "verdict": "accepted"},
+            "review": {"reviewer": "synthetic-reviewer", "verdict": verdict},
         },
         **kw,
     )
@@ -256,13 +262,149 @@ def test_contradicting_claim_evidence_is_not_a_mention(tmp_path: Path) -> None:
     assert memory.id not in collect(repository, _rules(repository))
 
 
+def _candidate(
+    repository: Repository,
+    dream_id: str,
+    reason: str,
+    refs: list[str],
+    *,
+    memory_ids: list[str] | None = None,
+) -> None:
+    stage(
+        repository.root,
+        dream_id,
+        [
+            Candidate(
+                operation="distill",
+                action="distill",
+                memory_ids=memory_ids or [],
+                reason=reason,
+                evidence=[EvidenceRef(ref=ref, polarity="support") for ref in refs],
+            )
+        ],
+        {"kind": CLAIMS_REPORT_KIND},
+        created_at=T0.isoformat(),
+    )
+
+
+LONG = "The nightly export runs at two"
+
+
+def test_claims_credit_only_the_default_tenant(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    # The same title in three tenants is a shared key: no memory may claim it.
+    ids = {}
+    for tenant in ("alpha", "beta", ""):
+        document = repository.add(LONG, "body", tenant=tenant)
+        ids[tenant] = document.id
+    _claims(repository, "conv-t", LONG, ("claude:t1@1", None))
+    data = collect(repository, _rules(repository))
+    assert data == {}
+    # Distinct titles per tenant: only the default tenant is credited.
+    repository = _vault(tmp_path / "second")
+    for tenant in ("alpha", "beta", ""):
+        ids[tenant] = repository.add(
+            f"{LONG} for tenant {tenant or 'default'}", "body", tenant=tenant
+        ).id
+    for tenant in ("alpha", "beta", ""):
+        _claims(
+            repository,
+            f"conv-{tenant or 'default'}",
+            f"{LONG} for tenant {tenant or 'default'}",
+            ("claude:t1@1", None),
+        )
+    data = collect(repository, _rules(repository))
+    assert sorted(data) == [ids[""]]
+
+
+def test_short_or_shared_keys_never_match(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    first = repository.add("Notes", "body")
+    second = repository.add("Notes", "body")
+    unique = repository.add(LONG, "body")
+    _claims(repository, "conv-n", "Notes", ("claude:n1@1", None))
+    _claims(repository, "conv-u", LONG, ("claude:u1@1", None))
+    data = collect(repository, _rules(repository))
+    assert first.id not in data and second.id not in data
+    assert sorted(data[unique.id]) == [("claude", "u1")]
+
+
+def test_shared_long_title_never_matches(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    repository.add(LONG, "body")
+    repository.add(LONG, "other body")
+    _claims(repository, "conv-s", LONG, ("claude:s1@1", None))
+    assert collect(repository, _rules(repository)) == {}
+
+
+def test_claim_candidate_citing_the_memory_is_derived(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    memory = repository.add(LONG, "body")
+    for index, cited in enumerate((memory.id, f"memory:{memory.id}", f"mem:{memory.id}")):
+        _candidate(repository, f"conv-cite-{index}", LONG, [cited, f"conv:claude:c{index}@1"])
+    _candidate(repository, "conv-ids", LONG, ["conv:codex:x1@1"], memory_ids=[memory.id])
+    assert collect(repository, _rules(repository)) == {}
+    _candidate(repository, "conv-ok", LONG, ["conv:kimi:k1@1"])
+    assert sorted(collect(repository, _rules(repository))[memory.id]) == [("kimi", "k1")]
+
+
+def test_experience_points_need_tenant_and_acceptance(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    memory = repository.add(LONG, "body", tenant="alpha")
+    _experience(repository, [memory.id], ["conv:claude:e1@1"])  # other tenant
+    _experience(repository, [memory.id], ["conv:codex:e2@1"], tenant="alpha", verdict="failed")
+    # (Each point is corroborated by its own evidence; the memory is not.)
+    assert memory.id not in collect(repository, _rules(repository))
+    _experience(repository, [memory.id], ["conv:kimi:e3@1"], tenant="alpha")
+    assert sorted(collect(repository, _rules(repository))[memory.id]) == [("kimi", "e3")]
+
+
+def test_unknown_time_in_injected_session_is_excluded(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    memory = repository.add(LONG, "body")
+    repository.capture_event(
+        EventKind.MEMORY_ACCESS,
+        actor="mechanism",
+        details={"memory_id": memory.id, "session_id": "s7", "source": "codex"},
+        timestamp=T0 - timedelta(days=30),
+    )
+    # A staged dream without created_at: the mention has no time at all.
+    directory = repository.root / "_candidates" / "dream" / "conv-notime"
+    directory.mkdir(parents=True)
+    (directory / "report.json").write_text(json.dumps({"kind": CLAIMS_REPORT_KIND}))
+    front = {
+        "candidates": [
+            {
+                "reason": LONG,
+                "memory_ids": [],
+                "evidence": [
+                    {"ref": "conv:codex:s7@1", "polarity": "support"},
+                    {"ref": "conv:codex:s8@1", "polarity": "support"},
+                ],
+            }
+        ]
+    }
+    (directory / "x.md").write_text("---\n" + json.dumps(front) + "\n---\n")
+    data = collect(repository, _rules(repository))[memory.id]
+    assert data == {("codex", "s8"): (None, None)}
+
+
+def test_projection_file_is_private(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    repository.add(LONG, "body", evidence=["conv:claude:p1@1"])
+    path = projection_path(repository.root)
+    rebuild(repository, _rules(repository))
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert not list(repository.root.glob(".corroboration*"))
+
+
 # --- share policy ------------------------------------------------------------------
 
 
 def _shared(tmp_path: Path) -> tuple[Repository, str]:
     repository = _vault(tmp_path)
     memory = repository.add(
-        "Shared fact",
+        "The shared fact everyone repeats",
         "body",
         evidence=[
             "conv:claude:c1@1",
@@ -359,7 +501,12 @@ def _vault_bytes(repository: Repository) -> dict[str, bytes]:
 
 def test_rebuild_is_byte_identical_and_read_only(tmp_path: Path) -> None:
     repository, memory_id = _shared(tmp_path)
-    _claims(repository, "conv-e", "Shared fact", ("codex:x2@1", "2026-01-01T00:00:00Z"))
+    _claims(
+        repository,
+        "conv-e",
+        "The shared fact everyone repeats",
+        ("codex:x2@1", "2026-01-01T00:00:00Z"),
+    )
     before = _vault_bytes(repository)
     path = projection_path(repository.root)
     rebuild(repository, _rules(repository))
@@ -389,7 +536,7 @@ def test_schema_has_no_text_columns(tmp_path: Path) -> None:
     }
     # The body, titles and claims never reach the file.
     raw = projection_path(repository.root).read_bytes()
-    assert b"Shared fact" not in raw and b"body" not in raw
+    assert b"The shared fact everyone repeats" not in raw and b"body" not in raw
 
 
 def test_refuses_to_write_inside_memories(tmp_path: Path) -> None:

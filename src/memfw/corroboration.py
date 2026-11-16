@@ -11,18 +11,26 @@ reference (the M2 conversation store's namespace) carried by one of:
 * ``M``'s own ``evidence`` (``self``);
 * a staged ``memory_claims`` candidate (``_candidates/dream/<id>/``, report
   kind ``conversation-memory-candidates``) whose claim, normalised (case,
-  whitespace, trailing punctuation), equals ``M``'s title or summary
-  (``claim``): each evidence ref is a transcript turn the worker verified;
-* a reviewed experience point (``type: experience-point`` with its review
-  block) in ``M``'s tenant whose ``related`` lists ``M`` (``experience``).
+  whitespace, trailing punctuation), equals ``M``'s match key: its summary,
+  else its title, and only a key of at least 4 tokens and 20 characters that
+  no other memory (any tenant) shares as title or summary. Each evidence ref
+  is a transcript turn the worker verified. The conversation store has no
+  tenant, so claims credit only memories in the default tenant ``""``. The
+  worker stages each claim once per app (it dedupes on app + claim text), so
+  later sessions of that app repeating the same claim add nothing. Dream review records no
+  rejected state: a rejected or stale candidate keeps counting until it is
+  removed from ``_candidates/``;
+* an accepted experience point (``type: experience-point``, review verdict
+  ``accepted``; ``failed`` is not support) in ``M``'s tenant whose
+  ``related`` lists ``M``.
 
 **Independence rules.** Each surviving mention becomes one (app, session)
 pair; the same app in the same session counts once, however often it is
 cited. A mention does not count when:
 
-* its carrier is derived from ``M``: the carrier's evidence cites ``M``'s id
-  (bare, ``memory:``/``mem:`` prefixed) or a dream candidate names ``M`` in
-  ``memory_ids`` (dream verify/curate output, wiki-style summaries);
+* its carrier is derived from ``M``: the carrier's evidence (an experience
+  point's, or a claim candidate's) cites ``M``'s id (bare, ``memory:``/``mem:``
+  prefixed) or a candidate names ``M`` in ``memory_ids``;
 * it falls in a session where ``M`` was injected, at or after the injection:
   a ``memory_access`` event for ``M`` whose details carry ``session_id``
   (and, when present, ``source``/``agent_id`` as the app). memfw's own
@@ -30,7 +38,8 @@ cited. A mention does not count when:
   rule has no producer yet; an agent restating an injected memory in a new
   session without such an event is *not* detected (documented gap);
 * its carrier has a generated provenance (``_GENERATED_PROVENANCES``), or it
-  is a dream candidate from anything but the conversation worker;
+  is a dream candidate from anything but the conversation worker (dream
+  verify/curate output never counts);
 * its app is not ``readable`` or has opted out under ``conversation_share``
   (such apps are never written to the file).
 
@@ -53,6 +62,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import sqlite3
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -74,6 +84,11 @@ _APP = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
 _SESSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:+=-]{0,199}$")
 _MEMORY_PREFIXES: Final = ("memory:", "mem:")
 _TRAILING = " \t.,;:!?。！？；，"
+#: A claim matches a memory only on a key at least this long (after normalising).
+MIN_KEY_TOKENS: Final = 4
+MIN_KEY_CHARS: Final = 20
+#: The conversation store is tenant-less (one user): claims credit only this tenant.
+CLAIMS_TENANT: Final = ""
 
 
 class CorroborationError(ValueError):
@@ -168,6 +183,15 @@ def _normal(text: str) -> str:
     return " ".join(text.casefold().split()).rstrip(_TRAILING)
 
 
+def _match_key(text: str) -> str | None:
+    """A claim-matching key, or ``None`` when ``text`` is too short or generic."""
+
+    key = _normal(text)
+    if len(key) < MIN_KEY_CHARS or len(key.split()) < MIN_KEY_TOKENS:
+        return None
+    return key
+
+
 def _cites(references: Iterable[str], memory_id: str) -> bool:
     for reference in references:
         value = str(reference).strip()
@@ -207,6 +231,7 @@ class _StagedCandidate:
     memory_ids: tuple[str, ...]
     reason: str
     mentions: tuple[_Mention, ...]
+    refs: tuple[str, ...]
 
 
 def _plain_file(path: Path) -> bool:
@@ -257,8 +282,12 @@ def _staged(root: Path) -> list[_StagedCandidate]:
                 if not isinstance(raw, Mapping):
                     continue
                 mentions: list[_Mention] = []
+                refs: list[str] = []
                 for item in raw.get("evidence") or []:
-                    if not isinstance(item, Mapping) or item.get("polarity") != "support":
+                    if not isinstance(item, Mapping):
+                        continue
+                    refs.append(str(item.get("ref") or ""))
+                    if item.get("polarity") != "support":
                         continue
                     seen = _instant(item.get("timestamp")) or created
                     mentions.extend(_from_refs([str(item.get("ref") or "")], seen))
@@ -268,6 +297,7 @@ def _staged(root: Path) -> list[_StagedCandidate]:
                         memory_ids=tuple(str(item) for item in raw.get("memory_ids") or []),
                         reason=str(raw.get("reason") or ""),
                         mentions=tuple(mentions),
+                        refs=tuple(refs),
                     )
                 )
     return found
@@ -311,6 +341,16 @@ def _after_injection(mention: _Mention, injections: Sequence[tuple[str | None, s
 _Seen = tuple[str | None, str | None]
 
 
+def _claim_key(memory: MemoryDocument, owners: Mapping[str, set[str]]) -> str | None:
+    """The memory's summary key if usable and unique, else its title key."""
+
+    for text in (memory.summary, memory.title):
+        key = _match_key(text)
+        if key is not None and owners.get(key) == {memory.id}:
+            return key
+    return None
+
+
 def collect(repository: Repository, rules: ShareRules) -> dict[str, dict[tuple[str, str], _Seen]]:
     """``memory_id -> {(app, session): (first_seen, last_seen)}`` after the rules."""
 
@@ -320,23 +360,31 @@ def collect(repository: Repository, rules: ShareRules) -> dict[str, dict[tuple[s
     experience = [
         item
         for item in documents
-        if item.type == EXPERIENCE_POINT_TYPE and item.experience is not None
+        if item.type == EXPERIENCE_POINT_TYPE
+        and item.experience is not None
+        and item.experience.review.verdict == "accepted"
     ]
     claims_by_text: dict[str, list[_StagedCandidate]] = {}
     for candidate in staged:
-        if candidate.reason:
+        if candidate.claims and candidate.reason:
             claims_by_text.setdefault(_normal(candidate.reason), []).append(candidate)
+    # A key two memories share (title or summary, any tenant) names neither.
+    key_owners: dict[str, set[str]] = {}
+    for document in documents:
+        for text in (document.title, document.summary):
+            if (key := _match_key(text)) is not None:
+                key_owners.setdefault(key, set()).add(document.id)
 
     result: dict[str, dict[tuple[str, str], _Seen]] = {}
     for memory in documents:
         mentions: list[_Mention] = []
         if not _generated(memory):
             mentions.extend(_from_refs(_evidence_of(memory), _instant(memory.created_at)))
-        keys = {_normal(text) for text in (memory.title, memory.summary) if _normal(text)}
-        for key in sorted(keys):
-            for candidate in claims_by_text.get(key, ()):
-                if not candidate.claims or memory.id in candidate.memory_ids:
-                    continue  # dream output, or derived from this memory
+        if memory.tenant == CLAIMS_TENANT:
+            key = _claim_key(memory, key_owners)
+            for candidate in claims_by_text.get(key, ()) if key else ():
+                if memory.id in candidate.memory_ids or _cites(candidate.refs, memory.id):
+                    continue  # derived from this memory
                 mentions.extend(candidate.mentions)
         for point in experience:
             if point.id == memory.id or point.tenant != memory.tenant:
@@ -385,10 +433,16 @@ def rebuild(repository: Repository, rules: ShareRules, path: Path | None = None)
         raise CorroborationError("refusing to write the projection inside memories/")
     data = collect(repository, rules)
     target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
-    temporary.unlink(missing_ok=True)
+    temporary = target.with_name(f".{target.name}.{secrets.token_hex(8)}.tmp")
+    # Private from the first byte; O_EXCL refuses a planted file or symlink.
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
+    os.close(os.open(temporary, flags, 0o600))
     rows = 0
-    connection = sqlite3.connect(temporary)
+    try:
+        connection = sqlite3.connect(temporary)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
     try:
         connection.execute("PRAGMA journal_mode = DELETE")
         connection.execute("PRAGMA page_size = 4096")
@@ -405,8 +459,12 @@ def rebuild(repository: Repository, rules: ShareRules, path: Path | None = None)
                         (memory_id, app, session, first, last),
                     )
                     rows += 1
-    finally:
+    except BaseException:
         connection.close()
+        temporary.unlink(missing_ok=True)
+        raise
+    connection.close()
+    os.chmod(temporary, 0o600)
     os.replace(temporary, target)
     return {"memories": len(data), "mentions": rows}
 
