@@ -70,37 +70,70 @@ from urllib.parse import quote, urlsplit
 
 import yaml
 
+UPGRADE_DOC = "docs/READONLY-SERVICE-UPGRADE.md"
 
-def _load_library() -> Any:
-    """``memfw.index.readonly``, the read side this entry point serves.
 
-    Without ``memfw`` importable (a standalone copy run by the system
-    interpreter) the module is loaded from ``readonly.py`` beside this file,
-    or from ``src/memfw/index/`` of a checkout. It needs only the standard
-    library and PyYAML, and finds ``read_path.py`` beside itself.
-    """
+def _installed_readonly() -> Path | None:
+    """``memfw/index/readonly.py`` of an installed memfw, found without importing it."""
+
+    import importlib.util
 
     try:
-        from memfw.index import readonly
-    except ImportError:
-        import importlib.util
+        spec = importlib.util.find_spec("memfw")
+    except (ImportError, ValueError):
+        return None
+    if spec is None or not spec.submodule_search_locations:
+        return None
+    for location in spec.submodule_search_locations:
+        path = Path(location) / "index" / "readonly.py"
+        if path.is_file():
+            return path
+    return None
 
-        here = Path(__file__).resolve()
-        for path in (
-            here.with_name("readonly.py"),
-            here.parents[1] / "src" / "memfw" / "index" / "readonly.py",
-        ):
-            if not path.is_file():
-                continue
-            spec = importlib.util.spec_from_file_location("memfw_index_readonly", path)
-            if spec is None or spec.loader is None:
-                continue
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[spec.name] = module
-            spec.loader.exec_module(module)
-            return module
-        raise
-    return readonly
+
+def _library_candidates() -> list[Path]:
+    """Where the read side is loaded from, first match wins.
+
+    1. ``readonly.py`` beside this file (a deployed copy);
+    2. ``src/memfw/index/readonly.py`` of the checkout this file sits in;
+    3. the installed ``memfw`` package.
+    """
+
+    here = Path(__file__).resolve()
+    return [
+        here.with_name("readonly.py"),
+        here.parents[1] / "src" / "memfw" / "index" / "readonly.py",
+    ]
+
+
+def _load_library() -> Any:
+    """Load ``memfw.index.readonly`` by file, without importing ``memfw.index``.
+
+    The module needs only the standard library and PyYAML, and loads the
+    ``read_path.py`` beside it; ``memfw`` itself is imported lazily, only for
+    a unicode61 index or ontology alias expansion.
+    """
+
+    import importlib.util
+
+    candidates = _library_candidates()
+    chosen = next((path for path in candidates if path.is_file()), None)
+    if chosen is None:
+        chosen = _installed_readonly()
+    if chosen is None:
+        expected = ", ".join(str(path) for path in candidates)
+        raise ImportError(
+            "memfw read-only service: readonly.py not found. Expected readonly.py and "
+            f"read_path.py beside this script, or one of: {expected}, or an installed "
+            f"memfw. See {UPGRADE_DOC} (Deploy)."
+        )
+    spec = importlib.util.spec_from_file_location("memfw_readonly_library", chosen)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"memfw read-only service: cannot load {chosen}; see {UPGRADE_DOC}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 _library = _load_library()
@@ -1247,6 +1280,7 @@ def main(argv: list[str] | None = None) -> int:
     server = ThreadingHTTPServer((host, args.port), Handler)
     server.daemon_threads = True
     sys.stderr.write(f"memfw read-only service on {host}:{args.port} (contract {CONTRACT})\n")
+    sys.stderr.write(f"memfw read-only service: read path from {_library.__file__}\n")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

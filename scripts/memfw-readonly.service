@@ -17,6 +17,11 @@ EnvironmentFile=%h/memfw-remote/memfw-readonly.env
 # /related uses the edges path; without it /related falls back to lexical FTS
 # and reports degraded:true. Example (commented):
 #   --related-db %h/memfw-related.sqlite3
+# %h/memfw-remote/ must hold three files from one memfw revision:
+#   memfw_readonly_service.py  (scripts/)
+#   readonly.py, read_path.py  (src/memfw/index/)
+# The copies beside the script win over any installed memfw; the service logs
+# the read path it loaded at startup. See docs/READONLY-SERVICE-UPGRADE.md.
 ExecStart=/usr/bin/python3 %h/memfw-remote/memfw_readonly_service.py --root %h/memfw-vault --host 127.0.0.1 --port 18080
 Restart=on-failure
 RestartSec=3

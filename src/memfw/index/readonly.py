@@ -32,18 +32,29 @@ import yaml
 
 
 def _load_read_path() -> Any:
-    """``memfw.index.read_path``, or the copy beside this file without memfw."""
+    """``memfw.index.read_path``, or the ``read_path.py`` beside this file.
 
-    try:
+    Imported as ``memfw.index.readonly`` the package module is used. Loaded by
+    file (the HTTP script does this) the sibling file is loaded the same way,
+    so neither ``memfw`` nor ``memfw.index`` is imported.
+    """
+
+    if __name__ == "memfw.index.readonly":
         from memfw.index import read_path as module
-    except ImportError:
-        path = Path(__file__).with_name("read_path.py")
-        spec = importlib.util.spec_from_file_location("memfw_read_path", path)
-        if spec is None or spec.loader is None:
-            raise RuntimeError("read_path.py is missing") from None
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-    return module
+
+        return module
+    path = Path(__file__).with_name("read_path.py")
+    if not path.is_file():
+        raise ImportError(
+            f"read_path.py is missing: expected {path} beside {Path(__file__).name}; "
+            "see docs/READONLY-SERVICE-UPGRADE.md"
+        )
+    spec = importlib.util.spec_from_file_location("memfw_read_path", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"read_path.py cannot be loaded from {path}")
+    loaded = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(loaded)
+    return loaded
 
 
 read_path = _load_read_path()
@@ -825,3 +836,21 @@ def shared_readonly() -> ModuleType:
     """This module. Kept for callers of ``memfw.memory_hybrid.shared_readonly``."""
 
     return sys.modules[__name__]
+
+
+# Deprecated: the names this code had in ``scripts/memfw_readonly_service.py``
+# (``shared_readonly()`` returned that module). Kept for one release so
+# callers of the old private names keep working; use the public names.
+_bad_request = bad_request
+_internal = internal_error
+_unsupported_query = unsupported_query
+_normalise_as_of = normalise_as_of
+_metadata = read_metadata
+_iso_string = iso_string
+_optional = optional_text
+_recorded_at = recorded_at_text
+_document_payload = document_payload
+_has_table = has_table
+_query_terms = fts_query_terms
+_quoted_or = quoted_or
+_fts_query = fts_query

@@ -284,11 +284,13 @@ backend only through exported files and the `resolve` interface.
   between coordinators; `FtsProvider` and `HybridProvider` take an optional
   `observe(page_items, payloads)` hook for in-process callers.
 
-### Internal — readonly read path moves into the library (A1)
+### Changed — readonly read path moves into the library (A1)
 
-No behaviour change: HTTP `/search` and `/related`, MCP `memory_search` in
-every mode and the recall `FtsProvider` return the same JSON as before
-(checked side by side against the previous commit).
+Search results are unchanged: HTTP `/search` and `/related`, MCP
+`memory_search` in every mode and the recall `FtsProvider` return the same
+JSON as the previous commit (checked side by side, timing fields aside).
+What changes is where the code lives, how the HTTP script finds it, and the
+names `shared_readonly()` exposes.
 
 - The read side of `scripts/memfw_readonly_service.py` (query and `as_of`
   rules, `ServiceError`, the FTS `search_vault` path, document helpers) is now
@@ -297,17 +299,32 @@ every mode and the recall `FtsProvider` return the same JSON as before
   path. MCP `mode=two_stage` calls the public `check_query_text` and
   `normalise_as_of` instead of the script's private helpers.
 - `scripts/memfw_readonly_service.py` keeps the HTTP layer, `/related`,
-  `/stage` and the CLI, and re-exports every name it exported before. Without
-  `memfw` importable it loads `readonly.py` (and `read_path.py`) from beside
-  itself or from a checkout's `src/memfw/index/`: a standalone copy now needs
-  those two files next to the script.
-- `memfw.memory_hybrid.shared_readonly()` remains and returns
-  `memfw.index.readonly`; the helpers it exposes have public names
-  (`bad_request`, `read_metadata`, `iso_string`, `optional_text`,
-  `recorded_at_text`, ...). The wheel no longer force-includes
-  `memfw/read_path.py`; it still ships `memfw/memfw_readonly_service.py`.
+  `/stage` and the CLI, and re-exports every name it exported before. It loads
+  the read path by file, first match wins: `readonly.py` beside the script,
+  then the checkout's `src/memfw/index/readonly.py`, then the installed
+  `memfw` package. Loading imports neither `memfw.index` nor jieba (`memfw` is
+  still imported lazily for a unicode61 index or alias expansion). The service
+  logs the chosen file at startup.
+- **Deploy:** a standalone service directory needs three files from one
+  revision: the script, `readonly.py` and `read_path.py` (see
+  `docs/READONLY-SERVICE-UPGRADE.md`). With only the script and no installed
+  `memfw` it exits with an `ImportError` naming the missing files instead of
+  `No module named 'memfw'`.
+- **Behaviour change:** `memfw.memory_hybrid.shared_readonly()` remains but
+  returns `memfw.index.readonly`, a module whose helpers have public names
+  (`bad_request`, `internal_error`, `unsupported_query`, `normalise_as_of`,
+  `read_metadata`, `iso_string`, `optional_text`, `recorded_at_text`,
+  `document_payload`, `has_table`, `fts_query_terms`, `quoted_or`,
+  `fts_query`). The old private names (`_bad_request`, `_metadata`,
+  `_optional`, `_recorded_at`, `_iso_string`, ...) stay as deprecated aliases
+  for one release and will then be removed.
+- The wheel no longer force-includes `memfw/read_path.py` (it is
+  `memfw/index/read_path.py` now); it still ships
+  `memfw/memfw_readonly_service.py`.
 - `tests/test_no_scripts_import.py` fails if anything under `src/memfw`
-  imports `scripts`, loads `memfw_readonly_service` or edits `sys.path`.
+  imports `scripts`, names a `scripts/` path or the service module, edits
+  `sys.path` (aliases included), or calls `exec`, `site.addsitedir`,
+  `SourceFileLoader` or `runpy.run_path`.
 
 ## [0.2.0] — 2026-11-15
 

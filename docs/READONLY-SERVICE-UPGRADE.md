@@ -11,11 +11,21 @@ and `"service": "memfw"`, plus `index_present` and `related_index_present`.
 
 ## Deploy
 
-Install this script in place of the pre-v2 process. The script is the HTTP
-entry point; its read path is `memfw.index.readonly`. With `memfw` installed
-for the interpreter that runs it, nothing else is needed. Otherwise copy
-`src/memfw/index/readonly.py` and `src/memfw/index/read_path.py` into the same
-directory as the script (they need only the standard library and PyYAML). Keep the vault root on
+Install the service in place of the pre-v2 process. Copy three files from
+the same memfw revision into the service directory (`~/memfw-remote/` in
+`scripts/memfw-readonly.service`):
+
+1. `scripts/memfw_readonly_service.py` (the HTTP entry point);
+2. `src/memfw/index/readonly.py` (the read path: query rules, `search_vault`);
+3. `src/memfw/index/read_path.py` (shared read-path fields).
+
+The two library files need only the standard library and PyYAML. The script
+loads its read path from the first of: `readonly.py` beside it, the checkout's
+`src/memfw/index/readonly.py`, an installed `memfw`. It logs the file it chose
+at startup. With only the script copied and no `memfw` installed it exits with
+an error naming the missing files.
+
+Keep the vault root on
 `MEMFW_READONLY_ROOT` or pass `--root` (the flag falls back to that variable).
 Do not bind `0.0.0.0`; the supported unit is `scripts/memfw-readonly.service`
 (loopback by default, or an explicit tailnet `--host`). Read and write tokens
