@@ -175,12 +175,23 @@ class MemoryDocument(BaseModel):
     recorded_at: datetime | None = None
     body: str
     _ignored_keys: tuple[str, ...] = PrivateAttr(default=())
+    #: Frontmatter keys the source file carried at their default value. A count
+    #: of zero never means "the file had none": it means the document did not
+    #: come from ``parse`` (a fresh document), so ``render`` applies its normal
+    #: omission rule. Parsed documents always record the full observed set.
+    _observed_default_fields: tuple[str, ...] = PrivateAttr(default=())
 
     @property
     def ignored_keys(self) -> tuple[str, ...]:
         """Frontmatter keys this version did not know and ignored when parsing."""
 
         return self._ignored_keys
+
+    @property
+    def observed_default_fields(self) -> tuple[str, ...]:
+        """Optional fields the source file carried at their default value."""
+
+        return self._observed_default_fields
 
     @model_validator(mode="before")
     @classmethod

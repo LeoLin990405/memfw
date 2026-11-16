@@ -23,7 +23,7 @@ from .feedback import FeedbackEvent, FeedbackStore
 from .index import HttpEmbeddingProvider, NotesIndex
 from .retrieval import HttpRerankerProvider, NotesRetriever, RetrievalConfig
 
-SERVER_INFO = {"name": "memfw-notes", "version": "0.1.0"}
+SERVER_INFO = {"name": "memfw-notes", "version": "0.2.0"}
 PROTOCOL = "2024-11-05"
 
 TOOLS: list[dict[str, Any]] = [

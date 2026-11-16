@@ -12,6 +12,7 @@ from typing import Annotated, Any
 
 import typer
 
+from . import __version__
 from .budget import BYTE_BUDGETS, BudgetLimits, BudgetProfile
 from .capture.cli import app as capture_app
 from .capture.confirm import confirm_command
@@ -961,12 +962,29 @@ def _parse_now(raw: str | None) -> datetime | None:
     return value.astimezone(UTC)
 
 
+def _show_version(value: bool) -> None:
+    """Print the installed package version and exit (``memfw --version``)."""
+
+    if value:
+        typer.echo(f"memfw {__version__}")
+        raise typer.Exit()
+
+
 @app.callback()
 def main(
     now: Annotated[str | None, typer.Option("--now", help="Inject an ISO-8601 UTC time")] = None,
     id_seed: Annotated[
         str | None, typer.Option("--id-seed", help="Inject a deterministic id seed")
     ] = None,
+    version: Annotated[
+        bool,
+        typer.Option(
+            "--version",
+            callback=_show_version,
+            is_eager=True,
+            help="Show the memfw version and exit",
+        ),
+    ] = False,
 ) -> None:
     """Manage a Markdown memory vault."""
     global _NOW, _ID_SEED
@@ -1349,7 +1367,7 @@ def index_search(
     repository = _repo(root)
     index = MemoryIndex(repository.index_path)
     if dry_run:
-        if not repository.index_path.exists():
+        if not index.schema_is_current():
             typer.echo(json.dumps({"would_rebuild": True, "writes": False, "results": []}))
             return
         matches = index.search(query)

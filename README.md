@@ -75,6 +75,7 @@ uv venv .venv && uv sync --frozen --extra dev   # or: python -m venv .venv && pi
 ```
 
 This installs two commands: `memfw` (CLI) and `memfw-mcp` (stdio MCP server).
+`memfw --version` prints the installed version (`memfw 0.2.0`); the release smoke test checks it.
 
 Create a vault, add a memory and search it:
 
@@ -123,6 +124,14 @@ name (see [`docs/conversations-share.md`](docs/conversations-share.md)).
 The conversation store and the worker state are kept **outside** the vault, by default under
 `~/.local/share/memfw/` (see [Privacy](#-privacy-and-permissions)). If the vault is a git
 repository, add `index.sqlite3` and `.memfw-history.sqlite*` to its `.gitignore`.
+
+An index written by an older memfw has no temporal projections. Writers are lazy about it:
+the MCP server (`memfw-mcp`) and `memfw index search` check the schema generation (`PRAGMA user_version`)
+before using the file and rebuild it when it is stale, so an upgrade needs no manual step there.
+The read-only HTTP service (`scripts/memfw_readonly_service.py`) never writes, so it **does not**
+rebuild: it detects the missing tables and degrades instead (no temporal filtering when
+`memory_temporal` is absent, and no results at all when `memory_access` is absent). Run
+`memfw index rebuild` once before pointing the read-only service at an upgraded vault.
 
 ## 🧠 Memory commands
 
@@ -393,14 +402,30 @@ on synthetic duplicate, conflict and stale cases with `python -m eval.dreams`
 | [`docs/RELEASE-READINESS.md`](docs/RELEASE-READINESS.md) | measured checks and known limitations |
 | [`docs/legacy-design-notes.md`](docs/legacy-design-notes.md) | earlier design notes (historical) |
 
-## 📍 Status
+## 📍 Status and boundaries
 
-memfw is version 0.1, Apache-2.0, and runs offline on one machine. Implemented: the vault and
-event log, retention, the MCP server, the transcript index, the conversation store with 14
-readers, sharing and the worker, handoff packs, and dream (verify, curate, distill, budget,
-skills). Known limits: matching is lexical (paraphrases without shared words are missed), dream
-only stages (there is no `dream apply`; apply candidates through `update` / `supersede`),
-scheduling ships as a printed launchd plist, and the evaluation is small. See
+memfw is version **0.2.0** (2026-11-15), Apache-2.0, and runs offline on one machine.
+Implemented: the vault and hash-linked event log, retention and the `10MB` budget, the
+disposable FTS5 index and the read path (per-term matching, concept aliases, multi-hop), the
+MCP servers, the section-level notes index and code retrieval, the read-only transcript index,
+the conversation store with 14 readers, sharing and the worker, handoff packs, dream (verify,
+curate, distill, budget, skills), OKF v0.2 export, and the read-only HTTP service
+(`memfw-http/2`). Changes are listed in [`CHANGELOG.md`](CHANGELOG.md).
+
+**Upgrade boundary.** The vault format did not change in `0.2.0`: `vault.yaml` stays at
+`schema_version: 1`, and a file written by `0.1.x` keeps its bytes — parse → render is
+byte-identical in both directions, and a normal write no longer restates default fields. A file
+written after 2026-11-06 that already spelled those fields out keeps them too, so upgrading does
+not change its content hash. The FTS5 index is a disposable projection and is **not** migrated in
+place: the MCP server (`memfw-mcp`) and `memfw index search` rebuild a stale index before they use it; the
+read-only HTTP service never writes, so run `memfw index rebuild` once before pointing it at an
+upgraded vault.
+
+**Boundaries.** Matching is lexical — a paraphrase with no shared word is missed; dream only
+stages proposals (there is no `dream apply`, apply candidates through `update` / `supersede`);
+the notes, transcript and conversation indexes are derived and separate from the vault; the
+read-only HTTP service is authenticated by read/write tokens and refuses an unconfigured
+write path; scheduling ships as a printed launchd plist; the evaluation is small. See
 [`docs/dream.md`](docs/dream.md#limitations) and
 [`docs/RELEASE-READINESS.md`](docs/RELEASE-READINESS.md).
 
@@ -433,3 +458,9 @@ Issues and pull requests are welcome. Before opening a PR:
 Licensed under the [Apache License 2.0](LICENSE). The Traditional-to-Simplified character map in
 `src/memfw/ontology/t2s.py` is derived from [OpenCC](https://github.com/BYVoid/OpenCC) (Apache-2.0);
 see [`NOTICE`](NOTICE).
+
+`memfw okf export` writes bundles in
+[Open Knowledge Format v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format)
+(GoogleCloudPlatform). That is a format specification only: memfw is compatible with it and
+contains no OKF code, and `NOTICE` therefore carries no OKF entry. The evaluation table's Mem0
+row is a comparison baseline only — memfw uses no Mem0 code.

@@ -48,6 +48,36 @@ def test_mcp_search_and_get(tmp_path: Path) -> None:
     assert "greenhouse" in document["body"]
 
 
+def test_mcp_fts_search_rebuilds_an_index_from_an_older_schema(tmp_path: Path) -> None:
+    """An index newer than the Markdown but from an earlier generation is rebuilt.
+
+    The file-time check alone would keep it, and FTS would silently return
+    nothing for an index without the current projections.
+    """
+
+    import os
+    import sqlite3
+
+    from memfw.index import MemoryIndex
+
+    root = _vault(tmp_path)
+    repository = Repository(root)
+    index = MemoryIndex(repository.index_path)
+    index.rebuild(repository)
+    with sqlite3.connect(repository.index_path) as connection:
+        connection.execute("DROP TABLE memory_temporal")
+        connection.execute("PRAGMA user_version = 0")
+        connection.commit()
+    newest = max(path.stat().st_mtime for path in repository.memories_dir.glob("*.md"))
+    os.utime(repository.index_path, (newest + 60, newest + 60))
+    assert index.schema_is_current() is False
+
+    found = Gateway(root).search("greenhouse", limit=5, mode="fts")
+
+    assert found["results"]
+    assert index.schema_is_current() is True
+
+
 def test_mcp_remember_is_staging_only(tmp_path: Path) -> None:
     root = _vault(tmp_path)
     gateway = Gateway(root)

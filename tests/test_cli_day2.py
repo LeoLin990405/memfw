@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner, Result
 
+from memfw import __version__
 from memfw.cli import app
 
 runner = CliRunner()
@@ -16,6 +17,22 @@ ID_SEED = "cli-day2-deterministic-seed"
 
 def invoke(root: Path, *args: str) -> Result:
     return runner.invoke(app, ["--now", NOW, "--id-seed", ID_SEED, *args])
+
+
+def test_version_flag_prints_the_package_version() -> None:
+    """The release smoke test reads the version from the installed command."""
+
+    result = runner.invoke(app, ["--version"])
+    assert result.exit_code == 0
+    assert result.stdout.strip() == f"memfw {__version__}"
+
+
+def test_version_flag_wins_over_a_subcommand() -> None:
+    """``--version`` is eager: it answers without needing a vault or a command."""
+
+    result = runner.invoke(app, ["--version", "list", "--root", "/nonexistent"])
+    assert result.exit_code == 0
+    assert result.stdout.strip() == f"memfw {__version__}"
 
 
 def tree_bytes(root: Path) -> dict[str, bytes]:

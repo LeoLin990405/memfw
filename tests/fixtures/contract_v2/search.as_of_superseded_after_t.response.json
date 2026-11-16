@@ -5,7 +5,7 @@
   "mode": "fts",
   "results": [
     {
-      "content_hash": "sha256:fec0665739c7ea765151b2726a2fea34b5a5ff646afaa0f6c83fb2c74398ddf0",
+      "content_hash": "sha256:ee91c51671498e30ea5758bd429569a2f0ebf6c5d9123080bb828f568f04ae90",
       "id": "mem-alpha",
       "index_version": "1",
       "layer": "current",
@@ -28,7 +28,7 @@
       "why": "lexical"
     },
     {
-      "content_hash": "sha256:55ad1b3bcce2af29fcdc68dc1ed12d9e202134c0bb7069c3caa5d3f81e95edf1",
+      "content_hash": "sha256:d020da71e7f7d485cd4745bbc51ab8d8fb955271724cc8b9058f0f13825eff3a",
       "id": "mem-beta",
       "index_version": "1",
       "layer": "current",
@@ -49,7 +49,7 @@
       "why": "lexical"
     },
     {
-      "content_hash": "sha256:3d1db2102c9db6c2decc328e440240f3b64fdc7367d7f532db23555d86da7eda",
+      "content_hash": "sha256:04e9f006574f1e97e086008e6fd9745a7fee30d31a47c763c9f21836691d7335",
       "id": "mem-old",
       "index_version": "1",
       "layer": "current",

@@ -59,7 +59,7 @@ uv venv .venv && uv sync --frozen --extra dev   # 或：python -m venv .venv && 
 . .venv/bin/activate
 ```
 
-装好后有两个命令：`memfw`（命令行）和 `memfw-mcp`（stdio MCP 服务）。
+装好后有两个命令：`memfw`（命令行）和 `memfw-mcp`（stdio MCP 服务）。`memfw --version` 打印已安装的版本（`memfw 0.2.0`），发版冒烟测试会用它核对。
 
 建一个 vault，加一条记忆，再搜出来：
 
@@ -103,6 +103,8 @@ Claude Code 可以直接运行 `claude mcp add memfw -- memfw-mcp --root /path/t
 | `index.sqlite3`、`.memfw-history.sqlite` | 派生的 FTS5 索引（可随时删除重建） |
 
 会话库和 worker 状态放在 vault **之外**，默认在 `~/.local/share/memfw/`（见[隐私与权限](#-隐私与权限)）。如果 vault 本身是 git 仓库，记得把 `index.sqlite3` 和 `.memfw-history.sqlite*` 加进 `.gitignore`。
+
+旧版 memfw 写出的索引里没有时间投影。使用索引的写侧命令是惰性重建的：MCP 服务（`memfw-mcp`）和 `memfw index search` 会先检查 schema 世代（`PRAGMA user_version`），过时就在使用前重建，所以从旧版本升级不需要手动操作。只读 HTTP 服务（`scripts/memfw_readonly_service.py`）完全不写盘，因此**不会**重建：它检测到表缺失就降级（没有 `memory_temporal` 时不做时间过滤，没有 `memory_access` 时不返回结果）。升级后如果要用只读服务，先跑一次 `memfw index rebuild`。
 
 ## 🧠 记忆相关命令
 
@@ -307,9 +309,13 @@ memfw 是引擎，编排系统和它保持一定距离地集成：
 
 除 `COMPONENTS` 外，`docs/` 下的文档目前只有英文版。
 
-## 📍 现状
+## 📍 现状与边界
 
-memfw 当前版本 0.1，Apache-2.0 许可，在单机上离线运行。已经实现：vault 与事件日志、保留策略、MCP 服务、会话记录索引、带 14 个 reader 的会话库、共享与 worker、交接包，以及 dream（核对、整理、提炼、预算、技能）。已知局限：匹配是基于词面的（没有共同用词的改写会漏掉）；dream 只暂存候选（没有 `dream apply`，需要用 `update` / `supersede` 落地）；定时运行只提供打印出来的 launchd plist；评估规模较小。详见 [`docs/dream.md`](docs/dream.md#limitations) 和 [`docs/RELEASE-READINESS.md`](docs/RELEASE-READINESS.md)。
+memfw 当前版本 **0.2.0**（2026-11-15），Apache-2.0 许可，在单机上离线运行。已经实现：vault 与哈希链事件日志、保留策略与 `10MB` 预算、可重建的 FTS5 索引与读路径（按词匹配、概念别名、多跳）、MCP 服务、章节级 notes 索引与代码检索、只读转录索引、带 14 个 reader 的会话库、共享与 worker、交接包、dream（核对、整理、提炼、预算、技能）、OKF v0.2 导出，以及只读 HTTP 服务（`memfw-http/2`）。逐条变更见 [`CHANGELOG.md`](CHANGELOG.md)。
+
+**升级边界。** `0.2.0` 没有改动 vault 格式：`vault.yaml` 仍是 `schema_version: 1`，`0.1.x` 写出的文件保持原字节——解析再渲染两个方向都逐字节一致，普通写入也不会再补默认字段；2026-11-06 之后写出、已经显式带上这些字段的文件同样保持原样，升级不会改动它的 content hash。FTS5 索引是可丢弃的投影，**不会就地迁移**：MCP 服务（`memfw-mcp`）和 `memfw index search` 会在使用前重建过期索引；只读 HTTP 服务从不写盘，升级后要先跑一次 `memfw index rebuild` 再指向它。
+
+**边界。** 匹配是基于词面的（没有共同用词的改写会漏掉）；dream 只暂存候选（没有 `dream apply`，需要用 `update` / `supersede` 落地）；notes、转录和会话索引都是派生索引，与 vault 分开；只读 HTTP 服务用读写 token 鉴权，未配置写路径时一律拒绝；定时运行只提供打印出来的 launchd plist；评估规模较小。详见 [`docs/dream.md`](docs/dream.md#limitations) 和 [`docs/RELEASE-READINESS.md`](docs/RELEASE-READINESS.md)。
 
 ## 🛠️ 开发
 
@@ -335,3 +341,5 @@ uv sync --frozen --extra dev
 ## 📄 许可证
 
 本项目采用 [Apache License 2.0](LICENSE)。`src/memfw/ontology/t2s.py` 中的繁简转换表派生自 [OpenCC](https://github.com/BYVoid/OpenCC)（Apache-2.0），详见 [`NOTICE`](NOTICE)。
+
+`memfw okf export` 输出的是 [Open Knowledge Format v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format)（GoogleCloudPlatform）格式，只兼容这个格式，不包含它的代码，因此 `NOTICE` 里没有 OKF 条目。评测表中的 Mem0 只是对比基线，memfw 没有使用 Mem0 的代码。
