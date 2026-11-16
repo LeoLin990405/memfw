@@ -11,6 +11,39 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
+### Fixed — budget enforcement keeps live supersede chains
+
+- Budget/policy enforcement with `forget_action: hard` never deletes a live
+  supersede chain. A record is a chain member when its `superseded_by` names a
+  memory that still exists, or when such a record names it; for
+  `a-old -> z-new` both are kept. A chain whose successor has been cooled to a
+  cold stub is still live and still protected. Before, `fifo`, `lru`, `decay` and
+  `salience` could delete `a-old` (losing it for `as_of` queries and
+  `.history` reconstruction), or delete the head `z-new` and leave `a-old` as
+  an orphan. Chain members are retained with the decision reason
+  `protected_history` and still count toward usage, so the policy moves on to
+  other records. This applies in body and total budget modes and to
+  `memfw forget run --action hard`.
+- Plain expiry is not protected: a record with `valid_to` set (past or
+  future) and no live successor stays an ordinary eviction candidate.
+- When only chain members (and anchors) are left in scope and the budget is
+  still over, the result is unmet with the new reason code `history_floor`, a
+  `budget_unsatisfiable` event, and the new `blocking_history_ids` field
+  (filled only for `history_floor`). In body mode, a run blocked by anchors
+  still reports `anchor_floor`, even when chain members also block; in total
+  mode, `history_floor` is reported once every remaining in-scope non-anchor
+  record is a chain member. Dry runs report the same floor from the plan.
+  Other reasons are chosen exactly as before (in total mode with
+  `budget_scope: hot`, only the `history_floor` check looks at in-scope
+  records).
+  `proposal_stats` gains `history_retained` and `history_floor_unmet`.
+- Still allowed: an explicit `memfw delete` / `Repository.delete`, an
+  approved merge and an approved forget proposal can remove a chain member.
+  Soft forgetting is unchanged (the cold archive keeps the original bytes).
+  Plans for vaults without live chains are byte-identical to before.
+  `Policy.plan` takes a new keyword `protected_history_ids` (default empty);
+  `memfw.policies.live_chain_ids` computes it.
+
 ### Fixed — recall privacy tags fail closed (security)
 
 - `memfw.recall.builtin.meta_from_document` recognised only the exact, lower-case `sensitivity:private` tag, so under `policy=strict` (`memory_search mode=two_stage`) a memory tagged `Sensitivity:Private`, `sensitivity:local-private` or `sensitivity:secret` was kept. It now classes `sensitivity:*` tags exactly like the projection (`tag_privacy_class`): any case, only `sensitivity:private` is `local-private`, any other value is `unknown`, and both are dropped without clearance. `privacy:` and `lifecycle:` tag prefixes are matched in any case too, and with several such tags the strictest wins instead of the first (privacy: unknown > local-private > none; lifecycle: retired > superseded > other non-active > active), so tag order or case can never widen access. Before, `privacy:none` followed by `privacy:local-private` was kept under `strict`. `MemoryMeta` gains an optional `sensitivity_class`; callers that set only `sensitivity_private` behave as before. `policy=compat_fts` does not check privacy, so its output is unchanged.

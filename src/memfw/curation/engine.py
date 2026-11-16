@@ -22,6 +22,7 @@ from memfw.policies import (
     PolicyCandidate,
     PolicyName,
     PolicyPlan,
+    live_chain_ids,
     make_policy,
 )
 
@@ -152,18 +153,37 @@ def plan_forget(
     now: datetime | None = None,
     scope: str = "hot",
     memory_ids: set[str] | None = None,
+    protect_live_chains: bool = False,
 ) -> PolicyPlan:
-    """Create a pure plan. ``hot`` measures only active hot bodies."""
+    """Create a pure plan. ``hot`` measures only active hot bodies.
+
+    ``protect_live_chains`` keeps every member of a live supersede chain out of
+    the forget set (see ``_BasePolicy.plan``); ``run_forget`` sets it for hard
+    forgetting.
+    """
 
     if scope not in {"hot", "all"}:
         raise ValueError("scope must be 'hot' or 'all'")
     current = now or repository._now()
-    documents = repository.list()
+    all_documents = repository.list()
+    documents = all_documents
     if scope == "hot":
         documents = [doc for doc in documents if doc.tier == Tier.HOT and not doc.is_stub]
     if memory_ids is not None:
         documents = [doc for doc in documents if doc.id in memory_ids]
-    return make_policy(policy).plan(candidates_for(repository, documents), limits, now=current)
+    # Chain links are judged against every stored memory, not only the scoped
+    # candidates: a hot predecessor of a cold successor is still a live chain.
+    protected = live_chain_ids(all_documents) if protect_live_chains else frozenset()
+    return make_policy(policy).plan(
+        candidates_for(repository, documents),
+        limits,
+        now=current,
+        protected_history_ids=protected,
+    )
+
+
+def _protected_history_ids(plan: PolicyPlan) -> tuple[str, ...]:
+    return tuple(row.memory_id for row in plan.decisions if row.reason == "protected_history")
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,6 +206,8 @@ class ForgetResult:
     blocking_anchor_ids: tuple[str, ...] = ()
     pending_proposal_ids: tuple[str, ...] = ()
     would_propose: tuple[str, ...] = ()
+    #: Historical versions a hard forget kept although the budget was unmet.
+    blocking_history_ids: tuple[str, ...] = ()
     physical_breakdown_before: dict[str, int] = field(default_factory=dict)
     physical_breakdown_after: dict[str, int] = field(default_factory=dict)
     physical_overage_bytes: int = 0
@@ -270,6 +292,7 @@ class ForgetResult:
             "unsatisfied_reason": self.unsatisfied_reason,
             "unsatisfied_reason_code": self.unsatisfied_reason_code,
             "blocking_anchor_ids": list(self.blocking_anchor_ids),
+            "blocking_history_ids": list(self.blocking_history_ids),
             "pending_proposal_ids": list(self.pending_proposal_ids),
             "would_propose": list(self.would_propose),
         }
@@ -485,7 +508,10 @@ def _enforce_total_budget(
         budget_bytes = default_budget_bytes
     ranked_candidates = candidates_for(repository, eligible)
     ranking_limits = BudgetLimits(max_count=0)
-    ranking_plan = make_policy(policy).plan(ranked_candidates, ranking_limits, now=point)
+    chain_ids = live_chain_ids(documents) if action == "hard" else frozenset()
+    ranking_plan = make_policy(policy).plan(
+        ranked_candidates, ranking_limits, now=point, protected_history_ids=chain_ids
+    )
     if (
         dry_run
         and PolicyName(policy) == PolicyName.CONSOLIDATE_THEN_FORGET
@@ -517,6 +543,23 @@ def _enforce_total_budget(
     if dry_run:
         dry_count_ok = limits.max_count is None or initial_count <= limits.max_count
         dry_bytes_ok = before <= budget_bytes
+        dry_reason = None if dry_bytes_ok and dry_count_ok else "would_require_actions"
+        dry_history = _protected_history_ids(ranking_plan)
+        # Name the history floor when the protected chains alone already keep
+        # the target out of reach: nothing else is selectable, or the count
+        # stays over even after every selectable candidate is gone.
+        if (
+            dry_reason
+            and dry_history
+            and (
+                not ranking_plan.forgotten_ids
+                or (
+                    limits.max_count is not None
+                    and initial_count - len(ranking_plan.forgotten_ids) > limits.max_count
+                )
+            )
+        ):
+            dry_reason = "history_floor"
         return ForgetResult(
             ranking_plan,
             action,
@@ -531,8 +574,9 @@ def _enforce_total_budget(
             budget_mode="total",
             physical_bytes_before=before,
             physical_bytes_after=before,
-            unsatisfied_reason=(None if dry_bytes_ok and dry_count_ok else "would_require_actions"),
+            unsatisfied_reason=dry_reason,
             blocking_anchor_ids=anchors,
+            blocking_history_ids=dry_history if dry_reason == "history_floor" else (),
         )
 
     if PolicyName(policy) == PolicyName.CONSOLIDATE_THEN_FORGET and (
@@ -601,11 +645,21 @@ def _enforce_total_budget(
                 for doc in documents_by_id.values()
                 if doc.layer != Layer.ANCHOR and not doc.anchor
             ]
+            # Only the history floor is judged in scope: out-of-scope records
+            # cannot be chain members this run could have deleted. The other
+            # floors keep their vault-wide choice unchanged.
+            scoped_non_anchor = [
+                doc
+                for doc in non_anchor_documents
+                if scope == "all" or (doc.tier == Tier.HOT and not doc.is_stub)
+            ]
             reason = (
                 "approval_required"
                 if pending_source_proposals
                 else (
-                    "policy_exhausted"
+                    "history_floor"
+                    if scoped_non_anchor and all(doc.id in chain_ids for doc in scoped_non_anchor)
+                    else "policy_exhausted"
                     if non_anchor_documents
                     else ("anchor_floor" if anchors else "metadata_floor")
                 )
@@ -617,6 +671,9 @@ def _enforce_total_budget(
             reason = "policy_exhausted"
             break
         if document.layer == Layer.ANCHOR or document.anchor:
+            continue
+        if target in chain_ids:
+            # Budget enforcement never hard-deletes a member of a live chain.
             continue
         # Match run_forget's audited operation semantics without rebuilding a plan
         # or reparsing all Markdown to select this already-ranked single target.
@@ -717,6 +774,22 @@ def _enforce_total_budget(
         ),
         blocking_anchor_ids=anchors if reason == "anchor_floor" else (),
         pending_proposal_ids=tuple(pending_source_proposals),
+        blocking_history_ids=(
+            tuple(
+                sorted(
+                    doc.id
+                    for doc in documents_by_id.values()
+                    if doc.id in chain_ids
+                    and (scope == "all" or (doc.tier == Tier.HOT and not doc.is_stub))
+                )
+            )
+            if reason == "history_floor"
+            and (
+                current_bytes > budget_bytes
+                or (limits.max_count is not None and current_count > limits.max_count)
+            )
+            else ()
+        ),
     )
 
 
@@ -784,7 +857,15 @@ def run_forget(
         ]
     initial_evaluation = evaluate_budget(candidates_for(repository, input_documents), limits)
     initial_usage = initial_evaluation.usage
-    plan = plan_forget(repository, policy, limits, now=now, scope=scope, memory_ids=memory_ids)
+    plan = plan_forget(
+        repository,
+        policy,
+        limits,
+        now=now,
+        scope=scope,
+        memory_ids=memory_ids,
+        protect_live_chains=action == "hard",
+    )
     is_consolidation = PolicyName(policy) == PolicyName.CONSOLIDATE_THEN_FORGET
     eligible_documents = [doc for doc in repository.list() if not doc.is_stub]
     if scope == "hot":
@@ -814,6 +895,16 @@ def run_forget(
             would_propose = tuple(
                 memory_id for memory_id in plan.forgotten_ids if source_counts.get(memory_id, 0) > 0
             )
+        # Mirror the applied path's floor: protected chains block a plan that
+        # cannot fit, unless anchors (reported first when applied) also block.
+        dry_history = _protected_history_ids(plan)
+        dry_floor = (
+            "history_floor"
+            if dry_history
+            and not plan.satisfied
+            and not any(row.reason == "protected_anchor" for row in plan.decisions)
+            else None
+        )
         if is_consolidation:
             would_propose = _record_consolidation_review(
                 repository, eligible_documents, now or repository._now(), record=False
@@ -847,8 +938,9 @@ def run_forget(
             initial_usage.bytes,
             unsatisfied_reason=("approval_required" if would_propose else "policy_exhausted")
             if is_consolidation or would_propose
-            else None,
+            else dry_floor,
             would_propose=would_propose,
+            blocking_history_ids=dry_history if dry_floor == "history_floor" else (),
         )
 
     # Consolidation is a reviewed workflow, never a policy-side deletion. The
@@ -898,6 +990,10 @@ def run_forget(
             raise IntegrityError(f"Forget target disappeared after planning: {memory_id}")
         if doc.layer == Layer.ANCHOR or bool(doc.anchor):
             raise IntegrityError(f"Refusing to forget protected anchor: {memory_id}")
+    chain_ids = live_chain_ids(documents.values()) if action == "hard" else frozenset()
+    for memory_id in selected:
+        if memory_id in chain_ids:
+            raise IntegrityError(f"Refusing to hard-forget a live supersede chain: {memory_id}")
     actionable = []
     for memory_id in plan.forgotten_ids:
         document = documents[memory_id]
@@ -998,14 +1094,19 @@ def run_forget(
         )
     )
     unsatisfied_reason = None
+    blocking_history: tuple[str, ...] = ()
     if not actual.within_budget:
         unsatisfied_reason = (
             "approval_required"
             if pending_source_proposals
             else "anchor_floor"
             if blocking_anchors
+            else "history_floor"
+            if _protected_history_ids(plan)
             else "policy_exhausted"
         )
+        if unsatisfied_reason == "history_floor":
+            blocking_history = _protected_history_ids(plan)
         _record_budget_unsatisfied(
             repository,
             reason=unsatisfied_reason,
@@ -1031,6 +1132,7 @@ def run_forget(
         unsatisfied_reason=unsatisfied_reason,
         blocking_anchor_ids=blocking_anchors if unsatisfied_reason == "anchor_floor" else (),
         pending_proposal_ids=tuple(pending_source_proposals),
+        blocking_history_ids=blocking_history,
     )
 
 

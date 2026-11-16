@@ -37,6 +37,7 @@ class _Plan(Protocol):
     limits: _Budget
     decisions: tuple[_Decision, ...]
     forgotten_ids: tuple[str, ...]
+    satisfied: bool
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,7 @@ def proposal_stats(result: _Plan) -> dict[str, int]:
     usage = result.usage
     forgotten = set(result.forgotten_ids)
     anchors = sum(decision.reason == "protected_anchor" for decision in result.decisions)
+    history = sum(decision.reason == "protected_history" for decision in result.decisions)
     return {
         "retained_count": usage.count,
         "retained_bytes": usage.bytes,
@@ -76,8 +78,10 @@ def proposal_stats(result: _Plan) -> dict[str, int]:
             else 0
         ),
         "anchor_floor_unmet": 0,
+        "history_floor_unmet": int(bool(history) and not result.satisfied),
         "cold_floor_unmet": 0,
         "anchor_retained": anchors,
+        "history_retained": history,
     }
 
 
