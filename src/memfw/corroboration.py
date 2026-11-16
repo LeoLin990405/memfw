@@ -13,7 +13,7 @@ reference (the M2 conversation store's namespace) carried by one of:
   kind ``conversation-memory-candidates``) whose claim, normalised (case,
   whitespace, trailing punctuation), equals ``M``'s match key: its summary,
   else its title, and only a key of at least 4 tokens and 20 characters that
-  no other memory (any tenant) shares as title or summary. Each evidence ref
+  no other default-tenant memory shares as title or summary. Each evidence ref
   is a transcript turn the worker verified. The conversation store has no
   tenant, so claims credit only memories in the default tenant ``""``. The
   worker stages each claim once per app (it dedupes on app + claim text), so
@@ -368,9 +368,12 @@ def collect(repository: Repository, rules: ShareRules) -> dict[str, dict[tuple[s
     for candidate in staged:
         if candidate.claims and candidate.reason:
             claims_by_text.setdefault(_normal(candidate.reason), []).append(candidate)
-    # A key two memories share (title or summary, any tenant) names neither.
+    # A key two default-tenant memories share (title or summary) names neither.
+    # Other tenants are not consulted: their text must not change this answer.
     key_owners: dict[str, set[str]] = {}
     for document in documents:
+        if document.tenant != CLAIMS_TENANT:
+            continue
         for text in (document.title, document.summary):
             if (key := _match_key(text)) is not None:
                 key_owners.setdefault(key, set()).add(document.id)

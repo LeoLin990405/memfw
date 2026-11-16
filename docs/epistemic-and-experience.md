@@ -182,7 +182,8 @@ Per memory it records which (app, session) pairs mention it, from
 * staged conversation-worker claims (`memory_claims`, under `_candidates/dream/`) whose
   claim equals the memory's match key after normalising case, whitespace and trailing
   punctuation. The key is the summary, else the title, and only one of at least 4 tokens
-  and 20 characters that no other memory (in any tenant) has as its title or summary.
+  and 20 characters that no other default-tenant memory has as its title or summary
+  (other tenants are never consulted, so their text cannot change the answer).
   The conversation store has no tenant, so claims credit only memories in the default
   tenant `""`. The worker stages a claim once per app (it dedupes on app and claim), so
   repeating a claim in later sessions of the same app adds nothing until the claim text

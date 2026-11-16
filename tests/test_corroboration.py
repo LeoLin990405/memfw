@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
+from memfw import corroboration
 from memfw.cli import app
 from memfw.conversations.policy import SharePolicy
 from memfw.core.epistemic import EXPERIENCE_DISCLAIMER
@@ -292,14 +293,16 @@ LONG = "The nightly export runs at two"
 
 def test_claims_credit_only_the_default_tenant(tmp_path: Path) -> None:
     repository = _vault(tmp_path)
-    # The same title in three tenants is a shared key: no memory may claim it.
+    # The same title in three tenants: only the default memory is credited, and
+    # the other tenants' text does not make the key ambiguous (no oracle).
     ids = {}
     for tenant in ("alpha", "beta", ""):
         document = repository.add(LONG, "body", tenant=tenant)
         ids[tenant] = document.id
     _claims(repository, "conv-t", LONG, ("claude:t1@1", None))
     data = collect(repository, _rules(repository))
-    assert data == {}
+    assert sorted(data) == [ids[""]]
+    assert sorted(data[ids[""]]) == [("claude", "t1")]
     # Distinct titles per tenant: only the default tenant is credited.
     repository = _vault(tmp_path / "second")
     for tenant in ("alpha", "beta", ""):
@@ -327,6 +330,50 @@ def test_short_or_shared_keys_never_match(tmp_path: Path) -> None:
     data = collect(repository, _rules(repository))
     assert first.id not in data and second.id not in data
     assert sorted(data[unique.id]) == [("claude", "u1")]
+
+
+def test_other_tenant_text_does_not_change_the_count(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    memory = repository.add(LONG, "body")
+    _claims(repository, "conv-o", LONG, ("claude:o1@1", None))
+    rebuild(repository, _rules(repository))
+    assert _all(repository, memory.id)["count"] == 1
+    repository.add(LONG, "beta body", tenant="beta")
+    rebuild(repository, _rules(repository))
+    assert _all(repository, memory.id)["count"] == 1
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "a b c d",  # 4 tokens, under 20 characters
+        "abcdefghijklmnopqrstuvwxy",  # 25 characters, one token
+    ],
+)
+def test_each_half_of_the_min_key_rule(tmp_path: Path, key: str) -> None:
+    repository = _vault(tmp_path)
+    repository.add(key, "body")
+    _claims(repository, "conv-k", key, ("claude:k1@1", None))
+    assert collect(repository, _rules(repository)) == {}
+
+
+def test_temp_file_is_created_exclusively(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repository = _vault(tmp_path)
+    repository.add(LONG, "body", evidence=["conv:claude:p1@1"])
+    monkeypatch.setattr(corroboration.secrets, "token_hex", lambda _n: "fixed")
+    planted = repository.root / ".corroboration.sqlite3.fixed.tmp"
+    planted.write_bytes(b"planted")
+    with pytest.raises(FileExistsError):
+        rebuild(repository, _rules(repository))
+    assert planted.read_bytes() == b"planted"
+    assert not projection_path(repository.root).exists()
+    planted.unlink()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.write_bytes(b"x")
+    planted.symlink_to(elsewhere)
+    with pytest.raises(FileExistsError):
+        rebuild(repository, _rules(repository))
+    assert elsewhere.read_bytes() == b"x"
 
 
 def test_shared_long_title_never_matches(tmp_path: Path) -> None:
