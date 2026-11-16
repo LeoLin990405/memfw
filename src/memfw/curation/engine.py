@@ -643,17 +643,22 @@ def _enforce_total_budget(
             non_anchor_documents = [
                 doc
                 for doc in documents_by_id.values()
-                if doc.layer != Layer.ANCHOR
-                and not doc.anchor
-                and (scope == "all" or (doc.tier == Tier.HOT and not doc.is_stub))
+                if doc.layer != Layer.ANCHOR and not doc.anchor
+            ]
+            # Only the history floor is judged in scope: out-of-scope records
+            # cannot be chain members this run could have deleted. The other
+            # floors keep their vault-wide choice unchanged.
+            scoped_non_anchor = [
+                doc
+                for doc in non_anchor_documents
+                if scope == "all" or (doc.tier == Tier.HOT and not doc.is_stub)
             ]
             reason = (
                 "approval_required"
                 if pending_source_proposals
                 else (
                     "history_floor"
-                    if non_anchor_documents
-                    and all(doc.id in chain_ids for doc in non_anchor_documents)
+                    if scoped_non_anchor and all(doc.id in chain_ids for doc in scoped_non_anchor)
                     else "policy_exhausted"
                     if non_anchor_documents
                     else ("anchor_floor" if anchors else "metadata_floor")

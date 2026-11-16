@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from memfw.budget import BudgetLimits
-from memfw.core.models import MemoryDocument, Tier
+from memfw.core.models import Layer, MemoryDocument, Tier
 from memfw.core.repository import Repository
 from memfw.curation.engine import enforce_budget, plan_forget, run_forget
 from memfw.policies import PolicyName, live_chain_ids, make_policy
@@ -161,6 +161,55 @@ def test_total_mode_hot_scope_reason_uses_in_scope_records(tmp_path: Path) -> No
     assert result.unsatisfied_reason_code == "history_floor"
     assert result.blocking_history_ids == CHAIN
     assert "o1" in {doc.id for doc in repo.list()}
+
+
+@pytest.mark.parametrize("policy", FORGETTING)
+def test_chain_with_cold_stub_successor_is_still_protected(
+    tmp_path: Path, policy: PolicyName
+) -> None:
+    repo = _chain_repo(tmp_path / policy.value)
+    repo.update("z-new", actor="human", tier=Tier.COLD)
+    repo.cold_archive("cool-head", actor="mechanism", memory_ids={"z-new"})
+    assert repo.get("z-new").is_stub
+
+    result = _hard(repo, policy, BudgetLimits(max_count=0), scope="hot")
+
+    assert result.applied_ids == ("o1",)
+    assert {doc.id for doc in repo.list()} == set(CHAIN)
+    assert result.unsatisfied_reason == "history_floor"
+    assert result.blocking_history_ids == ("a-old",)
+
+
+@pytest.mark.parametrize("action", ["hard", "soft"])
+@pytest.mark.parametrize("with_anchor", [True, False], ids=["hot_anchor", "no_anchor"])
+def test_total_mode_hot_scope_other_floors_match_base(
+    tmp_path: Path, action: str, with_anchor: bool
+) -> None:
+    """Without chains the hot-scope floor stays as before this fix.
+
+    A big cold record outside the hot scope is still a non-anchor memory, so
+    the result is ``policy_exhausted`` (base 8429235), never ``anchor_floor``
+    or ``metadata_floor``.
+    """
+    repo = _repo(tmp_path / f"{action}{with_anchor}")
+    repo.add("Big", "b" * 6000, memory_id="big-cold", tier=Tier.COLD)
+    if with_anchor:
+        repo.add("Pinned", "keep me", memory_id="pinned", layer=Layer.ANCHOR)
+    _configure(
+        repo,
+        budget_mode="total",
+        max_bytes=1000,
+        forget_policy="fifo",
+        forget_action=action,
+        budget_scope="hot",
+    )
+
+    result = enforce_budget(repo, now=NOW)
+
+    assert result.applied_ids == ()
+    assert result.unsatisfied_reason_code == "policy_exhausted"
+    assert result.blocking_anchor_ids == ()
+    assert result.blocking_history_ids == ()
 
 
 def test_total_mode_still_converges_on_other_records(tmp_path: Path) -> None:

@@ -16,7 +16,8 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 - Budget/policy enforcement with `forget_action: hard` never deletes a live
   supersede chain. A record is a chain member when its `superseded_by` names a
   memory that still exists, or when such a record names it; for
-  `a-old -> z-new` both are kept. Before, `fifo`, `lru`, `decay` and
+  `a-old -> z-new` both are kept. A chain whose successor has been cooled to a
+  cold stub is still live and still protected. Before, `fifo`, `lru`, `decay` and
   `salience` could delete `a-old` (losing it for `as_of` queries and
   `.history` reconstruction), or delete the head `z-new` and leave `a-old` as
   an orphan. Chain members are retained with the decision reason
@@ -28,9 +29,13 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 - When only chain members (and anchors) are left in scope and the budget is
   still over, the result is unmet with the new reason code `history_floor`, a
   `budget_unsatisfiable` event, and the new `blocking_history_ids` field
-  (filled only for `history_floor`). `anchor_floor` keeps precedence in body
-  mode. Dry runs report the same floor from the plan. Total mode with
-  `budget_scope: hot` now judges the floor from in-scope records only.
+  (filled only for `history_floor`). In body mode, a run blocked by anchors
+  still reports `anchor_floor`, even when chain members also block; in total
+  mode, `history_floor` is reported once every remaining in-scope non-anchor
+  record is a chain member. Dry runs report the same floor from the plan.
+  Other reasons are chosen exactly as before (in total mode with
+  `budget_scope: hot`, only the `history_floor` check looks at in-scope
+  records).
   `proposal_stats` gains `history_retained` and `history_floor_unmet`.
 - Still allowed: an explicit `memfw delete` / `Repository.delete`, an
   approved merge and an approved forget proposal can remove a chain member.
