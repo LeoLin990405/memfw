@@ -383,9 +383,10 @@ When the hybrid retriever falls back to FTS internally, `HybridProvider` raises
 `ProviderUnavailable("fell_back_to_fts")`: the FTS provider answers instead. Its
 `projection_version` is the embedder's `fingerprint`.
 
-**Read-only.** No built-in provider appends an event. `HybridProvider` builds its retriever
-with `record_access=False`, so neither its hybrid/vector hits nor the retriever's internal FTS
-fallback write `memory_access` events. On first use it may build or refresh the disposable
+**Read-only.** No built-in provider appends an event or warms a memory. `HybridProvider`
+builds its retriever with `record_access=False` and `autowarm=False`, so neither its
+hybrid/vector hits nor the retriever's internal FTS fallback write `memory_access`,
+`tier_change` or `memory_restore` events. On first use it may build or refresh the disposable
 `.memory-hybrid.sqlite` index (and, with entities on, `.memory-entities.sqlite`): an index
 projection, not an event. Access is recorded by the caller for what it returns (§4.1).
 
@@ -415,10 +416,14 @@ index and builds the rows.
   call's `source`, `include_history` and (FTS only) `scope`. Each provider may take 3 s;
   all providers and resolvers together get **4 s** (the total deadline). The index staleness
   check (`Runtime.ensure_index`) runs before the deadline starts. Resolvers are `default_resolvers(root)`.
-- **Access events.** After the filter and fusion, `Runtime.recall` appends one
-  `memory_access` event (`operation: two_stage_retrieve`) per returned hit, in hit order.
-  A candidate the policy drops (privacy, tenant, source, validity, lifecycle) is never
-  access-logged, so it feeds no strength, reinforcement or tier signal.
+- **Warming and access events.** After the filter and fusion, `Runtime.recall` warms each
+  returned hit that is cold or a stub and then appends one `memory_access` event
+  (`operation: two_stage_retrieve`), per returned hit, in hit order. A candidate the policy
+  drops (privacy, tenant, source, validity, lifecycle) is never warmed or access-logged, so
+  it feeds no strength, reinforcement or tier signal. Best effort: a failure keeps the hits,
+  sets `degraded` and adds the error `access_not_recorded`. Known race: rows are built after
+  `recall` returns and each hit is re-read from the vault; a hit removed or changed in
+  between is logged but not shown. Logging follows the coordinator's output.
 - **One thread per hung provider.** Every call on one `Runtime` (one Runtime per Gateway)
   shares its `InflightRegistry`, so `max_inflight` (1) holds across calls: a provider that hangs holds
   one worker thread, and later calls report it as `busy` instead of starting another.

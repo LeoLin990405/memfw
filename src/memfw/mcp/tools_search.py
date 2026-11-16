@@ -699,6 +699,11 @@ class SearchTools(GatewayBase):
                 for entry in raw.get("ambiguity") or []:
                     if entry not in ambiguities:
                         ambiguities.append(entry)
+        for code in outcome.errors:
+            # A post-filter warm or access event failed; the rows stand.
+            payload_degraded = True
+            if code not in errors:
+                errors.append(code)
         labels = result.labels
         payload: dict[str, Any] = {
             "mode": "two_stage",

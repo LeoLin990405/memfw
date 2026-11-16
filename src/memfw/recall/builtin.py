@@ -10,7 +10,8 @@ the adapter between it and today's vault and retrievers.
 - ``FtsProvider``: the shared ``search_vault`` that MCP ``memory_search``
   ``mode=fts`` and HTTP ``/search`` use.
 - ``HybridProvider``: ``MemoryHybridRetriever`` in ``hybrid`` or ``vector``
-  mode, with ``record_access=False``: it appends no ``memory_access`` event
+  mode, with ``record_access=False`` and ``autowarm=False``: it appends no
+  ``memory_access`` event and warms no cold or stub hit
   (it may build the disposable ``.memory-hybrid.sqlite`` index on first use,
   which is a projection, not an event). Unavailable without an embedder or
   ``sqlite-vec``; when the retriever falls back to FTS internally the provider
@@ -487,6 +488,9 @@ class HybridProvider:
             # Read-only provider: the coordinator filters these hits later, so
             # the Runtime records access only for the ones it returns.
             record_access=False,
+            # Nor does it warm cold or stub hits: the Runtime warms the ones
+            # it returns, after the filter.
+            autowarm=False,
         )
         result = retriever.search(
             query,
