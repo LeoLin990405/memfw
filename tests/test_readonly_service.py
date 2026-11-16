@@ -25,8 +25,11 @@ import hashlib
 import json
 import multiprocessing
 import os
+import shutil
 import socket
 import sqlite3
+import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -1895,3 +1898,141 @@ def test_tracked_text_names_no_personal_home_or_volume_paths() -> None:
             continue
         hits += [f"{name.decode()}:{m.group(0)}" for m in pattern.finditer(text)]
     assert hits == []
+
+
+_CHECKOUT = Path(__file__).resolve().parents[1]
+_DEPLOY_FILES = {
+    "memfw_readonly_service.py": _CHECKOUT / "scripts" / "memfw_readonly_service.py",
+    "readonly.py": _CHECKOUT / "src" / "memfw" / "index" / "readonly.py",
+    "read_path.py": _CHECKOUT / "src" / "memfw" / "index" / "read_path.py",
+}
+_BLOCK_MEMFW = """
+import importlib.abc, sys
+
+class RejectMemfw(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if fullname == "memfw" or fullname.startswith("memfw."):
+            raise ModuleNotFoundError(fullname)
+        return None
+
+sys.meta_path.insert(0, RejectMemfw())
+"""
+
+
+def _deploy(directory: Path, *names: str) -> Path:
+    directory.mkdir()
+    for name in names:
+        shutil.copy(_DEPLOY_FILES[name], directory / name)
+    return directory / "memfw_readonly_service.py"
+
+
+def _run_script(
+    script: Path, body: str, *args: str, block: bool
+) -> subprocess.CompletedProcess[str]:
+    probe = (_BLOCK_MEMFW if block else "") + (
+        "import json, runpy, sys\n"
+        "module = runpy.run_path(sys.argv[1], run_name='memfw_readonly_deployed')\n" + body
+    )
+    return subprocess.run(
+        [sys.executable, "-I", "-c", probe, str(script), *args],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+
+_REPORT = (
+    "print(json.dumps({'file': module['_library'].__file__, "
+    "'loaded': sorted(n for n in sys.modules if n == 'memfw' or n.startswith('memfw.') "
+    "or n == 'jieba')}))\n"
+)
+
+
+def test_deployed_copy_prefers_the_files_beside_the_script(tmp_path: Path) -> None:
+    # memfw is importable here: the copy beside the script still wins, and
+    # loading it imports neither memfw.index nor jieba.
+    script = _deploy(
+        tmp_path / "remote", "memfw_readonly_service.py", "readonly.py", "read_path.py"
+    )
+    completed = _run_script(script, _REPORT, block=False)
+    assert completed.returncode == 0, completed.stderr
+    report = json.loads(completed.stdout)
+    assert Path(report["file"]) == (tmp_path / "remote" / "readonly.py").resolve()
+    assert report["loaded"] == []
+
+
+def test_checkout_script_uses_the_checkout_library() -> None:
+    assert Path(service._library.__file__) == _DEPLOY_FILES["readonly.py"]
+
+
+def test_checkout_candidate_needs_a_scripts_directory(tmp_path: Path) -> None:
+    # A deploy directory next to an unrelated ``src/`` checkout never picks it up.
+    home = tmp_path / "home"
+    unrelated = home / "src" / "memfw" / "index" / "readonly.py"
+    unrelated.parent.mkdir(parents=True)
+    unrelated.write_text("raise SystemExit('unrelated checkout')\n", encoding="utf-8")
+    deployed = home / "memfw-remote" / "memfw_readonly_service.py"
+    assert service._library_candidates(deployed) == [deployed.with_name("readonly.py")]
+    checkout = tmp_path / "repo" / "scripts" / "memfw_readonly_service.py"
+    assert service._library_candidates(checkout) == [
+        checkout.with_name("readonly.py"),
+        tmp_path / "repo" / "src" / "memfw" / "index" / "readonly.py",
+    ]
+
+
+def test_script_at_the_filesystem_root_has_only_the_sibling_candidate() -> None:
+    script = Path("/memfw_readonly_service.py")
+    assert service._library_candidates(script) == [Path("/readonly.py")]
+
+
+def test_script_alone_falls_back_to_the_installed_package(tmp_path: Path) -> None:
+    import importlib.util
+
+    script = _deploy(tmp_path / "remote", "memfw_readonly_service.py")
+    completed = _run_script(script, _REPORT, block=False)
+    assert completed.returncode == 0, completed.stderr
+    spec = importlib.util.find_spec("memfw")
+    assert spec is not None and spec.submodule_search_locations
+    installed = Path(list(spec.submodule_search_locations)[0]) / "index" / "readonly.py"
+    assert Path(json.loads(completed.stdout)["file"]) == installed
+
+
+def test_script_alone_without_memfw_names_the_missing_files(tmp_path: Path) -> None:
+    script = _deploy(tmp_path / "remote", "memfw_readonly_service.py")
+    completed = _run_script(script, "", block=True)
+    assert completed.returncode != 0
+    assert "readonly.py not found" in completed.stderr
+    assert "read_path.py" in completed.stderr
+    assert "docs/READONLY-SERVICE-UPGRADE.md" in completed.stderr
+    assert "No module named 'memfw'" not in completed.stderr
+
+
+def test_missing_read_path_beside_readonly_is_named(tmp_path: Path) -> None:
+    script = _deploy(tmp_path / "remote", "memfw_readonly_service.py", "readonly.py")
+    completed = _run_script(script, "", block=True)
+    assert completed.returncode != 0
+    assert "read_path.py is missing" in completed.stderr
+    assert "docs/READONLY-SERVICE-UPGRADE.md" in completed.stderr
+
+
+def test_standalone_copy_searches_without_memfw(tmp_path: Path) -> None:
+    """The deployed layout: script, ``readonly.py`` and ``read_path.py`` in one directory."""
+
+    root = seed_vault(tmp_path / "vault")
+    script = _deploy(
+        tmp_path / "remote", "memfw_readonly_service.py", "readonly.py", "read_path.py"
+    )
+    completed = _run_script(
+        script,
+        "found = module['search_vault'](sys.argv[2], 'alpha corpus', limit=5, tenant='tenant-a')\n"
+        "print(json.dumps(found, sort_keys=True))\n",
+        str(root),
+        block=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    standalone = json.loads(completed.stdout)
+    assert standalone == json.loads(
+        json.dumps(search_vault(root, "alpha corpus", limit=5, tenant="tenant-a"), sort_keys=True)
+    )
+    assert standalone["results"]

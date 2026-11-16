@@ -247,10 +247,7 @@ def test_same_length_update_during_read_serves_the_current_bytes(
 
     monkeypatch.setattr(Path, "read_bytes", interleave)
     gateway = Gateway(repository.root, tenant="alpha", entity_enabled=False)
-    hits = [
-        gateway.search("alpha keyword", mode="multihop")["results"][0]
-        for _ in range(3)
-    ]
+    hits = [gateway.search("alpha keyword", mode="multihop")["results"][0] for _ in range(3)]
     actual = "sha256:" + hashlib.sha256(real_read(target)).hexdigest()
     old = "sha256:" + hashlib.sha256(original).hexdigest()
     assert target.stat().st_mtime_ns == before.st_mtime_ns
@@ -559,7 +556,8 @@ def test_wheel_search_runs_outside_the_checkout(tmp_path: Path) -> None:
         names = archive.namelist()
         archive.extractall(site)
     assert any(name.endswith("memfw/memfw_readonly_service.py") for name in names)
-    assert any(name.endswith("memfw/read_path.py") for name in names)
+    assert any(name.endswith("memfw/index/read_path.py") for name in names)
+    assert any(name.endswith("memfw/index/readonly.py") for name in names)
     vault = tmp_path / "vault"
     script = tmp_path / "smoke.py"
     script.write_text(

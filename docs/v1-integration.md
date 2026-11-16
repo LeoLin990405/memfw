@@ -53,7 +53,9 @@ principle.
 
 `scripts/memfw_readonly_service.py` is a small HTTP facade over an existing
 MemFW vault that implements contract **`memfw-http/2`**. It uses the standard
-library plus the project's PyYAML dependency and no web framework; it reads the
+library plus the project's PyYAML dependency and no web framework (the read
+path is the library module `memfw.index.readonly`, which a standalone copy
+loads from `readonly.py` and `read_path.py` beside the script); it reads the
 disposable SQLite index and Markdown only, and its single write path, `/stage`,
 writes one candidate file under `<vault>/_candidates/remember/` and never the
 vault. Every response body, including errors, carries
