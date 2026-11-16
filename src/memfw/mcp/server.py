@@ -63,6 +63,7 @@ from memfw.history.index import split_ref
 from memfw.index import MemoryIndex
 from memfw.memory_hybrid import MemoryHybridRetriever, shared_readonly
 from memfw.notes import HttpEmbeddingProvider
+from memfw.recall.coordinator import InflightRegistry
 from memfw.related import RelatedIndex
 from memfw.retrieval.multihop import search_multihop
 
@@ -381,6 +382,17 @@ def _client_message(message: str, root: Path) -> str:
 _ABSOLUTE_PATH = re.compile(r"(?:^|[\s'\"(=:])(?:/|~/|[A-Za-z]:\\)[^\s'\"]+")
 
 
+def _policy_argument(arguments: dict[str, Any]) -> str:
+    """``memory_search`` ``policy``: absent means ``compat_fts``; any non-string is an error."""
+
+    value = arguments.get("policy")
+    if value is None:
+        return "compat_fts"
+    if not isinstance(value, str):
+        raise ValueError("policy must be a string")
+    return value
+
+
 def _flag(arguments: dict[str, Any], key: str, default: bool) -> bool:
     value = arguments.get(key, default)
     if value is None:
@@ -694,6 +706,69 @@ def _annotate_hit(row: dict[str, Any], document: Any, item: dict[str, Any], *, w
             row["stale"] = True
 
 
+def _index_row(
+    repository: Repository, item: dict[str, Any], offset: int, *, why: str
+) -> dict[str, Any]:
+    """A ``memory_search`` row from an index item (one that has ``memory_type``).
+
+    The first ``_FRESHNESS_LIMIT`` rows (by ``offset``) are checked against the
+    live file and marked ``stale`` when it changed since it was indexed.
+    """
+
+    memory_path = repository.root / "memories" / f"{item['id']}.md"
+    checked = offset < _FRESHNESS_LIMIT
+    if checked:
+        live_hash, live_version, consistent = _RAW_HASH_CACHE.lookup(memory_path)
+    else:
+        live_hash, live_version, consistent = "", "", True
+    index_version = item["index_version"] if item.get("index_version") is not None else ""
+    indexed_hash = str(item.get("content_hash") or "")
+    row = {
+        "id": item["id"],
+        "title": item["title"],
+        "layer": item["layer"],
+        "tier": item["tier"],
+        "updated_at": item["updated_at"],
+        "valid_from": item["valid_from"],
+        "valid_to": item["valid_to"],
+        "superseded_by": item["superseded_by"],
+        # Alias and multihop items do not carry it: read the file.
+        "recorded_at": item.get("recorded_at") or _recorded_at_of(memory_path),
+        "type": item["memory_type"],
+        "score": item["score"],
+        "source": item["source"],
+        # An inconsistent read has no digest. Do not fill in the
+        # indexed hash, which would look like a verified live one.
+        "content_hash": ("" if checked and not consistent else (live_hash or indexed_hash)),
+    }
+    # The two labels an answering agent must see. An old file has no
+    # epistemic type; ``causal`` defaults to ``none``.
+    epistemic_label, causal_label = _epistemic_labels_of(memory_path)
+    row["epistemic"] = epistemic_label
+    row["causal"] = causal_label
+    shared_readonly().read_path.annotate(
+        row,
+        provenance=str(item.get("provenance") or ""),
+        source=str(item.get("source") or ""),
+        index_version=index_version,
+        # Past the first 10, the file is not read. Keep the index
+        # version so a skipped check is not reported as stale.
+        sot_version=live_version if checked else index_version,
+        why=str(item.get("why") or why),
+    )
+    if checked:
+        if not consistent:
+            row["stale"] = True
+        if indexed_hash and not _hash_matches(live_hash, indexed_hash):
+            row["stale"] = True
+        projection_hash = str(item.get("projection_hash") or "")
+        if projection_hash:
+            row["projection_hash"] = projection_hash
+            if live_hash.removeprefix("sha256:") != projection_hash:
+                row["stale"] = True
+    return row
+
+
 def _document_row(
     repository: Repository, document: MemoryDocument, item: dict[str, Any], *, why: str
 ) -> dict[str, Any]:
@@ -729,6 +804,8 @@ _MAX_SCOPE_CHARS = 512
 #: still applies). Above the 1.5 s port default so a cold SQLite page does not
 #: count as a timeout.
 _TWO_STAGE_PROVIDER_TIMEOUT = 3.0
+#: Total wait for all ``mode=two_stage`` providers and resolvers together.
+_TWO_STAGE_TOTAL_TIMEOUT = 4.0
 
 
 def _checked_scope(scope: object) -> str:
@@ -778,6 +855,9 @@ class Gateway:
                     dimension=int(os.environ.get("MEMFW_EMBEDDING_DIMENSION", "1024")),
                 )
         self.embedder = embedder
+        # Shared by every ``mode=two_stage`` call, so a hung provider holds at
+        # most ``max_inflight`` worker threads per gateway, not one per call.
+        self._recall_inflight = InflightRegistry()
         self.dream_clock: Callable[[], datetime] = lambda: datetime.now(UTC)
         self._last_staged: float | None = None
         self.history_refresh_seconds = float(
@@ -996,62 +1076,7 @@ class Gateway:
         rows = []
         for offset, item in enumerate(result["results"]):
             if "memory_type" in item:
-                memory_path = repository.root / "memories" / f"{item['id']}.md"
-                checked = offset < _FRESHNESS_LIMIT
-                if checked:
-                    live_hash, live_version, consistent = _RAW_HASH_CACHE.lookup(memory_path)
-                else:
-                    live_hash, live_version, consistent = "", "", True
-                index_version = (
-                    item["index_version"] if item.get("index_version") is not None else ""
-                )
-                indexed_hash = str(item.get("content_hash") or "")
-                row = {
-                    "id": item["id"],
-                    "title": item["title"],
-                    "layer": item["layer"],
-                    "tier": item["tier"],
-                    "updated_at": item["updated_at"],
-                    "valid_from": item["valid_from"],
-                    "valid_to": item["valid_to"],
-                    "superseded_by": item["superseded_by"],
-                    # Alias and multihop items do not carry it: read the file.
-                    "recorded_at": item.get("recorded_at") or _recorded_at_of(memory_path),
-                    "type": item["memory_type"],
-                    "score": item["score"],
-                    "source": item["source"],
-                    # An inconsistent read has no digest. Do not fill in the
-                    # indexed hash, which would look like a verified live one.
-                    "content_hash": (
-                        "" if checked and not consistent else (live_hash or indexed_hash)
-                    ),
-                }
-                # The two labels an answering agent must see. An old file has no
-                # epistemic type; ``causal`` defaults to ``none``.
-                epistemic_label, causal_label = _epistemic_labels_of(memory_path)
-                row["epistemic"] = epistemic_label
-                row["causal"] = causal_label
-                shared_readonly().read_path.annotate(
-                    row,
-                    provenance=str(item.get("provenance") or ""),
-                    source=str(item.get("source") or ""),
-                    index_version=index_version,
-                    # Past the first 10, the file is not read. Keep the index
-                    # version so a skipped check is not reported as stale.
-                    sot_version=live_version if checked else index_version,
-                    why=str(item.get("why") or why),
-                )
-                if checked:
-                    if not consistent:
-                        row["stale"] = True
-                    if indexed_hash and not _hash_matches(live_hash, indexed_hash):
-                        row["stale"] = True
-                    projection_hash = str(item.get("projection_hash") or "")
-                    if projection_hash:
-                        row["projection_hash"] = projection_hash
-                        if live_hash.removeprefix("sha256:") != projection_hash:
-                            row["stale"] = True
-                rows.append(row)
+                rows.append(_index_row(repository, item, offset, why=why))
                 continue
             document = repository.get(item["id"])
             rows.append(_document_row(repository, document, item, why=why))
@@ -1093,6 +1118,53 @@ class Gateway:
             payload["route"] = result["route"]
         return payload
 
+    def _two_stage_providers(
+        self,
+        repository: Repository,
+        *,
+        source: str,
+        include_history: bool,
+        scope: str,
+        observe: Callable[[str], Any],
+    ) -> tuple[list[Any], dict[str, Any]]:
+        """The ``two_stage`` providers and their configs for one call.
+
+        ``observe(name)`` returns the hook that records that provider's raw
+        rows for this call only. A seam for tests, which add stub providers.
+        """
+
+        from memfw.ports import RecallBudget
+        from memfw.recall import ProviderConfig
+        from memfw.recall.builtin import FtsProvider, HybridProvider
+
+        allowed = tuple(self.allowed_sources)
+        budget = RecallBudget(timeout_seconds=_TWO_STAGE_PROVIDER_TIMEOUT)
+        providers: list[Any] = [
+            FtsProvider(
+                repository.root,
+                source=source,
+                include_history=include_history,
+                scope=scope,
+                allowed_sources=allowed,
+                observe=observe("fts"),
+            )
+        ]
+        configs: dict[str, Any] = {"fts": ProviderConfig(budget=budget)}
+        if self.embedder:
+            providers.append(
+                HybridProvider(
+                    repository.root,
+                    embedder=self.embedder,
+                    source=source,
+                    include_history=include_history,
+                    allowed_sources=allowed,
+                    entity_enabled=self.entity_enabled,
+                    observe=observe("hybrid"),
+                )
+            )
+            configs["hybrid"] = ProviderConfig(budget=budget)
+        return providers, configs
+
     def _search_two_stage(
         self,
         repository: Repository,
@@ -1110,49 +1182,57 @@ class Gateway:
         Providers: FTS always, plus hybrid when an embedder is configured.
         The coordinator resolves every candidate against the vault and filters
         it with ``policy`` before fusing, so a row is built only for a memory
-        that passed the filter. Ontology alias expansion is not applied in
-        this mode (yet): ``concepts/`` aliases do not add rows here.
-        Provider exception messages never reach the payload; the coordinator
-        keeps only fixed codes.
+        that passed the filter. Rows are then built by the same code as the
+        other modes, from the provider's own index row when it returned one,
+        so freshness (``stale``, ``index_version``, ``sot_version``,
+        ``content_hash``) matches ``mode=fts``.
+
+        Ontology alias expansion is not applied in this mode (yet):
+        ``concepts/`` aliases do not add rows here. Provider exception
+        messages never reach the payload; the coordinator keeps only fixed
+        codes.
         """
 
-        # Imported here so the other modes do not load the recall layer.
-        from memfw.ports import RecallBudget
-        from memfw.recall import Coordinator, FilterPolicy, ProviderConfig
-        from memfw.recall.builtin import FtsProvider, HybridProvider, default_resolvers
+        # Imported here so the other modes never load the built-in providers.
+        from memfw.recall import Coordinator, FilterPolicy
+        from memfw.recall.builtin import default_resolvers
 
+        service = shared_readonly()
+        # The same input rules as ``search_vault`` (``mode=fts``), and the same
+        # errors, before any provider runs.
+        needle = query.strip()
+        if len(needle) > service.MAX_QUERY_CHARS:
+            raise service._bad_request("query must be 1..512 characters")
+        if service._unsupported_query(needle):
+            raise service._bad_request("query contains an unsupported character")
         page = max(1, min(int(limit), 50))
-        parsed_as_of = None
-        if as_of:
-            parsed_as_of = datetime.fromisoformat(as_of)
-            if parsed_as_of.tzinfo is None or parsed_as_of.utcoffset() is None:
-                raise ValueError("as_of must include a timezone")
+        # Like ``mode=fts``: a timestamp without a timezone is read as UTC.
+        parsed_as_of = (
+            datetime.fromisoformat(service._normalise_as_of(as_of)) if as_of is not None else None
+        )
         # Before the coordinator starts its deadline: a rebuild may take a while.
         _ensure_search_index(repository)
-        allowed = tuple(self.allowed_sources)
-        budget = RecallBudget(timeout_seconds=_TWO_STAGE_PROVIDER_TIMEOUT)
-        providers: list[Any] = [
-            FtsProvider(
-                repository.root,
-                source=source,
-                include_history=include_history,
-                scope=scope,
-                allowed_sources=allowed,
-            )
-        ]
-        configs = {"fts": ProviderConfig(budget=budget)}
-        if self.embedder:
-            providers.append(
-                HybridProvider(
-                    repository.root,
-                    embedder=self.embedder,
-                    source=source,
-                    include_history=include_history,
-                    allowed_sources=allowed,
-                    entity_enabled=self.entity_enabled,
+        captured: dict[str, tuple[dict[str, dict[str, Any]], list[Any]]] = {}
+
+        def observe(name: str) -> Callable[[Any, Any], None]:
+            def record(items: Any, payloads: Any) -> None:
+                # One assignment, so a late (timed-out) worker never leaves
+                # a half-written entry.
+                captured[name] = (
+                    {str(item.get("id") or ""): dict(item) for item in items},
+                    [dict(payload) for payload in payloads],
                 )
-            )
-            configs["hybrid"] = ProviderConfig(budget=budget)
+
+            return record
+
+        providers, configs = self._two_stage_providers(
+            repository,
+            source=source,
+            include_history=include_history,
+            scope=scope,
+            observe=observe,
+        )
+        allowed = tuple(self.allowed_sources)
         if policy == "strict":
             filter_policy = FilterPolicy(
                 tenant=self.tenant,
@@ -1173,35 +1253,77 @@ class Gateway:
             providers,
             resolvers=default_resolvers(repository.root),
             configs=configs,
+            inflight=self._recall_inflight,
+            total_timeout=_TWO_STAGE_TOTAL_TIMEOUT,
         )
         result = coordinator.search(query, limit=page, policy=filter_policy)
+        answered = set(result.labels.providers)
+        seen = {name: captured[name] for name in list(captured) if name in answered}
         rows: list[dict[str, Any]] = []
         for hit in result.hits:
-            try:
-                document = repository.get(hit.memory_id)
-            except (MemfwError, OSError, ValueError):
-                continue  # removed or unreadable since it was resolved
-            if not self._visible(document):
-                continue  # the policy already checked; never widen on a race
-            item: dict[str, Any] = {"score": hit.score}
-            why = hit.extra.get("why")
-            if isinstance(why, str) and why:
-                item["why"] = why
-            row = _document_row(repository, document, item, why="lexical")
+            item: dict[str, Any] | None = None
+            for name in hit.providers:
+                found = seen.get(name, ({}, []))[0].get(hit.memory_id)
+                if found is not None:
+                    item = found
+                    break
+            why = "semantic" if item is None or "memory_type" not in item else "lexical"
+            if item is not None and "memory_type" in item:
+                if self.allowed_sources and item.get("source") not in self.allowed_sources:
+                    continue  # the policy already checked; never widen on a race
+                row = _index_row(repository, item, len(rows), why=why)
+            else:
+                try:
+                    document = repository.get(hit.memory_id)
+                except (MemfwError, OSError, ValueError):
+                    continue  # removed or unreadable since it was resolved
+                if not self._visible(document):
+                    continue  # the policy already checked; never widen on a race
+                base = dict(item or {})
+                extra_why = hit.extra.get("why")
+                if not base.get("why") and isinstance(extra_why, str) and extra_why:
+                    base["why"] = extra_why
+                base["score"] = hit.score
+                row = _document_row(repository, document, base, why=why)
+            row["score"] = hit.score
             row["providers"] = list(hit.providers)
             row["recall_labels"] = list(hit.labels)
             rows.append(row)
+        errors: list[str] = []
+        ambiguities: list[Any] = []
+        payload_degraded = False
+        for name in result.labels.providers:
+            for raw in seen.get(name, ({}, []))[1]:
+                payload_degraded = payload_degraded or bool(raw.get("degraded"))
+                for message in raw.get("errors") or []:
+                    text = _client_message(str(message), repository.root)
+                    if text not in errors:
+                        errors.append(text)
+                for entry in raw.get("ambiguity") or []:
+                    if entry not in ambiguities:
+                        ambiguities.append(entry)
         labels = result.labels
-        return {
+        payload: dict[str, Any] = {
             "mode": "two_stage",
             "policy": policy,
-            "degraded": bool(labels.degraded or labels.resolvers_degraded or labels.fail_closed),
-            "errors": [],
+            # The one flag to read: true when any provider or resolver
+            # degraded, the call failed closed, or a provider reported a
+            # degraded page (``recall`` says which).
+            "degraded": bool(
+                labels.degraded
+                or labels.resolvers_degraded
+                or labels.fail_closed
+                or payload_degraded
+            ),
+            "errors": errors,
             "model_versions": {},
             "results": rows,
             "recall": labels.as_dict(),
             "recall_metrics": result.metrics.as_dict(),
         }
+        if ambiguities:
+            payload["ambiguity"] = ambiguities
+        return payload
 
     def _visible(self, document: MemoryDocument) -> bool:
         """In the bound tenant and, when ``MEMFW_ALLOWED_SOURCES`` is set, an allowed source."""
@@ -1697,7 +1819,7 @@ class Gateway:
                 as_of=(str(args["as_of"]) if args.get("as_of") else None),
                 rounds=(int(args["rounds"]) if args.get("rounds") is not None else None),
                 scope=args.get("scope"),
-                policy=str(args.get("policy") or "compat_fts"),
+                policy=_policy_argument(args),
             ),
             "memory_get": lambda args: self.get(str(args.get("memory_id") or "")),
             "memory_remember": lambda args: self.remember(

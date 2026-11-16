@@ -267,13 +267,22 @@ backend only through exported files and the `resolve` interface.
   multihop providers. It wraps the existing code without changing it.
 - MCP `memory_search` gains the opt-in `mode=two_stage`: FTS (plus hybrid when
   an embedder is configured) through the coordinator, with a `policy` of
-  `compat_fts` (default; same ids and order as `mode=fts` without an embedder)
-  or `strict` (adds privacy, status, lifecycle and archive checks). Rows add
-  `providers` and `recall_labels`; the payload adds `recall` and
-  `recall_metrics` (no query or body text). No ontology alias expansion in
-  this mode yet. `policy` with any other mode is an error. Every other mode,
-  and the default, is byte-identical to before. Not wired into HTTP or the
-  CLI. See `docs/ports-and-recall.md` §4.1.
+  `compat_fts` (default) or `strict` (adds privacy, status, lifecycle, archive
+  and strict validity checks). Without an embedder, `compat_fts` returns the
+  same rows as `mode=fts` (ids, order, freshness fields; the score is the fused
+  one). Rows add `providers` and `recall_labels`; the payload adds `recall` and
+  `recall_metrics` (no query or body text). Query and `as_of` rules and errors
+  match `mode=fts`; 3 s per provider, 4 s in total; one in-flight registry per
+  gateway, so a hung provider holds one thread. No ontology alias expansion in
+  this mode yet. Not wired into HTTP or the CLI. See
+  `docs/ports-and-recall.md` §4.1.
+- **Behaviour change:** `memory_search` with `policy` other than `compat_fts`
+  and a mode other than `two_stage` is now an error, as is a non-string
+  `policy`. Without `policy`, every other mode and the default are
+  byte-identical to before.
+- `Coordinator(..., inflight=InflightRegistry())` shares in-flight counts
+  between coordinators; `FtsProvider` and `HybridProvider` take an optional
+  `observe(page_items, payloads)` hook for in-process callers.
 
 ## [0.2.0] — 2026-11-15
 

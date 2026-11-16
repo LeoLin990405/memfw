@@ -13,6 +13,7 @@ from __future__ import annotations
 from .coordinator import (
     DEFAULT_TOTAL_TIMEOUT,
     Coordinator,
+    InflightRegistry,
     ProviderConfig,
     ProviderReport,
     RecallHit,
@@ -45,6 +46,7 @@ __all__ = [
     "DefaultRouter",
     "FilterPolicy",
     "FusedHit",
+    "InflightRegistry",
     "MemoryMeta",
     "MemoryPathResolver",
     "PathResolver",

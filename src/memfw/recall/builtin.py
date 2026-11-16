@@ -116,6 +116,11 @@ PAGE_CAP = 50
 
 Prepare = Callable[[Repository], None]
 
+#: ``observe(page_items, payloads)``: the raw rows behind the candidates and
+#: the raw search payloads, for an in-process caller that builds its own rows
+#: (the MCP server's freshness fields). Nothing of it enters a ``Candidate``.
+Observe = Callable[[Sequence[Mapping[str, Any]], Sequence[Mapping[str, Any]]], None]
+
 
 def _vault_ok(root: Path) -> bool:
     return root.is_dir() and (root / "vault.yaml").is_file()
@@ -160,6 +165,7 @@ class FtsProvider:
         scope: str = "",
         allowed_sources: tuple[str, ...] = (),
         prepare: Prepare | None = None,
+        observe: Observe | None = None,
     ) -> None:
         self.name = name
         self.root = Path(root).expanduser()
@@ -168,6 +174,7 @@ class FtsProvider:
         self.scope = scope
         self.allowed_sources = tuple(allowed_sources)
         self.prepare = prepare
+        self.observe = observe
         self.projection_version = ""
 
     def available(self) -> Availability:
@@ -207,6 +214,7 @@ class FtsProvider:
         else:
             sources = tuple(dict.fromkeys(self.allowed_sources))
         merged: list[dict[str, Any]] = []
+        payloads: list[dict[str, Any]] = []
         for each in sources:
             payload = shared_readonly().search_vault(
                 self.root,
@@ -218,6 +226,7 @@ class FtsProvider:
                 as_of=as_of.isoformat() if as_of is not None else None,
                 scope=self.scope,
             )
+            payloads.append(payload)
             merged.extend(
                 item
                 for item in payload["results"]
@@ -225,6 +234,8 @@ class FtsProvider:
             )
         if len(sources) > 1:
             merged.sort(key=lambda item: -float(item.get("score") or 0.0))
+        if self.observe is not None:
+            self.observe(merged[:page], payloads)
         return _candidates(self.name, merged[:page], why="lexical")
 
 
@@ -244,6 +255,7 @@ class HybridProvider:
         include_history: bool = False,
         allowed_sources: tuple[str, ...] = (),
         entity_enabled: bool = False,
+        observe: Observe | None = None,
     ) -> None:
         if mode not in {"hybrid", "vector"}:
             raise ValueError("mode must be hybrid or vector")
@@ -255,6 +267,7 @@ class HybridProvider:
         self.include_history = include_history
         self.allowed_sources = tuple(allowed_sources)
         self.entity_enabled = entity_enabled
+        self.observe = observe
         self.projection_version = ""
 
     def available(self) -> Availability:
@@ -301,6 +314,8 @@ class HybridProvider:
             raise ProviderUnavailable("fell_back_to_fts")
         fingerprint = str(getattr(self.embedder, "fingerprint", "") or "")
         self.projection_version = fingerprint
+        if self.observe is not None:
+            self.observe(result["results"], [result])
         return _candidates(self.name, result["results"], why="semantic")
 
 
@@ -370,6 +385,7 @@ __all__ = [
     "FtsProvider",
     "HybridProvider",
     "MultihopProvider",
+    "Observe",
     "Prepare",
     "VaultIdResolver",
     "default_resolvers",
