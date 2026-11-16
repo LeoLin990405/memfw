@@ -166,7 +166,7 @@ def test_live_agent_merge_drops_cross_tenant_pairs() -> None:
 # Plan JSON for this single-tenant fixture was captured from the code at
 # 99c8ad7 (before the tenant/historical scoping) by running both trees side by
 # side; the fix must not change it.
-_SINGLE_TENANT_PLAN_SHA256 = "88dd8eecef691a429cf7fdbe6e3d7cf0a482fa42f37d315fe303171f5de68ca1"
+_SINGLE_TENANT_PLAN_SHA256 = "4ccbfcb6d4c79e76ab4c24f985fe7bab862d68f46a042bbb569494477de06e16"
 
 
 def _single_tenant_fixture() -> list[MemoryDocument]:
@@ -198,7 +198,11 @@ def test_single_tenant_plan_is_unchanged() -> None:
             )
             plans[f"{name.value}:{limits.max_count}:{limits.max_bytes}"] = asdict(plan)
     encoded = json.dumps(plans, default=lambda value: value.isoformat(), sort_keys=True)
-    canonical = json.dumps(json.loads(encoded), sort_keys=True, separators=(",", ":"))
+    # decay/salience scores come from exp/log, whose last bits differ between
+    # libm implementations (macOS vs Linux CI); compare at 9 significant digits.
+    canonical = json.dumps(
+        _round_floats(json.loads(encoded)), sort_keys=True, separators=(",", ":")
+    )
     assert hashlib.sha256(canonical.encode()).hexdigest() == _SINGLE_TENANT_PLAN_SHA256
 
     merges = DeterministicJudge(clock=lambda: NOW).find_near_duplicates(documents)
@@ -307,3 +311,13 @@ def test_review_ids_with_history_match_pre_fix_minus_historical_pairs(tmp_path: 
         if "a-old" not in targets
     ]
     assert sorted(ids) == sorted(expected)
+
+
+def _round_floats(value: Any) -> Any:
+    if isinstance(value, float):
+        return float(f"{value:.9g}")
+    if isinstance(value, dict):
+        return {key: _round_floats(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_round_floats(item) for item in value]
+    return value
