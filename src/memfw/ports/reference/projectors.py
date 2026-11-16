@@ -4,7 +4,8 @@
   metadata and a ``body_sha256`` — no body text. An index an external tool
   can join against, or diff between two exports to see what changed.
 - ``MirrorProjector`` (``markdown-mirror``): the memory files copied
-  byte-for-byte to ``<out>/memories/``, for a plain-file backend (a grep, a
+  byte-for-byte to ``<out>/memories/``, which it owns (unselected ``*.md``
+  files there are deleted), for a plain-file backend (a grep, a
   static site, another indexer) that reads Markdown.
 
 Both read the vault only and apply core's privacy classes (see
@@ -163,9 +164,11 @@ class JsonlProjector(_FileProjector):
 class MirrorProjector(_FileProjector):
     """``<out>/memories/<id>.md``: each selected memory file, byte-for-byte.
 
-    ``<out>/memories/`` is made to match the selection: a ``.md`` file left
-    from an earlier export (a memory since deleted, or since made private) is
-    removed.
+    The projector owns ``<out>/memories/``: after an export it holds exactly
+    the selected memories, and every other ``*.md`` there (one left from an
+    earlier export, a memory since deleted or made private, or any file put
+    there by hand) is deleted. Point ``out`` at a directory used for nothing
+    else.
     """
 
     def __init__(self, *, name: str = "markdown-mirror", clock: Clock | None = None) -> None:

@@ -9,6 +9,7 @@ tenant/privacy isolation still hold.
 
 from __future__ import annotations
 
+import functools
 import json
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -16,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from memfw.core.markdown_parse import parse_memory_markdown
 from memfw.core.repository import Repository
 from memfw.dream.claims import DreamClaimStager, DreamClaimVerifier
 from memfw.index import MemoryIndex
@@ -336,6 +338,136 @@ def test_scalars_drop_inline_comments_like_yaml() -> None:
         "It's # here",
         "a#b",
     )
+
+
+#: The eight list-item forms core reads as private (or rejects) that an
+#: earlier reader took as plain tags. Each replaces ``tags:\n- x\n``.
+REVIEW_FORMS: dict[str, str] = {
+    "anchor-item": "tags:\n- &a sensitivity:private\n",
+    "tag-item": "tags:\n- !!str sensitivity:private\n",
+    "nested-seq-item": "tags:\n- - x\n",
+    "flow-map-item": "tags:\n- {sensitivity: private}\n",
+    "map-item": "tags:\n- sensitivity: private\n",
+    "flow-seq-item": "tags:\n- [x]\n",
+    "empty-item": "tags:\n-\n",
+    "tab-after-key": "tags:\t\n- sensitivity:private\n",
+}
+
+
+def _replace_tags(text: str, *, form: str) -> str:
+    return text.replace("tags:\n- x\n", form)
+
+
+#: Evasion attempts: tabs, CRLF, BOM, quoted keys, a second front matter
+#: block, aliases and merge keys, ``?`` keys, the ``...`` marker, other line
+#: breaks, indicators. Each maps the base text to a variant.
+EVASIONS: dict[str, Callable[[str], str]] = {
+    **{name: functools.partial(_replace_tags, form=form) for name, form in REVIEW_FORMS.items()},
+    "tab-after-dash": lambda t: t.replace("tags:\n- x\n", "tags:\n-\tsensitivity:private\n"),
+    "tab-before-comment": lambda t: t.replace(
+        "tags:\n- x\n", "tags:\n- sensitivity:private\t# c\n"
+    ),
+    "tab-indented-key": lambda t: t.replace("tags:\n- x\n", "\ttags:\n- sensitivity:private\n"),
+    "crlf": lambda t: t.replace("- x\n", "- sensitivity:private\n").replace("\n", "\r\n"),
+    "lone-cr": lambda t: t.replace("tags:\n- x\n", "tags:\n- x\r- sensitivity:private\n"),
+    "nel-break": lambda t: t.replace("tags:\n- x\n", "tags:\n- x\x85- sensitivity:private\n"),
+    "line-separator": lambda t: t.replace("tags:\n- x\n", "tags:\n- x - sensitivity:private\n"),
+    "bom": lambda t: "﻿" + t.replace("- x\n", "- sensitivity:private\n"),
+    "double-quoted-key": lambda t: t.replace("tags:\n- x\n", '"tags":\n- sensitivity:private\n'),
+    "single-quoted-key": lambda t: t.replace("tags:\n- x\n", "'tags':\n- sensitivity:private\n"),
+    "space-before-colon": lambda t: t.replace("tags:\n- x\n", "tags :\n- sensitivity:private\n"),
+    "second-front-matter": lambda t: t.replace(
+        "\n---\n", "\n---\n---\ntags:\n- sensitivity:private\n---\n", 1
+    ),
+    "document-end-marker": lambda t: t.replace("tags:\n- x\n", "...\ntags:\n- x\n"),
+    "alias-item": lambda t: t.replace("tags:\n- x\n", "x_p: &p sensitivity:private\ntags:\n- *p\n"),
+    "anchor-on-value": lambda t: t.replace("tags:\n- x\n", "tags: &t\n- sensitivity:private\n"),
+    "merge-key": lambda t: t.replace(
+        "tags:\n- x\n", "x_b: &b\n  tags:\n  - sensitivity:private\n<<: *b\n"
+    ),
+    "complex-key": lambda t: t.replace("tags:\n- x\n", "? tags\n: - sensitivity:private\n"),
+    "seq-tag-on-value": lambda t: t.replace("tags:\n- x\n", "tags: !!seq\n- sensitivity:private\n"),
+    "flow-list": lambda t: t.replace("tags:\n- x\n", "tags: ['x', sensitivity:private]\n"),
+    "indented-list": lambda t: t.replace("tags:\n- x\n", "tags:\n  - sensitivity:private\n"),
+    "one-space-list": lambda t: t.replace("tags:\n- x\n", "tags:\n - sensitivity:private\n"),
+    "block-scalar": lambda t: t.replace("tags:\n- x\n", "tags: |\n  sensitivity:private\n"),
+    "duplicate-key": lambda t: t.replace(
+        "tags:\n- x\n", "tags:\n- x\ntags:\n- sensitivity:private\n"
+    ),
+    "question-item": lambda t: t.replace("tags:\n- x\n", "tags:\n- ? sensitivity:private\n"),
+    "percent-item": lambda t: t.replace("tags:\n- x\n", "tags:\n- x\n- %sensitivity:private\n"),
+    "at-item": lambda t: t.replace("tags:\n- x\n", "tags:\n- x\n- @sensitivity:private\n"),
+    "backtick-item": lambda t: t.replace("tags:\n- x\n", "tags:\n- x\n- `sensitivity:private\n"),
+    "trailing-colon": lambda t: t.replace("tags:\n- x\n", "tags:\n- sensitivity:private:\n"),
+    "dash-no-space": lambda t: t.replace("tags:\n- x\n", "tags:\n-sensitivity:private\n"),
+    "indented-closing": lambda t: t.replace(
+        "tags:\n- x\n", "tags:\n- x\n ---\n- sensitivity:private\n"
+    ),
+    "quoted-item": lambda t: t.replace("tags:\n- x\n", "tags:\n- 'sensitivity:private'\n"),
+    "escaped-item": lambda t: t.replace("tags:\n- x\n", 'tags:\n- "sensitivity:\\x70rivate"\n'),
+    "comment-between": lambda t: t.replace("tags:\n- x\n", "tags:\n# c\n- sensitivity:private\n"),
+    "comment-after-item": lambda t: t.replace("tags:\n- x\n", "tags:\n- sensitivity:private # c\n"),
+    "secret-second": lambda t: t.replace("tags:\n- x\n", "tags:\n- x\n- Sensitivity:Secret\n"),
+    "top-level-privacy": lambda t: t.replace("tags:\n- x\n", "tags: []\nprivacy: restricted\n"),
+    "privacy-key-anchor": lambda t: t.replace("tags:\n- x\n", "tags: []\nprivacy: &q x\n"),
+    "body-after-closing": lambda t: t.replace(
+        "tags:\n- x\n", "tags:\n- x\n---\n- sensitivity:private\n"
+    ),
+}
+
+
+def _base_text(tmp_path: Path) -> str:
+    repository = Repository(tmp_path / "base")
+    repository.init()
+    repository.add("Doc", "BODY-SECRET", memory_id="e1", tags=["x"])
+    text = (repository.memories_dir / "e1.md").read_text(encoding="utf-8")
+    assert "tags:\n- x\n" in text
+    return text
+
+
+def _core_class(text: str) -> str | None:
+    try:
+        document = parse_memory_markdown(text, expected_id="e1")
+    except Exception:  # noqa: BLE001 - core rejects the file
+        return None
+    return meta_from_document(document).privacy_class()[0]
+
+
+def test_evasion_corpus_is_large_enough() -> None:
+    assert len(EVASIONS) >= 34
+
+
+@pytest.mark.parametrize("name", sorted(EVASIONS))
+def test_evasion_corpus_never_looser_than_core(tmp_path: Path, name: str) -> None:
+    """Skipped, or at least as strict as core; a file core rejects is skipped."""
+
+    text = EVASIONS[name](_base_text(tmp_path))
+    core = _core_class(text)
+    memory = parse_memory("e1", text.encode("utf-8"))
+    reference = None if memory is None else memory.privacy_class()
+    if core is None:
+        assert reference is None, (name, reference)
+    elif reference is not None:
+        assert RANK[reference] >= RANK[core], (name, core, reference)
+
+
+def test_mirror_exports_none_of_the_review_forms(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "vault")
+    repository.init()
+    repository.add("Public", "PUBLIC-BODY", memory_id="pub")
+    for index, form in enumerate(REVIEW_FORMS.values()):
+        memory_id = f"f{index}"
+        repository.add("Doc", f"BODY-{memory_id}", memory_id=memory_id, tags=["x"])
+        path = repository.memories_dir / f"{memory_id}.md"
+        path.write_text(path.read_text("utf-8").replace("tags:\n- x\n", form), "utf-8")
+    out = tmp_path / "out"
+    manifest = MirrorProjector().export(repository.root, out, ProjectionPolicy("v1"))
+    assert manifest.files == ("memories/pub.md",)
+    exported = b"".join(path.read_bytes() for path in out.rglob("*") if path.is_file())
+    for index in range(len(REVIEW_FORMS)):
+        assert f"BODY-f{index}".encode() not in exported
+    jsonl = JsonlProjector().export(repository.root, tmp_path / "j", ProjectionPolicy("v1"))
+    assert jsonl.projected == 1
 
 
 def _privacy_vault(tmp_path: Path) -> Repository:

@@ -1,15 +1,20 @@
 """Read a vault's memory files without memfw internals. Stdlib only.
 
 The reference adapters read ``<vault>/memories/<id>.md`` directly: a YAML
-front matter block between ``---`` lines, then the body. Only what they need
+front matter block between ``---`` lines, then the body. The block is cut
+exactly as core cuts it (``memfw.core.markdown_parse``): CRLF is normalised,
+the file must start with ``---\n`` and the block ends at the first
+``\n---\n``. Only what they need
 is parsed: top-level scalar keys (``key: value``, quotes and inline
 ``# comments`` stripped) and top-level block lists of scalars (``key:``
 followed by ``- item`` lines at column 0, the layout the vault writes).
 
 The parser fails closed. A file whose front matter cannot be read, or whose
 privacy-relevant keys (``tags``, ``privacy``, ``sensitivity``) use any other
-YAML form (a flow list, an indented list, a block scalar, a duplicate key),
-is ``None``: the caller counts it as unreadable and skips it, never guesses.
+YAML form (a flow list, an indented list, a block scalar, a duplicate key,
+a tab, an anchor, alias or type tag, a nested item, a list item that is
+empty, starts with an indicator character, contains ``": "`` or ends with
+``:``), is ``None``: the caller counts it as unreadable and skips it, never guesses.
 
 ``privacy_class`` mirrors core's rule (``memfw.projection.tag_privacy_class``
 and ``memfw.recall.policy.classify_privacy`` as ``meta_from_document``
@@ -33,12 +38,19 @@ PrivacyClass = Literal["none", "local-private", "unknown"]
 
 _KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):(?:[ \t]+(.*))?$")
 _COMMENT_RE = re.compile(r"[ \t]#")
+#: YAML line breaks other than ``\n`` (``\r``, NEL, LS, PS) and control
+#: characters: core's YAML splits or rejects on them; this reader does neither,
+#: so a block containing one is unreadable.
+_BREAKS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f\x85\u2028\u2029\ufeff]")
 #: Front matter keys that decide visibility; any form the parser does not
 #: understand for them makes the whole file unreadable.
 PRIVACY_KEYS: frozenset[str] = frozenset({"tags", "privacy", "sensitivity"})
 #: ``privacy:`` values core treats as public (``memfw.recall.policy``).
 PRIVACY_NONE_VALUES: frozenset[str] = frozenset({"", "none", "null", "public", "fleet", "shared"})
 _RANK: dict[str, int] = {"none": 0, "local-private": 1, "unknown": 2}
+#: YAML indicator characters: an unquoted value under a privacy key that
+#: starts with one of these is not a plain scalar this reader trusts.
+_INDICATORS = ("[", "{", "|", ">", "&", "*", "!", "-", "?", "%", "@", "`", ",", "#")
 
 
 def _declared_class(value: str) -> PrivacyClass:
@@ -194,8 +206,14 @@ def _front(lines: list[str]) -> dict[str, str | list[str]]:
                 raise _Unparsable("list item outside a list")
             items = front[current]
             assert isinstance(items, list)
+            if current in PRIVACY_KEYS:
+                if "\t" in line:
+                    raise _Unparsable("tab in a privacy list item")
+                _check_privacy_value(line[1:])
             items.append(_scalar(line[1:]))
             continue
+        if line.startswith("-") and (current in PRIVACY_KEYS or _last_key(front) in PRIVACY_KEYS):
+            raise _Unparsable("list item without a space under a privacy key")
         if line.startswith((" ", "\t")):
             # A nested value (an indented list, a mapping, a continuation).
             if current in PRIVACY_KEYS or _last_key(front) in PRIVACY_KEYS:
@@ -207,19 +225,37 @@ def _front(lines: list[str]) -> dict[str, str | list[str]]:
         key, raw = match.group(1), (match.group(2) or "")
         if key in front and key in PRIVACY_KEYS:
             raise _Unparsable("duplicate privacy key")
+        if key in PRIVACY_KEYS and "\t" in line:
+            raise _Unparsable("tab on a privacy key line")
         stripped = raw.strip()
         if not stripped or stripped.startswith("#"):
             current = key
             front[key] = []
             continue
         current = None
-        if stripped.startswith(("[", "{", "|", ">", "&", "*", "!")):
-            if key in PRIVACY_KEYS and stripped not in {"[]", "{}"}:
-                raise _Unparsable("flow or block form under a privacy key")
-            front[key] = [] if stripped in {"[]", "{}"} else stripped
+        if stripped in {"[]", "{}"}:
+            front[key] = []
+            continue
+        if key in PRIVACY_KEYS:
+            _check_privacy_value(raw)
+        elif stripped.startswith(("[", "{", "|", ">", "&", "*", "!")):
+            front[key] = stripped
             continue
         front[key] = _scalar(raw)
     return front
+
+
+def _check_privacy_value(raw: str) -> None:
+    """Refuse anything under a privacy key that is not a plain or quoted scalar."""
+
+    value = raw.strip()
+    if not value or value.startswith(_INDICATORS):
+        raise _Unparsable("empty or indicator value under a privacy key")
+    if value[0] in {"'", '"'}:
+        return  # _scalar parses the quotes and refuses text after them
+    plain = _COMMENT_RE.split(value, maxsplit=1)[0].rstrip()
+    if ": " in plain or plain.endswith(":"):
+        raise _Unparsable("mapping value under a privacy key")
 
 
 def _last_key(front: dict[str, str | list[str]]) -> str | None:
@@ -233,15 +269,22 @@ def parse_memory(memory_id: str, raw: bytes) -> MemoryFile | None:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
         return None
-    lines = text.split("\n")
-    if not lines or lines[0].strip() != "---":
+    text = text.replace("\r\n", "\n")
+    if not text.startswith("---\n"):
+        return None  # a BOM or leading text included, as in core
+    closing = text.find("\n---\n", 3)
+    if closing < 0:
         return None
+    block = text[4 : closing + 1]
+    if _BREAKS_RE.search(block):
+        return None  # another YAML line break, or a control character
     try:
-        end = next(index for index in range(1, len(lines)) if lines[index].strip() == "---")
-        front = _front(lines[1:end])
-    except (StopIteration, _Unparsable):
+        front = _front(block.split("\n"))
+    except _Unparsable:
         return None
-    body = "\n".join(lines[end + 1 :]).strip("\n")
+    body = text[closing + 5 :].lstrip("\n")
+    if body.endswith("\n"):
+        body = body[:-1]
     return MemoryFile(memory_id, raw, front, body)
 
 
