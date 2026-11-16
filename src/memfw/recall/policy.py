@@ -93,6 +93,10 @@ class MemoryMeta:
     source: str = ""
     privacy: str | None = None
     sensitivity_private: bool = False
+    #: Class derived from ``sensitivity:*`` tags (``none``/``local-private``/
+    #: ``unknown``). ``None`` means "not computed": fall back to
+    #: ``sensitivity_private``, so callers that only set the bool keep working.
+    sensitivity_class: PrivacyClass | None = None
     status: str | None = "unconfirmed"
     lifecycle: str | None = None
     superseded_by: str | None = None
@@ -109,7 +113,14 @@ class MemoryMeta:
         """Strictest class of the two sources, and whether they disagreed."""
 
         declared = classify_privacy(self.privacy)
-        tagged: PrivacyClass = "local-private" if self.sensitivity_private else "none"
+        tagged: PrivacyClass
+        if self.sensitivity_class is not None:
+            tagged = self.sensitivity_class
+            floor = _PRIVACY_ORDER["local-private"]
+            if self.sensitivity_private and _PRIVACY_ORDER[tagged] < floor:
+                tagged = "local-private"
+        else:
+            tagged = "local-private" if self.sensitivity_private else "none"
         if self.privacy is None:
             return tagged, False
         strict = declared if _PRIVACY_ORDER[declared] >= _PRIVACY_ORDER[tagged] else tagged

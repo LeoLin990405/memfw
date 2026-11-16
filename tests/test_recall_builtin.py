@@ -350,3 +350,62 @@ def test_builtin_providers_pass_the_full_contract_for_each_tenant(tmp_path: Path
                 error_queries=["x" * 600, "a\x00b"],
                 budget=RecallBudget(timeout_seconds=5),
             )
+
+
+@pytest.mark.parametrize(
+    ("tags", "expected"),
+    [
+        ([], "none"),
+        (["sensitivity:private"], "local-private"),
+        (["Sensitivity:Private"], "local-private"),
+        (["SENSITIVITY:PRIVATE "], "local-private"),
+        (["sensitivity:local-private"], "unknown"),
+        (["sensitivity:secret"], "unknown"),
+        (["sensitivity:private", "sensitivity:secret"], "unknown"),
+        (["Privacy:local-private"], "local-private"),
+        (["privacy:none", "sensitivity:private"], "local-private"),
+        # Several privacy tags: the strictest wins regardless of case or order.
+        (["Privacy:none", "privacy:local-private"], "local-private"),
+        (["privacy:none", "privacy:local-private"], "local-private"),
+        (["privacy:local-private", "privacy:none"], "local-private"),
+        (["PRIVACY:none", "privacy:secret"], "unknown"),
+    ],
+)
+def test_meta_from_document_classes_sensitivity_like_the_projection(
+    tmp_path: Path, tags: list[str], expected: str
+) -> None:
+    from memfw.projection import tag_privacy_class
+    from memfw.recall.builtin import meta_from_document
+    from memfw.recall.policy import FilterPolicy, evaluate
+
+    repository = Repository(tmp_path / "vault")
+    repository.init()
+    document = repository.add("t", "body", tags=tags)
+    meta = meta_from_document(document)
+    assert meta.privacy_class()[0] == expected
+    if not any(tag.lower().startswith("privacy:") for tag in tags):
+        assert tag_privacy_class(tags) == expected
+    verdict = evaluate(meta, FilterPolicy(), now=datetime.now(UTC))
+    assert (verdict.reason == "privacy") == (expected != "none")
+
+
+@pytest.mark.parametrize(
+    ("tags", "reason"),
+    [
+        (["Lifecycle:active", "lifecycle:retired"], "retired"),
+        (["lifecycle:retired", "lifecycle:active"], "retired"),
+        (["LIFECYCLE:Active", "lifecycle:superseded"], "superseded"),
+        (["lifecycle:active", "lifecycle:draft"], "lifecycle"),
+        (["Lifecycle:Retired"], "retired"),
+        (["lifecycle:active"], None),
+    ],
+)
+def test_lifecycle_tags_strongest_wins(tmp_path: Path, tags: list[str], reason: str | None) -> None:
+    from memfw.recall.builtin import meta_from_document
+    from memfw.recall.policy import FilterPolicy, evaluate
+
+    repository = Repository(tmp_path / "vault")
+    repository.init()
+    document = repository.add("t", "body", tags=tags)
+    verdict = evaluate(meta_from_document(document), FilterPolicy(), now=datetime.now(UTC))
+    assert verdict.reason == reason

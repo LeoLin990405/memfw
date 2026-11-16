@@ -39,34 +39,77 @@ from memfw.ports.types import (
     RecallBudget,
     RefKind,
 )
+from memfw.projection import tag_privacy_class
 
-from .policy import MemoryMeta
+from .policy import ACTIVE_LIFECYCLES, MemoryMeta, classify_privacy
 from .resolve import MemoryPathResolver, Resolution, Resolver
 
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+
+
+_PRIVACY_RANK = {"none": 0, "local-private": 1, "unknown": 2}
+
+
+def _strictest_privacy(values: Sequence[str]) -> str | None:
+    """Several ``privacy:`` tags: the strictest wins, never the first one.
+
+    Tag order must not decide visibility, so ``privacy:none`` next to
+    ``privacy:local-private`` (in any case) is ``local-private``.
+    """
+
+    if not values:
+        return None
+    return max(values, key=lambda value: _PRIVACY_RANK[classify_privacy(value)])
+
+
+def _strongest_lifecycle(values: Sequence[str]) -> str | None:
+    """Several ``lifecycle:`` tags: retired > superseded > any non-active > active."""
+
+    if not values:
+        return None
+
+    def rank(value: str) -> int:
+        cleaned = value.strip().lower()
+        if cleaned == "retired":
+            return 3
+        if cleaned == "superseded":
+            return 2
+        if cleaned not in ACTIVE_LIFECYCLES:
+            return 1
+        return 0
+
+    return max(values, key=rank)
 
 
 def meta_from_document(document: MemoryDocument) -> MemoryMeta:
     """Filter metadata from a parsed vault document.
 
     Privacy comes from tags until the meta-index is joined: a
-    ``privacy:<value>`` tag gives the declared value and
-    ``sensitivity:private`` marks the memory private.
+    ``privacy:<value>`` tag gives the declared value, and ``sensitivity:*``
+    tags are classed exactly like the projection does
+    (:func:`memfw.projection.tag_privacy_class`): any case, only
+    ``sensitivity:private`` is ``local-private``, and any other
+    ``sensitivity:`` value is ``unknown`` (fail closed).
     """
 
-    declared: str | None = None
-    lifecycle: str | None = None
+    privacy_values: list[str] = []
+    lifecycle_values: list[str] = []
     for tag in document.tags:
-        if tag.startswith("privacy:") and declared is None:
-            declared = tag.split(":", 1)[1]
-        elif tag.startswith("lifecycle:") and lifecycle is None:
-            lifecycle = tag.split(":", 1)[1]
+        lowered = tag.lower()
+        if lowered.startswith("privacy:"):
+            privacy_values.append(tag.split(":", 1)[1])
+        elif lowered.startswith("lifecycle:"):
+            lifecycle_values.append(tag.split(":", 1)[1])
+    declared = _strictest_privacy(privacy_values)
+    lifecycle = _strongest_lifecycle(lifecycle_values)
+    tag_class = tag_privacy_class(document.tags)
     return MemoryMeta(
         memory_id=document.id,
         tenant=document.tenant,
         source=document.source,
         privacy=declared,
-        sensitivity_private="sensitivity:private" in document.tags,
+        sensitivity_private=tag_class == "local-private",
+        sensitivity_class=tag_class,
         status=document.status,
         lifecycle=lifecycle,
         superseded_by=document.superseded_by,

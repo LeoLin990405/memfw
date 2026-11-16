@@ -11,6 +11,11 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
+### Fixed — recall privacy tags fail closed (security)
+
+- `memfw.recall.builtin.meta_from_document` recognised only the exact, lower-case `sensitivity:private` tag, so under `policy=strict` (`memory_search mode=two_stage`) a memory tagged `Sensitivity:Private`, `sensitivity:local-private` or `sensitivity:secret` was kept. It now classes `sensitivity:*` tags exactly like the projection (`tag_privacy_class`): any case, only `sensitivity:private` is `local-private`, any other value is `unknown`, and both are dropped without clearance. `privacy:` and `lifecycle:` tag prefixes are matched in any case too, and with several such tags the strictest wins instead of the first (privacy: unknown > local-private > none; lifecycle: retired > superseded > other non-active > active), so tag order or case can never widen access. Before, `privacy:none` followed by `privacy:local-private` was kept under `strict`. `MemoryMeta` gains an optional `sensitivity_class`; callers that set only `sensitivity_private` behave as before. `policy=compat_fts` does not check privacy, so its output is unchanged.
+
+
 ### Fixed — body lookup parses only hash matches (performance)
 
 - `_current_body_by_hash` and the archive lookup compared the body hash only after YAML-parsing each file, so every write parsed up to the whole vault and the cost depended on the filesystem's directory order (a perf guard passed on macOS and failed on Linux CI with 109 parses). They now hash first and parse only a matching file; the result is the same first file in glob order that both matches and parses. A non-matching file with invalid UTF-8 no longer raises; a matching one is skipped like any file that fails to parse. A delete in a 200-memory vault now parses 6 files in any directory order (was 6–204).
