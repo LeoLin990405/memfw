@@ -112,6 +112,11 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   `truncated_ids` naming the memories that did not fit. `strict` filters through the recall
   `FilterPolicy`: no `local-private` or unrecognised-privacy memories, no retired,
   superseded, expired or archived ones. See `docs/ports-and-recall.md` §4.2.
+- v2 builds each entry from a single read of its file (body, version and hash agree) and
+  reports `skipped` for memories it cannot represent (e.g. a hand-placed file whose id is
+  outside the memory id pattern) instead of failing.
+- New errors for v1 callers: `policy` other than `compat_fts`, or `v` not the integer 1 or 2,
+  used to be ignored and now fail.
 
 ### Fixed — tenant isolation on supersede (security)
 

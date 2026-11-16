@@ -94,11 +94,21 @@ class ContextSlot:
     """A named, budgeted group of entries.
 
     ``overflow`` counts the selected memories this slot did not carry in
-    full, and ``truncated_ids`` names them in selection order: a memory cut
-    part-way (its entry is present with a prefix of the body) and every
+    full, and ``truncated_ids`` names them: a memory cut part-way and every
     memory left out once the budget ran out. A caller fetches them with
     ``memory_get`` or ``memory_search`` when it needs them; nothing is dropped
     silently.
+
+    Contract: at most one memory is cut part-way; when there is one, its entry
+    is the slot's last entry (with a prefix of the body) and its id is in
+    ``truncated_ids``. The order of ``truncated_ids`` is the producer's
+    (the built-in ``core`` slot uses selection order, so the partial one
+    comes first).
+
+    ``skipped`` counts selected memories the producer could not represent
+    (for example an id outside the memory id pattern or a file that could
+    not be read). They are neither carried nor overflow, and are not part of
+    ``pack_version``.
     """
 
     name: str
@@ -106,6 +116,7 @@ class ContextSlot:
     used_tokens_est: int
     overflow: int = 0
     truncated_ids: tuple[str, ...] = ()
+    skipped: int = 0
 
     def __post_init__(self) -> None:
         check_name(self.name, what="slot name")
@@ -120,6 +131,8 @@ class ContextSlot:
             raise ValueError("used_tokens_est must be a non-negative integer")
         if type(self.overflow) is not int or self.overflow < 0:
             raise ValueError("overflow must be a non-negative integer")
+        if type(self.skipped) is not int or self.skipped < 0:
+            raise ValueError("skipped must be a non-negative integer")
         if any(
             type(item) is not str or not MEMORY_ID_RE.fullmatch(item) for item in self.truncated_ids
         ):
@@ -136,6 +149,7 @@ class ContextSlot:
             "used_tokens_est": self.used_tokens_est,
             "overflow": self.overflow,
             "truncated_ids": list(self.truncated_ids),
+            "skipped": self.skipped,
         }
 
 

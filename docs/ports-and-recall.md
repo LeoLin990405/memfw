@@ -459,12 +459,20 @@ to earlier versions: `limit_tokens`, `used_chars`, `entries`.
  "slots": [{"name": "core", "entries": [{"id": "...", "title": "...", "type": "procedural",
    "layer": "current", "anchor": null, "epistemic": null, "causal": "none", "text": "...",
    "version": 1, "content_hash": "sha256:..."}],
-   "used_tokens_est": 12, "overflow": 0, "truncated_ids": []}]}
+   "used_tokens_est": 12, "overflow": 0, "truncated_ids": [], "skipped": 0}]}
 ```
 
 - **One slot, `core`,** with the same selection, order and text as v1 under `compat_fts`.
   `content_hash` is the sha256 of the memory file, the value `memory_search` reports.
-  `used_tokens_est` is the characters carried divided by four, rounded up.
+  `used_tokens_est` is the characters carried divided by four, rounded up. The budget never
+  drops below 100 characters, so with a very small `limit_tokens` (under 25) `used_tokens_est`
+  can exceed `limit_tokens`.
+- **One read per entry.** Each selected memory's file is read once more and its entry (body,
+  `version`, `content_hash`) is built from those bytes, then selected and ordered again, so a
+  concurrent write never pairs one version's text with another's hash. `skipped` counts
+  selected memories the pack cannot represent: an id outside the memory id pattern (a
+  hand-placed `memories/a.dot.md`, which v1 still returns), an unreadable or unparsable file,
+  or one that no longer qualifies when re-read. They are not overflow.
 - **`policy`** (v=2 only). `compat_fts` (default) applies v1's filters, tenant and source
   (`FilterPolicy.compat_fts` with `include_history`, since the slot keeps v1's own rule that a
   memory with `valid_to` is never resident). `strict` is the default `FilterPolicy`: privacy
@@ -472,7 +480,9 @@ to earlier versions: `limit_tokens`, `used_chars`, `entries`.
   (`lifecycle:retired` and other non-active tags), supersession, validity and archive (cold
   tier or stub). Both run `memfw.recall.policy.evaluate` on `meta_from_document`. Absent,
   `null` and `""` mean `compat_fts`; a non-string or unknown value is an error, and so is a
-  `policy` other than `compat_fts` with `v=1`. `v` must be the integer 1 or 2.
+  `policy` other than `compat_fts` with `v=1`. `v` must be the integer 1 or 2. These are new
+  errors for v1 callers: a v1 call that passes `policy` (other than `compat_fts`), or a `v`
+  that is not the integer 1 or 2, used to have the argument ignored and now fails.
 - **Overflow.** `overflow` is how many selected memories the slot did not carry in full and
   `truncated_ids` names them in order: the memory cut part-way (its entry is the last one
   carried, with a prefix of the body) first, then every memory left out once the budget ran
@@ -484,12 +494,19 @@ to earlier versions: `limit_tokens`, `used_chars`, `entries`.
   No body text, title or query goes in (`pack_version_payload` returns the exact bytes), and
   `generated_at` is not part of it. The key changes when a carried memory changes (body, version
   or hash), when the selection or cut changes, or with the policy; it does not change when an
-  unrelated memory does. `ContextPack` rejects a `pack_version` that does not match its slots.
+  unrelated memory does. Because `content_hash` covers the whole file, a frontmatter-only
+  change (`updated_at`, `strength`, `reference_count`, ...) also changes the key, even when the
+  carried text is the same: expect that churn when caching (C3). `ContextPack` rejects a
+  `pack_version` that does not match its slots.
+  TODO (C3): the design also puts the projection version into `pack_version`; C1 does not yet.
 - **Contract kit.** `check_context_pack(pack, *, slots=None, max_tokens=None, forbidden=())`
   (in `memfw.ports.testing`) checks the type, the recomputed version, `overflow ==
-  len(truncated_ids)`, at most one partial entry (the last carried), the token cap, that the
-  version payload contains no entry text or title and none of the `forbidden` strings (8+
-  characters), and that `as_dict()` is JSON serialisable.
+  len(truncated_ids)`, at most one partial entry, which must be the last carried entry and be
+  listed in `truncated_ids` (their order is the producer's; `core` uses selection order), the
+  token cap, that no string in the version payload contains an entry's text or title (8+
+  characters, other than one equal to an id, slot name or the policy) or any `forbidden`
+  string, and that `as_dict()` is JSON serialisable (else `ContractError`). A `forbidden` string
+  under 8 characters is a usage error (`ValueError`).
 
 ## 5. Adapter rules
 
@@ -676,7 +693,7 @@ def test_search_matches_recorded_contract(monkeypatch):
 | `check_deriver(deriver, *, vault, request, vault_exclude=())` | vault unchanged; `DerivedView` is read-only, names the deriver and kind, and cites only requested memories |
 | `check_clock(clock, *, samples=32)` | `Clock` protocol; every `now()` is a timezone-aware `datetime`; no sample earlier than the previous one |
 | `check_id_gen(id_gen, *, samples=1000)` | `IdGen` protocol; every `new_id()` is a `str` valid as a memory id; no id repeated |
-| `check_context_pack(pack, *, slots=None, max_tokens=None, forbidden=())` | exactly a `ContextPack`; `pack_version` recomputes; overflow matches `truncated_ids`; one partial entry at most, carried last; no content in the version payload (§4.2) |
+| `check_context_pack(pack, *, slots=None, max_tokens=None, forbidden=())` | exactly a `ContextPack`; `pack_version` recomputes; overflow matches `truncated_ids`; one partial entry at most, carried last and listed in `truncated_ids`; no content in the version payload; `as_dict()` serialisable (§4.2) |
 
 `tree_digest(root, *, exclude=())` is the helper they use to compare file trees.
 

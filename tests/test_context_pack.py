@@ -448,3 +448,87 @@ def test_context_capability_does_not_import_interface_layers() -> None:
                 assert name.startswith(
                     ("memfw.core", "memfw.recall", "memfw.ports", "memfw.context")
                 ), f"{path.name} imports {name}"
+
+
+# --- review follow-ups -------------------------------------------------------------
+
+
+def _hand_placed(repository: Repository, source_id: str, new_id: str) -> None:
+    path = repository.memories_dir / f"{source_id}.md"
+    text = path.read_text(encoding="utf-8").replace(f"id: {source_id}", f"id: {new_id}")
+    (repository.memories_dir / f"{new_id}.md").write_text(text, encoding="utf-8")
+    path.unlink()
+
+
+def test_v2_skips_an_out_of_pattern_id_that_v1_returns(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    repository.add("Dotted", "dotted body", memory_id="a-dot", layer=Layer.ANCHOR)
+    _hand_placed(repository, "a-dot", "a.dot")
+    gateway = Gateway(repository.root)
+    assert "a.dot" in {entry["id"] for entry in gateway.context()["entries"]}
+    core = _core(gateway.context(v=2))
+    assert "a.dot" not in {entry["id"] for entry in core["entries"]}
+    assert core["skipped"] == 1
+    assert "a.dot" not in core["truncated_ids"]
+    assert _core(gateway.context(v=2, policy="strict"))["skipped"] == 1
+
+
+def test_v2_entry_text_version_and_hash_come_from_one_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = _vault(tmp_path)
+    stale = repository.list()  # p-1 at version 1
+    repository.update("p-1", body="the newer procedure body")
+    monkeypatch.setattr(Repository, "list", lambda self: stale)
+    pack = build_core_pack(repository, tenant="", allowed_sources=(), limit_tokens=2000, now=NOW)
+    entry = next(entry for entry in pack.slots[0].entries if entry.id == "p-1")
+    raw = (repository.memories_dir / "p-1.md").read_bytes()
+    import hashlib
+
+    assert entry.text == "the newer procedure body"
+    assert entry.version == 2
+    assert entry.content_hash == "sha256:" + hashlib.sha256(raw).hexdigest()
+    assert pack.slots[0].skipped == 0
+
+
+def test_v2_skips_a_memory_that_no_longer_qualifies_when_re_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = _vault(tmp_path)
+    stale = repository.list()
+    repository.update("p-1", type="semantic")
+    monkeypatch.setattr(Repository, "list", lambda self: stale)
+    pack = build_core_pack(repository, tenant="", allowed_sources=(), limit_tokens=2000, now=NOW)
+    assert "p-1" not in {entry.id for entry in pack.slots[0].entries}
+    assert pack.slots[0].skipped == 1
+
+
+def test_contract_kit_accepts_any_truncated_order_with_the_partial_last_carried() -> None:
+    first, second = _entry("m-1"), _entry("m-2")
+    slot = ContextSlot(
+        "core", (first, second), used_tokens_est=1, overflow=2, truncated_ids=("m-9", "m-2")
+    )
+    check_context_pack(ContextPack.build((slot,), policy="strict", generated_at=NOW))
+
+
+def test_contract_kit_usage_and_false_positives() -> None:
+    slot = ContextSlot(
+        "core",
+        (_entry(memory_id="memory-0001", title="memory-0001", text="compat_fts"),),
+        used_tokens_est=1,
+    )
+    pack = ContextPack.build((slot,), policy="compat_fts", generated_at=NOW)
+    check_context_pack(pack)  # a title equal to its id is not content in the key
+    with pytest.raises(ValueError, match="at least 8"):
+        check_context_pack(pack, forbidden=["short"])
+    broken = _entry()
+    object.__setattr__(broken, "title", {1, 2})
+    bad = ContextPack.build(
+        (ContextSlot("core", (_entry("m-2"),), used_tokens_est=1),),
+        policy="strict",
+        generated_at=NOW,
+    )
+    object.__setattr__(bad.slots[0], "entries", (broken,))
+    object.__setattr__(bad, "pack_version", compute_pack_version(bad.slots, bad.policy))
+    with pytest.raises(ContractError, match="JSON"):
+        check_context_pack(bad)

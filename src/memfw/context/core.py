@@ -29,9 +29,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from memfw.core.errors import MemfwError
 from memfw.core.models import Layer, MemoryDocument
 from memfw.core.repository import Repository
 from memfw.ports.context import ContextEntry, ContextPack, ContextSlot
+from memfw.ports.types import MEMORY_ID_RE
 from memfw.recall.builtin import meta_from_document
 from memfw.recall.policy import FilterPolicy, evaluate
 
@@ -186,12 +188,25 @@ def core_context_v1(
     }
 
 
-def _file_hash(repository: Repository, memory_id: str) -> str | None:
-    try:
-        raw = (repository.memories_dir / f"{memory_id}.md").read_bytes()
-    except OSError:
+def _snapshot(
+    repository: Repository, document: MemoryDocument
+) -> tuple[MemoryDocument, str] | None:
+    """Re-read one memory file once: the document parsed from it and its hash.
+
+    Body, version and ``content_hash`` then come from the same bytes, so a
+    concurrent write can never pair one version's text with another's hash.
+    ``None`` when the id is outside the memory id pattern (``ContextEntry``
+    cannot carry it) or the file cannot be read or parsed.
+    """
+
+    if not MEMORY_ID_RE.fullmatch(document.id):
         return None
-    return "sha256:" + hashlib.sha256(raw).hexdigest()
+    try:
+        raw = (repository.memories_dir / f"{document.id}.md").read_bytes()
+        parsed = repository.parse(raw.decode("utf-8"), expected_id=document.id)
+    except (OSError, ValueError, MemfwError):
+        return None
+    return parsed, "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
 def build_core_pack(
@@ -206,22 +221,36 @@ def build_core_pack(
     """A one-slot (``core``) pack under ``policy``.
 
     ``content_hash`` is the sha256 of the memory file, the same value
-    ``memory_search`` reports. A memory whose file cannot be read for the
-    hash is left out (it is not counted as overflow either: it was not
-    selectable).
+    ``memory_search`` reports. Each selected memory's file is read once more
+    and the entry is built from that read (body, version and hash from the
+    same bytes); the snapshot is selected and ordered again, so a memory
+    changed in between is judged by its new content.
+
+    Selected memories that cannot be represented are counted in the slot's
+    ``skipped``, never carried and never overflow: an id outside the memory
+    id pattern (a hand-placed file such as ``memories/a.dot.md``, which v1
+    still returns), an unreadable or unparsable file, or one that no longer
+    qualifies when re-read.
+
+    Because the hash covers the whole file, a frontmatter-only change
+    (``updated_at``, ``strength``, ``reference_count`` ...) changes
+    ``pack_version`` too, even when the carried text did not change.
     """
 
     budget = limit_chars(limit_tokens)
     moment = now if now is not None else datetime.now(UTC)
     rules = filter_policy(policy, tenant=tenant, allowed_sources=allowed_sources)
+    candidates = select_core(repository.list(), rules, now=moment)
     hashes: dict[str, str] = {}
-    selected: list[MemoryDocument] = []
-    for document in select_core(repository.list(), rules, now=moment):
-        digest = _file_hash(repository, document.id)
-        if digest is None:
+    snapshots: list[MemoryDocument] = []
+    for document in candidates:
+        snapshot = _snapshot(repository, document)
+        if snapshot is None:
             continue
-        hashes[document.id] = digest
-        selected.append(document)
+        hashes[snapshot[0].id] = snapshot[1]
+        snapshots.append(snapshot[0])
+    selected = select_core(snapshots, rules, now=moment)
+    skipped = len(candidates) - len(selected)
     cut = _cut(selected, budget)
     entries = tuple(
         ContextEntry(
@@ -244,6 +273,7 @@ def build_core_pack(
         used_tokens_est=estimate_tokens(cut.used_chars),
         overflow=len(cut.truncated_ids),
         truncated_ids=cut.truncated_ids,
+        skipped=skipped,
     )
     return ContextPack.build((slot,), policy=policy, generated_at=moment)
 

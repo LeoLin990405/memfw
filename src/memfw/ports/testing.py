@@ -376,14 +376,21 @@ def check_context_pack(
       recomputed digest (so a field changed after construction is caught);
     - ``slots``, when given, is the expected slot order;
     - per slot: ``overflow == len(truncated_ids)``; at most one entry is both
-      carried and truncated, and it is the slot's last entry; with
+      carried and truncated, and it is the slot's last entry (the order of
+      ``truncated_ids`` is the producer's, see ``ContextSlot``); with
       ``max_tokens``, ``used_tokens_est`` stays within it;
-    - the version payload contains no entry text or title (of 8 characters
-      or more) and none of the ``forbidden`` strings (e.g. the query or a
-      private body the caller knows about);
+    - no string in the version payload contains an entry's text or title
+      (8 characters or more; a title or text equal to an id, slot name or the
+      policy name is not content) or any ``forbidden`` string (e.g. the query
+      or a private body the caller knows about). A ``forbidden`` string
+      shorter than 8 characters is a usage error (``ValueError``): it would
+      match ids and hashes by chance;
     - ``as_dict()`` is JSON serialisable.
     """
 
+    short = [text for text in forbidden if not isinstance(text, str) or len(text) < 8]
+    if short:
+        raise ValueError("forbidden strings must be at least 8 characters")
     _require(type(pack) is ContextPack, "context pack must be exactly memfw.ports.ContextPack")
     assert isinstance(pack, ContextPack)
     _require(pack.generated_at.tzinfo is not None, "generated_at must include a timezone")
@@ -407,24 +414,39 @@ def check_context_pack(
             _require(
                 carried[-1] == partial[0], f"slot {slot.name}: partial entry is not the last one"
             )
-            _require(
-                slot.truncated_ids[0] == partial[0],
-                f"slot {slot.name}: partial entry must come first in truncated_ids",
-            )
         if max_tokens is not None:
             _require(
                 slot.used_tokens_est <= max_tokens,
                 f"slot {slot.name}: used_tokens_est exceeds {max_tokens}",
             )
-    payload = pack_version_payload(pack.slots, pack.policy).decode("ascii")
-    texts = [entry.text for slot in pack.slots for entry in slot.entries]
-    texts += [entry.title for slot in pack.slots for entry in slot.entries]
-    for text in [*texts, *forbidden]:
-        if len(text) >= 8:
-            encoded = json.dumps(text, ensure_ascii=True)[1:-1]
-            _require(encoded not in payload, "pack_version input contains content")
-    json.dumps(pack.as_dict())
+    leaves = _string_leaves(json.loads(pack_version_payload(pack.slots, pack.policy)))
+    structural = {pack.policy, *names}
+    structural.update(entry.id for slot in pack.slots for entry in slot.entries)
+    structural.update(memory_id for slot in pack.slots for memory_id in slot.truncated_ids)
+    content = [entry.text for slot in pack.slots for entry in slot.entries]
+    content += [entry.title for slot in pack.slots for entry in slot.entries]
+    candidates = [
+        text
+        for text in content
+        if isinstance(text, str) and len(text) >= 8 and text not in structural
+    ]
+    for text in [*candidates, *forbidden]:
+        _require(not any(text in leaf for leaf in leaves), "pack_version input contains content")
+    try:
+        json.dumps(pack.as_dict())
+    except (TypeError, ValueError) as error:
+        raise ContractError(f"as_dict() is not JSON serialisable: {error}") from error
     return pack
+
+
+def _string_leaves(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [leaf for item in value.values() for leaf in _string_leaves(item)]
+    if isinstance(value, list):
+        return [leaf for item in value for leaf in _string_leaves(item)]
+    return []
 
 
 __all__ = [
