@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
@@ -22,6 +23,8 @@ from .models import (
 
 Mode = Literal["mock", "live"]
 JsonObject = dict[str, JsonValue]
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class JudgeAgent(Protocol):
@@ -92,6 +95,9 @@ class DeterministicJudge:
         self.clock = clock
         self.transport = transport
         self.env_key = env_key
+        #: Provider merge pairs dropped by the last ``find_near_duplicates``
+        #: call because their targets spanned tenants (live and local MLX).
+        self.dropped_cross_tenant_pairs = 0
 
     def _input_hash(self, input_value: object) -> str:
         return _digest(
@@ -230,12 +236,14 @@ class DeterministicJudge:
     def find_near_duplicates(self, memories: list[MemoryDocument]) -> list[MergeProposal]:
         input_value = [_memory_payload(memory) for memory in memories]
         input_hash = self._input_hash(input_value)
+        self.dropped_cross_tenant_pairs = 0
         if self.mode == "live":
             response = self._request("find_near_duplicates", input_value)
             pairs = response.get("merge_pairs")
             if not isinstance(pairs, list):
                 raise ValueError("live find_near_duplicates response requires merge_pairs list")
             known_ids = {memory.id for memory in memories}
+            tenants = {memory.id: memory.tenant for memory in memories}
             proposals: list[MergeProposal] = []
             for raw_pair in pairs:
                 if not isinstance(raw_pair, dict):
@@ -265,6 +273,11 @@ class DeterministicJudge:
                 duplicate_ids = cast(list[str], raw_duplicate_ids)
                 disposition = cast(Literal["delete", "retain"], raw_disposition)
                 targets: tuple[str, ...] = (representative_id, *duplicate_ids)
+                if not _same_tenant(targets, tenants):
+                    # Merges are tenant-scoped; review refuses cross-tenant
+                    # merges, so such a pair could never be approved.
+                    self.dropped_cross_tenant_pairs += 1
+                    continue
                 output_data: JsonObject = {
                     "representative_id": representative_id,
                     "duplicate_ids": cast(JsonValue, duplicate_ids),
@@ -294,12 +307,15 @@ class DeterministicJudge:
                         proposal=proposal,
                     )
                 )
+            _log_dropped_pairs(self.provider, self.dropped_cross_tenant_pairs)
             return proposals
         masks, gram_counts = self._ngram_bitsets(memories, self.ngram_size)
         output: list[MergeProposal] = []
         ordered = sorted(memories, key=lambda memory: memory.id)
         for index, left_memory in enumerate(ordered):
             for right_memory in ordered[index + 1 :]:
+                if left_memory.tenant != right_memory.tenant:
+                    continue
                 intersection = (masks[left_memory.id] & masks[right_memory.id]).bit_count()
                 union_count = (
                     gram_counts[left_memory.id] + gram_counts[right_memory.id] - intersection
@@ -385,6 +401,19 @@ class DeterministicJudge:
         ):
             raise ValueError("live wake_intensity response requires intensity in [0, 1]")
         return float(intensity)
+
+
+def _log_dropped_pairs(provider: str, count: int) -> None:
+    """Debug-log how many cross-tenant merge pairs were dropped (no memory text)."""
+
+    if count:
+        _LOGGER.debug("dropped %d cross-tenant merge pair(s) from provider %s", count, provider)
+
+
+def _same_tenant(targets: tuple[str, ...], tenants: dict[str, str]) -> bool:
+    """Whether every merge target belongs to one tenant."""
+
+    return len({tenants[target] for target in targets}) <= 1
 
 
 class ClaudeJudge(DeterministicJudge):

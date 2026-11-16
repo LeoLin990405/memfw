@@ -296,7 +296,12 @@ def _record_consolidation_review(
     Candidate discovery is deliberately independent of the pure policy's exact
     duplicate/group-key heuristic. The policy chooses when consolidation is a
     useful response to pressure; the judge decides which eligible pairs merit
-    review. No candidate is mutated here.
+    review. No candidate is mutated here. The judge sees every eligible
+    document, so its input hash (and every review proposal id) stays stable;
+    a pair that names a historical version (``valid_to`` or ``superseded_by``
+    set) is then skipped, so review never proposes deleting the current version
+    in favour of a superseded one. The judge itself keeps every pair within one
+    tenant.
     """
     from memfw.agents import DeterministicJudge
     from memfw.agents.models import canonical_payload_hash, mock_signature
@@ -306,7 +311,10 @@ def _record_consolidation_review(
     existing = {
         proposal.proposal_id: proposal for proposal in repository.list_proposals(status=None)
     }
+    historical_ids = {doc.id for doc in documents if doc.valid_to is not None or doc.superseded_by}
     for candidate in judge.find_near_duplicates(documents):
+        if historical_ids.intersection((candidate.representative_id, *candidate.duplicate_ids)):
+            continue
         proposal = candidate.to_proposal()
         output = dict(proposal.output)
         output["disposition"] = "delete"

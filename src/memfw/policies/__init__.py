@@ -44,6 +44,12 @@ class PolicyCandidate:
     group_key: str | None = None
     layer: str = "current"
     anchor: str | None = None
+    #: Owning tenant (``""`` for the default tenant). Consolidation groups
+    #: never span tenants.
+    tenant: str = ""
+    #: True for a historical version (``valid_to`` or ``superseded_by`` set).
+    #: Historical records are never part of a consolidation group.
+    historical: bool = False
     metadata: dict[str, Any] = field(default_factory=dict, compare=False)
 
     def __post_init__(self) -> None:
@@ -91,6 +97,7 @@ class PolicyCandidate:
             return direct if direct is not None else metadata.get(name, default)
 
         layer = read("layer", "current")
+        tenant = read("tenant", "")
         return cls(
             id=str(read("id")),
             body=str(read("body", "")),
@@ -110,6 +117,8 @@ class PolicyCandidate:
             group_key=meta("group_key", meta("consolidation_group")),
             layer=str(getattr(layer, "value", layer)),
             anchor=read("anchor"),
+            tenant="" if tenant is None else str(tenant),
+            historical=read("valid_to") is not None or bool(read("superseded_by")),
             metadata=dict(metadata),
         )
 
@@ -405,7 +414,14 @@ def _salience_reason(candidate: PolicyCandidate) -> str:
 def _components(
     candidates: tuple[PolicyCandidate, ...],
 ) -> tuple[tuple[tuple[PolicyCandidate, ...], str], ...]:
-    """Connected components linked only by exact body hash or explicit group key."""
+    """Connected components linked only by exact body hash or explicit group key.
+
+    Links never cross tenants: buckets are keyed by tenant, so tenant A's memory
+    is never consolidated away because tenant B holds the same body or group
+    key. Historical records (``valid_to`` or ``superseded_by`` set) join no
+    group, so a superseded version can neither be chosen as the representative
+    over the current version nor be forgotten as its redundant copy.
+    """
 
     parent = {item.id: item.id for item in candidates}
 
@@ -422,13 +438,15 @@ def _components(
             parent[high] = low
 
     basis_for_pair: dict[frozenset[str], set[str]] = {}
-    buckets: dict[tuple[str, str], list[str]] = {}
+    buckets: dict[tuple[str, str, str], list[str]] = {}
     for item in candidates:
+        if item.historical:
+            continue
         body_hash = hashlib.sha256(item.body.encode("utf-8")).hexdigest()
-        buckets.setdefault(("body_hash", body_hash), []).append(item.id)
+        buckets.setdefault(("body_hash", item.tenant, body_hash), []).append(item.id)
         if item.group_key:
-            buckets.setdefault(("group_key", item.group_key), []).append(item.id)
-    for (basis, _), identifiers in sorted(buckets.items()):
+            buckets.setdefault(("group_key", item.tenant, item.group_key), []).append(item.id)
+    for (basis, _, _), identifiers in sorted(buckets.items()):
         for index, left in enumerate(identifiers):
             for right in identifiers[index + 1 :]:
                 union(left, right)

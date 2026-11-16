@@ -14,7 +14,7 @@ from typing import Literal, Protocol, cast
 from pydantic import TypeAdapter
 
 from ..core.models import Layer, MemoryDocument
-from . import DeterministicJudge, JsonObject, _digest, _memory_payload
+from . import DeterministicJudge, JsonObject, _digest, _log_dropped_pairs, _memory_payload
 from .models import JsonValue, MergeProposal, Proposal
 
 
@@ -588,6 +588,7 @@ class LocalMLXJudge(DeterministicJudge):
         if not isinstance(pairs, list):
             raise ValueError("local MLX merge response requires merge_pairs")
         input_hash = self._input_hash(values)
+        self.dropped_cross_tenant_pairs = 0
         output: list[MergeProposal] = []
         for pair in pairs:
             if not isinstance(pair, dict):
@@ -619,6 +620,10 @@ class LocalMLXJudge(DeterministicJudge):
             merge_disposition = cast(Literal["retain", "delete"], disposition)
             merge_confidence = cast(float, confidence)
             targets = (representative_id, *duplicate_ids)
+            if len({known[item].tenant for item in targets}) > 1:
+                # Merges are tenant-scoped; review refuses cross-tenant merges.
+                self.dropped_cross_tenant_pairs += 1
+                continue
             reason = self._reason(pair)
             output_data: JsonObject = {
                 "representative_id": representative_id,
@@ -645,6 +650,7 @@ class LocalMLXJudge(DeterministicJudge):
                     proposal=proposal,
                 )
             )
+        _log_dropped_pairs(self.provider, self.dropped_cross_tenant_pairs)
         return output
 
     def suggest_queries(self, memories: list[MemoryDocument], count: int) -> list[dict[str, str]]:
