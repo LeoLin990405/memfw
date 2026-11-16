@@ -13,7 +13,9 @@ Steps:
 * A1 (done, #38): the readonly service moved into ``memfw.index.readonly``;
   no library code loads ``scripts/``.
 * A2: cycles and upward/same-layer edges are cut with protocols or by moving
-  shared helpers down.
+  shared helpers down. A2a (done): the conversations/dream and stats/curation
+  cycles and the kernel/handoff edges (cold-archive read and capture stage
+  recovery moved into storage, transcript reader into history, claim ports).
 * A3: ``memfw.runtime`` (the composition root) builds providers, indexes and
   repositories; interfaces get them from the ``Runtime``.
 * A4: ``mcp/server.py`` is split by tool group; each group depends on the
@@ -40,19 +42,6 @@ ALLOWLIST: Final[dict[tuple[str, str], tuple[str, Sites]]] = {
         " the vault (lazy __getattr__ re-export)",
         {"memfw": 1},
     ),
-    # --- cycles (spec section 1) -----------------------------------------------
-    ("memfw.conversations", "memfw.dream"): (
-        "A2: conversations.worker uses dream.verify/dream.model (Summarizer protocol)",
-        {"memfw.conversations.worker": 3},
-    ),
-    ("memfw.dream", "memfw.conversations"): (
-        "A2: dream.skills reads the conversation store (TranscriptReader protocol)",
-        {"memfw.dream.skills.queue": 5},
-    ),
-    ("memfw.stats", "memfw.curation"): (
-        "A2: stats calls curation.engine._with_archived_body (StatsSource protocol)",
-        {"memfw.stats": 1},
-    ),
     # --- library -> CLI (spec section 1: capture -> cli, curation -> cli) ------
     ("memfw.capture", "memfw.cli"): (
         "A2: capture.confirm uses memfw.cli._repo (move the vault opener to core)",
@@ -67,24 +56,6 @@ ALLOWLIST: Final[dict[tuple[str, str], tuple[str, Sites]]] = {
         {"memfw.curation.review_cli": 1},
     ),
     # --- found by A0, not in spec section 1 ------------------------------------
-    ("memfw.storage", "memfw.capture"): (
-        "A2: kernel calls capture._recover_stage_intent (move recovery into storage)",
-        {"memfw.storage.transactions": 1},
-    ),
-    ("memfw.storage", "memfw.curation"): (
-        "A2: kernel calls curation.engine._with_archived_body (move it into storage)",
-        {"memfw.storage.operations": 2},
-    ),
-    ("memfw.handoff", "memfw.conversations"): (
-        "A2: handoff reads the conversation store (TranscriptReader protocol)",
-        {
-            "memfw.handoff.gitinfo": 1,
-            "memfw.handoff.ledger": 1,
-            "memfw.handoff.pack": 2,
-            "memfw.handoff.source": 1,
-            "memfw.handoff.summarize": 1,
-        },
-    ),
     ("memfw.okf", "memfw.capture"): (
         "A2: OKF import stages through capture.review/staging (memfw.ports staging contract)",
         {"memfw.okf.importer": 2},

@@ -32,6 +32,7 @@ from ..core.models import (
     _same_instant,
     fold_temporal_aliases,
 )
+from ..storage import with_archived_body
 from ..storage.transactions import _serialized
 
 _LOG = logging.getLogger(__name__)
@@ -380,9 +381,7 @@ class MemoryOperationsMixin:
         # write does not silently drop lines the file already had.
         new_doc._observed_default_fields = old._observed_default_fields
         if new_doc.is_stub:
-            from ..curation.engine import _with_archived_body
-
-            _with_archived_body(self, new_doc)
+            with_archived_body(self, new_doc)
         # A restored archive may have had its duplicate history object removed.
         # Preserve the exact current state before replacing it so rollback remains
         # available without keeping two copies of the active Markdown.
@@ -1070,13 +1069,11 @@ class MemoryOperationsMixin:
             expected_id=event.memory_id,
         )
         if old_doc.is_stub:
-            from ..curation.engine import _with_archived_body
-
             try:
                 # A historical stub is usable only while its referenced original
                 # member is still present and matches archived_hash. Archive files
                 # may remain for other notes after this note was restored.
-                _with_archived_body(self, old_doc)
+                with_archived_body(self, old_doc)
             except (IntegrityError, OSError) as exc:
                 raise DeletedContentUnavailable(
                     "Prior cold Markdown stub has no verified archived body"

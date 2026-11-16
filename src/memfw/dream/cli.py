@@ -169,7 +169,14 @@ def dream_skills(
         boilerplate_min_sessions=boilerplate_min_sessions,
     )
     try:
-        result = run_skills(root, now=_now(now), dry_run=dry_run, options=options)
+        feed = None
+        if from_queue:
+            from memfw.conversations.feed import WorkerEpisodeFeed
+
+            feed = WorkerEpisodeFeed()
+        result = run_skills(
+            root, now=_now(now), dry_run=dry_run, options=options, episode_feed=feed
+        )
     except (DreamStageError, HistoryError, MemfwError, ValueError, ImportError, OSError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(2) from exc

@@ -21,6 +21,7 @@ from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
 
+from .claims import POLARITIES, ClaimStager, ClaimVerifier, StagedClaim
 from .clock import Clock, IdGen
 from .context import ContextPack, compute_pack_version, pack_version_payload
 from .protocols import Deriver, Ingestor, Projector, RecallProvider
@@ -451,8 +452,56 @@ def _string_leaves(value: object) -> list[str]:
     return []
 
 
+def check_claim_verifier(verifier: ClaimVerifier, *, pairs: Sequence[tuple[str, str]]) -> list[str]:
+    """``polarity()`` answers one of ``POLARITIES``, the same way every time."""
+
+    _require(bool(pairs), "check_claim_verifier needs at least one (claim, text) pair")
+    _require(isinstance(verifier, ClaimVerifier), "verifier does not implement ClaimVerifier")
+    answers: list[str] = []
+    for claim, text in pairs:
+        first = verifier.polarity(claim, text)
+        _require(first in POLARITIES, f"polarity() returned {first!r}, not one of {POLARITIES}")
+        _require(verifier.polarity(claim, text) == first, "polarity() is not deterministic")
+        answers.append(first)
+    return answers
+
+
+def check_claim_stager(
+    stager: ClaimStager,
+    *,
+    vault: Path,
+    claims: Sequence[StagedClaim],
+    batch_id: str = "contract-claims",
+    created_at: str = "2026-01-01T00:00:00+00:00",
+) -> dict[str, str]:
+    """Only ``_candidates/`` changes; restaging a batch id writes nothing and returns False.
+
+    Returns the digest of ``_candidates/`` after the first staging.
+    """
+
+    _require(bool(claims), "check_claim_stager needs at least one claim")
+    _require(isinstance(stager, ClaimStager), "stager does not implement ClaimStager")
+    before = tree_digest(vault, exclude=(CANDIDATES_DIR,))
+    staged_before = _staged(vault)
+    report = {"kind": "contract"}
+    first = stager.stage_claims(vault, batch_id, claims, report, created_at=created_at)
+    _require(first is True, "first stage_claims() of a batch must return True")
+    _require(_staged(vault) != staged_before, "stage_claims() staged nothing")
+    snapshot = tree_digest(vault / CANDIDATES_DIR)
+    second = stager.stage_claims(vault, batch_id, claims, report, created_at=created_at)
+    _require(second is False, "restaging the same batch id must return False")
+    _require(tree_digest(vault / CANDIDATES_DIR) == snapshot, "restaging a batch changed files")
+    _require(
+        tree_digest(vault, exclude=(CANDIDATES_DIR,)) == before,
+        "stage_claims() wrote outside _candidates/",
+    )
+    return snapshot
+
+
 __all__ = [
     "ContractError",
+    "check_claim_stager",
+    "check_claim_verifier",
     "check_clock",
     "check_context_pack",
     "check_deriver",

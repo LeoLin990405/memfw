@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from memfw.conversations.store import ensure_private_dir, ensure_private_file
+from memfw.history.transcripts import ensure_private_dir, ensure_private_file
 
 DIR_NAME = "handoffs"
 DB_NAME = "handoffs.sqlite"

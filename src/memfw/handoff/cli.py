@@ -24,6 +24,7 @@ from typing import Annotated, Any, NoReturn
 import typer
 
 from memfw.conversations.adapter import checked_location, store_path
+from memfw.conversations.backends import load_backend
 from memfw.conversations.policy import SharePolicy
 from memfw.conversations.service import read_config
 from memfw.conversations.store import ConversationError, check_id, check_private_location
@@ -159,6 +160,7 @@ def run(
             allow_cloud=allow_cloud,
             measure=measure,
             saved_as=reservation.path.name if reservation else None,
+            loader=load_backend,
         )
         body = render(pack)
         if ledger is not None and reservation is not None:

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from memfw.core.repository import Repository
+from memfw.ports.claims import ClaimStager, ClaimVerifier
 
 from .adapter import SqliteStoreSource, checked_location, store_ingestor, store_path
 from .backends import ModelBackend
@@ -50,8 +51,14 @@ def open_worker(
     state: Path | None = None,
     ingest: bool = True,
     judge: Judge | None = None,
+    verifier: ClaimVerifier | None = None,
+    stager: ClaimStager | None = None,
     **budgets: Any,
 ) -> ConversationWorker:
+    """The worker for ``root``; a vault root needs ``stager`` and ``verifier`` (or
+    ``judge``), injected by the caller (``memfw conversations work`` passes
+    :mod:`memfw.dream.claims`)."""
+
     config, vault = read_config(root)
     policy = SharePolicy.from_config(config)
     db = checked_location(store, config, vault=vault) if store else store_path(config, vault=vault)
@@ -70,4 +77,6 @@ def open_worker(
         ingestor=ingestor,
         vault=vault,
         judge=judge,
+        verifier=verifier,
+        stager=stager,
     )

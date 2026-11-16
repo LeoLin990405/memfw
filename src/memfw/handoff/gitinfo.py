@@ -22,7 +22,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from memfw.conversations.store import safe_text
+from memfw.history.transcripts import safe_text
 
 LINE_CHARS = 300
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]

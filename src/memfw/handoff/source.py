@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from memfw.conversations.store import GOAL_SCAN_TURNS, goal_text, ts_display, ts_key
+from memfw.history.transcripts import GOAL_SCAN_TURNS, goal_text, ts_display, ts_key
 
 TABLE = "conversation_turns"
 TS_FUNCTION = "memfw_ts_key"

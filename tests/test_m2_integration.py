@@ -27,13 +27,18 @@ from memfw.cli import app as cli_app
 from memfw.conversations import open_worker
 from memfw.conversations.adapter import SqliteStoreSource
 from memfw.conversations.backends import ModelReply
+from memfw.conversations.feed import WorkerEpisodeFeed
 from memfw.conversations.worker import EpisodeQueue, WorkState
+from memfw.dream.claims import DreamClaimStager, DreamClaimVerifier
 from memfw.dream.skills import SkillOptions, run_skills
 from memfw.history.conversations import ConversationStore
 from memfw.mcp.server import Gateway
 from tests.conversation_fixtures import make_vault
 
 NOW = datetime(2026, 1, 6, 12, 0, tzinfo=UTC)
+#: What ``memfw conversations work`` / ``memfw dream skills --from-queue`` inject.
+CLAIM_PORTS: dict[str, Any] = {"verifier": DreamClaimVerifier(), "stager": DreamClaimStager()}
+FEED = WorkerEpisodeFeed()
 # Assembled at runtime so the repository holds no credential-shaped literal.
 SECRET = "pass" + "word=correct-horse-battery-9"
 REQUEST = "Run the release checks for the uploader package before tagging."
@@ -244,7 +249,7 @@ def test_m2_end_to_end(world: dict[str, Path]) -> None:
 
     # 4. worker run (ingest via the store module again, then summaries and claims)
     backend = FakeBackend()
-    worker = open_worker(vault, backend=backend, judge=_judge)
+    worker = open_worker(vault, backend=backend, judge=_judge, **CLAIM_PORTS)
     worker.now = lambda: NOW
     report = worker.run().as_dict()
     assert report["ingest"]["status"] == "ok"
@@ -271,9 +276,11 @@ def test_m2_end_to_end(world: dict[str, Path]) -> None:
     # 6. skill candidate from the worker's episode queue (>= 3 sessions, 2 agents)
     state = WorkState(data / "work.sqlite")
     assert len(EpisodeQueue(state).pending()) == 3
-    dry = run_skills(vault, now=NOW, dry_run=True, options=SkillOptions(from_queue=True))
+    dry = run_skills(
+        vault, now=NOW, dry_run=True, options=SkillOptions(from_queue=True), episode_feed=FEED
+    )
     assert dry.candidates and len(EpisodeQueue(state).pending()) == 3  # dry run claims nothing
-    skills = run_skills(vault, now=NOW, options=SkillOptions(from_queue=True))
+    skills = run_skills(vault, now=NOW, options=SkillOptions(from_queue=True), episode_feed=FEED)
     assert skills.report["history"]["source"] == "episode_queue"
     assert skills.report["episodes_acked"] == 3
     assert EpisodeQueue(state).pending() == []
@@ -291,7 +298,7 @@ def test_m2_end_to_end(world: dict[str, Path]) -> None:
     assert all(SECRET not in p.read_text("utf-8") for p in skill_dir.iterdir())
 
     # A rerun reads the consumed episodes again and stages nothing new.
-    again = run_skills(vault, now=NOW, options=SkillOptions(from_queue=True))
+    again = run_skills(vault, now=NOW, options=SkillOptions(from_queue=True), episode_feed=FEED)
     assert [c.status for c in again.candidates] == ["exists"]
 
     # Nothing outside tmp_path was written.
@@ -306,7 +313,7 @@ def _queued(world: dict[str, Path]) -> WorkState:
         cli_app, ["history", "ingest", "claude", "codex", "--root", str(vault)]
     )
     assert result.exit_code == 0, result.output
-    worker = open_worker(vault, backend=FakeBackend(), judge=_judge)
+    worker = open_worker(vault, backend=FakeBackend(), judge=_judge, **CLAIM_PORTS)
     worker.now = lambda: NOW
     assert worker.run().as_dict()["episodes_queued"] == 3
     return WorkState(world["data"] / "work.sqlite")
@@ -324,7 +331,9 @@ def test_queue_claims_are_released_on_failure(
 
     monkeypatch.setattr(run_module, "stage_candidate", boom)
     with pytest.raises(ValueError):
-        run_skills(world["vault"], now=NOW, options=SkillOptions(from_queue=True))
+        run_skills(
+            world["vault"], now=NOW, options=SkillOptions(from_queue=True), episode_feed=FEED
+        )
     assert len(EpisodeQueue(state).pending()) == 3  # released, not stuck as claimed
 
     # A crashed consumer's claim is taken back once it is stale.
@@ -332,7 +341,9 @@ def test_queue_claims_are_released_on_failure(
     queue.claim("crashed", 10, now="2020-01-01T00:00:00+00:00")
     assert queue.pending() == []
     monkeypatch.undo()
-    result = run_skills(world["vault"], now=NOW, options=SkillOptions(from_queue=True))
+    result = run_skills(
+        world["vault"], now=NOW, options=SkillOptions(from_queue=True), episode_feed=FEED
+    )
     assert result.report["episodes_acked"] == 3
 
 
@@ -344,7 +355,9 @@ def test_queue_skips_apps_no_longer_processable(world: dict[str, Path]) -> None:
         "conversation_share": {"enabled": True, "apps": {"codex": {"process": False}}}
     }
     set_config(world["vault"], repository_config)
-    result = run_skills(world["vault"], now=NOW, options=SkillOptions(from_queue=True))
+    result = run_skills(
+        world["vault"], now=NOW, options=SkillOptions(from_queue=True), episode_feed=FEED
+    )
     assert result.report["sessions_not_processable"] == 1
     assert result.report["sessions_read"] == 2
     assert result.candidates == []  # two sessions are below min_sessions
