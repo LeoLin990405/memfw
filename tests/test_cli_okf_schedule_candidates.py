@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import json
 import plistlib
 from pathlib import Path
@@ -51,7 +53,11 @@ def test_okf_export_existing_output_without_force_names_the_flag(tmp_path: Path)
     assert runner.invoke(app, ["okf", "export", str(out), "--root", str(root)]).exit_code == 0
     result = runner.invoke(app, ["okf", "export", str(out), "--root", str(root)])
     assert result.exit_code == 2
-    assert "--force" in result.output and "force=True" not in result.output
+    # Rich may colour and box-wrap the usage error (CI terminals force colour and
+    # an 80-column width), so compare on the plain, unwrapped text.
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    plain = re.sub(r"[\s│╭╮╰╯─]+", " ", plain)
+    assert "--force" in plain and "force=True" not in plain
     again = runner.invoke(app, ["okf", "export", str(out), "--root", str(root), "--force"])
     assert again.exit_code == 0, again.output
     again = runner.invoke(app, ["okf", "export", str(out), "--root", str(root), "--force"])
