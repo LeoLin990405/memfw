@@ -110,7 +110,7 @@ def test_build_runtime_takes_values_as_given(tmp_path: Path) -> None:
         tmp_path, tenant="alpha", allowed_sources=("nas",), embedder=embedder, entity_enabled=True
     )
     assert isinstance(runtime, Runtime)
-    assert runtime.root == tmp_path.resolve()
+    assert runtime.root == tmp_path
     assert (runtime.tenant, runtime.allowed_sources) == ("alpha", ("nas",))
     assert runtime.embedder is embedder and runtime.entity_enabled is True
     assert isinstance(runtime.recall_inflight, InflightRegistry)
@@ -144,6 +144,7 @@ def test_recall_matches_the_old_inline_wiring(
         )
         for query in QUERIES:
             outcome = runtime.recall(
+                repository,
                 query,
                 limit=10,
                 policy_name=policy,
@@ -208,6 +209,7 @@ def test_inflight_registry_is_shared_per_runtime(tmp_path: Path) -> None:
         patch.setattr(Coordinator, "__init__", record)
         for runtime in (first, first, second):
             runtime.recall(
+                repository,
                 "backup",
                 limit=5,
                 policy_name="compat_fts",
@@ -254,6 +256,7 @@ def test_importing_runtime_does_not_load_builtin_providers() -> None:
 
 def _recall(runtime: Runtime, policy_name: str) -> RecallOutcome:
     return runtime.recall(
+        Repository(runtime.root),
         "backup",
         limit=5,
         policy_name=policy_name,
@@ -292,15 +295,53 @@ def test_mcp_keeps_its_policy_messages(tmp_path: Path) -> None:
         gateway.search("backup", mode="fts", policy="strict")
 
 
-def test_root_is_resolved_once_and_matches_the_gateway_vault(tmp_path: Path) -> None:
+def test_runtime_root_is_the_configured_path(tmp_path: Path) -> None:
     repository = _vault(tmp_path)
     link = tmp_path / "link"
     link.symlink_to(repository.root, target_is_directory=True)
     for root in (repository.root, link, tmp_path / "vault" / ".." / "vault"):
         gateway = Gateway(root, tenant="", entity_enabled=False, allowed_sources=())
-        assert gateway.runtime.root == gateway._repo().root == repository.root
-    # recall has no root argument: it always uses Runtime.root.
-    assert "root" not in Runtime.recall.__code__.co_varnames[: Runtime.recall.__code__.co_argcount]
+        # Configured, not resolved: the vault the caller opens per call decides.
+        assert gateway.runtime.root == gateway.root == Path(root)
+        assert gateway._repo().root == repository.root
+
+
+def _two_vaults(tmp_path: Path) -> tuple[Path, Path]:
+    for name in ("a", "b"):
+        other = Repository(tmp_path / name)
+        other.init()
+        other.add(f"{name} backup vault", f"backup body {name}", memory_id=f"m-{name}")
+    link = tmp_path / "current"
+    link.symlink_to(tmp_path / "a", target_is_directory=True)
+    return link, tmp_path / "b"
+
+
+def test_symlink_retarget_fts_and_two_stage_agree(tmp_path: Path) -> None:
+    link, target_b = _two_vaults(tmp_path)
+    gateway = Gateway(link, tenant="", entity_enabled=False, allowed_sources=())
+
+    def ids(mode: str) -> list[str]:
+        return [row["id"] for row in gateway.search("backup", mode=mode)["results"]]
+
+    assert ids("fts") == ids("two_stage") == ["m-a"]
+    link.unlink()
+    link.symlink_to(target_b, target_is_directory=True)
+    assert ids("fts") == ids("two_stage") == ["m-b"]
+    # The runtime itself follows the caller's repository, not a pinned path.
+    outcome = _recall(gateway.runtime, "compat_fts")
+    assert outcome.result.ids == ["m-b"]
+
+
+def test_ensure_index_refuses_a_missing_vault(tmp_path: Path) -> None:
+    for root in (tmp_path / "missing", tmp_path / "empty"):
+        if root.name == "empty":
+            root.mkdir()  # a directory without vault.yaml is not a vault
+        runtime = build_runtime(root)
+        with pytest.raises(ValueError, match="^vault root does not exist$"):
+            runtime.ensure_index()
+        assert not (root / "vault.yaml").exists()
+        assert not (root / "index.sqlite3").exists()
+    assert not (tmp_path / "missing").exists()
 
 
 def test_timeouts_are_runtime_parameters(tmp_path: Path) -> None:

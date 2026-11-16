@@ -51,8 +51,11 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   inline (built-in providers, resolvers, `compat_fts`/`strict` filter policy, the
   `InflightRegistry` (one per Runtime), the coordinator call); the server gets recall only
   from `Gateway.runtime`. `Runtime.recall` accepts exactly `compat_fts` or `strict` and
-  raises `ValueError` on any other policy (the MCP checks and messages are unchanged). The
-  root is resolved once in `build_runtime`; the two_stage timeouts are `Runtime` parameters
+  raises `ValueError` on any other policy (the MCP checks and messages are unchanged). `Runtime.root`
+  is the configured (unresolved) path; `recall` and `ensure_index` take the caller's open
+  `Repository`, so a symlinked or relative vault root is followed per call by every mode, as
+  before. `Runtime.ensure_index()` without a repository refuses a missing vault (never creates
+  one). The two_stage timeouts are `Runtime` parameters
   (defaults 3 s per provider, 4 s total). The index staleness check moved to
   `memfw.runtime.ensure_search_index` / `Runtime.ensure_index`, still run before the
   coordinator's deadline. Callers sharing one Runtime share its in-flight slots per provider

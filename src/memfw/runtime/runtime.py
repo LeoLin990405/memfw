@@ -47,8 +47,10 @@ class RecallOutcome:
 class Runtime:
     """Capability objects for one vault: one Runtime per Gateway.
 
-    ``root`` is the resolved vault root (``build_runtime`` resolves it, the
-    same way ``Repository`` does), the one root every call uses. Holds the
+    ``root`` is the configured vault path (``expanduser`` only, never
+    resolved): a symlinked or relative root follows its target per call, so
+    every call takes the caller's open ``Repository`` (resolved per call, as
+    the interface opens it) and uses ``repository.root``. Holds the
     settings the interface resolved (tenant, allowed sources, embedder, entity
     flag), the two_stage timeouts, and one ``InflightRegistry`` per Runtime.
 
@@ -81,11 +83,19 @@ class Runtime:
     def ensure_index(self, repository: Repository | None = None) -> None:
         """Rebuild the memory index when it is stale (see ``ensure_search_index``).
 
-        ``repository`` is the caller's open vault for this root; without one
-        the Runtime opens ``Repository(self.root)``.
+        ``repository`` is the caller's open vault for this root. Without one
+        the Runtime opens ``Repository(self.root)``, but only an existing
+        vault: a missing root (or one without ``vault.yaml``) raises
+        ``ValueError("vault root does not exist")``, like the MCP server's
+        vault opener; it never creates one.
         """
 
-        ensure_search_index(repository if repository is not None else Repository(self.root))
+        if repository is None:
+            root = self.root
+            if not root.is_dir() or not (root / "vault.yaml").is_file():
+                raise ValueError("vault root does not exist")
+            repository = Repository(root)
+        ensure_search_index(repository)
 
     def _two_stage_providers(
         self,
@@ -136,6 +146,7 @@ class Runtime:
 
     def recall(
         self,
+        repository: Repository,
         query: str,
         *,
         limit: int,
@@ -147,17 +158,19 @@ class Runtime:
     ) -> RecallOutcome:
         """Run the ``two_stage`` providers through the coordinator.
 
-        ``limit`` is the page size, already clamped by the caller; ``as_of``
-        is already parsed. ``policy_name`` is ``"compat_fts"`` or ``"strict"``;
-        any other value raises ``ValueError`` (fail closed) before a provider
-        runs. Providers: FTS always, plus hybrid when an embedder is
-        configured. Call ``ensure_index`` first: the coordinator's deadline
-        starts here.
+        ``repository`` is the caller's open vault (its resolved ``root`` is
+        used, so recall reads the same target as ``ensure_index`` and the
+        other modes of that call). ``limit`` is the page size, already
+        clamped by the caller; ``as_of`` is already parsed. ``policy_name``
+        is ``"compat_fts"`` or ``"strict"``; any other value raises
+        ``ValueError`` (fail closed) before a provider runs. Providers: FTS
+        always, plus hybrid when an embedder is configured. Call
+        ``ensure_index`` first: the coordinator's deadline starts here.
         """
 
         if policy_name not in RECALL_POLICIES:
             raise ValueError("unknown policy")
-        root = self.root
+        root = repository.root
 
         # Imported here so callers that never recall never load them.
         from memfw.recall import Coordinator, FilterPolicy
@@ -225,13 +238,13 @@ def build_runtime(
 ) -> Runtime:
     """The default assembly: today's behaviour, no ``runtime:`` config yet.
 
-    ``root`` is resolved here (``expanduser().resolve()``, as ``Repository``
-    does). Other values are taken as given; resolving them from the
+    ``root`` is kept as configured (``expanduser`` only; see ``Runtime``).
+    Other values are taken as given; resolving them from the
     environment stays with the interface for now (A3 follow-up).
     """
 
     return Runtime(
-        Path(root).expanduser().resolve(),
+        Path(root).expanduser(),
         tenant=tenant,
         allowed_sources=tuple(allowed_sources),
         embedder=embedder,

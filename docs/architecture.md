@@ -102,19 +102,22 @@ harness comparisons against `origin/main`. Another CI setup needs the same (or
 
 `memfw.runtime` (L4) builds capability objects for the interfaces: one Runtime per Gateway.
 `build_runtime(root, *, tenant, allowed_sources, embedder, entity_enabled, provider_timeout=3.0,
-total_timeout=4.0)` resolves `root` once (as `Repository` does) and takes the other values the
-interface already resolved; there is no `runtime:` section in `vault.yaml` yet, so the default
+total_timeout=4.0)` keeps `root` as configured (`expanduser` only, never resolved) and takes
+the other values the interface already resolved. Calls take the caller's open `Repository` and
+use its (per call resolved) root, so a symlinked or relative vault root is followed per call by
+every mode; there is no `runtime:` section in `vault.yaml` yet, so the default
 assembly is today's behaviour, byte-identical except timing fields.
 
-**A3a (done).** `Runtime.recall(query, *, limit, policy_name, source, include_history, as_of,
+**A3a (done).** `Runtime.recall(repository, query, *, limit, policy_name, source, include_history, as_of,
 scope) -> RecallOutcome` owns the `memory_search mode=two_stage` wiring: the providers
 (`FtsProvider`, plus `HybridProvider` with an embedder; the `Runtime._two_stage_providers`
 test seam), `default_resolvers`, the `compat_fts`/`strict` `FilterPolicy` (any other
 `policy_name` raises `ValueError`: fail closed), the `InflightRegistry` (one per Runtime) and
 the coordinator call. `RecallOutcome.observed` carries the raw index rows of the providers
-that answered, from which the MCP server builds rows as before. `Runtime.ensure_index()`
+that answered, from which the MCP server builds rows as before. `Runtime.ensure_index(repository)`
 (`memfw.runtime.ensure_search_index`) is the index staleness check the MCP server runs before
-every FTS-backed search, before the coordinator's deadline starts. In-flight slots are counted
+every FTS-backed search, before the coordinator's deadline starts; without a repository it
+opens `Runtime.root` only if a vault exists there (`ValueError` otherwise, never creates one). In-flight slots are counted
 per provider name and shared by every caller of one Runtime: a hung provider shows as `busy`
 across tools until it returns. The MCP server no longer imports `memfw.recall` or
 `memfw.recall.builtin` (two allowlist entries removed).

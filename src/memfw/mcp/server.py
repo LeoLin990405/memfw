@@ -1119,6 +1119,7 @@ class Gateway:
         # Before the coordinator starts its deadline: a rebuild may take a while.
         self.runtime.ensure_index(repository)
         outcome = self.runtime.recall(
+            repository,
             query,
             limit=page,
             policy_name=policy,
