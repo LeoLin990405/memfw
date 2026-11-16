@@ -19,12 +19,16 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 ### Added — architecture guards (A0)
 
 - `tests/test_architecture_layers.py`: every `memfw` module is placed in a layer
-  (`tests/architecture/layers.py`); upward imports, unlisted same-layer imports,
-  library imports of `scripts/` and new cycles fail the build. A new module that
-  is not in the map fails too.
-- `tests/architecture/allowlist.py`: the 26 violations present today, each naming
-  the step (A1–A5) that removes it. The list can only shrink: stale entries fail.
-- `memfw.ports`: `Clock` and `IdGen` protocols with `SystemClock`, `FixedClock`,
+  (`tests/architecture/layers.py`); upward imports (including through root
+  re-exports and memfw module names held in strings), unlisted same-layer
+  imports, library references to `scripts/`, unreadable loader calls and new
+  cycles fail the build. A new top-level module that is not in the map fails too.
+- `tests/architecture/allowlist.py`: the 27 violations present today with their
+  exact import sites, each naming the step (A1–A5) that removes it. The list can
+  only shrink: new sites, stale entries or sites, and growth against the
+  merge-base fail.
+- `memfw.ports`: `Clock` and `IdGen` protocols with `SystemClock` (wall clock,
+  never returns an earlier time), `FixedClock`,
   `UuidIdGen` and `SeededIdGen`; `memfw.ports.testing.check_clock` and
   `check_id_gen`. Core does not use them yet (A3).
 - `tests/harness/byte_identical.py`: run a probe on a git ref and on the working

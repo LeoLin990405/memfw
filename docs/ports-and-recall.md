@@ -180,10 +180,10 @@ class IdGen(Protocol):
 
 | Implementation | Behaviour |
 |---|---|
-| `SystemClock()` | `datetime.now(UTC)`, the same as `memfw.core.models.utc_now` |
+| `SystemClock(source=...)` | `datetime.now(UTC)` (as `memfw.core.models.utc_now`), made monotonic: if the wall clock steps back it repeats the last value it returned (time stalls) until the wall clock catches up |
 | `FixedClock(at)` | returns `at` (timezone-aware) until `advance(delta)` or `set(at)`; never moves backwards |
 | `UuidIdGen()` | `str(uuid.uuid4())`, the default `Repository` `id_factory` |
-| `SeededIdGen(seed, *, start=0)` | `sha256(f"{seed}:{n}")[:32]` for n = start+1, start+2, ...: the `memfw --id-seed` scheme |
+| `SeededIdGen(seed, *, start=0)` | `sha256(f"{seed}:{n}")[:32]` for n = start+1, start+2, ...: the `memfw --id-seed` scheme; to continue an existing vault's sequence pass `start = 2 * (non-empty lines in events.jsonl)`, as the CLI does |
 
 `clock.now` and `id_gen.new_id` are the zero-argument callables `Repository(clock=...,
 id_factory=...)` already accepts. Core does not use the ports yet; A3 (composition root) wires

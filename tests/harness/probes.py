@@ -39,7 +39,11 @@ def _vault(root: Path) -> Path:
 
 
 def mcp_memory_search(payload: dict[str, Any], workdir: Path) -> str:
-    """One MCP ``tools/call memory_search`` on a fresh fixture vault; JSON-RPC lines out."""
+    """One MCP ``tools/call memory_search`` on a fresh fixture vault.
+
+    Returns the JSON-RPC responses, pretty-printed, with the tool's JSON text
+    result decoded in place (so a diff points at the changed field).
+    """
 
     from memfw.mcp.server import Gateway
 
@@ -55,7 +59,15 @@ def mcp_memory_search(payload: dict[str, Any], workdir: Path) -> str:
             "params": {"name": "memory_search", "arguments": payload},
         }
     )
-    text = "\n".join(json.dumps(item, ensure_ascii=False, sort_keys=True) for item in sent)
+    for item in sent:  # the tool result is JSON inside a string: unpack it for readable diffs
+        for block in item.get("result", {}).get("content", []):
+            try:
+                block["text"] = json.loads(block["text"])
+            except (TypeError, ValueError):
+                pass
+    text = "\n".join(
+        json.dumps(item, ensure_ascii=False, sort_keys=True, indent=1) for item in sent
+    )
     return text.replace(str(root), "<vault>").replace(str(workdir), "<workdir>")
 
 

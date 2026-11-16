@@ -32,6 +32,39 @@ def test_system_clock_is_utc_now() -> None:
     assert before <= value <= datetime.now(UTC)
 
 
+def test_system_clock_never_goes_backwards_when_the_wall_clock_does() -> None:
+    steps = iter(
+        [
+            T0,
+            T0 + timedelta(seconds=10),
+            T0 + timedelta(seconds=3),  # NTP steps the wall clock back
+            T0 + timedelta(seconds=9),
+            T0 + timedelta(seconds=11),
+        ]
+    )
+    clock = SystemClock(lambda: next(steps))
+    seen = [clock.now() for _ in range(5)]
+    assert seen == [
+        T0,
+        T0 + timedelta(seconds=10),
+        T0 + timedelta(seconds=10),  # stalls instead of going back
+        T0 + timedelta(seconds=10),
+        T0 + timedelta(seconds=11),
+    ]
+    stepping = iter([T0 + timedelta(seconds=5), T0])
+    check_clock(SystemClock(lambda: next(stepping)), samples=2)
+    with pytest.raises(ValueError):
+        SystemClock(lambda: datetime(2026, 1, 1)).now()
+
+
+def test_contract_id_rule_is_the_repository_rule() -> None:
+    from memfw.core import repository
+    from memfw.ports import testing
+
+    assert testing._ID_RULE.pattern == repository._ID_RE.pattern
+    assert testing._ID_RULE.flags == repository._ID_RE.flags
+
+
 def test_fixed_clock_moves_only_forward() -> None:
     clock = FixedClock(T0)
     assert clock.now() == clock.now() == T0
@@ -65,6 +98,12 @@ def test_seeded_id_gen_matches_the_cli_seed_scheme(
     from_cli = cli._id_factory(tmp_path / "no-vault-yet")
     ours = SeededIdGen("fixture-seed")
     assert [ours.new_id() for _ in range(5)] == [from_cli() for _ in range(5)]
+    # Resuming a vault: the CLI starts at 2 * (event lines).
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "events.jsonl").write_text('{"a": 1}\n{"b": 2}\n', encoding="utf-8")
+    resumed_cli = cli._id_factory(vault)
+    assert SeededIdGen("fixture-seed", start=4).new_id() == resumed_cli()
     fresh = SeededIdGen("fixture-seed")
     third = [fresh.new_id() for _ in range(3)][-1]
     assert SeededIdGen("fixture-seed", start=2).new_id() == third

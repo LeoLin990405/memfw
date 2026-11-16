@@ -10,8 +10,15 @@ the text it returns (all payloads for one tree run in one subprocess):
 
 Each tree runs in a fresh subprocess with the tree's ``src`` first on ``sys.path``
 (the runner checks that ``memfw`` really loaded from there), ``HOME`` pointed
-at an empty temp directory and every ``MEMFW_*`` variable removed, so the two
-runs share nothing but the probe and its payload.
+at an empty temp directory and every ``MEMFW_*`` variable removed. Both trees
+share this interpreter and its venv (third-party packages, and the probe
+module from this checkout); only memfw's own source differs.
+
+An unknown ref, or a ref without ``src/`` and ``scripts/``, raises
+``UnknownRef`` (a hard error, never a skip). Only a missing git raises
+``HarnessUnavailable``. CI checkouts are shallow by default: a refactor PR
+that compares against ``origin/main`` needs ``fetch-depth: 0`` (or a
+``git fetch origin main``) first.
 
 A probe is ``"module:function"``. The module is imported from this checkout
 (so it may live under ``tests/``) and must only use memfw APIs that exist in
@@ -63,6 +70,10 @@ for payload in spec["payloads"]:
     outputs.append(result)
 Path(spec["out"]).write_text(json.dumps(outputs), encoding="utf-8")
 """
+
+
+class UnknownRef(ValueError):
+    """The ref does not exist, or holds neither ``src/`` nor ``scripts/``: a hard error."""
 
 
 class HarnessUnavailable(RuntimeError):
@@ -119,8 +130,10 @@ def materialize(ref: str, dest: Path, *, repo: Path = REPO) -> Path:
         check=False,
     )
     if listed.returncode != 0:
-        raise HarnessUnavailable(f"unknown ref {ref!r}: {listed.stderr.strip()}")
+        raise UnknownRef(f"unknown ref {ref!r}: {listed.stderr.strip()}")
     paths = [name for name in listed.stdout.split() if name]
+    if not paths:
+        raise UnknownRef(f"ref {ref!r} has neither src/ nor scripts/")
     archive = subprocess.run(
         ["git", "-C", str(repo), "archive", "--format=tar", ref, "--", *paths],
         capture_output=True,
@@ -210,6 +223,7 @@ def compare(
 __all__ = [
     "Comparison",
     "HarnessUnavailable",
+    "UnknownRef",
     "compare",
     "git_available",
     "materialize",

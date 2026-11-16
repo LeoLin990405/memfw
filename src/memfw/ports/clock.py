@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import threading
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Protocol, runtime_checkable
 
@@ -48,11 +49,31 @@ def _aware(value: datetime, what: str) -> datetime:
     return value
 
 
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
 class SystemClock:
-    """The wall clock in UTC: what ``memfw.core.models.utc_now`` returns."""
+    """The wall clock in UTC (``memfw.core.models.utc_now``), made monotonic.
+
+    The wall clock can step backwards (NTP, a manual change). This clock keeps
+    the last value it returned and never returns an earlier one: during a
+    backward step it repeats that value (time appears to stall) until the
+    wall clock catches up. ``source`` is the wall clock; tests inject a fake.
+    """
+
+    def __init__(self, source: Callable[[], datetime] = _utc_now) -> None:
+        self._source = source
+        self._last: datetime | None = None
+        self._lock = threading.Lock()
 
     def now(self) -> datetime:
-        return datetime.now(UTC)
+        value = _aware(self._source(), "the time source's value")
+        with self._lock:
+            if self._last is not None and value < self._last:
+                return self._last
+            self._last = value
+            return value
 
 
 class FixedClock:
@@ -96,7 +117,9 @@ class SeededIdGen:
     """Deterministic ids: ``sha256(f"{seed}:{n}")[:32]`` for n = start+1, start+2, ...
 
     The same scheme as ``memfw --id-seed`` (``memfw.cli._id_factory``), so a
-    test can predict the ids a seeded CLI run produces.
+    test can predict the ids a seeded CLI run produces. That factory resumes an
+    existing vault at ``start = 2 * (non-empty lines in events.jsonl)``; pass
+    the same ``start`` to continue its sequence.
     """
 
     def __init__(self, seed: str, *, start: int = 0) -> None:

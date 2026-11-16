@@ -30,10 +30,10 @@ because they sit in a different layer from their package:
   internals; the rest of ``memfw.recall`` may import only ``memfw.ports``.
 
 Relation to ``memfw-architecture`` section 2 (L0 ports, L1 index/projections,
-L2 core, L3 capabilities, L4 runtime, L5 interfaces): the spec draws L1 under
-L2, but in code every projection is rebuilt *from* the vault and imports
-``memfw.core``, so the kernel layers sit below the projection layers here. The
-spec's L-number is kept in each layer name.
+L2 core, L3 capabilities, L4 runtime, L5 interfaces): every projection is
+rebuilt *from* the vault and imports ``memfw.core``, so the kernel layers sit
+below the projection layers (spec v1.1). The spec's L-number is kept in each
+layer name.
 """
 
 from __future__ import annotations
@@ -75,8 +75,9 @@ UNITS: Final[dict[str, str]] = {
     "memfw.log": "L2-kernel-parts",
     # Markdown storage, transactions, cold archive; mixins of Repository.
     "memfw.storage": "L2-kernel-parts",
-    # Knowledge cards; KnowledgeStoreMixin is part of Repository. The K
-    # iteration may lift it to L3 behind a protocol.
+    # Knowledge cards: KnowledgeStoreMixin is a mixin of Repository, so the
+    # vault facade cannot exist without it (kernel, not L3). The K iteration
+    # may lift it to L3 behind a protocol.
     "memfw.knowledge": "L2-kernel-parts",
     # Proposal schemas the vault signs and verifies (agents.models); the
     # package __init__ (deterministic mock judges) loads with it.
@@ -178,4 +179,14 @@ RESTRICTED: Final[dict[str, frozenset[str]]] = {
     # (A3 builds memfw.runtime, A4 splits the server). Add memfw.runtime here
     # when it exists.
     "memfw.mcp": frozenset({"memfw.ports"}),
+}
+
+#: Modules allowed to call a loader on a name only known at run time, with the
+#: exact number of such call sites. Each loads an operator-configured
+#: ``module:function`` plug-in (off unless configured). A new dynamic loader
+#: elsewhere is a violation; a changed count fails until this is updated.
+DYNAMIC_IMPORT_ALLOWED: Final[dict[str, tuple[str, int]]] = {
+    "memfw.conversations.backends": ("operator-configured summarizer `module:factory`", 1),
+    "memfw.dream.run": ("operator-configured judge `module:function`", 1),
+    "memfw.dream.skills.draft": ("operator-configured drafter `module:function`", 1),
 }
