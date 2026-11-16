@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import re
-
 import json
 import plistlib
+import re
 from pathlib import Path
 
 from typer.testing import CliRunner
