@@ -11,6 +11,26 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
+### Added — recall shows "unknown" (U2)
+
+- MCP `memory_search` marks hits that an unresolved open question is about:
+  `open_question:<id>` when a visible open question shares an `about` concept
+  with the hit, and `conflicted` when one lists the hit in its `conflicts`.
+  Only questions with no `resolved_by`, no `valid_to`, not superseded and kept
+  by the call's filter policy count, so a question in another tenant or one the
+  policy drops (for example a private one under `policy=strict`) never appears
+  in a label.
+- `mode=two_stage` appends them to `recall_labels`. The other modes take a new
+  `labels` argument (default `false`); with `labels: true` every row has
+  `recall_labels`. Default output of every mode is unchanged, and `two_stage`
+  is unchanged when no visible open question exists.
+- The `memory_search` description tells agents that a hit of type
+  `open-question`, or one labelled `open_question:*` or `conflicted`, means the
+  answer is unknown: say so rather than guess.
+- `memfw.recall.open_question_labels` / `OpenQuestionIndex` (pure),
+  `memfw.recall.builtin.open_question_index` (the per-call vault builder) and
+  `Runtime.open_question_labels`.
+
 ### Fixed — budget enforcement keeps live supersede chains
 
 - Budget/policy enforcement with `forget_action: hard` never deletes a live

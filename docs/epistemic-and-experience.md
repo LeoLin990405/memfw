@@ -157,7 +157,15 @@ open_question:
   refuses gated writes to that memory until the block is restored, and `fsck` reports
   `open_question_missing_block`.
 
-Recall does not treat open questions specially yet.
+* **Recall (U2).** An open question is recalled like any memory and its row says
+  `type: open-question`. MCP `memory_search` labels other hits: `open_question:<id>` when an
+  unresolved open question visible to the caller is `about` one of the hit's concepts, and
+  `conflicted` when one lists the hit in `conflicts`. `mode=two_stage` always adds them to
+  `recall_labels`; the other modes add `recall_labels` only with `labels: true`. A question
+  from another tenant, or one the active policy drops (for example a private one under
+  `policy=strict`), never appears in a label. See
+  [ports-and-recall.md §4.1](ports-and-recall.md#41-mcp-memory_search-modetwo_stage). The
+  context pack does not include open questions yet.
 
 ## Retrieval and export
 

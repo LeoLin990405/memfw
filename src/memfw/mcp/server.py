@@ -104,7 +104,11 @@ TOOLS: list[dict[str, Any]] = [
             "Search the local memfw vault with its rebuildable FTS5 index. Each hit carries "
             "epistemic (experience|fact|judgment|inference, absent on old memories) and causal "
             "(none|association|hypothesis|verified) labels; treat a hypothesis as a hypothesis, "
-            "never as a conclusion."
+            "never as a conclusion. A hit of type open-question records that something is "
+            "not known; a hit whose recall_labels include open_question:<id> has an unresolved "
+            "open question about its concepts, and conflicted means an open question lists it "
+            "as contradicted. Either way the answer is unknown: say so (and why), never guess. "
+            "mode=two_stage always carries recall_labels; other modes add them with labels=true."
         ),
         "inputSchema": {
             "type": "object",
@@ -129,6 +133,15 @@ TOOLS: list[dict[str, Any]] = [
                 "rounds": {"type": "integer", "minimum": 1, "maximum": 2},
                 "source": {"type": "string"},
                 "scope": {"type": "string"},
+                "labels": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "Add recall_labels (open_question:<id>, conflicted) to every row of "
+                        "the fts, hybrid, vector and multihop modes. mode=two_stage always "
+                        "has them."
+                    ),
+                },
             },
             "required": ["query"],
         },
@@ -946,6 +959,7 @@ class Gateway:
         judge: object | None = None,
         scope: str = "",
         policy: str = "compat_fts",
+        labels: bool = False,
     ) -> dict[str, Any]:
         # This delivery does not score hits. An injected judge is ignored.
         del judge
@@ -1080,6 +1094,23 @@ class Gateway:
                 rows = fuse_rows(rows, alias_rows, limit=page)
             elif len(rows) > page:
                 rows = rows[:page]
+        if labels:
+            # Opt-in (U2): the Runtime computes them with the compat_fts policy
+            # these modes filter by; without the flag rows are unchanged.
+            found = self.runtime.open_question_labels(
+                repository,
+                [str(row["id"]) for row in rows],
+                policy_name=policy,
+                source=source,
+                include_history=include_history,
+                as_of=(
+                    datetime.fromisoformat(readonly.normalise_as_of(as_of))
+                    if as_of is not None
+                    else None
+                ),
+            )
+            for row in rows:
+                row["recall_labels"] = list(found.get(str(row["id"]), ()))
         errors = [_client_message(str(item), repository.root) for item in result["errors"]]
         if alias_note:
             errors.append(alias_note)
@@ -1683,6 +1714,7 @@ class Gateway:
                 rounds=(int(args["rounds"]) if args.get("rounds") is not None else None),
                 scope=args.get("scope"),
                 policy=_policy_argument(args),
+                labels=_flag(args, "labels", False),
             ),
             "memory_get": lambda args: self.get(str(args.get("memory_id") or "")),
             "memory_remember": lambda args: self.remember(

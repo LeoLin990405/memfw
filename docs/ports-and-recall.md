@@ -427,7 +427,23 @@ index and builds the rows.
   `content_hash`, `epistemic`, `causal` and `why` match `mode=fts` for FTS hits. A hit with
   no index row (a hybrid row without one, or an adapter) is built from the vault document.
   Every row adds `providers` (which providers returned it) and `recall_labels` (the filter
-  labels). `score` is the fused RRF score, so it is not comparable with `mode=fts` scores.
+  labels, then the open-question labels below). `score` is the fused RRF score, so it is not
+  comparable with `mode=fts` scores.
+- **Open-question labels (U2).** `open_question:<id>` for each unresolved open question
+  whose `about` shares a concept with the hit's `about` (sorted by id; a question never
+  labels itself), then `conflicted` when such a question lists the hit in its `conflicts`.
+  A question counts only when it has no `resolved_by`, no `valid_to`, is not superseded,
+  and the call's `FilterPolicy` keeps it (tenant, source, `as_of`; `strict` adds privacy,
+  status, lifecycle and archive), so a question in another tenant or one the policy drops
+  never shows up in a label. The pure function is `memfw.recall.open_question_labels` over an
+  `OpenQuestionIndex`; `memfw.recall.builtin.open_question_index` builds it per call from the
+  caller's `Repository` (it parses only files that contain `open-question`), and
+  `Runtime.recall` appends the labels to the coordinator's hits. The other modes get the same
+  labels, with the `compat_fts` policy they filter by, only with `labels: true`
+  (`Runtime.open_question_labels`): every row then has `recall_labels`. Without the flag
+  their output is byte-identical; without a visible open question `two_stage` is too. An open
+  question is itself recalled like any memory, with `type: open-question`. The tool
+  description tells agents that either signal means "unknown: say so, don't guess".
 - **Payload.** `mode: "two_stage"`, `policy`, `errors` and `ambiguity` (from the answering
   providers' pages, as `fts` reports them), `recall` (`RecallLabels.as_dict()`) and
   `recall_metrics` (`RecallMetrics.as_dict()`). `recall` and `recall_metrics` never contain

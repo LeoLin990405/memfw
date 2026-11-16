@@ -14,6 +14,9 @@ the adapter between it and today's vault and retrievers.
   falls back to FTS internally the provider reports itself unavailable, so
   the FTS provider is the one that answers.
 - ``MultihopProvider``: ``search_multihop``.
+- ``open_question_index`` / ``open_question_labels_for``: the U2 labels
+  (``open_question:<id>``, ``conflicted``) from the vault's visible,
+  unresolved open questions (``memfw.recall.labels``).
 
 None of them changes the code it wraps; index preparation is injected
 (``prepare``) so the wiring PR can pass the same staleness check the MCP
@@ -29,6 +32,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from memfw.core.epistemic import OPEN_QUESTION_TYPE
+from memfw.core.errors import MemfwError
 from memfw.core.models import MemoryDocument
 from memfw.core.repository import Repository
 from memfw.ports.types import (
@@ -41,7 +46,8 @@ from memfw.ports.types import (
 )
 from memfw.projection import tag_privacy_class
 
-from .policy import ACTIVE_LIFECYCLES, MemoryMeta, classify_privacy
+from .labels import OpenQuestionIndex, open_question_labels
+from .policy import ACTIVE_LIFECYCLES, FilterPolicy, MemoryMeta, classify_privacy, evaluate
 from .resolve import MemoryPathResolver, Resolution, Resolver
 
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
@@ -152,6 +158,89 @@ class VaultIdResolver:
 def default_resolvers(root: Path | str) -> dict[RefKind, Resolver]:
     ids = VaultIdResolver(root)
     return {"memory_id": ids, "path": MemoryPathResolver(ids)}
+
+
+#: Bytes every open-question file contains (its ``type``); a cheap pre-filter
+#: so building the index parses only candidate files, not the whole vault.
+_OPEN_QUESTION_MARKER = OPEN_QUESTION_TYPE.encode("ascii")
+
+
+def _is_open(document: MemoryDocument, policy: FilterPolicy, now: datetime) -> bool:
+    """An unresolved, current open question that ``policy`` would keep."""
+
+    block = document.open_question
+    if document.type != OPEN_QUESTION_TYPE or block is None:
+        return False
+    if block.resolved_by or document.valid_to is not None or document.superseded_by:
+        return False
+    return evaluate(meta_from_document(document), policy, now=now).kept
+
+
+def open_question_index(
+    repository: Repository, policy: FilterPolicy, *, now: datetime
+) -> OpenQuestionIndex:
+    """The open questions ``policy`` lets this caller see, keyed for labelling.
+
+    ``repository`` is the caller's open vault (resolved per call). A question
+    is listed only when it is unresolved (no ``resolved_by``, no ``valid_to``,
+    not superseded) and ``evaluate`` keeps it under ``policy`` (tenant, source,
+    and for ``strict`` privacy, status, lifecycle, archive): a question in
+    another tenant, or one the policy drops, contributes nothing, so its id
+    can never appear in a label. An unreadable file is skipped (no label).
+    """
+
+    memories = repository.root / "memories"
+    if memories.is_symlink() or not memories.is_dir():
+        return OpenQuestionIndex()
+    questions: list[tuple[str, list[str], list[str]]] = []
+    for path in sorted(memories.glob("*.md")):
+        if path.is_symlink() or not _ID_RE.fullmatch(path.stem):
+            continue
+        try:
+            if _OPEN_QUESTION_MARKER not in path.read_bytes():
+                continue
+            document = repository.get(path.stem)
+        except (MemfwError, OSError, UnicodeDecodeError, ValueError):
+            continue
+        if document.open_question is None or not _is_open(document, policy, now):
+            continue
+        questions.append(
+            (document.id, list(document.about), list(document.open_question.conflicts))
+        )
+    return OpenQuestionIndex.build(questions)
+
+
+def open_question_labels_for(
+    repository: Repository,
+    memory_ids: Sequence[str],
+    policy: FilterPolicy,
+    *,
+    now: datetime,
+) -> dict[str, tuple[str, ...]]:
+    """Open-question labels for each hit id that has any (others are absent).
+
+    The hit's ``about`` is read from the vault; a hit outside ``policy``'s
+    tenant, or one that cannot be read, gets none. Without a visible open
+    question nothing but the index scan happens.
+    """
+
+    index = open_question_index(repository, policy, now=now)
+    if not index:
+        return {}
+    out: dict[str, tuple[str, ...]] = {}
+    for memory_id in dict.fromkeys(memory_ids):
+        if not _ID_RE.fullmatch(memory_id):
+            continue
+        try:
+            document = repository.get(memory_id)
+        except (MemfwError, OSError, UnicodeDecodeError, ValueError):
+            continue
+        if document.tenant != policy.tenant:
+            continue
+        labels = open_question_labels(memory_id, document.about, index)
+        if labels:
+            out[memory_id] = labels
+    return out
 
 
 #: Same page cap as the MCP ``memory_search`` paths.
@@ -431,4 +520,6 @@ __all__ = [
     "VaultIdResolver",
     "default_resolvers",
     "meta_from_document",
+    "open_question_index",
+    "open_question_labels_for",
 ]
