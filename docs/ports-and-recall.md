@@ -14,9 +14,9 @@ memfw is an authoritative kernel plus a coordination layer. The kernel owns what
 well, or present them in another form. Their code never enters memfw: an adapter uses the
 external project's public interface, and the kernel uses the adapter only through a port.
 
-**Status in this release.** The coordinator is not wired into MCP, HTTP or the CLI. Existing
-search output is unchanged. A later PR wires it in as `mode=two_stage`, after the open fix
-branches merge.
+**Status in this release.** The coordinator is wired into MCP `memory_search` as the opt-in
+`mode=two_stage` (§4.1). It is not used by HTTP or the CLI. The default mode (`hybrid`) and
+`fts`, `vector` and `multihop` are unchanged: their output is byte-identical to before.
 
 ### 1.1 Packaging boundaries
 
@@ -166,10 +166,11 @@ content, citations, epistemic_cap="inference", causal_cap="association", read_on
 ## 3. The coordinator pipeline
 
 `Coordinator(providers, *, resolvers, configs=None, router=None, total_timeout=4.0,
-rrf_k=60, clock=..., timer=..., metrics_sink=None)` takes a sequence of `RecallProvider`s and
+rrf_k=60, clock=..., timer=..., metrics_sink=None, inflight=None)` takes a sequence of `RecallProvider`s and
 a `Mapping[RefKind, Resolver]`. Provider names must be unique; `configs` may only name known
 providers. `ProviderConfig(weight=1.0, budget=RecallBudget(), lexical=None, overfetch=1,
-max_inflight=1)` (weight must be finite and `>= 0`);
+max_inflight=1)` (weight must be finite and `>= 0`). `inflight` is an `InflightRegistry`
+shared between coordinators that run the same providers, so `max_inflight` holds across them;
 `lexical=None` means "use the provider's `lexical` attribute". `search(query, *, limit=10, policy)` caps
 `limit` at 200 and runs seven steps. No body text passes through.
 
@@ -363,6 +364,53 @@ All three built-in providers pass `memfw.ports.testing.check_recall_provider` (s
 with only `FtsProvider` and `FilterPolicy.compat_fts(...)` returns the same ids, in the same
 order, as `Gateway.search(mode="fts")`. This is checked across tenants, limits, `source`,
 `include_history`, `as_of` and `allowed_sources`.
+
+### 4.1 MCP `memory_search` `mode=two_stage`
+
+`mode=two_stage` runs the query through a `Coordinator` and builds the rows from the fused
+hits. It is opt-in; nothing else changes.
+
+- **Providers.** `FtsProvider` always; `HybridProvider` (`mode=hybrid`) only when the server
+  has an embedder (`MEMFW_EMBEDDING_URL`). Both get the server's `allowed_sources`, the
+  call's `source`, `include_history` and (FTS only) `scope`. Each provider may take 3 s;
+  all providers and resolvers together get **4 s** (the total deadline). The index staleness
+  check runs before the deadline starts. Resolvers are `default_resolvers(root)`.
+- **One thread per hung provider.** Every call on one `Gateway` shares an
+  `InflightRegistry`, so `max_inflight` (1) holds across calls: a provider that hangs holds
+  one worker thread, and later calls report it as `busy` instead of starting another.
+  Concurrent `two_stage` calls on one gateway can therefore see a provider as `busy`.
+- **`policy`.** `compat_fts` (default) is `FilterPolicy.compat_fts(...)`: tenant, source and
+  the index's temporal clause, exactly what `mode=fts` applies. `strict` is the default
+  `FilterPolicy(...)` with the same tenant, sources, `as_of` and `include_history`: it adds
+  the privacy (clearance `none`), status, lifecycle and archive checks and the strict temporal
+  rule (`valid_from` in the future is dropped). Absent, `null` and `""` mean `compat_fts`. An unknown
+  value, or a non-string in the tool call, is an error. **Any other mode rejects a `policy` other than `compat_fts`** (an error
+  where it was ignored before).
+- **Input rules match `mode=fts`.** The query must be 1..512 characters without NUL or lone
+  surrogates, and fails with the same error as `fts`, before any provider runs. `as_of` is
+  normalised the same way: `Z` and a timestamp without a timezone are read as UTC. `limit` is
+  capped to 1..50.
+- **Rows.** Each hit is built by the same code as the other modes, from the provider's own
+  index row when it returned one (passed in-process through the providers' `observe` hook,
+  never through `Candidate.extra`). So `stale`, `index_version`, `sot_version`,
+  `content_hash`, `epistemic`, `causal` and `why` match `mode=fts` for FTS hits. A hit with
+  no index row (a hybrid row without one, or an adapter) is built from the vault document.
+  Every row adds `providers` (which providers returned it) and `recall_labels` (the filter
+  labels). `score` is the fused RRF score, so it is not comparable with `mode=fts` scores.
+- **Payload.** `mode: "two_stage"`, `policy`, `errors` and `ambiguity` (from the answering
+  providers' pages, as `fts` reports them), `recall` (`RecallLabels.as_dict()`) and
+  `recall_metrics` (`RecallMetrics.as_dict()`). `recall` and `recall_metrics` never contain
+  the query or body text, and provider exception messages never appear, only fixed codes.
+- **`degraded`.** Clients read the top-level `degraded`. It is true when any provider or
+  resolver degraded (`recall.degraded`, `recall.resolvers_degraded`), the call failed closed
+  (`recall.fail_closed`), or a provider's page said it was degraded. `recall` says which.
+- **No ontology alias expansion** in this mode yet: `concepts/` aliases add no rows. (FTS
+  still reports `ambiguity` for the query itself.)
+- **Parity.** With no embedder and `policy=compat_fts`, `two_stage` returns the same rows as
+  `mode=fts` (same ids, order and every field except `score`, plus `providers` and
+  `recall_labels`), and the same `errors` and `ambiguity`, across `source`,
+  `allowed_sources`, `include_history` and `as_of` (`tests/test_mcp_two_stage.py`). With an
+  embedder, the hybrid provider is fused in and the order differs by design.
 
 ## 5. Adapter rules
 

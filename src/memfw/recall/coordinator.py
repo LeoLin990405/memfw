@@ -235,6 +235,22 @@ def _version(value: object) -> str:
     return value if isinstance(value, str) and _VERSION_RE.fullmatch(value) else ""
 
 
+class InflightRegistry:
+    """In-flight worker counts, shareable between coordinators.
+
+    A worker thread cannot be killed, so ``max_inflight`` only bounds the
+    threads a hung provider holds if every coordinator that runs it counts in
+    the same place. A caller that builds a coordinator per request passes one
+    registry to all of them.
+    """
+
+    __slots__ = ("counts", "lock")
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.counts: dict[str, int] = {}
+
+
 class Coordinator:
     """Runs recall providers and turns their refs into filtered, fused memory ids."""
 
@@ -250,6 +266,7 @@ class Coordinator:
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         timer: Callable[[], float] = time.monotonic,
         metrics_sink: Callable[[RecallMetrics], None] | None = None,
+        inflight: InflightRegistry | None = None,
     ) -> None:
         names: list[str] = []
         for provider in providers:
@@ -275,8 +292,9 @@ class Coordinator:
         self.timer = timer
         self.metrics_sink = metrics_sink
         self.last_metrics: RecallMetrics | None = None
-        self._lock = threading.Lock()
-        self._inflight: dict[str, int] = {}
+        registry = inflight if inflight is not None else InflightRegistry()
+        self._lock = registry.lock
+        self._inflight: dict[str, int] = registry.counts
 
     # -- configuration -------------------------------------------------
 
@@ -646,6 +664,7 @@ __all__ = [
     "DEFAULT_TOTAL_TIMEOUT",
     "MAX_LIMIT",
     "Coordinator",
+    "InflightRegistry",
     "ProviderConfig",
     "ProviderReport",
     "ProviderStatus",
