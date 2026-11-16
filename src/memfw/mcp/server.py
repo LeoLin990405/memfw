@@ -56,7 +56,7 @@ from memfw.notes import HttpEmbeddingProvider
 from memfw.related import RelatedIndex
 from memfw.retrieval.multihop import search_multihop
 
-SERVER_INFO = {"name": "memfw", "version": "0.1.0"}
+SERVER_INFO = {"name": "memfw", "version": "0.2.0"}
 DREAM_MAX_LIMIT = 1000
 DREAM_MAX_SESSIONS = 100
 """The dreams reference reads 1 to 100 sessions; memfw starts small (20)."""
@@ -531,10 +531,15 @@ def _publish_candidate(root: Path, filename: str, text: str) -> None:
 
 
 def _ensure_search_index(repository: Repository) -> None:
-    """Rebuild the disposable memory index when Markdown is newer than it."""
+    """Rebuild the disposable memory index when it is stale.
+
+    Stale means: missing, built by an earlier schema generation (an index
+    written by memfw 0.1.x has no ``memory_temporal`` projection and would
+    answer every FTS query with nothing), or older than a Markdown file.
+    """
 
     path = repository.index_path
-    stale = not path.is_file()
+    stale = not path.is_file() or not MemoryIndex(path).schema_is_current()
     if not stale and repository.memories_dir.is_dir():
         indexed_at = path.stat().st_mtime
         stale = False
