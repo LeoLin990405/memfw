@@ -15,7 +15,7 @@ and project; a pack that still does not fit is refused (``pack_too_large``).
 
 The goal is the first user message that is the person's own words: turns
 holding only harness-injected text (a ``<system-reminder>`` block) are skipped
-(:func:`memfw.conversations.store.goal_text`). When git state was asked for
+(:func:`memfw.history.transcripts.goal_text`). When git state was asked for
 but not taken, ``system.notes`` says why (for example a redacted stored cwd).
 """
 
@@ -27,8 +27,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from memfw.conversations.backends import load_backend
-from memfw.conversations.store import WITHHELD, safe_text
+from memfw.history.transcripts import WITHHELD, safe_text
 
 from . import gitinfo, summarize, tools_map
 from .schema import (
@@ -243,7 +242,7 @@ def build_pack(
             goal=goal,
             turns=talk,
             allow_cloud=allow_cloud,
-            loader=loader or load_backend,
+            loader=loader,
         )
     fit(pack, cap, measure or json_size)
     validate_pack(pack)

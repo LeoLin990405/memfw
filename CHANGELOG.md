@@ -76,6 +76,47 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 - `_current_body_by_hash` and the archive lookup compared the body hash only after YAML-parsing each file, so every write parsed up to the whole vault and the cost depended on the filesystem's directory order (a perf guard passed on macOS and failed on Linux CI with 109 parses). They now hash first and parse only a matching file; the result is the same first file in glob order that both matches and parses. A non-matching file with invalid UTF-8 no longer raises; a matching one is skipped like any file that fails to parse. A delete in a 200-memory vault now parses 6 files in any directory order (was 6–204).
 
+### Internal — cycles broken in the kernel and between capabilities (A2a)
+
+CLI output is unchanged: `memfw stats`, `memfw cold-archive` / `cold-restore`,
+capture stage crash recovery (`Repository.recover_pending`), `memfw handoff`
+(JSON and Markdown, with and without `--summarize`), `memfw conversations
+worker` (report and staged dream candidates) and `memfw dream skills
+--from-queue` give the same bytes as the previous commit (checked side by
+side; wall-clock stamps and run ids aside). Six allowlist entries are gone
+(23 -> 17):
+
+- `storage -> curation`, `stats -> curation`: the cold-stub body read
+  (`_with_archived_body`) moved from `memfw.curation.engine` into
+  `memfw.storage.with_archived_body` (next to the cold archive writer);
+  `curation.engine._with_archived_body` stays as an alias.
+- `storage -> capture`: the capture candidate WAL (`CaptureCandidate`, the
+  record reader, pack decompression and the pending-append recovery) moved into
+  `memfw.storage.capture_stage`, so `recover_pending` no longer imports the
+  capture package. `memfw.capture` re-exports them under the old names.
+- `handoff -> conversations`: the transcript read interface and its text
+  guards (`ConversationSource`, `SessionInfo`, `Turn`, `safe_text`, the
+  timestamp keys, `goal_text`, the private-location guard) moved from
+  `memfw.conversations.store` into `memfw.history.transcripts`, next to the
+  store it reads; `memfw.conversations.store` re-exports them unchanged. The
+  handoff summarizer gets its backend loader injected: `memfw handoff` passes
+  `memfw.conversations.backends.load_backend`; calling
+  `memfw.handoff.build_pack(..., summarize_spec=...)` from Python now needs
+  `loader=` (it raises `SummarizeError` without one).
+- `conversations -> dream`: new stdlib-only ports `memfw.ports.claims`
+  (`ClaimVerifier`, `ClaimStager`, `StagedClaim`, `ClaimEvidence`) with
+  contract checks `memfw.ports.testing.check_claim_verifier` /
+  `check_claim_stager`. The worker verifies and stages claims through them;
+  `memfw.dream.claims` (`DreamClaimVerifier`, `DreamClaimStager`) implements
+  them and `memfw conversations worker` injects them. `ConversationWorker` /
+  `open_worker` with a vault now refuse to start without a stager and a
+  verifier (or judge).
+- `dream -> conversations`: `memfw.dream.skills.queue` reads the worker's
+  episode queue through an `EpisodeFeed` protocol;
+  `memfw.conversations.feed.WorkerEpisodeFeed` implements it and
+  `memfw dream skills --from-queue` injects it. `run_skills(...,
+  options=SkillOptions(from_queue=True))` from Python needs `episode_feed=`.
+
 ### Added — architecture guards (A0)
 
 - `tests/test_architecture_layers.py`: every `memfw` module is placed in a layer

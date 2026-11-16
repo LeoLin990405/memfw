@@ -223,9 +223,9 @@ class TransactionMixin:
             stage_path = self.root / ".staging" / "capture-candidates.jsonl"
             stage_intent = self.root / ".staging" / "capture-candidates.pending.json"
             if stage_intent.exists():
-                from ..capture import _recover_stage_intent
+                from .capture_stage import recover_stage_intent
 
-                if _recover_stage_intent(self, stage_path):
+                if recover_stage_intent(self, stage_path):
                     cleaned.append(".staging/capture-candidates.jsonl")
             if self.recover_log_compaction():
                 cleaned.append("events.jsonl")

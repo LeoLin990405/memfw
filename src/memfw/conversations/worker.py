@@ -40,6 +40,7 @@ from typing import Any
 from urllib.parse import quote
 
 from ..history.injected import has_content, strip_structural
+from ..ports.claims import ClaimEvidence, ClaimStager, ClaimVerifier, StagedClaim
 from .adapter import Ingestor, checked_location, data_dir
 from .backends import PROMPT_VERSION, ModelBackend, estimate_tokens, parse_reply
 from .policy import SharePolicy
@@ -458,10 +459,18 @@ class ConversationWorker:
         ingestor: Ingestor | None = None,
         vault: Path | None = None,
         judge: Judge | None = None,
+        verifier: ClaimVerifier | None = None,
+        stager: ClaimStager | None = None,
         lock_path: Path | None = None,
         now: Callable[[], datetime] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
+        # Claims are verified and staged through ports (memfw.ports.claims); the
+        # caller injects them (memfw conversations work: memfw.dream.claims).
+        if vault is not None and (stager is None or (judge is None and verifier is None)):
+            raise ConversationError(
+                "a worker with a vault needs a claim stager and a claim verifier (or judge)"
+            )
         self.source = source
         self.state = state
         self.backend = backend
@@ -470,6 +479,8 @@ class ConversationWorker:
         self.ingestor = ingestor
         self.vault = vault
         self.judge = judge
+        self.verifier = verifier
+        self.stager = stager
         self.lock_path = lock_path or state.path.with_name(LOCK_NAME)
         self.now = now or (lambda: datetime.now(UTC))
         self.monotonic = monotonic
@@ -1086,8 +1097,6 @@ class ConversationWorker:
     def _verify(self, claim: str, evidence: Sequence[tuple[Turn, tuple[str, bool]]]) -> Turn | None:
         """Verify-first: a supporting turn, no contradicting one, and no copied text."""
 
-        from memfw.dream.verify import classify
-
         support: Turn | None = None
         for turn, (text, withheld) in evidence:
             if withheld or not text:
@@ -1100,7 +1109,8 @@ class ConversationWorker:
                 except Exception:
                     continue
             else:
-                polarity, _ = classify(claim, text)
+                assert self.verifier is not None  # checked in __init__
+                polarity = self.verifier.polarity(claim, text)
             if polarity == "contradict":
                 return None
             if polarity == "support" and support is None:
@@ -1108,10 +1118,7 @@ class ConversationWorker:
         return support
 
     def _stage(self, job: sqlite3.Row, verified: Sequence[tuple[str, Turn]]) -> int:
-        from memfw.dream.model import Candidate, EvidenceRef
-        from memfw.dream.stage import DreamExistsError, stage
-
-        assert self.vault is not None
+        assert self.vault is not None and self.stager is not None
         app, session_id = str(job["app"]), str(job["session_id"])
         fresh: list[tuple[str, str, Turn]] = []
         with self.state.open() as connection:
@@ -1127,21 +1134,15 @@ class ConversationWorker:
         # The claims are part of the id: a retry with other claims is a new dream.
         claim_ids = sorted(claim_digest for claim_digest, _claim, _turn in fresh)
         dream_id = f"conv-{_digest(app, session_id, job['fingerprint'], claim_ids)[:16]}"
-        candidates = [
-            Candidate(
-                operation="distill",
-                action="distill",
-                memory_ids=[],
-                reason=claim,
+        claims = [
+            StagedClaim(
+                claim=claim,
                 oid=f"conversation-{app}",
-                evidence=[
-                    EvidenceRef(
-                        ref=f"conv:{turn.ref}",
-                        polarity="support",
-                        session_id=session_id,
-                        timestamp=turn.ts or None,
-                    )
-                ],
+                evidence=(
+                    ClaimEvidence(
+                        ref=f"conv:{turn.ref}", session_id=session_id, timestamp=turn.ts or None
+                    ),
+                ),
             )
             for _digest_value, claim, turn in fresh
         ]
@@ -1150,12 +1151,12 @@ class ConversationWorker:
             "backend": self.backend.name,
             "prompt_version": PROMPT_VERSION,
             "evidence_refs": "conv:APP:SESSION@OFFSET, read with memfw conversations get",
-            "candidates": len(candidates),
+            "candidates": len(claims),
         }
-        try:
-            stage(self.vault, dream_id, candidates, report, created_at=self.now().isoformat())
-        except DreamExistsError:
-            pass  # staged by an earlier, interrupted run: idempotent
+        # False: staged by an earlier, interrupted run (idempotent).
+        self.stager.stage_claims(
+            self.vault, dream_id, claims, report, created_at=self.now().isoformat()
+        )
         with self.state.open() as connection:
             connection.executemany(
                 "INSERT OR IGNORE INTO staged_claims (claim_digest, app, session_id, dream_id,"

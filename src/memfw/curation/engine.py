@@ -2,17 +2,13 @@
 
 from __future__ import annotations
 
-import io
 import json
-import tarfile
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
-
-import zstandard
 
 from memfw.budget import BYTE_BUDGETS, BudgetLimits, BudgetProfile, evaluate_budget
 from memfw.core.errors import IntegrityError
@@ -25,6 +21,7 @@ from memfw.policies import (
     live_chain_ids,
     make_policy,
 )
+from memfw.storage import with_archived_body as _with_archived_body
 
 
 def access_projection(repository: Any) -> dict[str, tuple[datetime | None, int]]:
@@ -49,37 +46,6 @@ def _latest_access_intervals(repository: Any) -> dict[str, float]:
         if len(values) >= 2:
             intervals[memory_id] = max(0.0, (values[-1] - values[-2]).total_seconds() / 86400.0)
     return intervals
-
-
-def _with_archived_body(repository: Any, document: Any) -> Any:
-    """Read a cold stub's original document from its archive without restoring it."""
-
-    if not document.is_stub:
-        return document
-    if not document.archive_ref:
-        raise IntegrityError(f"Cold stub has no archive reference: {document.id}")
-    archive_path = repository.archives_dir / f"{document.archive_ref}.tar.zst"
-    try:
-        compressed = archive_path.read_bytes()
-        tar_bytes = zstandard.ZstdDecompressor().decompress(compressed)
-        with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:") as archive:
-            member = archive.extractfile(f"memories/{document.id}.md")
-            if member is None:
-                raise IntegrityError(f"Cold archive does not contain {document.id}")
-            raw = member.read()
-        archived_hash = document.archived_hash
-        if not archived_hash or sha256(raw).hexdigest() != archived_hash:
-            raise IntegrityError(f"Archived content hash mismatch for {document.id}")
-        original = repository.parse(raw.decode("utf-8"), expected_id=document.id)
-    except (
-        OSError,
-        UnicodeDecodeError,
-        zstandard.ZstdError,
-        tarfile.TarError,
-        KeyError,
-    ) as exc:
-        raise IntegrityError(f"Unable to read archived body for {document.id}") from exc
-    return document.model_copy(update={"body": original.body, "is_stub": False})
 
 
 def candidates_for(

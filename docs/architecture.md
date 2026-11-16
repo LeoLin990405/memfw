@@ -89,7 +89,22 @@ number of import lines on that edge. The test fails when:
   skips when the file did not exist at the merge-base. When the ref or the merge-base is not
   available it skips locally and fails in CI (`CI` set).
 
-So the list can only get shorter, and it is empty when the A series is done. The allowlist
+So the list can only get shorter, and it is empty when the A series is done.
+
+**A2 status.** A2a removed six entries (23 -> 17), each by moving a shared
+helper down to the layer that owns the data or by a port injected at the
+interface:
+
+| Edge | Fix |
+|---|---|
+| `storage -> curation`, `stats -> curation` | cold-stub body read is `memfw.storage.with_archived_body` |
+| `storage -> capture` | capture WAL and pending-append recovery are `memfw.storage.capture_stage` |
+| `handoff -> conversations` | transcript reader and text guards are `memfw.history.transcripts`; the summarizer's backend loader is injected by `memfw handoff` |
+| `conversations -> dream` | `memfw.ports.claims` (`ClaimVerifier`, `ClaimStager`, contract checks in `memfw.ports.testing`); `memfw.dream.claims` implements them, `memfw conversations worker` injects them |
+| `dream -> conversations` | `EpisodeFeed` protocol in `memfw.dream.skills.queue`; `memfw.conversations.feed.WorkerEpisodeFeed` implements it, `memfw dream skills --from-queue` injects it |
+
+Left for A2b: the library-to-CLI edges (`capture -> cli`, `capture.cli -> cli`,
+`curation.review_cli -> cli`) and `okf -> capture`. The allowlist
 is plain Python literals because the merge-base check reads the old version from git with
 `ast.literal_eval`.
 

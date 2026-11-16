@@ -35,6 +35,7 @@ from memfw.conversations.worker import (
     run_lock,
     state_path,
 )
+from memfw.dream.claims import DreamClaimStager, DreamClaimVerifier
 from memfw.history.redact import has_secret
 from tests.conversation_fixtures import (
     EMAIL,
@@ -123,6 +124,8 @@ def _worker(
         policy=SharePolicy.from_config(config or {}),
         budgets=Budgets(**budgets),
         vault=vault,
+        verifier=DreamClaimVerifier(),
+        stager=DreamClaimStager(),
         now=lambda: NOW,
     )
 

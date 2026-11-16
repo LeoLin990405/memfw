@@ -13,7 +13,9 @@ import typer
 from ..core.errors import IntegrityError
 from ..core.models import EventKind, Layer, Tier
 from ..core.repository import Repository
-from . import CaptureCandidate, CaptureSession, _ensure_raw_stage_locked, _read_stage_records
+from ..storage.capture_stage import ensure_raw_stage_locked as _ensure_raw_stage_locked
+from ..storage.capture_stage import read_stage_records as _read_stage_records
+from . import CaptureCandidate, CaptureSession
 
 Decision = Literal["keep", "discard", "anchor"]
 app = typer.Typer(help="Review staged capture candidates")

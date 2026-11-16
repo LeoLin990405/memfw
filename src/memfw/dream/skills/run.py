@@ -42,7 +42,7 @@ from .draft import (
 )
 from .episodes import Episode, segment
 from .private import PrivateTerms
-from .queue import QueueBatch, collect_queue, settle
+from .queue import EpisodeFeed, QueueBatch, collect_queue, settle
 
 SKILLS_DIR = Path("_candidates") / "skills"
 MAX_SESSIONS = 200
@@ -471,6 +471,12 @@ def stage_candidate(vault: Path, candidate: SkillCandidate) -> tuple[str, str]:
     return "staged", name
 
 
+def _feed(feed: EpisodeFeed | None) -> EpisodeFeed:
+    # Only reached with a batch, i.e. after --from-queue checked the feed.
+    assert feed is not None
+    return feed
+
+
 def run_skills(
     root: Path,
     *,
@@ -478,8 +484,12 @@ def run_skills(
     dry_run: bool = False,
     options: SkillOptions | None = None,
     queue_parts: dict[str, Any] | None = None,
+    episode_feed: EpisodeFeed | None = None,
 ) -> SkillResult:
-    """``queue_parts`` (tests): ``state`` and ``source`` overrides for ``--from-queue``."""
+    """``episode_feed``: the conversation worker's queue for ``--from-queue``, injected
+    by the caller (``memfw dream skills`` passes
+    :class:`memfw.conversations.feed.WorkerEpisodeFeed`). ``queue_parts`` (tests):
+    ``state`` and ``source`` overrides for ``--from-queue``."""
 
     queue_parts = dict(queue_parts or {})
     options = options or SkillOptions()
@@ -497,9 +507,12 @@ def run_skills(
     boilerplate = options.boilerplate()
     if options.from_queue:
         # The conversation worker's episode queue instead of the transcript index.
+        if episode_feed is None:
+            raise ValueError("--from-queue needs the conversation worker's episode feed")
         batch = collect_queue(
             config,
             repository.root,
+            feed=episode_feed,
             dry_run=dry_run,
             limit=options.max_sessions,
             boilerplate=boilerplate,
@@ -542,10 +555,24 @@ def run_skills(
                 candidate.path = (SKILLS_DIR / staged_id).as_posix()
     except BaseException:
         if batch is not None:
-            settle(batch, ok=False, config=config, vault=repository.root, state=state)
+            settle(
+                batch,
+                ok=False,
+                config=config,
+                vault=repository.root,
+                feed=_feed(episode_feed),
+                state=state,
+            )
         raise
     if batch is not None:
-        settled = settle(batch, ok=errors == 0, config=config, vault=repository.root, state=state)
+        settled = settle(
+            batch,
+            ok=errors == 0,
+            config=config,
+            vault=repository.root,
+            feed=_feed(episode_feed),
+            state=state,
+        )
         counts = {**counts, ("episodes_acked" if errors == 0 else "episodes_released"): settled}
     report = {
         "created_at": created_at,

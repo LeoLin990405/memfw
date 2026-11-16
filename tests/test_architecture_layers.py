@@ -24,7 +24,7 @@ import pytest
 from tests.architecture import allowlist, layers, scan
 
 #: ``len(allowlist.ALLOWLIST)``. Lower it when an entry is removed; never raise it.
-ALLOWLIST_SIZE = 23
+ALLOWLIST_SIZE = 17
 
 STEP = re.compile(r"^A[1-5]\b")
 ALLOWLIST_PATH = "tests/architecture/allowlist.py"

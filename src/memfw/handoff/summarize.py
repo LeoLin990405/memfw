@@ -2,10 +2,11 @@
 
 Called only when the operator passes ``--summarize``; without it the pack
 makes no model call at all. The backend is chosen the same way as for the
-conversation worker (:func:`memfw.conversations.backends.load_backend`, an
-operator-given ``module:factory``; a backend that is not ``local`` needs
-``--allow-cloud``). The built-in ``extractive`` backend calls no model and
-cannot summarise, so it is refused.
+conversation worker: the caller injects the ``loader`` (``memfw handoff``
+passes :func:`memfw.conversations.backends.load_backend`, an operator-given
+``module:factory``; a backend that is not ``local`` needs ``--allow-cloud``),
+so this package does not import the conversations package. The built-in
+``extractive`` backend calls no model and cannot summarise, so it is refused.
 
 A backend receives ``run("handoff_summary", data, max_tokens=...)`` with
 ``data = {"instructions", "schema", "goal", "turns"}``: the instructions and
@@ -25,7 +26,6 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
-from memfw.conversations.backends import load_backend
 from memfw.history.redact import has_secret, redact
 
 from .schema import MODEL_BYTES, MODEL_ITEM_CHARS, MODEL_ITEMS, MODEL_KEYS, MODEL_LABEL
@@ -91,12 +91,18 @@ def summarize(
     turns: Sequence[Mapping[str, str]],
     allow_cloud: bool = False,
     max_tokens: int = 1200,
-    loader: Callable[..., Any] = load_backend,
+    loader: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
-    """The pack's ``model_summarized`` part; one backend call, never partial content."""
+    """The pack's ``model_summarized`` part; one backend call, never partial content.
+
+    ``loader(spec, allow_cloud=...)`` returns the backend (the composition root
+    injects it); without one, ``--summarize`` is refused.
+    """
 
     if not spec or spec.strip().lower() == "extractive":
         raise SummarizeError("--summarize needs a model backend (module:factory)")
+    if loader is None:
+        raise SummarizeError("--summarize needs a backend loader")
     try:
         backend = loader(spec, allow_cloud=allow_cloud)
     except Exception as exc:  # message only: it names the spec, never the data

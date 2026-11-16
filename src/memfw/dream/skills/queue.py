@@ -21,15 +21,23 @@ later evidence appended), so re-reading consumed episodes stages nothing twice.
 A dry run only peeks; a real run claims the pending episodes and acks them
 once staging finished without an error, or releases them back to pending, so
 a failed run leaves them for the next one.
+
+This module does not import :mod:`memfw.conversations` (architecture A2a): the
+worker's queue, its share policy and the store reader come from an injected
+:class:`EpisodeFeed` (``memfw dream skills`` passes
+:class:`memfw.conversations.feed.WorkerEpisodeFeed`). Turn text is redacted
+with :func:`memfw.history.transcripts.safe_text`.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
+
+from memfw.history.transcripts import ConversationSource, safe_text
 
 from .boilerplate import BoilerplateFilter
 from .episodes import Episode, segment
@@ -38,6 +46,42 @@ CONSUMER = "dream-skills"
 MAX_EPISODES = 200
 STALE_CLAIM = timedelta(hours=6)
 """A claim older than this belongs to a consumer that died; it is taken back."""
+
+
+class EpisodeQueuePort(Protocol):
+    """The conversation worker's episode queue (ids, offsets and states only)."""
+
+    def pending(self, limit: int = 50) -> list[dict[str, Any]]: ...
+
+    def claim(self, consumer: str, limit: int = 10, *, now: str | None = None) -> list[str]: ...
+
+    def ack(self, episode_id: str) -> bool: ...
+
+    def release(self, episode_id: str) -> bool: ...
+
+    def rows(self, episode_ids: Sequence[str]) -> list[dict[str, Any]]: ...
+
+    def reclaim(self, before: str) -> int: ...
+
+    def consumed(self, limit: int = 50) -> list[dict[str, Any]]: ...
+
+
+class EpisodeFeed(Protocol):
+    """Opens the worker's queue, its share policy and the store for one vault.
+
+    ``state`` and ``source`` override the worker state and the store reader
+    (tests). ``open`` returns ``(processable, queue, store)``: whether the
+    share policy still lets the worker process an app, the queue, and the
+    read-only transcript reader.
+    """
+
+    def open(
+        self, config: Mapping[str, Any], vault: Path, *, state: Any = None, source: Any = None
+    ) -> tuple[Callable[[str], bool], EpisodeQueuePort, ConversationSource]: ...
+
+    def queue(
+        self, config: Mapping[str, Any], vault: Path, *, state: Any = None
+    ) -> EpisodeQueuePort: ...
 
 
 @dataclass
@@ -49,8 +93,6 @@ class QueueBatch:
 
 
 def _entries(turns: list[Any]) -> list[dict[str, Any]]:
-    from memfw.conversations.store import safe_text
-
     entries = []
     for turn in turns:
         if getattr(turn, "withheld", False):
@@ -80,6 +122,7 @@ def collect_queue(
     config: Mapping[str, Any],
     vault: Path,
     *,
+    feed: EpisodeFeed,
     dry_run: bool,
     limit: int = MAX_EPISODES,
     state: Any = None,
@@ -100,18 +143,11 @@ def collect_queue(
     stripped, so the whole corpus is never held in memory.
     """
 
-    from memfw.conversations.adapter import SqliteStoreSource, store_path
-    from memfw.conversations.policy import SharePolicy
-    from memfw.conversations.worker import EpisodeQueue, WorkState, state_path
-
-    policy = SharePolicy.from_config(config)
-    work = state if state is not None else WorkState(state_path(config, vault=vault))
-    store = source if source is not None else SqliteStoreSource(store_path(config, vault=vault))
+    processable, queue, store = feed.open(config, vault, state=state, source=source)
     batch = QueueBatch(info={"source": "episode_queue", "available": True, "dry_run": dry_run})
     if not store.available():
         batch.info.update(available=False, reason="conversation store not found")
         return batch
-    queue = EpisodeQueue(work)
     current = now or datetime.now(UTC)
     if dry_run:
         rows = queue.pending(limit)
@@ -138,7 +174,7 @@ def collect_queue(
         readable: list[tuple[str, str, int]] = []
         for row in rows:
             app, session_id = str(row["app"]), str(row["session_id"])
-            if not policy.processable(app):
+            if not processable(app):
                 counts["sessions_not_processable"] += 1
                 continue
             info = store.session(app, session_id)
@@ -158,7 +194,7 @@ def collect_queue(
             counts["entries_read"] += len(entries)
             batch.episodes.extend(segment(app, session_id, entries, boilerplate))
     except BaseException:
-        settle(batch, ok=False, config=config, vault=vault, state=work)
+        _settle(batch, ok=False, queue=queue)
         raise
     batch.counts = counts
     return batch
@@ -170,15 +206,18 @@ def settle(
     ok: bool,
     config: Mapping[str, Any],
     vault: Path,
+    feed: EpisodeFeed,
     state: Any = None,
 ) -> int:
     """Ack the claimed episodes (``ok``) or release them to pending. Returns the count."""
 
-    from memfw.conversations.worker import EpisodeQueue, WorkState, state_path
-
     if not batch.claimed:
         return 0
-    work = state if state is not None else WorkState(state_path(config, vault=vault))
-    queue = EpisodeQueue(work)
+    return _settle(batch, ok=ok, queue=feed.queue(config, vault, state=state))
+
+
+def _settle(batch: QueueBatch, *, ok: bool, queue: EpisodeQueuePort) -> int:
+    if not batch.claimed:
+        return 0
     settle_one = queue.ack if ok else queue.release
     return sum(1 for episode_id in batch.claimed if settle_one(episode_id))

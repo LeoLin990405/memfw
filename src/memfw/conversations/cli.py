@@ -158,6 +158,7 @@ def worker(
 ) -> None:
     """One idempotent, locked, budgeted processing run; prints counts only."""
 
+    from memfw.dream.claims import DreamClaimStager, DreamClaimVerifier
     from memfw.dream.run import load_judge
 
     try:
@@ -169,6 +170,8 @@ def worker(
             state=state,
             ingest=ingest,
             judge=load_judge(judge),
+            verifier=DreamClaimVerifier(),
+            stager=DreamClaimStager(),
             max_sessions=max_sessions,
             max_tokens=max_tokens,
             max_seconds=max_seconds,

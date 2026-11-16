@@ -147,11 +147,11 @@ def measure_runtime(
     cold = [doc for doc in docs if doc.tier == Tier.COLD]
 
     def body_bytes(rows: Iterable[MemoryDocument]) -> int:
-        from memfw.curation.engine import _with_archived_body
+        from memfw.storage import with_archived_body
 
         total = 0
         for listed_document in rows:
-            document = _with_archived_body(repository, listed_document)
+            document = with_archived_body(repository, listed_document)
             total += len(document.body.encode("utf-8"))
         return total
 
