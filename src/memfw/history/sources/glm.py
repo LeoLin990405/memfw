@@ -68,8 +68,10 @@ from typing import Any
 from .base import (
     ConversationRecord,
     SessionLocator,
+    SessionTooLarge,
     ToolCall,
     content_text,
+    inside,
     iso_timestamp,
     iter_jsonl,
     open_sqlite_readonly,
@@ -235,7 +237,7 @@ def _message_records(
 
 def _sqlite_sessions(root: Path) -> Iterator[SessionLocator]:
     database = root / DB_FILE
-    if not regular_file(database):
+    if not regular_file(database) or not inside(root, database):
         return
     connection = open_sqlite_readonly(database)
     if connection is None:
@@ -278,6 +280,9 @@ def _sqlite_read(locator: SessionLocator, after: int) -> Iterator[ConversationRe
     task_type = _str(locator.extra.get("task_type"))
     origin = SUBAGENT if task_type in _SPAWNED_TASK_TYPES else ""
     parent = _str(locator.extra.get("parent_id")) if task_type in _LINKED_TASK_TYPES else ""
+    # ``<root>/db/db.sqlite``: the store must not sit behind a symlink out of the root.
+    if not inside(locator.path.parent.parent, locator.path):
+        return
     connection = open_sqlite_readonly(locator.path)
     if connection is None:
         return
@@ -355,7 +360,19 @@ def _json_sessions(root: Path) -> Iterator[SessionLocator]:
     for path in walk_files(root, (".json",)):
         if not path.name.startswith(SESSION_PREFIX) or path.parent != root:
             continue
-        data = read_json(path)
+        try:
+            data = read_json(path, strict=True)
+        except SessionTooLarge:
+            # Listed anyway: ``read`` reports it as too large, so ingest keeps
+            # what it stored before instead of treating the session as gone.
+            yield SessionLocator(
+                agent=AGENT,
+                path=path,
+                key=relative_key(root, path),
+                session_id=path.stem,
+                extra={"store": "json", "cwd": ""},
+            )
+            continue
         if not isinstance(data, dict) or not isinstance(data.get("messages"), list):
             continue
         meta = _dict(data.get("meta"))
@@ -370,7 +387,7 @@ def _json_sessions(root: Path) -> Iterator[SessionLocator]:
 
 
 def _json_read(locator: SessionLocator, after: int) -> Iterator[ConversationRecord]:
-    data = read_json(locator.path)
+    data = read_json(locator.path, strict=True)
     if not isinstance(data, dict):
         return
     messages = data.get("messages")

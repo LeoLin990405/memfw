@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "projection_policy_version": 2,
+  "include_change_events": false,
+  "change_event_marker": {"tag_prefix": "fleet_path:feedback-change-event-", "type": "change-event"},
+  "exclude_tiers": ["cold"],
+  "exclude_stubbed": true,
+  "exclude_lifecycle": ["retired"],
+  "lifecycle_source": "status/memory-meta-index.json",
+  "lifecycle_max_lag_seconds": 600,
+  "join_key": "fleet_path",
+  "tenant_map": "identity",
+  "label_line_version": 1
+}

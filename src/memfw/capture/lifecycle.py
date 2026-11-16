@@ -17,6 +17,7 @@ from .review import (
     Candidate,
     candidate_content_hash,
     candidate_dict,
+    candidate_inside_vault,
     candidate_is_expired,
     candidate_provenance,
     parse_candidate_provenance,
@@ -112,8 +113,11 @@ def mark_expired_candidates(
         raise ValueError("now must include a timezone")
     marked: list[str] = []
     skipped: list[str] = []
+    vault = Path(root).expanduser().resolve()
     for path in staged_candidate_paths(root):
-        if path.is_symlink() or not path.is_file():
+        # A symlinked ``_candidates/remember`` directory must not let the
+        # expiry mark write outside the vault.
+        if path.is_symlink() or not path.is_file() or not candidate_inside_vault(path, vault):
             skipped.append(path.stem)
             continue
         try:

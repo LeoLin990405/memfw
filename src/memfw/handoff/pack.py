@@ -12,6 +12,11 @@ secret is withheld). The pack is cut to ``max_bytes`` of its rendered form,
 dropping the oldest recent turns first, then files touched (and git state),
 then the model part, then the goal's tail, the lineage and the source cwd
 and project; a pack that still does not fit is refused (``pack_too_large``).
+
+The goal is the first user message that is the person's own words: turns
+holding only harness-injected text (a ``<system-reminder>`` block) are skipped
+(:func:`memfw.conversations.store.goal_text`). When git state was asked for
+but not taken, ``system.notes`` says why (for example a redacted stored cwd).
 """
 
 from __future__ import annotations
@@ -49,6 +54,9 @@ from .source import StoredSession, load_session
 
 CALL_SUMMARY_CHARS = 200
 TALK_ROLES = ("user", "assistant")
+REDACTED_MARK = "[REDACTED"
+NOTE_GIT_REDACTED_CWD = "git_skipped: the stored cwd is redacted; pass --cwd for git state"
+NOTE_GIT_UNAVAILABLE = "git_unavailable: the work tree is missing or not a git work tree"
 
 
 class HandoffError(Exception):
@@ -186,11 +194,18 @@ def build_pack(
     goal, goal_source = _goal(session, task_text)
     work_tree = cwd if cwd is not None else (session.cwd or None)
     snapshot = None
-    if git and work_tree:
+    notes: list[str] = []
+    if git and work_tree and REDACTED_MARK in str(work_tree):
+        # The store redacted part of the path (a user name, say): it names no
+        # real directory, so git is not run at all and the pack says why.
+        notes.append(NOTE_GIT_REDACTED_CWD)
+    elif git and work_tree:
         if git_runner is not None:
             snapshot = gitinfo.git_snapshot(work_tree, runner=git_runner)
         else:
             snapshot = gitinfo.git_snapshot(work_tree)
+        if snapshot is None:
+            notes.append(NOTE_GIT_UNAVAILABLE)
     recent_turns = _recent(session, int(recent))
     pack: dict[str, Any] = {
         "schema": SCHEMA,
@@ -215,6 +230,8 @@ def build_pack(
         "max_bytes": cap,
         "saved_as": saved_as,
     }
+    if notes:
+        pack["system"]["notes"] = notes  # optional field: present only when non-empty
     if summarize_spec is not None:
         talk = [
             {"role": turn["role"], "text": turn["text"]}
@@ -350,6 +367,8 @@ def render_markdown(pack: dict[str, Any]) -> str:
     ]
     if source.get("cwd"):
         lines.append(f"- cwd: {_inline(source['cwd'])}")
+    for note in system.get("notes") or ():
+        lines.append(f"- note: {_inline(note)}")
     goal_title = "Goal (task text)" if system["goal_source"] == "task_file" else "Goal"
     lines += ["", f"## {goal_title}", "", *_quote(system["goal"] or "(no user message)"), ""]
     if system["files_touched"]:

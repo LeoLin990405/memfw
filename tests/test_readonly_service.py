@@ -614,7 +614,7 @@ def test_related_edges_mode_and_no_write(tmp_path: Path) -> None:
     root = seed_vault(tmp_path / "vault")
     related_db = build_related(root)
     before = related_db.read_bytes()
-    result = related_vault(root, "mem-alpha", limit=5, related_db=related_db)
+    result = related_vault(root, "mem-alpha", limit=5, related_db=related_db, tenant="tenant-a")
     assert result["mode"] == "edges"
     assert result["degraded"] is False
     assert result["contract"] == CONTRACT
@@ -789,7 +789,7 @@ def test_limit_is_clamped_and_not_an_error(tmp_path: Path) -> None:
     assert len(low["results"]) == 1
     high = search_vault(root, "corpus keyword", limit=999, tenant="tenant-a")
     assert 1 <= len(high["results"]) <= 50
-    over = related_vault(root, "mem-alpha", limit=0)
+    over = related_vault(root, "mem-alpha", limit=0, tenant="tenant-a")
     assert isinstance(over["results"], list)
 
 
@@ -808,7 +808,9 @@ def test_write_token_can_read(httpd: str, tmp_path: Path, monkeypatch: pytest.Mo
     status, payload = _post(httpd, "/search", {"query": "corpus"}, WRITE_TOKEN)
     assert status == 200
     assert payload["contract"] == CONTRACT
-    status, payload = _post(httpd, "/related", {"memory_id": "mem-alpha"}, WRITE_TOKEN)
+    status, payload = _post(
+        httpd, "/related", {"memory_id": "mem-alpha", "tenant": "tenant-a"}, WRITE_TOKEN
+    )
     assert status == 200
     assert payload["mode"] == "fts"
 
@@ -1026,7 +1028,7 @@ def test_stage_source_with_control_characters_is_400(tmp_path: Path) -> None:
 def test_related_reasons_stay_in_the_contract_vocabulary(tmp_path: Path) -> None:
     root = seed_vault(tmp_path / "vault")
     related_db = build_related(root)
-    result = related_vault(root, "mem-alpha", limit=10, related_db=related_db)
+    result = related_vault(root, "mem-alpha", limit=10, related_db=related_db, tenant="tenant-a")
     reasons = {reason for item in result["results"] for reason in item["reasons"]}
     assert reasons <= service.ALLOWED_REASONS
     for method, expected in (
@@ -1680,7 +1682,7 @@ SCENARIOS: dict[str, dict] = {
         "status": 200,
         "method": "POST",
         "path": "/related",
-        "body": {"memory_id": "mem-alpha", "limit": 3},
+        "body": {"memory_id": "mem-alpha", "limit": 3, "tenant": "tenant-a"},
         "token": READ_TOKEN,
         "related": True,
     },

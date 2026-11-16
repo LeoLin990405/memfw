@@ -9,6 +9,7 @@ from typer.testing import CliRunner, Result
 
 from memfw import __version__
 from memfw.cli import app
+from memfw.core.repository import Repository
 
 runner = CliRunner()
 NOW = "2026-01-31T12:00:00+00:00"
@@ -186,7 +187,8 @@ def test_fixed_now_and_seed_produce_identical_full_vault_trees(tmp_path: Path) -
             "rollback",
             lambda root, hot, cold: (
                 "rollback",
-                "nonexistent-event",
+                # A real event: an unknown id now fails the dry run like the real run.
+                Repository(root).events()[-1].event_id,
                 "--root",
                 str(root),
                 "--dry-run",

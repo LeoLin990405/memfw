@@ -10,7 +10,10 @@ raw lines are never copied. The location rules live in
 :mod:`memfw.history.store_location`.
 
 Rows are keyed by ``(agent, session_id, offset)``: re-ingesting the same turn
-is a no-op, a changed turn is updated in place. Per locator a cursor keeps the
+is a no-op, a changed turn is updated in place. The same session seen under
+two roots (a Worker home mirroring it) is stored once; ``conversation_turn_locators``
+records every locator that holds each turn, so a full re-read of one copy only
+drops a turn no other locator still holds. Per locator a cursor keeps the
 store's fingerprint and the last offset seen:
 
 * unchanged fingerprint: skipped;
@@ -28,7 +31,16 @@ read keeps the label already stored. When :data:`LABELS_VERSION` changes, the
 next ingest re-reads every session once (the re-label pass).
 
 A re-read that yields nothing although the locator had rows (store locked,
-vanished mid-read) changes nothing and leaves the cursor as it was.
+vanished mid-read) changes nothing and leaves the cursor as it was, at most
+:data:`BUSY_RETRIES` times for the same fingerprint: then the stored rows are
+kept, the cursor is saved (``sessions_stale``) and the next change re-reads the
+whole session. A session file over the reader's size limit
+(:class:`~memfw.history.sources.base.SessionTooLarge`) keeps its stored rows and
+is not retried until the file changes (``sessions_too_large``).
+
+Text is scrubbed before it is written: lone UTF-16 surrogates (a JavaScript
+writer that cut a pair) become U+FFFD, which SQLite can encode. Timestamps
+with a UTC offset are stored as UTC ``...Z`` so text comparison orders them.
 """
 
 from __future__ import annotations
@@ -37,6 +49,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import re
 import sqlite3
 from collections.abc import Iterable, Iterator
 from contextlib import closing, contextmanager
@@ -47,11 +60,19 @@ from typing import Any
 from .index import HistoryError
 from .injected import has_content, strip_structural
 from .redact import has_secret, redact
-from .sources.base import ConversationRecord, Reader, SessionLocator, StoreRoot
+from .sources.base import (
+    ConversationRecord,
+    Reader,
+    SessionLocator,
+    SessionTooLarge,
+    StoreRoot,
+    utc_timestamp,
+)
 from .sources.labels import merge_origin, prompt_origin
 from .store_location import prepare_store_path
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
+"""2: ``conversation_turn_locators`` (turn ownership per locator) was added."""
 TEXT_CHARS = 16_000
 FIELD_CHARS = 512
 SUMMARY_CHARS = 200
@@ -63,6 +84,9 @@ or ``subagent`` (:data:`memfw.history.sources.labels.SESSION_ORIGINS`)."""
 LABELS_VERSION = "2"
 """Bumped when session labelling (origin, parent) changes: the next ingest of
 each agent re-reads every session once, so existing stores are re-labelled."""
+BUSY_RETRIES = 3
+"""Consecutive empty re-reads of one unchanged fingerprint before ingest gives up."""
+_SURROGATES = re.compile("[\ud800-\udfff]")
 
 
 @dataclass(frozen=True)
@@ -94,6 +118,12 @@ class OptOut:
             return (Path(cwd) / OPTOUT_MARKER).exists()
         except OSError:
             return False
+
+
+def _scrub(value: str) -> str:
+    """``value`` with lone surrogates replaced by U+FFFD (SQLite cannot encode them)."""
+
+    return _SURROGATES.sub("\ufffd", value) if isinstance(value, str) and value else ""
 
 
 def _clean(value: str, limit: int = FIELD_CHARS) -> str:
@@ -131,6 +161,8 @@ class IngestCounts:
     sessions_read: int = 0
     sessions_failed: int = 0
     sessions_busy: int = 0
+    sessions_stale: int = 0
+    sessions_too_large: int = 0
     sessions_opted_out: int = 0
     records_new: int = 0
     records_updated: int = 0
@@ -200,6 +232,7 @@ class ConversationStore:
             );
             """
         )
+        self._migrate(connection)
         columns = {
             str(row[1]) for row in connection.execute("PRAGMA table_info(conversation_turns)")
         }
@@ -208,16 +241,132 @@ class ConversationStore:
             connection.execute(
                 "ALTER TABLE conversation_turns ADD COLUMN parent_session TEXT NOT NULL DEFAULT ''"
             )
-        connection.execute(
-            "INSERT OR IGNORE INTO conversation_meta (key, value) VALUES ('schema_version', ?)",
-            (SCHEMA_VERSION,),
-        )
+        self._repair_owners(connection)
         return connection
+
+    @staticmethod
+    def _migrate(connection: sqlite3.Connection) -> None:
+        """Schema 1 -> 2 in one transaction, decided by ``schema_version`` (not by a table).
+
+        Every step is idempotent and ``schema_version`` is written in the same
+        transaction, so a failure rolls everything back and the next open retries.
+        """
+
+        row = connection.execute(
+            "SELECT value FROM conversation_meta WHERE key = 'schema_version'"
+        ).fetchone()
+        try:
+            version = int(row[0]) if row is not None else 0
+        except (TypeError, ValueError):
+            version = 0
+        if version >= int(SCHEMA_VERSION):
+            return
+        connection.isolation_level = None
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                # Re-check under the write lock: another process may have migrated.
+                row = connection.execute(
+                    "SELECT value FROM conversation_meta WHERE key = 'schema_version'"
+                ).fetchone()
+                if row is not None and str(row[0]).isdigit() and int(row[0]) >= int(SCHEMA_VERSION):
+                    connection.execute("COMMIT")
+                    return
+                # Schema 2: every locator holding a turn. Existing turns get the locator
+                # that wrote them; cursors are cleared so every session is re-read once
+                # and mirrored copies register (the store is derived data).
+                connection.execute(
+                    "CREATE TABLE IF NOT EXISTS conversation_turn_locators ("
+                    " agent TEXT NOT NULL, session_id TEXT NOT NULL, offset INTEGER NOT NULL,"
+                    " locator TEXT NOT NULL,"
+                    " PRIMARY KEY (agent, session_id, offset, locator))"
+                )
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS conversation_turn_locators_locator"
+                    " ON conversation_turn_locators (agent, locator)"
+                )
+                connection.execute(
+                    "INSERT OR IGNORE INTO conversation_turn_locators"
+                    " (agent, session_id, offset, locator)"
+                    " SELECT agent, session_id, offset, locator FROM conversation_turns"
+                )
+                connection.execute("DELETE FROM conversation_cursors")
+                connection.execute(
+                    "INSERT OR REPLACE INTO conversation_meta (key, value)"
+                    " VALUES ('schema_version', ?)",
+                    (SCHEMA_VERSION,),
+                )
+                connection.execute("COMMIT")
+            except BaseException:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise
+        finally:
+            connection.isolation_level = "DEFERRED"
+
+    @staticmethod
+    def _repair_owners(connection: sqlite3.Connection) -> None:
+        """Reconcile ownership rows with turns (older code wrote or deleted turns without them).
+
+        A cheap ``EXISTS`` check first: nothing is written on a consistent store, and a
+        read-only store is left alone (the repair is skipped, not an error).
+        """
+
+        try:
+            missing = connection.execute(
+                "SELECT EXISTS (SELECT 1 FROM conversation_turns t WHERE NOT EXISTS"
+                " (SELECT 1 FROM conversation_turn_locators o WHERE o.agent = t.agent"
+                " AND o.session_id = t.session_id AND o.offset = t.offset))"
+            ).fetchone()[0]
+            orphan = connection.execute(
+                "SELECT EXISTS (SELECT 1 FROM conversation_turn_locators o WHERE NOT EXISTS"
+                " (SELECT 1 FROM conversation_turns t WHERE t.agent = o.agent"
+                " AND t.session_id = o.session_id AND t.offset = o.offset))"
+            ).fetchone()[0]
+            if not missing and not orphan:
+                return
+            if missing:
+                connection.execute(
+                    "INSERT OR IGNORE INTO conversation_turn_locators"
+                    " (agent, session_id, offset, locator)"
+                    " SELECT t.agent, t.session_id, t.offset, t.locator FROM conversation_turns t"
+                    " WHERE NOT EXISTS (SELECT 1 FROM conversation_turn_locators o"
+                    " WHERE o.agent = t.agent AND o.session_id = t.session_id"
+                    " AND o.offset = t.offset)"
+                )
+            if orphan:
+                connection.execute(
+                    "DELETE FROM conversation_turn_locators WHERE NOT EXISTS"
+                    " (SELECT 1 FROM conversation_turns t"
+                    " WHERE t.agent = conversation_turn_locators.agent"
+                    " AND t.session_id = conversation_turn_locators.session_id"
+                    " AND t.offset = conversation_turn_locators.offset)"
+                )
+            connection.commit()
+        except sqlite3.OperationalError:
+            connection.rollback()  # read-only or busy: repair next time
 
     @staticmethod
     def _row(
         record: ConversationRecord, agent: str, origin: str, version: str, locator: str
     ) -> tuple[Any, ...]:
+        record = ConversationRecord(
+            agent=record.agent,
+            session_id=_scrub(record.session_id),
+            offset=record.offset,
+            turn=record.turn,
+            role=_scrub(record.role),
+            text=_scrub(record.text),
+            timestamp=utc_timestamp(_scrub(record.timestamp)),
+            tool_calls=tuple(
+                type(call)(_scrub(call.name), _scrub(call.summary)) for call in record.tool_calls
+            ),
+            cwd=_scrub(record.cwd),
+            project=_scrub(record.project),
+            model=_scrub(record.model),
+            origin=record.origin,
+            parent_session=_scrub(record.parent_session),
+        )
         scanned = [record.text, record.cwd, record.project, record.model]
         for call in record.tool_calls:
             scanned.extend((call.name, call.summary))
@@ -275,6 +424,9 @@ class ConversationStore:
                     "DELETE FROM conversation_turns WHERE agent = ?", (reader.agent,)
                 ).rowcount
                 connection.execute(
+                    "DELETE FROM conversation_turn_locators WHERE agent = ?", (reader.agent,)
+                )
+                connection.execute(
                     "DELETE FROM conversation_cursors WHERE agent = ?", (reader.agent,)
                 )
                 counts.extra["opted_out"] = True
@@ -329,7 +481,8 @@ class ConversationStore:
         counts: IngestCounts,
     ) -> None:
         # Opaque and collision-free: the raw relative path is never stored.
-        digest = hashlib.sha256(locator.key.encode("utf-8")).hexdigest()[:20]
+        # fsencode: a non-UTF-8 filename (surrogateescape) still hashes.
+        digest = hashlib.sha256(os.fsencode(locator.key)).hexdigest()[:20]
         key = f"{root.origin}:{root.label}/{digest}"
         agent = reader.agent
         version = str(getattr(reader, "parser_version", "1"))
@@ -363,43 +516,81 @@ class ConversationStore:
         labels: dict[str, list[str]] = {}
         prompted: set[str] = set()
         excluded = False
-        for record in reader.read(locator, after=after):
-            if record.offset <= after:
-                continue
-            if self.optout.cwd_excluded(record.cwd):
-                excluded = True
-                break
-            row = self._row(record, agent, root.origin, version, key)
-            rows.append(row)
-            seen.add((row[1], row[2]))
-            found = labels.setdefault(row[1], [])
-            if record.origin:
-                found.append(record.origin)
-            if (
-                after < 0
-                and row[1] not in prompted
-                and record.role == "user"
-                and has_content(strip_structural(record.text))
-            ):
-                # The session's first real prompt: a dispatch marker labels it.
-                prompted.add(row[1])
-                found.append(prompt_origin(record.text))
+        try:
+            for record in reader.read(locator, after=after):
+                if record.offset <= after:
+                    continue
+                if self.optout.cwd_excluded(record.cwd):
+                    excluded = True
+                    break
+                row = self._row(record, agent, root.origin, version, key)
+                rows.append(row)
+                seen.add((row[1], row[2]))
+                found = labels.setdefault(row[1], [])
+                if record.origin:
+                    found.append(record.origin)
+                if (
+                    after < 0
+                    and row[1] not in prompted
+                    and record.role == "user"
+                    and has_content(strip_structural(record.text))
+                ):
+                    # The session's first real prompt: a dispatch marker labels it.
+                    prompted.add(row[1])
+                    found.append(prompt_origin(record.text))
+        except SessionTooLarge:
+            # Over the reader's limit: keep what was stored, wait for the file to change.
+            counts.sessions_too_large += 1
+            self._clear_busy(connection, agent, key)
+            self._save_cursor(connection, agent, key, fingerprint, -1, version)
+            return
         if excluded:
             counts.sessions_opted_out += 1
-            counts.records_dropped += connection.execute(
+            owned = connection.execute(
+                "SELECT session_id, offset FROM conversation_turn_locators"
+                " WHERE agent = ? AND locator = ?",
+                (agent, key),
+            ).fetchall()
+            dropped = connection.execute(
                 "DELETE FROM conversation_turns WHERE agent = ? AND locator = ?", (agent, key)
             ).rowcount
+            for item in owned:
+                # Every copy of an excluded turn goes, whichever locator wrote it.
+                dropped += connection.execute(
+                    "DELETE FROM conversation_turns"
+                    " WHERE agent = ? AND session_id = ? AND offset = ?",
+                    (agent, item["session_id"], item["offset"]),
+                ).rowcount
+                connection.execute(
+                    "DELETE FROM conversation_turn_locators"
+                    " WHERE agent = ? AND session_id = ? AND offset = ?",
+                    (agent, item["session_id"], item["offset"]),
+                )
+            connection.execute(
+                "DELETE FROM conversation_turn_locators WHERE agent = ? AND locator = ?",
+                (agent, key),
+            )
+            counts.records_dropped += dropped
+            self._clear_busy(connection, agent, key)
             self._save_cursor(connection, agent, key, fingerprint, -1, version)
             return
         if after < 0 and not rows:
             had = connection.execute(
-                "SELECT 1 FROM conversation_turns WHERE agent = ? AND locator = ? LIMIT 1",
+                "SELECT 1 FROM conversation_turn_locators WHERE agent = ? AND locator = ? LIMIT 1",
                 (agent, key),
             ).fetchone()
             if had is not None:
                 # Nothing readable now although rows exist: likely locked or mid-rewrite.
-                counts.sessions_busy += 1
+                if self._note_busy(connection, agent, key, fingerprint) < BUSY_RETRIES:
+                    counts.sessions_busy += 1
+                    return
+                # Same empty result too often: keep the rows, stop retrying until
+                # the file changes (then the whole session is re-read).
+                counts.sessions_stale += 1
+                self._clear_busy(connection, agent, key)
+                self._save_cursor(connection, agent, key, fingerprint, -1, version)
                 return
+        self._clear_busy(connection, agent, key)
         origins = {
             session: self._session_origin(
                 connection, agent, key, session, root.origin, found, after >= 0
@@ -413,6 +604,11 @@ class ConversationStore:
                 " WHERE agent = ? AND session_id = ? AND offset = ?",
                 row[:3],
             ).fetchone()
+            connection.execute(
+                "INSERT OR IGNORE INTO conversation_turn_locators (agent, session_id, offset,"
+                " locator) VALUES (?, ?, ?, ?)",
+                (*row[:3], key),
+            )
             last = max(last, row[2])
             if existing is not None and existing["digest"] == row[15]:
                 counts.records_duplicate += 1
@@ -438,21 +634,40 @@ class ConversationStore:
                 (origin, agent, key, session, origin),
             )
         if after < 0:
-            # Full re-read finished: drop this locator's offsets that are gone.
+            # Full re-read finished: this locator no longer holds the offsets that are
+            # gone. A turn is dropped only when no other locator still holds it.
             stale = [
                 (agent, r["session_id"], r["offset"])
                 for r in connection.execute(
-                    "SELECT session_id, offset FROM conversation_turns"
+                    "SELECT session_id, offset FROM conversation_turn_locators"
                     " WHERE agent = ? AND locator = ?",
                     (agent, key),
                 )
                 if (r["session_id"], r["offset"]) not in seen
             ]
-            connection.executemany(
-                "DELETE FROM conversation_turns WHERE agent = ? AND session_id = ? AND offset = ?",
-                stale,
-            )
-            counts.records_dropped += len(stale)
+            for item in stale:
+                connection.execute(
+                    "DELETE FROM conversation_turn_locators"
+                    " WHERE agent = ? AND session_id = ? AND offset = ? AND locator = ?",
+                    (*item, key),
+                )
+                other = connection.execute(
+                    "SELECT locator FROM conversation_turn_locators"
+                    " WHERE agent = ? AND session_id = ? AND offset = ? ORDER BY locator LIMIT 1",
+                    item,
+                ).fetchone()
+                if other is None:
+                    counts.records_dropped += connection.execute(
+                        "DELETE FROM conversation_turns"
+                        " WHERE agent = ? AND session_id = ? AND offset = ?",
+                        item,
+                    ).rowcount
+                else:
+                    connection.execute(
+                        "UPDATE conversation_turns SET locator = ?"
+                        " WHERE agent = ? AND session_id = ? AND offset = ? AND locator = ?",
+                        (other["locator"], *item, key),
+                    )
         self._save_cursor(connection, agent, key, fingerprint, last, version)
 
     @staticmethod
@@ -478,6 +693,35 @@ class ConversationStore:
             if stored is not None:
                 previous.append(str(stored["origin"]))
         return merge_origin(root_origin, *found, *previous)
+
+    @staticmethod
+    def _note_busy(
+        connection: sqlite3.Connection, agent: str, key: str, fingerprint: dict[str, Any]
+    ) -> int:
+        """Count one more empty re-read of ``fingerprint``; returns the running count."""
+
+        name = f"busy:{agent}:{key}"
+        marker = json.dumps(fingerprint, sort_keys=True)
+        row = connection.execute(
+            "SELECT value FROM conversation_meta WHERE key = ?", (name,)
+        ).fetchone()
+        count = 1
+        if row is not None:
+            try:
+                previous = json.loads(row["value"])
+                if previous.get("fingerprint") == marker:
+                    count = int(previous.get("count", 0)) + 1
+            except (ValueError, TypeError, AttributeError):
+                count = 1
+        connection.execute(
+            "INSERT OR REPLACE INTO conversation_meta (key, value) VALUES (?, ?)",
+            (name, json.dumps({"fingerprint": marker, "count": count})),
+        )
+        return count
+
+    @staticmethod
+    def _clear_busy(connection: sqlite3.Connection, agent: str, key: str) -> None:
+        connection.execute("DELETE FROM conversation_meta WHERE key = ?", (f"busy:{agent}:{key}",))
 
     def _labels_changed(self, connection: sqlite3.Connection, agent: str) -> bool:
         """True (once) when :data:`LABELS_VERSION` differs from this agent's last ingest."""

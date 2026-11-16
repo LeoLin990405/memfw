@@ -100,6 +100,12 @@ def test_registered_with_aliases(tmp_path: Path) -> None:
     assert default_roots(READER, tmp_path) == [tmp_path / ".gemini" / "antigravity-cli"]
 
 
+def _at(step_index: int) -> int:
+    """Offset of the step with ``step_index`` (see ``antigravity._steps``)."""
+
+    return (step_index + 1) * 1024
+
+
 def test_sessions_and_records(tmp_path: Path) -> None:
     full = _store(tmp_path)
     [root] = default_roots(READER, tmp_path)
@@ -109,13 +115,13 @@ def test_sessions_and_records(tmp_path: Path) -> None:
     assert locator.key == f"brain/{CONVERSATION}/.system_generated/logs/transcript_full.jsonl"
     records = list(READER.read(locator))
     assert [(r.offset, r.role) for r in records] == [
-        (0, "user"),
-        (2, "assistant"),
-        (3, "tool"),
-        (5, "system"),
-        (6, "system"),
-        (7, "assistant"),
-        (8, "user"),
+        (_at(0), "user"),
+        (_at(2), "assistant"),
+        (_at(3), "tool"),
+        (_at(5), "system"),
+        (_at(6), "system"),
+        (_at(7), "assistant"),
+        (_at(8), "user"),
     ]
     assert [r.turn for r in records] == list(range(7))
     user, plan, tool, _implicit, error, done, thanks = records
@@ -136,8 +142,8 @@ def test_sessions_and_records(tmp_path: Path) -> None:
 def test_incremental_after(tmp_path: Path) -> None:
     _store(tmp_path)
     [locator] = list(READER.sessions(tmp_path / ".gemini" / "antigravity"))
-    later = list(READER.read(locator, after=3))
-    assert [r.offset for r in later] == [5, 6, 7, 8]
+    later = list(READER.read(locator, after=_at(3)))
+    assert [r.offset for r in later] == [_at(i) for i in (5, 6, 7, 8)]
     assert [r.turn for r in later] == [3, 4, 5, 6]
 
 
@@ -204,13 +210,13 @@ def test_ingest_round_trip_into_store(tmp_path: Path) -> None:
     assert counts.records_new == 7
     stored = store.turns("antigravity", CONVERSATION)
     assert [(t["offset"], t["role"]) for t in stored] == [
-        (0, "user"),
-        (2, "assistant"),
-        (3, "tool"),
-        (5, "system"),
-        (6, "system"),
-        (7, "assistant"),
-        (8, "user"),
+        (_at(0), "user"),
+        (_at(2), "assistant"),
+        (_at(3), "tool"),
+        (_at(5), "system"),
+        (_at(6), "system"),
+        (_at(7), "assistant"),
+        (_at(8), "user"),
     ]
     assert stored[0]["text"] == "please list the files"
     assert stored[0]["cwd"] == WORKSPACE
@@ -223,4 +229,6 @@ def test_ingest_round_trip_into_store(tmp_path: Path) -> None:
     _write(full.parent / "transcript.jsonl", rows)
     third = store.ingest(READER, [StoreRoot(root)])
     assert third.sessions_read == 1
-    assert [t["offset"] for t in store.turns("antigravity", CONVERSATION)] == [0, 2, 3, 5, 6]
+    assert [t["offset"] for t in store.turns("antigravity", CONVERSATION)] == [
+        _at(i) for i in (0, 2, 3, 5, 6)
+    ]

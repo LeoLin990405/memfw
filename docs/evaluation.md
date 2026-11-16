@@ -135,7 +135,7 @@ claim; read the report's limitations before citing numbers.
 conclusion. It is not a benchmark of causal-inference correctness: it exercises the write
 gate and the retrieval labels on synthetic materials that are known by construction.
 
-Materials live in `tests/fixtures/causal_eval/`, one JSON file each, in four groups of
+Materials live in `src/memfw/eval_data/causal_eval/` (shipped as package data), one JSON file each, in four groups of
 two so that each rule is exercised more than once:
 
 1. `identified` — two correct analyses with a complete identification argument, robustness

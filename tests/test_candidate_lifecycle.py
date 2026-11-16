@@ -19,7 +19,6 @@ from memfw.capture.lifecycle import (
     read_candidate,
 )
 from memfw.cli import app
-from memfw.core.errors import IntegrityError
 from memfw.core.models import MemoryDocument
 from memfw.core.repository import Repository
 
@@ -624,7 +623,7 @@ def test_concurrent_processes_apply_one_candidate_without_duplicate_memory(tmp_p
     assert documents[0].id == success_payload["memory_id"]
 
 
-def test_candidates_list_surfaces_integrity_error_for_bad_frontmatter(tmp_path: Path) -> None:
+def test_candidates_list_skips_bad_frontmatter(tmp_path: Path) -> None:
     repository = _repository(tmp_path)
     broken = repository.root / "_candidates" / "remember" / "broken.md"
     broken.parent.mkdir(parents=True)
@@ -632,8 +631,11 @@ def test_candidates_list_surfaces_integrity_error_for_bad_frontmatter(tmp_path: 
 
     result = CliRunner().invoke(app, ["candidates", "--root", str(repository.root)])
 
-    assert result.exit_code != 0
-    assert isinstance(result.exception, IntegrityError)
+    assert result.exit_code == 0, result.output
+    assert result.exception is None
+    payload = json.loads(result.stdout)
+    assert payload["candidates"] == []
+    assert payload["skipped"] == ["broken"]
 
 
 def _legacy_candidate_with_hash(root: Path, content: str, *, proposal_id: str | None) -> Path:

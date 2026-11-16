@@ -27,7 +27,7 @@ memfw-mcp = "memfw.mcp.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/memfw"]
-artifacts = ["src/memfw/agents/prompts/*.txt"]
+artifacts = ["src/memfw/agents/prompts/*.txt", "src/memfw/eval_data/**/*.json"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "scripts/memfw_readonly_service.py" = "memfw/memfw_readonly_service.py"

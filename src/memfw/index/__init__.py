@@ -16,7 +16,14 @@ from typing import Any, Literal
 from ..core.errors import IntegrityError
 from ..core.models import MemoryDocument
 from ..core.repository import Repository
-from .fts_terms import fts_match, jieba_segmenter
+from .fts_terms import (
+    fts_match,
+    fts_query_from_terms,
+    jieba_segmenter,
+    query_terms,
+    short_terms_clause,
+    split_short_terms,
+)
 
 _ROW_COLUMNS = (
     "id",
@@ -310,31 +317,7 @@ class MemoryIndex:
             return []
         with closing(sqlite3.connect(self.path)) as connection:
             tokenizer = self._tokenizer(connection)
-            if len(needle) == 2:
-                # Trigram cannot match fewer than three code points. Preserve substring
-                # lookup across every user-visible searchable field.
-                rows = connection.execute(
-                    "SELECT id,title FROM memory_rows "
-                    "WHERE id NOT IN (SELECT id FROM memory_temporal WHERE valid_to != '') "
-                    "AND (instr(title, ?) > 0 OR instr(search_body, ?) > 0 "
-                    "OR instr(summary, ?) > 0 OR instr(tags, ?) > 0) "
-                    "ORDER BY id LIMIT ?",
-                    (needle, needle, needle, needle, limit),
-                )
-                return [(str(row[0]), str(row[1])) for row in rows]
-
-            match = _match_text(needle, tokenizer)
-            if match is None:
-                return []
-            rows = connection.execute(
-                "SELECT r.id,r.title FROM memory_fts AS f "
-                "JOIN memory_rows AS r ON r.id=f.id "
-                "WHERE memory_fts MATCH ? AND r.id NOT IN "
-                "(SELECT id FROM memory_temporal WHERE valid_to != '') "
-                "ORDER BY bm25(memory_fts),r.id LIMIT ?",
-                (match, limit),
-            )
-            return [(str(row[0]), str(row[1])) for row in rows]
+            return _search_connection(connection, needle, tokenizer, limit)
 
     def search_many(
         self, queries: Iterable[str], *, limit: int = 100_000
@@ -355,30 +338,7 @@ class MemoryIndex:
                 if len(needle) < 2:
                     output[query] = []
                     continue
-                if len(needle) == 2:
-                    rows = connection.execute(
-                        "SELECT id,title FROM memory_rows "
-                        "WHERE id NOT IN "
-                        "(SELECT id FROM memory_temporal WHERE valid_to != '') "
-                        "AND (instr(title, ?) > 0 OR instr(search_body, ?) > 0 "
-                        "OR instr(summary, ?) > 0 OR instr(tags, ?) > 0) "
-                        "ORDER BY id LIMIT ?",
-                        (needle, needle, needle, needle, limit),
-                    )
-                else:
-                    match = _match_text(needle, tokenizer)
-                    if match is None:
-                        output[query] = []
-                        continue
-                    rows = connection.execute(
-                        "SELECT r.id,r.title FROM memory_fts AS f "
-                        "JOIN memory_rows AS r ON r.id=f.id "
-                        "WHERE memory_fts MATCH ? AND r.id NOT IN "
-                        "(SELECT id FROM memory_temporal WHERE valid_to != '') "
-                        "ORDER BY bm25(memory_fts),r.id LIMIT ?",
-                        (match, limit),
-                    )
-                output[query] = [(str(row[0]), str(row[1])) for row in rows]
+                output[query] = _search_connection(connection, needle, tokenizer, limit)
         return output
 
     def ranked_search(
@@ -396,19 +356,23 @@ class MemoryIndex:
             raise ValueError("ranking must be 'bm25' or 'count'")
         with closing(sqlite3.connect(self.path)) as connection:
             rows = connection.execute(
-                "SELECT r.id,r.title,r.search_body,r.summary,r.tags,t.valid_to "
+                "SELECT r.id,r.title,r.search_body,r.summary,r.tags,t.valid_to,t.superseded_by "
                 "FROM memory_rows r LEFT JOIN memory_temporal t ON t.id=r.id ORDER BY r.id"
             ).fetchall()
         allowed = None if candidate_ids is None else set(candidate_ids)
         retained = [
-            row for row in rows if (allowed is None or str(row[0]) in allowed) and str(row[5]) == ""
+            row
+            for row in rows
+            if (allowed is None or str(row[0]) in allowed)
+            and str(row[5]) == ""
+            and not row[6]  # superseded without valid_to is history too (I5)
         ]
         if ranking == "bm25":
             from ..stats.bm25 import BM25Scorer
 
             documents = {
                 str(identifier): " ".join((str(title), str(body), str(summary), str(tags)))
-                for identifier, title, body, summary, tags, _valid_to in retained
+                for identifier, title, body, summary, tags, _valid_to, _superseded in retained
             }
             ranked = BM25Scorer(documents).rank(query)
         else:
@@ -440,6 +404,74 @@ class MemoryIndex:
         if row is None or row[0] is None:
             raise sqlite3.DatabaseError("memory_fts schema is missing")
         return "trigram" if "trigram" in str(row[0]).lower() else "unicode61"
+
+
+#: Current view: neither closed (``valid_to``) nor replaced (``superseded_by``).
+#: A memory superseded without a ``valid_to`` is history too, matching the
+#: multihop and hybrid retrievers.
+_CURRENT = "id NOT IN (SELECT id FROM memory_temporal WHERE valid_to != '' OR superseded_by != '')"
+_SHORT_COLUMNS = ["title", "search_body", "summary", "tags"]
+
+
+def _search_connection(
+    connection: sqlite3.Connection, needle: str, tokenizer: _TOKENIZER, limit: int
+) -> list[tuple[str, str]]:
+    """Shared body of ``search`` and ``search_many`` for one stripped needle.
+
+    A two-character needle keeps its whole-needle substring lookup. Longer
+    needles split into terms; on a trigram index, terms shorter than three
+    code points cannot match FTS, so they are matched with ``instr`` over the
+    same fields. FTS hits come first in bm25 order, then substring hits by id.
+    """
+
+    if len(needle) == 2:
+        # Trigram cannot match fewer than three code points. Preserve substring
+        # lookup across every user-visible searchable field.
+        rows = connection.execute(
+            "SELECT id,title FROM memory_rows "
+            f"WHERE {_CURRENT} "
+            "AND (instr(title, ?) > 0 OR instr(search_body, ?) > 0 "
+            "OR instr(summary, ?) > 0 OR instr(tags, ?) > 0) "
+            "ORDER BY id LIMIT ?",
+            (needle, needle, needle, needle, limit),
+        )
+        return [(str(row[0]), str(row[1])) for row in rows]
+
+    if tokenizer != "trigram":
+        match = _match_text(needle, tokenizer)
+        return _fts_rows(connection, match, limit) if match is not None else []
+    long_terms, short_terms = split_short_terms(query_terms(needle, tokenizer), tokenizer)
+    output: list[tuple[str, str]] = []
+    match = fts_query_from_terms(long_terms)
+    if match is not None:
+        output = _fts_rows(connection, match, limit)
+    if short_terms and len(output) < limit:
+        clause, params = short_terms_clause(_SHORT_COLUMNS, short_terms)
+        seen = {identifier for identifier, _title in output}
+        rows = connection.execute(
+            f"SELECT id,title FROM memory_rows WHERE {_CURRENT} AND {clause} ORDER BY id",
+            params,
+        )
+        for row in rows:
+            identifier = str(row[0])
+            if identifier in seen:
+                continue
+            seen.add(identifier)
+            output.append((identifier, str(row[1])))
+            if len(output) >= limit:
+                break
+    return output
+
+
+def _fts_rows(connection: sqlite3.Connection, match: str, limit: int) -> list[tuple[str, str]]:
+    rows = connection.execute(
+        "SELECT r.id,r.title FROM memory_fts AS f "
+        "JOIN memory_rows AS r ON r.id=f.id "
+        f"WHERE memory_fts MATCH ? AND r.{_CURRENT} "
+        "ORDER BY bm25(memory_fts),r.id LIMIT ?",
+        (match, limit),
+    )
+    return [(str(row[0]), str(row[1])) for row in rows]
 
 
 def _read_archived_body(repository: Repository, document: MemoryDocument) -> str:

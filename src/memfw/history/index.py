@@ -30,7 +30,13 @@ from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
 from memfw.index import _supports_trigram
-from memfw.index.fts_terms import fts_match, jieba_segmenter
+from memfw.index.fts_terms import (
+    fts_query_from_terms,
+    jieba_segmenter,
+    query_terms,
+    short_terms_clause,
+    split_short_terms,
+)
 
 from .parse import Record, parse_line
 from .redact import MAX_SCAN_CHARS, has_secret, redact, redact_path, secret_continues
@@ -872,10 +878,16 @@ class TranscriptIndex:
         resume_offset = start
         number = int(state["line"])
         previous_text = str(state["previous_tail"])
+        # Parser state from before an incomplete trailing line. That line is
+        # indexed now but parsed again on resume, so what is persisted must not
+        # include its effects (window change, redaction context, counters).
+        snapshot: tuple[dict[str, Any], str, int, int, int] | None = None
         for offset, raw, length, complete in _lines(descriptor, start):
             if budget <= 0:
                 limit = "max_entries"
                 break
+            if not complete:
+                snapshot = (dict(state), previous_text, number, skipped_secret, skipped_other)
             number += 1
             if complete:
                 resume_offset = offset + length
@@ -961,6 +973,8 @@ class TranscriptIndex:
             budget -= 1
             if not complete:
                 number -= 1
+        if snapshot is not None:
+            state, previous_text, number, skipped_secret, skipped_other = snapshot
         state["line"] = number
         # Only a redacted tail is kept, for the split key/value check on resume.
         state["previous_tail"] = redact(previous_text)[-200:]
@@ -1067,15 +1081,26 @@ class TranscriptIndex:
         finally:
             connection.execute("PRAGMA busy_timeout = 30000")
 
-    def stats(self) -> dict[str, int]:
+    def stats(self, sources: Iterable[str] | None = None) -> dict[str, int]:
+        """File and entry counts; with ``sources``, only over those source names."""
+
+        where = ""
+        args: tuple[str, ...] = ()
+        if sources is not None:
+            names = tuple(sorted(set(sources)))
+            where = " WHERE source IN (" + ",".join("?" * len(names)) + ")" if names else " WHERE 0"
+            args = names
         with self._open() as connection:
             row = connection.execute(
                 "SELECT COUNT(*) AS files, COALESCE(SUM(entries), 0) AS entries,"
                 " COALESCE(SUM(skipped_secret), 0) AS skipped_secret,"
-                " COALESCE(SUM(skipped_other), 0) AS skipped_other FROM files"
+                " COALESCE(SUM(skipped_other), 0) AS skipped_other FROM files" + where,
+                args,
             ).fetchone()
+            failing_where = where.replace(" WHERE ", " AND ", 1)
             failing = connection.execute(
-                "SELECT COUNT(*) FROM failures WHERE attempts >= ?", (MAX_FAILURES,)
+                "SELECT COUNT(*) FROM failures WHERE attempts >= ?" + failing_where,
+                (MAX_FAILURES, *args),
             ).fetchone()[0]
             result = {key: int(row[key]) for key in row.keys()}
             result["files_failing"] = int(failing)
@@ -1162,7 +1187,11 @@ class TranscriptIndex:
         where, args = self._filters(source, session, since, until)
         fallback = False
         with self._open() as connection:
-            match = fts_match(text, self._tokenizer(connection))
+            tokenizer = self._tokenizer(connection)
+            # A trigram index cannot match terms under three characters, so
+            # those are matched by substring and merged after the FTS hits.
+            long_terms, short_terms = split_short_terms(query_terms(text, tokenizer), tokenizer)
+            match = fts_query_from_terms(long_terms)
             rows: list[sqlite3.Row] = []
             if match is not None:
                 try:
@@ -1176,6 +1205,18 @@ class TranscriptIndex:
                     ).fetchall()
                 except sqlite3.OperationalError:
                     rows = []
+            if short_terms and len(rows) < bounded:
+                clause, params = short_terms_clause(["e.snippet"], short_terms)
+                seen = {row["id"] for row in rows}
+                extra = connection.execute(
+                    f"{self._SELECT.replace('e.*,', 'e.*, 0.0 AS score,')}"
+                    " WHERE e.id IN (SELECT id FROM entries ORDER BY id DESC LIMIT ?)"
+                    f" AND {clause} AND {where} ORDER BY e.ts DESC LIMIT ?",
+                    (LIKE_SCAN_ROWS, *params, *args, bounded + len(rows)),
+                ).fetchall()
+                added = [row for row in extra if row["id"] not in seen][: bounded - len(rows)]
+                fallback = bool(added)
+                rows = [*rows, *added]
             if not rows:
                 # Short terms (under three characters) cannot match a trigram
                 # index. The substring fallback only scans the newest rows.

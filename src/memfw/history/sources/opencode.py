@@ -34,6 +34,7 @@ from .base import (
     SessionLocator,
     ToolCall,
     content_text,
+    inside,
     iso_timestamp,
     open_sqlite_readonly,
     read_json,
@@ -254,7 +255,9 @@ def _sorted_json(directory: Path) -> list[dict[str, Any]]:
 
 def _read_json_store(locator: SessionLocator, after: int) -> Iterator[ConversationRecord]:
     storage = Path(str(locator.extra["storage"]))
-    info = _obj(read_json(locator.path))
+    if not inside(storage.parent, locator.path):
+        return
+    info = _obj(read_json(locator.path, strict=True))
     cwd = _str(info.get("directory"))
     project = ""
     project_id = _str(info.get("projectID"))
@@ -297,6 +300,8 @@ class OpenCodeReader:
             if regular_file(database):
                 yield from self._db_sessions(root, database)
         storage = root / "storage"
+        if not inside(root, storage / "session"):
+            return
         for path in walk_files(storage / "session", (".json",)):
             info = _obj(read_json(path))
             session_id = _str(info.get("id")) or path.stem

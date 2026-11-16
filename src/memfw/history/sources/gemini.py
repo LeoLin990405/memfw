@@ -91,6 +91,10 @@ def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
 def _parts_text(content: Any) -> str:
     """Text of a Gemini ``PartListUnion``: a string, one part or a list; thoughts dropped."""
 
@@ -177,7 +181,7 @@ def _replay(path: Path) -> tuple[dict[str, Any], list[tuple[int, dict[str, Any]]
             message["toolCalls"] = calls
         messages[key] = (current[0], message)
 
-    for position, record in iter_jsonl(path):
+    def apply(position: int, record: dict[str, Any]) -> None:
         rewind = record.get("$rewindTo")
         if isinstance(rewind, str):
             if rewind in messages:
@@ -185,21 +189,21 @@ def _replay(path: Path) -> tuple[dict[str, Any], list[tuple[int, dict[str, Any]]
                 for key in keys[keys.index(rewind) :]:
                     del messages[key]
             # An unknown id is a no-op: never drop the whole log on a bad reference.
-            continue
+            return
         change = record.get("$patch")
         if isinstance(change, dict):
             patch_one(change)
-            for update in change.get("updates") or ():
+            for update in _list(change.get("updates")):
                 if isinstance(update, dict):
                     patch_one(update)
-            for key in change.get("removeIds") or ():
+            for key in _list(change.get("removeIds")):
                 if isinstance(key, str):
                     messages.pop(key, None)
             # ``orderIds`` is ignored: records stay in offset (recording) order.
-            continue
+            return
         if isinstance(record.get("id"), str):
             put(position, record)
-            continue
+            return
         update = record.get("$set")
         if isinstance(update, dict):
             if isinstance(update.get("messages"), list):
@@ -207,16 +211,23 @@ def _replay(path: Path) -> tuple[dict[str, Any], list[tuple[int, dict[str, Any]]
                 messages.clear()
                 _put_all(put, position, update["messages"], known)
             meta.update({k: v for k, v in update.items() if k != "messages"})
-            continue
+            return
         if isinstance(record.get("sessionId"), str):
             meta.update({k: v for k, v in record.items() if k != "messages"})
             listed = record.get("messages")
             _put_all(put, position, listed if isinstance(listed, list) else [])
+
+    for position, record in iter_jsonl(path):
+        try:
+            apply(position, record)
+        except (TypeError, ValueError, KeyError, AttributeError, RecursionError):
+            # One malformed record is skipped; the rest of the log still replays.
+            continue
     return meta, sorted(messages.values(), key=lambda pair: pair[0])
 
 
 def _snapshot(path: Path) -> tuple[dict[str, Any], list[tuple[int, dict[str, Any]]]]:
-    data = read_json(path)
+    data = read_json(path, strict=True)
     if not isinstance(data, dict):
         return {}, []
     meta = {k: v for k, v in data.items() if k != "messages"}
@@ -261,7 +272,7 @@ def _message_records(
         text = _parts_text(message.get("displayContent")).strip()
     calls: list[ToolCall] = []
     outputs: list[str] = []
-    for call in message.get("toolCalls") or ():
+    for call in _list(message.get("toolCalls")):
         if not isinstance(call, dict):
             continue
         calls.append(tool_call(call.get("name"), call.get("args")))
@@ -349,9 +360,13 @@ class GeminiReader:
         project = _str(locator.extra.get("project"))
         turn = 0
         for position, message in messages:
-            for record in _message_records(
-                message, position, session_id=session_id, cwd=cwd, project=project
-            ):
+            try:
+                records = _message_records(
+                    message, position, session_id=session_id, cwd=cwd, project=project
+                )
+            except (TypeError, ValueError, KeyError, AttributeError, RecursionError):
+                continue  # one malformed message never hides the rest of the session
+            for record in records:
                 record.turn = turn
                 turn += 1
                 if record.offset > after:

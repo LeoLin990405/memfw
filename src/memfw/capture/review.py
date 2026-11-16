@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -11,6 +12,8 @@ from typing import Any
 import yaml
 
 from ..core.errors import IntegrityError
+
+_log = logging.getLogger(__name__)
 
 #: A staged candidate nobody applied is hidden this many days after memfw
 #: recorded it. Expiry only marks and hides; the file is never deleted.
@@ -50,6 +53,26 @@ def _optional_text(value: Any) -> str | None:
     if isinstance(value, (date, datetime)):
         return value.isoformat()
     return str(value)
+
+
+class InvalidProposalIdError(IntegrityError):
+    """A candidate's ``proposal_id`` is present but not a string (e.g. YAML ``false``)."""
+
+
+def _proposal_id(value: Any, path: Path) -> str | None:
+    """A proposal_id is a non-blank string; blank counts as missing; a non-string is invalid.
+
+    ``""`` or ``"   "`` is treated like a missing (legacy) proposal_id, so the
+    apply path refuses it with the usual ``missing_proposal_id`` advice. YAML
+    ``false``, a number or a list is not an identity at all and is refused.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise InvalidProposalIdError(f"Invalid candidate proposal_id (not a string): {path}")
+    if not value.strip():
+        return None
+    return value
 
 
 def _string_list(value: Any) -> list[str]:
@@ -107,7 +130,7 @@ def read_candidate(path: Path | str) -> Candidate:
     return Candidate(
         path=candidate_path,
         candidate_id=candidate_path.stem,
-        proposal_id=_optional_text(_field(frontmatter, metadata, "proposal_id")),
+        proposal_id=_proposal_id(_field(frontmatter, metadata, "proposal_id"), candidate_path),
         source=str(_field(frontmatter, metadata, "source") or "candidate"),
         title=str(title_value or "memory"),
         body=body,
@@ -263,19 +286,53 @@ def staged_candidate_paths(root: Path | str) -> list[Path]:
     return sorted(base.glob("*.md"))
 
 
+def candidate_inside_vault(path: Path, root: Path) -> bool:
+    """True when ``path`` resolves (through any symlinked file or directory) under ``root``."""
+
+    try:
+        path.resolve().relative_to(root)
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return True
+
+
 def list_staged_candidates(
     root: Path | str,
     *,
     include_expired: bool = False,
     now: datetime | None = None,
+    skipped: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Staged candidates. Expired ones are hidden unless asked for."""
+    """Staged candidates. Expired ones are hidden unless asked for.
+
+    One bad file does not hide the rest: a symlink that leaves the vault, a
+    file that cannot be read or parsed, or one whose body no longer matches
+    ``content_hash`` is skipped with a warning. Pass ``skipped`` to collect
+    the skipped candidate ids, the same shape ``candidates-expire`` reports.
+    """
 
     current = now or datetime.now(UTC)
+    vault = Path(root).expanduser().resolve()
     output: list[dict[str, Any]] = []
     for path in staged_candidate_paths(root):
-        candidate = read_candidate(path)
-        validate_candidate_hash(candidate)
+        reason: str | None = None
+        # Every path, not only a symlinked file: a symlinked ``_candidates``
+        # or ``remember`` directory leads outside the vault just as well.
+        if not candidate_inside_vault(path, vault):
+            reason = "resolves outside the vault"
+        elif not path.is_file():
+            reason = "not a regular file"
+        if reason is None:
+            try:
+                candidate = read_candidate(path)
+                validate_candidate_hash(candidate)
+            except (OSError, IntegrityError) as exc:
+                reason = str(exc) or type(exc).__name__
+        if reason is not None:
+            _log.warning("skipped candidate %s: %s", path.name, reason)
+            if skipped is not None:
+                skipped.append(path.stem)
+            continue
         expired = candidate_is_expired(candidate, now=current)
         if expired and not include_expired:
             continue
@@ -289,10 +346,12 @@ def list_staged_candidates(
 __all__ = [
     "CANDIDATE_TTL_DAYS",
     "Candidate",
+    "InvalidProposalIdError",
     "candidate_is_expired",
     "candidate_recorded_instant",
     "candidate_content_hash",
     "candidate_dict",
+    "candidate_inside_vault",
     "candidate_provenance",
     "list_staged_candidates",
     "parse_candidate_provenance",

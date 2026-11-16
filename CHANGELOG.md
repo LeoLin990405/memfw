@@ -9,6 +9,266 @@ The vault format did not change between `0.1.1` and `0.2.0`: `vault.yaml`
 stays at `schema_version: 1`, and files written by an earlier version keep
 their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
+## [Unreleased]
+
+### Fixed — vault integrity
+
+- Frontmatter ends only at a closing `---` line, so a tag, title or summary
+  ending in `---` no longer truncates the frontmatter on read (and an update no
+  longer persists the damage). 0.1.x files still parse → render byte-identical.
+- `rollback` restores every document field of the target version except `id`,
+  `created_at`, `recorded_at`, `version` and `updated_at` (previously `type`,
+  `tenant`, `related`, validity, `superseded_by`, `status`, `evidence`,
+  `epistemic`, `causal`, `causal_record`, `limitations` and `experience` were
+  dropped). A human rollback counts as a human decision at the epistemic gate.
+- `delete` prunes `.history/bodies/` objects, so forgotten text no longer stays
+  on disk.
+- A body object shared with another memory stays recoverable after that memory
+  is cold-archived; archived-body lookup also searches other archive members
+  by hash.
+- `superseded_by` must name an existing memory other than itself and must not
+  form a cycle; `delete` clears back-references to the deleted memory; `fsck`
+  reports `dangling_superseded_by` and `cyclic_superseded_by`.
+- A missing `events.jsonl` while committed state still expects events raises
+  `IntegrityError` on read and append instead of reading as empty /
+  `FileNotFoundError`.
+- `events()` enforces `catalog_hash` from `events.state.json`; the append
+  cursor no longer reseeds over a mismatched catalog. New archived summary rows
+  carry the original `event_hash` and a full-event digest and are re-verified
+  on read; older rows without the digest still load but must match
+  `catalog_hash`.
+- Archived event summaries keep `storage`, `after_config_hash`,
+  `before_config_hash` and `target_snapshot_hash_mode`, which recovery and
+  proposal staleness checks read.
+- Rollback onto a version whose `superseded_by` names a since-deleted memory
+  fails with an error that says so and suggests clearing `superseded_by`.
+- The cleanup `delete` runs after its DELETE event commits (body-object
+  pruning, clearing `superseded_by` back-references) contains failures per
+  step and per reference; `fsck` re-runs it and reports
+  `deleted_superseded_by_cleared`.
+
+### Compatibility
+
+- **No downgrade after compaction.** `summary_hash` on archived event
+  summaries now also covers `original_event_digest` and `lossless`. Once this
+  version compacts a vault's event log, memfw ≤ 0.2.0 can no longer read that
+  log. Vaults that were never compacted by this version stay readable by 0.2.0.
+### Breaking for memfw-http/2 clients
+
+- `/related` without a `tenant` now only sees empty-tenant memories: asking
+  about a tenanted memory returns 404, and neighbours from other tenants are
+  dropped. Clients must send the tenant they read (S1).
+- `/stage` with an existing `proposal_id` but different content (title, tags,
+  related, tenant or source) returns 409 `conflict` instead of
+  `duplicate: true`; an identical resubmission is still a duplicate (S8).
+- Conductor's federation client already handles both: a 404 from `/related`
+  is an empty neighbour set and a 409 from `/stage` is a conflict.
+
+### Security
+
+- Readonly service `/related` compares tenants exactly, the empty tenant
+  included, and always scopes edge neighbours by tenant, so an untenanted
+  request no longer learns other tenants' ids, titles or existence (S1).
+- MCP `memory_get`, `memory_related` and `memory_context` enforce the bound
+  tenant and `MEMFW_ALLOWED_SOURCES`; FTS search filters sources in SQL
+  before the page limit; `memory_status` counts only visible memories (S2).
+- MCP history tools (`history_list`, `history_search`, `history_read`) honour
+  `conversation_optout`, `readable: false` and the caller's `can_read`;
+  `history_list` stats count only the sources the caller may see (S9).
+- Concept errors name a vault-relative path; the service and MCP send clients
+  a fixed message and log details to stderr (S4).
+- The service bind guard resolves the host with `AI_PASSIVE` and refuses any
+  unspecified address (`""`, `0`, `0.0`, `000.0.0.0`, `::`) (S5).
+- `/stage` applies the bound `MEMFW_TENANT` (default bound tenant, foreign
+  tenant → 403) (S6), and a resubmitted `proposal_id` with different
+  title/tags/related/tenant/source is a 409 conflict instead of a silent
+  duplicate (S8).
+- Incremental transcript refresh resumes from the parser state saved before a
+  partial trailing line, so redaction context (a password after
+  `Enter password:`), line numbers and windows match a full rebuild (I1).
+
+### Fixed — service, MCP and index
+
+- A stale memory index is reported as `degraded: true` with
+  `errors: ["index_stale"]` instead of a silent empty or unfiltered result (S3).
+- MCP `memory_search` rejects a non-boolean `include_history` such as
+  `"false"` (S7).
+- Queries made only of terms under three characters (`AI ML`, `数据 迁移`)
+  match on trigram indexes (memory index, service, notes, history) through an
+  `instr` clause merged after FTS hits; lowercase English stopwords such as
+  `is` and `of` are skipped there so they add no noise (I3).
+- The MCP index reindexes when memory files are added with an older mtime or
+  deleted outside memfw; multihop drops hits whose file is gone (I4).
+- Multihop, hybrid and `MemoryIndex.search`/`search_many`/`ranked_search`
+  treat `superseded_by` without `valid_to` as history (I5).
+- Notes: deleting a note without vector tables no longer raises (I2); a
+  changed embedder or dimension rebuilds vectors (I6); `path_prefix`/`since`
+  filters apply before the candidate cap (I7); the build-time FTS tokenizer is
+  recorded and used at query time (I8); tags with spaces survive (new
+  `tags_json` column) and a reranked result is no longer marked degraded (I10).
+- Code retrieval matches the ignore list against repo-relative paths,
+  updates embeddings by row, and resolves recent files against the repo
+  root (I9).
+### Fixed — CLI, OKF export and candidates
+
+- `okf export --force` refuses an output that is the vault, contains it or
+  sits inside it, comparing by file identity (`st_dev`/`st_ino`) so symlinks
+  and a case-insensitive file system cannot disguise the vault; the same check
+  covers the `.tmp` scratch and backup paths. It replaces only a directory whose
+  `manifest.json` was written by memfw-okf-export. Back-to-back exports in the
+  same second get unique backup names, a failed export leaves no `.tmp`,
+  `okf export .` works, and the refusal names `--force`; the CLI reports these
+  as usage errors instead of tracebacks. The reported bundle path keeps the
+  spelling you gave.
+- `conversations schedule --print` fills plist placeholders in one pass, so a
+  value containing a placeholder name is not expanded again; `--bin` defaults
+  to the absolute path of the running `memfw` (failing clearly when none is
+  found); the command reminds you to create the log directory, which launchd
+  does not do.
+- Candidates: a blank `proposal_id` is refused as `missing_proposal_id` (with
+  the `/stage` advice) and a non-string one (YAML `false`) as
+  `invalid_proposal_id`, instead of being applied; an unknown related id is a
+  clean error.
+- `memfw candidates` skips tampered, unreadable or unparseable candidate
+  files and any path that resolves outside the vault (a symlinked file or a
+  symlinked `_candidates/remember` directory), and lists them under `skipped`,
+  instead of failing the whole listing; `candidates-expire` never writes
+  through such a directory.
+- `approve-proposal --dry-run` runs the same check as the approval
+  (`Repository.check_proposal_approval`): the proposal exists, is undecided,
+  matches the payload hash, is not stale and its changes would apply, instead
+  of always reporting `payload_valid`. `record-proposal` refuses an invalid
+  `layer`/`tier` or changes that do not make a valid memory, so a human
+  decision is never written for a proposal that cannot apply, and its
+  `--dry-run` runs exactly the real run's checks (`Repository.check_proposal`).
+- `supersede`, `layer-set`, `cold-archive --apply` with no cold memories,
+  `record-proposal` / `approve-proposal` with non-object or unsupported
+  payloads, and `concepts import-seed` with a missing or malformed file exit
+  with a usage error instead of a traceback.
+- `record-proposal` refuses a proposal for an unknown memory before appending
+  an event, and `rollback --dry-run` fails on an unknown event like the real
+  run.
+- `memfw eval causal` works from an installed wheel: its fixtures ship as
+  package data under `memfw/eval_data/causal_eval/`.
+### Conversation store and readers (fixes)
+
+- Ingest no longer rolls back a session holding a lone UTF-16 surrogate:
+  every text field is scrubbed to U+FFFD before it is written, so the session
+  stores and the labels re-label pass completes.
+- The same session under two roots (a Worker home mirroring it) is no longer
+  lost when one copy shrinks: the new `conversation_turn_locators` table
+  records which locators hold each turn, and a turn is dropped only when no
+  locator holds it. Schema 2; an existing store is migrated on open (ownership
+  backfilled, cursors cleared, so every session is re-read once).
+- The schema 1 -> 2 migration runs in one `BEGIN IMMEDIATE` transaction and is
+  decided by `schema_version`, so a crash mid-migration rolls back and the next
+  open retries. Every open also reconciles ownership rows with turns (stores
+  touched by older code): missing rows are backfilled, orphans removed.
+- Upgrade note: the conversation worker re-processes every session once after
+  upgrading (the session fingerprint includes `updated_at`, now UTC-normalised).
+- Upgrade note: readers now skip a store whose data directory is a symlink that
+  resolves outside the store root (previously followed); a warning is logged
+  naming the path. Point the root at the real directory to read it.
+- Goal extraction also strips `<ide_opened_file>`, `<ide_selection>` and
+  `<user-prompt-submit-hook>` blocks; sort keys accept nanosecond and
+  seconds-less `Z` timestamps.
+- A session that re-reads empty although rows exist (emptied file, rewrite)
+  is retried at most 3 times for the same fingerprint, then kept as stored
+  (`sessions_stale`) instead of staying busy forever. A session file over the
+  reader's size limit raises `SessionTooLarge` and keeps its rows
+  (`sessions_too_large`).
+- Timestamps with a UTC offset are stored as UTC `...Z`; the adapter's
+  `since` filter and ordering compare in UTC, including rows stored before.
+- Readers survive one malformed field: unhashable `type` values (DeepSeek,
+  Kimi, Grok, StepFun), out-of-range numeric timestamps, a bad `file://` URI
+  (Antigravity), non-list Gemini `toolCalls`/`$patch` values. JSONL reading
+  strips a UTF-8 BOM and is linear in the line count. Symlinked store
+  directories that resolve outside the root (Cursor IDE, GLM, OpenCode) are
+  skipped. Antigravity offsets no longer collide (parser version 2).
+- Non-UTF-8 session file names hash via `os.fsencode`.
+- Handoff and share packs: recent turns come from the session's tail, the goal
+  is the first user turn with content after harness-injected blocks are
+  stripped, and a redacted cwd skips git with a note in `system.notes`.
+- The conversation worker no longer treats a session without timestamps as
+  idle on first sight; it waits `idle_minutes` after it last saw it change.
+### Added
+
+- `memfw okf import <bundle> --root <vault> [--dry-run/--apply] [--json]`: an
+  OKF Ingestor that path-checks and validates the bundle, then stages each
+  concept as a candidate under `_candidates/remember/` (never the vault) with a
+  deterministic `proposal_id` and `source: okf:<bundle-name>`. Re-import is
+  idempotent; concepts already in the vault are reported as duplicates.
+  The bundle is read once through `O_NOFOLLOW` directory descriptors;
+  symlinks leaving it, non-regular files, non-UTF-8 Markdown, concepts over
+  64 KiB and YAML anchors/aliases refuse the whole bundle. Staging is
+  all-or-nothing. See `docs/okf.md`.
+
+### Changed
+
+- The candidate staging writer moved from `memfw.mcp.server` to
+  `memfw.capture.staging` so `memory_remember` and `okf import` share it; the
+  candidate file `memory_remember` writes is unchanged.
+R6 PR-1: the backend-neutral recall projection, documented in
+`docs/qmd-projection.md`. memfw contains no QMD code; it couples to a recall
+backend only through exported files and the `resolve` interface.
+
+### Recall projection
+
+- `memfw projection export` writes one Markdown file per projectable memory,
+  `manifest.json`, `delta.json` and `export-failures.jsonl` into a new
+  `tree-<UTC stamp>-<sha8>` generation (staging directory + rename, files
+  `0600`). With an unchanged content head, policy and lifecycle-source status
+  it returns `no_change_fast_path` and writes nothing. The caller owns the
+  `current` symlink and any delta queue.
+- Projection policy file (v1 default; v2 adds `epistemic`/`causal`), validated
+  strictly: unknown keys are rejected, and `tenant_map`, `join_key` and
+  `label_line_version` accept only `identity`, `fleet_path` and `1`.
+- `memfw resolve --ids-stdin` maps backend hits (ids, `memories/<id>.md` paths
+  with any prefix, `<id>\t<title>` lines; at most 50 per call) to the
+  authoritative memfw metadata and the vault body (`memfw-resolve-v1`).
+- One shared `join_meta()` (`fleet_path` tag ↔ lifecycle-source `path`, with
+  the `f`+12-hex id check), stricter-wins privacy classification, and the
+  fail-closed `filter_resolved()` filter matrix for the two-stage consumer
+  that comes next (PR-2a).
+- `memfw index search --query-stdin` reads the query from stdin, so it stays
+  out of argv and sudo logs.
+- Fail-closed hardening: `sensitivity:*` tags other than `sensitivity:private`
+  classify as `unknown`; resolve staleness uses parsed `updated_at` (an
+  unparseable file → `stale`); unjoined resolve entries carry only id and join
+  outcome; resolve stdin capped (1 MiB, 4 KiB lines); export cleans up its
+  staging directory on failure and creates new `--out` parents `0700`.
+- Opt-in `projection export --skip-privacy unknown,local-private` (policy
+  `skip_privacy`); by default every privacy class is projected, which is safe
+  only while the backend is reachable solely through memfw.
+- `memfw.core.markdown_parse.parse_memory_markdown()`: the storage-free parser
+  the projection module depends on (the storage mixin now delegates to it).
+- No change to existing command output: `index search` default and
+  `--dry-run` output are unchanged, and every new command is read-only on the
+  vault.
+### Compat framework: ports and recall coordinator
+
+- New `memfw.ports`: the four port protocols (`RecallProvider`, `Projector`,
+  `Ingestor`, `Deriver`), their frozen value types, reference staging under
+  `_candidates/`, an adapter registry (`memfw.adapters` entry points plus
+  `register()`; discovery imports nothing, an adapter is imported only once
+  enabled in config, and a missing dependency or failing import reports it
+  unavailable instead of raising), atomic content-addressed staging,
+  and a contract-test kit, `memfw.ports.testing`. The package imports only
+  the standard library, so it can ship as a standalone distribution.
+- New `memfw.recall`: a coordinator that runs route → parallel recall
+  (bounded workers for `available()`, `search()` and resolvers under one
+  deadline, a per-provider in-flight limit so a hung adapter holds one
+  thread, and a failing provider is marked degraded) →
+  resolve → fail-closed policy filter (tenant, privacy clearance defaulting
+  to `none`, `unknown` always dropped, validity, supersession, lifecycle,
+  status, sources) → weighted
+  RRF → labels → metrics. Metrics never contain the query.
+  `memfw.recall.builtin` holds the vault resolver and the FTS, hybrid and
+  multihop providers. It wraps the existing code without changing it.
+- Not wired into MCP, HTTP or the CLI yet; search output is unchanged. A test
+  pins the FTS-only coordinator to the same ids and order as
+  `memory_search` `mode=fts`. See `docs/ports-and-recall.md`.
+
 ## [0.2.0] — 2026-11-15
 
 The first release since the standalone core: notes, concepts, the transcript

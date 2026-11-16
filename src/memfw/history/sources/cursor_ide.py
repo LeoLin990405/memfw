@@ -96,6 +96,7 @@ from .base import (
     ConversationRecord,
     SessionLocator,
     ToolCall,
+    inside,
     iso_timestamp,
     open_sqlite_readonly,
     read_json,
@@ -285,9 +286,15 @@ def _workspace_path(identifier: Any, workspaces: Path) -> str:
     workspace_id = _safe_id(ident.get("id"))
     if not workspace_id:
         return ""
-    info = _obj(read_json(workspaces / workspace_id / "workspace.json"))
+    info_path = workspaces / workspace_id / "workspace.json"
+    if not inside(workspaces.parent, info_path):
+        return ""
+    info = _obj(read_json(info_path))
     folder = _str(info.get("folder"))
-    parsed = urlparse(folder)
+    try:
+        parsed = urlparse(folder)
+    except ValueError:
+        return ""
     if parsed.scheme == "file" and parsed.path:
         return unquote(parsed.path)
     return ""
@@ -423,7 +430,8 @@ class CursorIdeReader:
 
     def sessions(self, root: Path) -> Iterator[SessionLocator]:
         database = root / _GLOBAL_DB
-        if not regular_file(database):
+        if not regular_file(database) or not inside(root, database):
+            log.debug("cursor-ide: no global store under the root")
             return
         connection = open_sqlite_readonly(database)
         if connection is None:
@@ -452,7 +460,10 @@ class CursorIdeReader:
 
     def read(self, locator: SessionLocator, *, after: int = -1) -> Iterator[ConversationRecord]:
         cid = _safe_id(locator.session_id)
+        # ``<root>/globalStorage/state.vscdb``: never behind a symlink out of the root.
         if not cid or not regular_file(locator.path):
+            return
+        if not inside(locator.path.parent.parent, locator.path):
             return
         connection = open_sqlite_readonly(locator.path)
         if connection is None:

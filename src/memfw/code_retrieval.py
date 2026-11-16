@@ -82,7 +82,9 @@ def index_code(
     temporary.unlink(missing_ok=True)
     chunks: list[CodeChunk] = []
     for path in sorted(base.rglob("*.py")):
-        if any(part in IGNORED for part in path.parts):
+        # Only the part inside the repo is checked: a repo that itself sits
+        # under a ``build/`` (or ``dist/``) directory is still indexed.
+        if any(part in IGNORED for part in path.relative_to(base).parts):
             continue
         chunks.extend(_chunks_for_file(base, path))
     tokenizer = "trigram"
@@ -95,6 +97,9 @@ def index_code(
         connection.execute(
             f"CREATE VIRTUAL TABLE code_fts USING fts5(path,symbol,content,tokenize='{tokenizer}')"
         )
+        connection.execute("CREATE TABLE code_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        connection.execute("INSERT INTO code_meta(key, value) VALUES ('root', ?)", (str(base),))
+        rowids: list[int] = []
         for chunk in chunks:
             cursor = connection.execute(
                 "INSERT INTO chunks(path,symbol,kind,start_line,end_line,content) "
@@ -112,13 +117,16 @@ def index_code(
                 "INSERT INTO code_fts(rowid,path,symbol,content) VALUES (?,?,?,?)",
                 (cursor.lastrowid, chunk.path, chunk.symbol, chunk.content),
             )
+            rowids.append(int(cursor.lastrowid or 0))
         embedded = 0
         if embedder is not None and chunks:
             vectors = embedder.embed([chunk.content for chunk in chunks], role="document")
-            for row, vector in zip(chunks, vectors, strict=False):
+            # By rowid: two chunks can share path and symbol (a redefined
+            # function), and each keeps its own vector.
+            for rowid, vector in zip(rowids, vectors, strict=False):
                 connection.execute(
-                    "UPDATE chunks SET embedding=? WHERE path=? AND symbol=?",
-                    (json.dumps(vector), row.path, row.symbol),
+                    "UPDATE chunks SET embedding=? WHERE id=?",
+                    (json.dumps(vector), rowid),
                 )
                 embedded += 1
         connection.commit()
@@ -151,6 +159,18 @@ class CodeIndex:
             return list(connection.execute("SELECT * FROM chunks ORDER BY id"))
         finally:
             connection.close()
+
+    def _root(self) -> Path:
+        """Repo root recorded by ``index_code``; an index without it uses the db directory."""
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            row = connection.execute("SELECT value FROM code_meta WHERE key='root'").fetchone()
+        except sqlite3.OperationalError:
+            row = None
+        finally:
+            connection.close()
+        return Path(str(row[0])) if row else self.db_path.parent
 
     def _lexical(self, query: str, limit: int) -> list[int]:
         connection = sqlite3.connect(self.db_path)
@@ -258,9 +278,10 @@ class CodeIndex:
             or path.endswith("__main__.py")
             or path.endswith("cli.py")
         ]
+        root = self._root()
         recent_files = []
         for row in rows:
-            path = self.db_path.parent / row["path"]
+            path = root / row["path"]
             if path.exists():
                 recent_files.append((path.stat().st_mtime, row["path"]))
         recent_files = [path for _, path in sorted(set(recent_files), reverse=True)[:recent]]

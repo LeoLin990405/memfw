@@ -8,7 +8,9 @@ checks). :func:`render` fills its placeholders; memfw never writes to
 
 from __future__ import annotations
 
+import re
 import shutil
+import sys
 from pathlib import Path
 from xml.sax.saxutils import escape
 
@@ -55,6 +57,31 @@ TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
+PLACEHOLDER_RE = re.compile(r"__(?:MEMFW_BIN|VAULT_ROOT|LOG_DIR|INTERVAL)__")
+
+
+def default_log_dir() -> Path:
+    """Where the rendered plist sends worker output unless told otherwise."""
+
+    return Path.home() / "Library" / "Logs" / "memfw"
+
+
+def default_memfw_bin() -> str:
+    """Absolute path of the memfw executable launchd should run.
+
+    launchd has no shell ``PATH``, so a bare ``memfw`` would not resolve. Prefer
+    the program that is running now, then ``memfw`` on ``PATH``.
+    """
+
+    argv0 = Path(sys.argv[0]) if sys.argv and sys.argv[0] else None
+    if argv0 is not None and argv0.name == "memfw" and argv0.is_file():
+        return str(argv0.resolve())
+    found = shutil.which("memfw")
+    if found:
+        return str(Path(found).resolve())
+    raise ConversationError("cannot find the memfw executable; pass --bin with its absolute path")
+
+
 def render(
     *,
     vault: Path,
@@ -64,15 +91,13 @@ def render(
 ) -> str:
     if not 60 <= int(interval) <= 86_400:
         raise ConversationError("interval must be between 60 and 86400 seconds")
-    binary = memfw_bin or shutil.which("memfw") or "memfw"
-    logs = log_dir if log_dir is not None else Path.home() / "Library" / "Logs" / "memfw"
+    binary = memfw_bin or default_memfw_bin()
+    logs = log_dir if log_dir is not None else default_log_dir()
     values = {
         "__MEMFW_BIN__": binary,
         "__VAULT_ROOT__": str(Path(vault).expanduser().resolve()),
         "__LOG_DIR__": str(logs),
         "__INTERVAL__": str(int(interval)),
     }
-    out = TEMPLATE
-    for placeholder, value in values.items():
-        out = out.replace(placeholder, escape(value))
-    return out
+    # One pass: a value that itself contains a placeholder is not re-expanded.
+    return PLACEHOLDER_RE.sub(lambda match: escape(values[match.group(0)]), TEMPLATE)

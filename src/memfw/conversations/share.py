@@ -18,12 +18,14 @@ from memfw.history.redact import redact_path
 from .policy import SharePolicy
 from .store import (
     DATA_NOTICE,
+    GOAL_SCAN_TURNS,
     ConversationError,
     ConversationSource,
     SessionInfo,
     Turn,
     check_app,
     check_id,
+    goal_text,
     safe_text,
 )
 
@@ -335,12 +337,20 @@ class ConversationShare:
                 raise ConversationError(f"app {target} may not read this session")
         cap = _clamp(max_bytes, MIN_BYTES, MAX_BYTES)
         recent = _clamp(recent, 1, 50)
-        turns = self.source.turns(info.app, info.session_id, start=0, limit=HANDOFF_MAX_TURNS)
+        # The latest turns (a long session's head is not what "recent" means).
+        start = max(0, int(info.turns) - HANDOFF_MAX_TURNS)
+        turns = self.source.turns(info.app, info.session_id, start=start, limit=HANDOFF_MAX_TURNS)
+        # The goal comes from the session's head: a small bounded read when the
+        # tail above does not start at the first turn.
+        head = (
+            turns[:GOAL_SCAN_TURNS]
+            if start == 0
+            else self.source.turns(info.app, info.session_id, start=0, limit=GOAL_SCAN_TURNS)
+        )
         goal = ""
-        for turn in turns:
-            if turn.role == "user" and not turn.withheld and turn.text.strip():
-                goal, _ = safe_text(turn.text, GOAL_CHARS)
-                break
+        found = goal_text([turn.text for turn in head if turn.role == "user" and not turn.withheld])
+        if found:
+            goal, _ = safe_text(found, GOAL_CHARS)
         talk = [turn for turn in turns if turn.role in {"user", "assistant"}]
         recent_turns = []
         for turn in talk[-recent:]:
@@ -359,7 +369,7 @@ class ConversationShare:
             "notice": DATA_NOTICE,
             "kind": "handoff",
             "for_agent": target,
-            "source": {**info.as_dict(), "turns_read": len(turns)},
+            "source": {**info.as_dict(), "turns_read": len(turns), "turns_start": start},
             "system": {
                 "label": "[system] derived by code from the stored, redacted session",
                 "goal": goal,

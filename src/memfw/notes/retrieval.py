@@ -434,6 +434,9 @@ class NotesRetriever:
                 tenant=tenant,
                 source=source,
             )
+        # Degraded means vector recall contributed nothing. Judge it before the
+        # reranker relabels sources as "rerank:<source>".
+        vector_recall = any(hit.source in {"vector", "hybrid"} for hit in candidates)
         reranked = False
         if self.reranker is not None and self.config.rerank_candidates > 0:
             head = candidates[: self.config.rerank_candidates]
@@ -481,8 +484,7 @@ class NotesRetriever:
                 query=query,
                 hits=hits,
                 mode_used=self.config.mode,
-                degraded=self.config.mode != "fts"
-                and not any(hit.source in {"vector", "hybrid"} for hit in candidates),
+                degraded=self.config.mode != "fts" and not vector_recall,
                 rewrites=rewrites,
                 reranked=reranked,
                 errors=errors,

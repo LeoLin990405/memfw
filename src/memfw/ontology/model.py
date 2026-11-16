@@ -321,7 +321,7 @@ def save_concept(vault: Path, concept: Concept, *, apply: bool = False) -> dict[
     preview = {"oid": concept.oid, "path": str(path), "applied": False}
     if not apply:
         return preview
-    _refuse_live_overwrite(path)
+    _refuse_live_overwrite(path, Path(vault))
     _refuse_duplicate_oid(vault, concept, path)
     path.parent.mkdir(parents=True, exist_ok=True)
     concept.path = path
@@ -544,18 +544,37 @@ def _relation_oids(value: Any) -> list[str]:
     return []
 
 
+def _display_path(path: Path, root: Path | None = None) -> str:
+    """``path`` relative to the vault for messages; never an absolute path.
+
+    Error text can reach HTTP and MCP clients, so it must not disclose where
+    the vault lives on disk. A concept file always sits at
+    ``concepts/<class>/<file>.md``, so that tail is shown; any other path is
+    shown relative to ``root``, or by its file name alone.
+    """
+    if root is not None:
+        try:
+            return path.relative_to(root).as_posix()
+        except ValueError:
+            pass
+    if path.parent.parent.name == "concepts":
+        return f"concepts/{path.parent.name}/{path.name}"
+    return path.name
+
+
 def _read_concept(path: Path) -> Concept:
+    shown = _display_path(path)
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:
-        raise OntologyError(f"{path} cannot be read") from exc
+        raise OntologyError(f"{shown} cannot be read") from exc
     try:
         meta, body = _split(text)
     except yaml.YAMLError as exc:
-        raise OntologyError(f"{path} frontmatter cannot be parsed") from exc
+        raise OntologyError(f"{shown} frontmatter cannot be parsed") from exc
     oid = str(meta.get("oid") or "")
     if not oid:
-        raise OntologyError(f"{path} has no oid")
+        raise OntologyError(f"{shown} has no oid")
     merged = meta.get("merged_into")
     merged_into = str(merged) if isinstance(merged, str) and merged else None
     extras = {key: value for key, value in meta.items() if key not in _CORE_KEYS}
@@ -685,9 +704,9 @@ def _refuse_live_vault(vault: Path) -> None:
         raise OntologyError("import-seed refuses a live vault; pass an empty temporary directory")
 
 
-def _refuse_live_overwrite(path: Path) -> None:
+def _refuse_live_overwrite(path: Path, vault: Path | None = None) -> None:
     if path.exists():
-        raise OntologyError(f"concept file already exists: {path}")
+        raise OntologyError(f"concept file already exists: {_display_path(path, vault)}")
 
 
 def _refuse_duplicate_oid(vault: Path, concept: Concept, path: Path) -> None:
