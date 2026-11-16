@@ -8,7 +8,10 @@ coordinator, with one ``InflightRegistry`` per Runtime (one Runtime per
 Gateway); ``Runtime.ensure_index`` is the index staleness check. C1 adds the
 ``memory_context`` wiring: ``Runtime.context_v1`` and ``Runtime.context_pack``
 build the ``memfw.context`` core slot with the visibility predicate
-(``Runtime.context_keep``: tenant/source, or the recall strict policy).
+(``Runtime.context_keep``: tenant/source, or the recall strict policy). C2
+composes the other slots (``Runtime.context_slot_provider``): ``handoff``
+reads the conversation share as the calling app, ``topics`` the concept
+catalogue (``context_sources``), so ``memfw.context`` imports neither.
 
 There is no ``runtime:`` section in ``vault.yaml`` yet; the default assembly
 is exactly what the MCP server built before (byte-identical output except
@@ -22,6 +25,7 @@ from __future__ import annotations
 
 from .index import ensure_search_index
 from .runtime import (
+    CONTEXT_SLOT_TIMEOUTS,
     RECALL_POLICIES,
     TWO_STAGE_PROVIDER_TIMEOUT,
     TWO_STAGE_TOTAL_TIMEOUT,
@@ -32,6 +36,7 @@ from .runtime import (
 )
 
 __all__ = [
+    "CONTEXT_SLOT_TIMEOUTS",
     "RECALL_POLICIES",
     "TWO_STAGE_PROVIDER_TIMEOUT",
     "TWO_STAGE_TOTAL_TIMEOUT",

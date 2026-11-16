@@ -204,7 +204,9 @@ reads the name (`memfw.mcp.tools_dream.DREAM_MAX_STAGED`,
 `memfw.mcp.tools_search.search_multihop`). The probe `tests.harness.probes:mcp_all_tools`
 sends every MCP method and all 15 tools (116 messages, error paths included) to one fixture
 vault; `tests/test_mcp_split.py` runs it against `MEMFW_ARCH_BASE_REF` when that is set
-(opt-in, skipped by default).
+(opt-in, skipped by default). Since C2 the comparison first applies C2's two
+expected changes to the base output (`initialize` advertises `resources`; `memory_context`
+gains the optional `slots` property; `with_expected_c2_changes`), so any other byte still fails.
 
 **A4b (next).** Each group reaches its capability through the `Runtime` or a protocol, and
 its allowlist entries go.
@@ -228,6 +230,7 @@ entry). `tests/test_ports_isolation.py` now walks `memfw/ports` recursively and 
 | `IdGen` | `UuidIdGen`, `SeededIdGen` (`memfw.ports.clock`) | `check_id_gen` |
 | `ClaimVerifier` | `DreamClaimVerifier` (`memfw.dream.claims`); `KeywordClaimVerifier` | `check_claim_verifier` |
 | `ClaimStager` | `DreamClaimStager` (`memfw.dream.claims`); `FileClaimStager` (`_candidates/claims-ref/<batch>.json`) | `check_claim_stager` |
+| `ContextSlotProvider` | `CoreSlotProvider` (the vault); `TopicsSlotProvider` and `HandoffSlotProvider` over injected sources (`memfw.context`; the drill feeds them a fixed catalogue and session feed) | `check_context_slot_provider` |
 
 `tests/test_swap_drills.py` parametrizes each port over that column and fails if a port drops
 below two. Its coordinator drill runs the recall pipeline with `InMemoryRecallProvider` in

@@ -36,6 +36,41 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   `stage_candidates` now uses (same behaviour).
 - The ports isolation test walks `memfw/ports` recursively and covers the new package.
 
+### Added — context slots and MCP resources (C2)
+
+- `memory_context(v=2, slots=[...])`: slots `core` (as before), `handoff` and `topics`,
+  returned in the requested order. Default `["core"]`: the v1 and v2 outputs are
+  byte-identical to before. An unknown or repeated slot, an empty or non-list `slots`, or
+  `slots` with `v=1` is an error.
+- `handoff`: the latest shared sessions the calling app may read (`conversation_share`
+  applies, through `ConversationShare.list_sessions`/`handoff`): one item per session with
+  its id, the redacted goal (at most 280 characters), the turn count and the latest turn
+  refs. No app, the operator name, sharing off or `can_read: false` give an empty slot;
+  hidden apps never appear. `topics`: active concepts with the number of memories the
+  policy keeps that are `about`/`applies_to` them (merged concepts count for their
+  target); labels and counts only, no body text.
+- Slots are built in parallel, each with its own deadline (`core` 10 s, `handoff` and
+  `topics` 3 s). A slot that raises, times out, is still running from an earlier call or
+  returns another slot is returned empty with `degraded` (`error`, `timeout`, `busy`,
+  `invalid`, `unavailable`; vault errors: `pending_recovery`, `integrity`, `not_found`,
+  `vault_error`); the others are not affected. `degraded` is in `as_dict()` and
+  `pack_version` only when set. Degrades are logged with the exception class only. The
+  default request (`["core"]`) runs inline and keeps C1's errors byte for byte (a pending
+  transaction is still the tool error, not a degraded slot).
+- MCP resources `memfw://context/<slot>` (`resources/list`, `resources/read`): the JSON
+  body is that slot's v=2 pack, `pack_version` included, for the same caller (app, tenant,
+  sources). `?policy=compat_fts|strict` selects the policy (any other query fails closed);
+  without it `topics` uses `strict`, `core` and `handoff` `compat_fts`. `initialize` now advertises `resources`. `tools/list`
+  changes only by the optional `slots` property of `memory_context`; the all-tools probe
+  comparison applies exactly these two changes to the base output and must then match.
+- Ports: `ContextSlotProvider` (name, `build(SlotRequest) -> ContextSlot`), `SlotRequest`,
+  `ContextItem` (non-memory entries) and `check_context_slot_provider` in
+  `memfw.ports.testing`. `memfw.context` composes the slots and imports only core and
+  ports; the Runtime adapts the conversation share and the concept catalogue
+  (`memfw.runtime.context_sources`). No new allowlist entry.
+- Swap drills: `ContextSlotProvider` joins the port matrix (`core`, `topics` with a fixed
+  catalogue, `handoff` with a fixed session feed, all through `check_context_slot_provider`).
+
 ### Internal — MCP server split by tool group (A4a)
 
 - `memfw/mcp/server.py` (about 1900 lines) is split into `base`, `schema`,

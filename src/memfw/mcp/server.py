@@ -15,6 +15,9 @@ Tools:
     dream_run(dry_run, focus, ...)   -> verify/curate/distill proposals (dry run by default)
     dream_list(limit)                -> staged dreams under _candidates/dream/ (read-only)
 
+memory_context(v=2, slots) also serves each slot as an MCP resource,
+memfw://context/<slot> (resources/list, resources/read).
+
 The conversations_* tools are read-only and obey per-app visibility in vault.yaml
 (``conversation_share``); the calling app names itself with --app or MEMFW_APP.
 
@@ -152,6 +155,7 @@ class Gateway(
                 int(args.get("limit_tokens") or 2000),
                 v=args.get("v"),
                 policy=args.get("policy"),
+                slots=args.get("slots"),
             ),
             "memory_status": lambda _args: self.status(),
             "dream_run": lambda args: self.dream_run(

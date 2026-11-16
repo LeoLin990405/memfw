@@ -194,6 +194,47 @@ def _snapshot(
     return parsed, "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
+def build_core_slot(repository: Repository, *, keep: Keep, limit_tokens: int) -> ContextSlot:
+    """The ``core`` slot of ``build_core_pack`` (see there), without the pack around it."""
+
+    budget = limit_chars(limit_tokens)
+    candidates = select_core(repository.list(), keep)
+    hashes: dict[str, str] = {}
+    snapshots: list[MemoryDocument] = []
+    for document in candidates:
+        snapshot = _snapshot(repository, document)
+        if snapshot is None:
+            continue
+        hashes[snapshot[0].id] = snapshot[1]
+        snapshots.append(snapshot[0])
+    selected = select_core(snapshots, keep)
+    skipped = len(candidates) - len(selected)
+    cut = _cut(selected, budget)
+    entries = tuple(
+        ContextEntry(
+            id=document.id,
+            title=document.title,
+            type=document.type,
+            layer=document.layer.value,
+            anchor=document.anchor,
+            epistemic=document.epistemic,
+            causal=document.causal,
+            text=text,
+            version=document.version,
+            content_hash=hashes[document.id],
+        )
+        for document, text in cut.carried
+    )
+    return ContextSlot(
+        name=CORE_SLOT,
+        entries=entries,
+        used_tokens_est=estimate_tokens(cut.used_chars),
+        overflow=len(cut.truncated_ids),
+        truncated_ids=cut.truncated_ids,
+        skipped=skipped,
+    )
+
+
 def build_core_pack(
     repository: Repository,
     *,
@@ -223,45 +264,11 @@ def build_core_pack(
     ``pack_version`` too, even when the carried text did not change.
     """
 
-    budget = limit_chars(limit_tokens)
+    limit_chars(limit_tokens)
     moment = now if now is not None else datetime.now(UTC)
     if policy not in CONTEXT_POLICIES:
         raise ValueError("unknown policy")
-    candidates = select_core(repository.list(), keep)
-    hashes: dict[str, str] = {}
-    snapshots: list[MemoryDocument] = []
-    for document in candidates:
-        snapshot = _snapshot(repository, document)
-        if snapshot is None:
-            continue
-        hashes[snapshot[0].id] = snapshot[1]
-        snapshots.append(snapshot[0])
-    selected = select_core(snapshots, keep)
-    skipped = len(candidates) - len(selected)
-    cut = _cut(selected, budget)
-    entries = tuple(
-        ContextEntry(
-            id=document.id,
-            title=document.title,
-            type=document.type,
-            layer=document.layer.value,
-            anchor=document.anchor,
-            epistemic=document.epistemic,
-            causal=document.causal,
-            text=text,
-            version=document.version,
-            content_hash=hashes[document.id],
-        )
-        for document, text in cut.carried
-    )
-    slot = ContextSlot(
-        name=CORE_SLOT,
-        entries=entries,
-        used_tokens_est=estimate_tokens(cut.used_chars),
-        overflow=len(cut.truncated_ids),
-        truncated_ids=cut.truncated_ids,
-        skipped=skipped,
-    )
+    slot = build_core_slot(repository, keep=keep, limit_tokens=limit_tokens)
     return ContextPack.build((slot,), policy=policy, generated_at=moment)
 
 
@@ -270,6 +277,7 @@ __all__ = [
     "CONTEXT_VERSIONS",
     "CORE_SLOT",
     "build_core_pack",
+    "build_core_slot",
     "context_request",
     "core_context_v1",
     "estimate_tokens",

@@ -1,4 +1,4 @@
-"""``Runtime`` and ``build_runtime``: recall (A3a) and context (C1) wiring for the interfaces."""
+"""``Runtime`` and ``build_runtime``: recall (A3a) and context (C1, C2) wiring for interfaces."""
 
 from __future__ import annotations
 
@@ -8,12 +8,28 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from memfw.context import Keep, build_core_pack, context_request, core_context_v1
+from memfw.context import (
+    CORE_SLOT,
+    DEFAULT_SLOTS,
+    HANDOFF_SLOT,
+    SLOT_NAMES,
+    TOPICS_SLOT,
+    CoreSlotProvider,
+    HandoffSlotProvider,
+    Keep,
+    SlotInflight,
+    TopicsSlotProvider,
+    assemble_pack,
+    context_request,
+    core_context_v1,
+    slots_request,
+)
 from memfw.core.models import MemoryDocument
 from memfw.core.repository import Repository
-from memfw.ports.context import ContextPack
+from memfw.ports.context import ContextPack, ContextSlotProvider, SlotRequest
 from memfw.recall.coordinator import InflightRegistry
 
+from .context_sources import concept_catalogue, share_feed
 from .index import ensure_search_index
 
 if TYPE_CHECKING:
@@ -28,6 +44,10 @@ TWO_STAGE_TOTAL_TIMEOUT = 4.0
 
 #: The ``policy_name`` values ``Runtime.recall`` accepts.
 RECALL_POLICIES = ("compat_fts", "strict")
+
+#: Per-slot deadline of ``memory_context`` (seconds from the start of the call).
+#: A slot that misses it is returned as ``degraded: timeout``.
+CONTEXT_SLOT_TIMEOUTS: dict[str, float] = {CORE_SLOT: 10.0, HANDOFF_SLOT: 3.0, TOPICS_SLOT: 3.0}
 
 #: What one provider's ``observe`` hook recorded: its raw index rows keyed by
 #: memory id, and its raw page payloads.
@@ -82,6 +102,9 @@ class Runtime:
         self.provider_timeout = provider_timeout
         self.total_timeout = total_timeout
         self.recall_inflight = InflightRegistry()
+        #: Slot builds still running after their deadline, per slot name (C2).
+        self.context_inflight = SlotInflight()
+        self.context_slot_timeouts = dict(CONTEXT_SLOT_TIMEOUTS)
 
     def ensure_index(self, repository: Repository | None = None) -> None:
         """Rebuild the memory index when it is stale (see ``ensure_search_index``).
@@ -336,6 +359,33 @@ class Runtime:
 
         return core_context_v1(repository, keep=self._visible, limit_tokens=limit_tokens)
 
+    @staticmethod
+    def context_slots_request(v: int, slots: object) -> tuple[str, ...]:
+        """Validate ``memory_context`` ``slots`` for version ``v`` (see ``memfw.context``)."""
+
+        return slots_request(v, slots)
+
+    def context_slot_provider(
+        self, name: str, repository: Repository, *, keep: Keep, app: str
+    ) -> ContextSlotProvider:
+        """The provider of slot ``name`` for one call (a seam for tests).
+
+        ``core`` reads the caller's ``repository``; ``handoff`` reads the
+        conversation share as ``app`` (``conversation_share`` applies);
+        ``topics`` reads the concept catalogue and counts the memories ``keep``
+        keeps, on its own ``Repository`` of the same root (the slots run in
+        parallel).
+        """
+
+        root = repository.root
+        if name == CORE_SLOT:
+            return CoreSlotProvider(repository, keep)
+        if name == HANDOFF_SLOT:
+            return HandoffSlotProvider(share_feed(root, app))
+        if name == TOPICS_SLOT:
+            return TopicsSlotProvider(Repository(root), keep, lambda: concept_catalogue(root))
+        raise ValueError("unknown slot")
+
     def context_pack(
         self,
         repository: Repository,
@@ -343,18 +393,45 @@ class Runtime:
         policy_name: str,
         limit_tokens: int,
         now: datetime | None = None,
+        slots: Sequence[str] = DEFAULT_SLOTS,
+        app: str = "",
     ) -> ContextPack:
-        """The ``memory_context`` v2 pack (one ``core`` slot) for the caller's open vault.
+        """The ``memory_context`` v2 pack for the caller's open vault.
 
         ``repository`` is the caller's per-call ``Repository`` (never one opened
         from ``self.root``). ``policy_name`` is ``compat_fts`` or ``strict``;
-        anything else raises ``ValueError`` before the vault is read.
+        anything else raises ``ValueError`` before the vault is read, and so
+        does an unknown slot name. ``slots`` (default ``("core",)``) are built
+        in parallel and returned in this order; each has its deadline in
+        ``context_slot_timeouts``, and one that raises, misses it or is still
+        busy from an earlier call is returned ``degraded`` (the rest are not
+        affected). The default ``("core",)`` alone runs inline with C1's error
+        behaviour: a vault error raises. ``app`` is the calling app, for ``handoff``.
         """
 
         moment = now if now is not None else datetime.now(UTC)
         keep = self.context_keep(policy_name, now=moment)
-        return build_core_pack(
-            repository, keep=keep, policy=policy_name, limit_tokens=limit_tokens, now=moment
+        names = tuple(slots)
+        if not names or any(name not in SLOT_NAMES for name in names):
+            raise ValueError("unknown slot")
+        providers = [
+            self.context_slot_provider(name, repository, keep=keep, app=app) for name in names
+        ]
+        request = SlotRequest(limit_tokens=int(limit_tokens), policy=policy_name, now=moment)
+        if names == DEFAULT_SLOTS:
+            # The default request keeps C1's semantics exactly: core runs in the
+            # caller's thread and a vault error (a pending transaction, say)
+            # propagates as the tool error it always was, never a degraded slot.
+            core = providers[0]
+            slot = core.build_raw(request) if isinstance(core, CoreSlotProvider) else None
+            if slot is not None:
+                return ContextPack.build((slot,), policy=policy_name, generated_at=moment)
+        return assemble_pack(
+            providers,
+            request,
+            timeouts=self.context_slot_timeouts,
+            default_timeout=max(self.context_slot_timeouts.values(), default=3.0),
+            inflight=self.context_inflight,
         )
 
 
@@ -410,6 +487,7 @@ def build_runtime(
 
 
 __all__ = [
+    "CONTEXT_SLOT_TIMEOUTS",
     "RECALL_POLICIES",
     "TWO_STAGE_PROVIDER_TIMEOUT",
     "TWO_STAGE_TOTAL_TIMEOUT",

@@ -23,7 +23,15 @@ from pathlib import Path
 
 from .claims import POLARITIES, ClaimStager, ClaimVerifier, StagedClaim
 from .clock import Clock, IdGen
-from .context import ContextPack, compute_pack_version, pack_version_payload
+from .context import (
+    ContextEntry,
+    ContextPack,
+    ContextSlot,
+    ContextSlotProvider,
+    SlotRequest,
+    compute_pack_version,
+    pack_version_payload,
+)
 from .protocols import Deriver, Ingestor, Projector, RecallProvider
 from .staging import CANDIDATES_DIR
 from .types import (
@@ -427,7 +435,11 @@ def check_context_pack(
     structural.update(entry.id for slot in pack.slots for entry in slot.entries)
     structural.update(memory_id for slot in pack.slots for memory_id in slot.truncated_ids)
     content = [entry.text for slot in pack.slots for entry in slot.entries]
-    content += [entry.title for slot in pack.slots for entry in slot.entries]
+    content += [
+        entry.title if isinstance(entry, ContextEntry) else entry.label
+        for slot in pack.slots
+        for entry in slot.entries
+    ]
     candidates = [
         text
         for text in content
@@ -440,6 +452,56 @@ def check_context_pack(
     except (TypeError, ValueError) as error:
         raise ContractError(f"as_dict() is not JSON serialisable: {error}") from error
     return pack
+
+
+def check_context_slot_provider(
+    provider: object,
+    *,
+    request: SlotRequest,
+    max_tokens: int | None = None,
+    forbidden: Sequence[str] = (),
+    vault: Path | None = None,
+    vault_exclude: Sequence[str] = (),
+    allow_degraded: bool = False,
+) -> ContextSlot:
+    """A slot provider builds a well-formed, stable slot under its own name.
+
+    - ``provider`` implements ``ContextSlotProvider`` and its ``name`` is a
+      valid slot name;
+    - ``build(request)`` returns exactly a ``ContextSlot`` named after the
+      provider, which passes ``check_context_pack`` as a one-slot pack (with
+      ``max_tokens`` and ``forbidden``);
+    - a second ``build`` gives the same version key (same ids, versions and
+      hashes, same cut);
+    - it is not ``degraded`` unless ``allow_degraded``;
+    - with ``vault``, the vault tree is byte-identical afterwards (no writes).
+
+    Returns the first slot.
+    """
+
+    _require(
+        isinstance(provider, ContextSlotProvider), "provider does not implement ContextSlotProvider"
+    )
+    assert isinstance(provider, ContextSlotProvider)
+    name = getattr(provider, "name", None)
+    _require(isinstance(name, str) and bool(name), "provider name must be a non-empty string")
+    before = tree_digest(vault, exclude=vault_exclude) if vault is not None else None
+    first = provider.build(request)
+    _require(type(first) is ContextSlot, "build() must return exactly memfw.ports.ContextSlot")
+    _require(first.name == name, f"slot is named {first.name!r}, provider is {name!r}")
+    if not allow_degraded:
+        _require(first.degraded is None, f"slot {name} is degraded ({first.degraded})")
+    pack = ContextPack.build((first,), policy=request.policy, generated_at=request.now)
+    check_context_pack(pack, slots=[first.name], max_tokens=max_tokens, forbidden=forbidden)
+    second = provider.build(request)
+    _require(type(second) is ContextSlot, "build() must return exactly memfw.ports.ContextSlot")
+    _require(
+        compute_pack_version((second,), request.policy) == pack.pack_version,
+        f"slot {name}: two builds give different version keys",
+    )
+    if vault is not None:
+        _require(tree_digest(vault, exclude=vault_exclude) == before, "provider changed the vault")
+    return first
 
 
 def _string_leaves(value: object) -> list[str]:
@@ -504,6 +566,7 @@ __all__ = [
     "check_claim_verifier",
     "check_clock",
     "check_context_pack",
+    "check_context_slot_provider",
     "check_deriver",
     "check_id_gen",
     "check_ingestor",

@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from memfw.mcp.base import GatewayBase
-from memfw.mcp.schema import INSTRUCTIONS, PROTOCOL, SERVER_INFO, TOOLS
+from memfw.mcp.schema import INSTRUCTIONS, PROTOCOL, RESOURCES, SERVER_INFO, TOOLS
+from memfw.mcp.tools_context import ResourceQueryError
 
 _CONCEPT_ERROR = "alias expansion skipped: a concept file is invalid"
 
@@ -85,11 +86,28 @@ def client_endpoint_fields(arguments: dict[str, Any]) -> list[str]:
     return found
 
 
+def _capabilities() -> dict[str, Any]:
+    """``initialize`` capabilities: ``resources`` only when there are resources."""
+
+    capabilities: dict[str, Any] = {"tools": {"listChanged": False}}
+    if RESOURCES:
+        capabilities["resources"] = {"listChanged": False}
+    return capabilities
+
+
 class ProtocolMixin(GatewayBase):
-    """``initialize``, ``tools/list`` and ``tools/call`` over the gateway's handlers."""
+    """``initialize``, ``tools/*`` and ``resources/*`` over the gateway's handlers."""
 
     def handlers(self) -> dict[str, Callable[[dict[str, Any]], Any]]:
         """The tool table; ``memfw.mcp.server.Gateway`` defines it."""
+        raise NotImplementedError
+
+    def resources(self) -> list[dict[str, Any]]:
+        """``resources/list``; ``memfw.mcp.tools_context.ContextTools`` defines it."""
+        raise NotImplementedError
+
+    def read_resource(self, uri: str) -> dict[str, Any] | None:
+        """``resources/read``; ``None`` for an unknown URI (``ContextTools``)."""
         raise NotImplementedError
 
     def respond(self, payload: dict[str, Any]) -> None:
@@ -126,7 +144,7 @@ class ProtocolMixin(GatewayBase):
                     "id": msg_id,
                     "result": {
                         "protocolVersion": PROTOCOL,
-                        "capabilities": {"tools": {"listChanged": False}},
+                        "capabilities": _capabilities(),
                         "serverInfo": SERVER_INFO,
                         "instructions": INSTRUCTIONS,
                     },
@@ -140,6 +158,30 @@ class ProtocolMixin(GatewayBase):
             return
         if method == "tools/list":
             self.respond({"jsonrpc": "2.0", "id": msg_id, "result": {"tools": TOOLS}})
+            return
+        if method == "resources/list" and RESOURCES:
+            self.respond(
+                {"jsonrpc": "2.0", "id": msg_id, "result": {"resources": self.resources()}}
+            )
+            return
+        if method == "resources/read" and RESOURCES:
+            uri = params.get("uri")
+            if not isinstance(uri, str) or not uri:
+                self.respond(_rpc_error(msg_id, -32602, "invalid params"))
+                return
+            try:
+                result = self.read_resource(uri)
+            except ResourceQueryError:
+                self.respond(_rpc_error(msg_id, -32602, "invalid params"))
+                return
+            except Exception as exc:  # pragma: no cover - protocol boundary
+                text = _client_message(str(exc), self.root)[:500]
+                self.respond(_rpc_error(msg_id, -32603, text))
+                return
+            if result is None:
+                self.respond(_rpc_error(msg_id, -32002, "resource not found"))
+                return
+            self.respond({"jsonrpc": "2.0", "id": msg_id, "result": result})
             return
         if method == "tools/call":
             name = str(params.get("name") or "")
