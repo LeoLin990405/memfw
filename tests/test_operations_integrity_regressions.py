@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import itertools
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -13,6 +14,7 @@ from memfw.core.epistemic import CausalRecord
 from memfw.core.errors import IntegrityError
 from memfw.core.models import EventKind
 from memfw.core.repository import Repository
+from memfw.storage.markdown import _split_raw_markdown
 
 NOW = datetime(2026, 10, 18, tzinfo=UTC)
 
@@ -331,7 +333,33 @@ def test_delete_back_ref_cleanup_does_not_parse_every_memory(
     repository.delete("n000", actor="human")
     assert repository.get("n001").superseded_by is None
     # The old code parsed every memory (>200 parses for 200 memories); the
-    # prefilter parses only files that mention the deleted id. The exact count
-    # varies a little across platforms, so the bound only separates O(N) from
-    # near-constant work.
-    assert calls < 100, calls
+    # prefilter parses only files that mention the deleted id, and the shared
+    # body lookup hashes before it parses. The count no longer depends on the
+    # filesystem's directory order, so the bound is tight.
+    assert calls < 15, calls
+
+
+def test_body_lookup_parses_only_hash_matches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The shared-body lookup must not YAML-parse files whose body differs."""
+    repository = _repo(tmp_path)
+    repository.add_many(
+        [{"title": f"n{i}", "body": f"body {i}", "memory_id": f"n{i:03d}"} for i in range(200)]
+    )
+    target = (repository.memories_dir / "n150.md").read_bytes()
+    _, body = _split_raw_markdown(target)
+    calls = 0
+    real_parse = Repository.parse
+
+    def counting_parse(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        return real_parse(*args, **kwargs)
+
+    monkeypatch.setattr(Repository, "parse", staticmethod(counting_parse))
+    found = repository._current_body_by_hash(hashlib.sha256(body).hexdigest())
+    assert found == body
+    assert calls == 1, calls
+    assert repository._current_body_by_hash("0" * 64) is None
+    assert calls == 1, calls

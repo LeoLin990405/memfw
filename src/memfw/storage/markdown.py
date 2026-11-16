@@ -150,11 +150,20 @@ class MarkdownStorageMixin:
             try:
                 raw = path.read_bytes()
                 _, body = _split_raw_markdown(raw)
-                self.parse(raw.decode("utf-8"), expected_id=path.stem)
             except (OSError, IntegrityError):
                 continue
-            if hashlib.sha256(body).hexdigest() == body_hash:
-                return body
+            # Compare the cheap body hash first and only parse (validate) a
+            # file whose body matches. Parsing every file before the compare
+            # made this O(vault) YAML parses per write, and the count depended
+            # on the filesystem's directory order. The result is the same: the
+            # first file in glob order that both matches and parses.
+            if hashlib.sha256(body).hexdigest() != body_hash:
+                continue
+            try:
+                self.parse(raw.decode("utf-8"), expected_id=path.stem)
+            except (IntegrityError, UnicodeDecodeError):
+                continue
+            return body
         return None
 
     def _archived_body_by_hash(
@@ -172,10 +181,16 @@ class MarkdownStorageMixin:
         def matching_body(raw: bytes, expected_id: str) -> bytes | None:
             try:
                 _, body = _split_raw_markdown(raw)
+            except Exception:
+                return None
+            # Hash first, parse (validate) only a matching body; same result.
+            if hashlib.sha256(body).hexdigest() != body_hash:
+                return None
+            try:
                 self.parse(raw.decode("utf-8"), expected_id=expected_id)
             except Exception:
                 return None
-            return body if hashlib.sha256(body).hexdigest() == body_hash else None
+            return body
 
         archives: list[tarfile.TarFile] = []
         try:
