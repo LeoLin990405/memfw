@@ -388,6 +388,9 @@ None]`, run before each search, so the wiring PR can pass the MCP server's index
 check. Without it, a missing `index.sqlite3` makes the provider unavailable.
 
 All three built-in providers pass `memfw.ports.testing.check_recall_provider` (see §7.1).
+`memfw.ports.reference.InMemoryRecallProvider` (stdlib BM25-lite over `{memory_id: text}`, or
+`from_vault(root)`) passes the same check and can stand in for any of them; see the swap
+drills in `docs/architecture.md`.
 `tests/test_recall_builtin.py` holds the equivalence guard for the wiring PR. A coordinator
 with only `FtsProvider` and `FilterPolicy.compat_fts(...)` returns the same ids, in the same
 order, as `Gateway.search(mode="fts")`. This is checked across tenants, limits, `source`,
@@ -726,6 +729,11 @@ def test_search_matches_recorded_contract(monkeypatch):
 | `check_context_pack(pack, *, slots=None, max_tokens=None, forbidden=())` | exactly a `ContextPack`; `pack_version` recomputes; overflow matches `truncated_ids`; one partial entry at most, carried last and listed in `truncated_ids`; no content in the version payload; `as_dict()` serialisable (§4.2) |
 
 `tree_digest(root, *, exclude=())` is the helper they use to compare file trees.
+
+`memfw.ports.reference` holds a stdlib-only implementation of every port that passes these
+checks (projectors, ingestors, derivers, a recall provider, a claim verifier and stager), a
+starting point for an adapter and a second implementation for the swap drills
+(`tests/test_swap_drills.py`).
 
 **Building a coordinator with it.**
 

@@ -71,6 +71,15 @@ def candidate_directory(vault: Path, ingestor: str) -> Path:
     return resolved
 
 
+def check_ingest_args(proposal_id: str, source: str) -> None:
+    """The ingest contract's required arguments. Raises ``StagingError``."""
+
+    if not isinstance(proposal_id, str) or not _PROPOSAL_RE.fullmatch(proposal_id):
+        raise StagingError("proposal_id required")
+    if not isinstance(source, str) or not _SOURCE_RE.fullmatch(source):
+        raise StagingError("source required")
+
+
 def stage_candidates(
     vault: Path,
     ingestor: str,
@@ -88,10 +97,7 @@ def stage_candidates(
     matches, otherwise staging stops with ``StagingError``.
     """
 
-    if not isinstance(proposal_id, str) or not _PROPOSAL_RE.fullmatch(proposal_id):
-        raise StagingError("proposal_id required")
-    if not isinstance(source, str) or not _SOURCE_RE.fullmatch(source):
-        raise StagingError("source required")
+    check_ingest_args(proposal_id, source)
     check_name(ingestor, what="ingestor")
     prepared: list[tuple[str, str, bytes]] = []
     batch: set[str] = set()
@@ -139,7 +145,18 @@ def stage_candidates(
 def _write_new(directory: Path, identifier: str, data: bytes) -> bool:
     """Atomically create ``<identifier>.json``. ``False`` when it already exists."""
 
-    temporary = directory / f".{identifier}.{secrets.token_hex(8)}.tmp"
+    return create_exclusive(directory, identifier, ".json", data)
+
+
+def create_exclusive(directory: Path, stem: str, suffix: str, data: bytes) -> bool:
+    """Atomically create ``<stem><suffix>`` in ``directory``; ``False`` if it exists.
+
+    The data is written and fsynced under a temporary name first and then
+    linked into place, so a reader never sees a partial file and an existing
+    file is never replaced.
+    """
+
+    temporary = directory / f".{stem}.{secrets.token_hex(8)}.tmp"
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
         with os.fdopen(descriptor, "wb") as handle:
@@ -147,7 +164,7 @@ def _write_new(directory: Path, identifier: str, data: bytes) -> bool:
             handle.flush()
             os.fsync(handle.fileno())
         try:
-            os.link(temporary, directory / f"{identifier}.json")
+            os.link(temporary, directory / f"{stem}{suffix}")
         except FileExistsError:
             return False
         return True
@@ -180,7 +197,9 @@ __all__ = [
     "StagingError",
     "candidate_directory",
     "candidate_id",
+    "check_ingest_args",
     "content_sha256",
+    "create_exclusive",
     "check_view_citations",
     "stage_candidates",
 ]

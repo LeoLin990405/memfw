@@ -11,6 +11,31 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
+### Internal — swap drills: every port has two implementations (A5a)
+
+- New `memfw.ports.reference` (stdlib only, imports only `memfw.ports`): `InMemoryRecallProvider`
+  (BM25-lite), `JsonlProjector` and `MirrorProjector`, `JsonIngestor` and `MarkdownIngestor`,
+  `ConcatDeriver` and `TimelineDeriver`, `KeywordClaimVerifier`, `FileClaimStager`. Not imported
+  by `memfw.ports`; `register_reference()` adds the adapter specs on request, each off until
+  enabled. No entry points, no change to any default output.
+- The reference projectors and derivers apply core's privacy classes, never looser
+  (cross-checked against `meta_from_document`): `local-private` only with
+  `include_private`, `unknown` (`sensitivity:secret`, `privacy:restricted`, ...) never. Their
+  front matter reader fails closed: a flow, indented or block form, or a duplicate key, under
+  `tags`/`privacy`/`sensitivity` makes the file unreadable (skipped), as does a list item there
+  that is empty, starts with a YAML indicator, contains `": "` or ends with `:`, a tab, a
+  line break other than `\n`, or front matter that core would cut differently (it is cut
+  exactly as `memfw.core.markdown_parse` does). A 46-variant evasion corpus checks it is
+  never looser than core and skips every file core rejects. `MirrorProjector` removes
+  stale copies; writes go through a temporary file and never follow a symlink.
+- `tests/test_swap_drills.py` runs every implementation of every port (`RecallProvider`,
+  `Projector`, `Ingestor`, `Deriver`, `Clock`, `IdGen`, `ClaimVerifier`, `ClaimStager`) through
+  the same `memfw.ports.testing` check, and runs the coordinator with the reference recall
+  provider in place of FTS (filter policy, fusion, labels and tenant isolation hold).
+- `memfw.ports.staging` exposes `check_ingest_args` and `create_exclusive`, which
+  `stage_candidates` now uses (same behaviour).
+- The ports isolation test walks `memfw/ports` recursively and covers the new package.
+
 ### Internal — MCP server split by tool group (A4a)
 
 - `memfw/mcp/server.py` (about 1900 lines) is split into `base`, `schema`,
