@@ -7,7 +7,9 @@
 
 Neither reads or repeats a body, so the view says nothing the titles do not.
 Both cite only requested memories that exist in the vault (with their
-version), skip the rest, and raise ``ValueError`` when none exists (a view
+version) and that core's privacy rule lets through — ``local-private`` only
+with ``request.options["include_private"]`` true, ``unknown`` never — skip
+the rest, and raise ``ValueError`` when none exists (a view
 must cite something). The caps are the weakest useful ones: ``inference`` and
 no causal claim.
 """
@@ -41,6 +43,7 @@ class _ListingDeriver:
         root = Path(vault).expanduser()
         if not is_vault(root):
             raise ValueError("not a vault: vault.yaml is missing")
+        include_private = request.options.get("include_private") is True
         found: list[MemoryFile] = []
         seen: set[str] = set()
         for memory_id in request.memory_ids:
@@ -48,10 +51,13 @@ class _ListingDeriver:
                 continue
             seen.add(memory_id)
             memory = read_memory(root, memory_id)
-            if memory is not None:
+            if memory is None:
+                continue
+            privacy = memory.privacy_class()
+            if privacy == "none" or (privacy == "local-private" and include_private):
                 found.append(memory)
         if not found:
-            raise ValueError("none of the requested memories exists")
+            raise ValueError("none of the requested memories exists or is visible")
         return found
 
     def _view(

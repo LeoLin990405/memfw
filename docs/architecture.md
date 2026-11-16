@@ -227,13 +227,17 @@ entry). `tests/test_ports_isolation.py` now walks `memfw/ports` recursively and 
 | `Clock` | `SystemClock`, `FixedClock` (`memfw.ports.clock`) | `check_clock` |
 | `IdGen` | `UuidIdGen`, `SeededIdGen` (`memfw.ports.clock`) | `check_id_gen` |
 | `ClaimVerifier` | `DreamClaimVerifier` (`memfw.dream.claims`); `KeywordClaimVerifier` | `check_claim_verifier` |
-| `ClaimStager` | `DreamClaimStager` (`memfw.dream.claims`); `FileClaimStager` (`_candidates/claims/<batch>.json`) | `check_claim_stager` |
+| `ClaimStager` | `DreamClaimStager` (`memfw.dream.claims`); `FileClaimStager` (`_candidates/claims-ref/<batch>.json`) | `check_claim_stager` |
 
 `tests/test_swap_drills.py` parametrizes each port over that column and fails if a port drops
 below two. Its coordinator drill runs the recall pipeline with `InMemoryRecallProvider` in
 place of `FtsProvider` on one fixture vault: the same route, no degraded provider, and the
 filter policy still drops private, retired and other-tenant memories, even when the provider
-itself ignores tenants. A third drill fuses FTS with the reference provider. The hybrid
+itself ignores tenants. A third drill fuses FTS with the reference provider. The reference projectors and derivers
+read memory files themselves, so they re-implement core's privacy classes stdlib-only and a
+test cross-checks them against `meta_from_document` (never looser): `unknown` is never
+exported, `local-private` only with `include_private`, and any front matter form under
+`tags`/`privacy`/`sensitivity` the reader cannot parse safely makes the file unreadable. The hybrid
 provider is checked without the kit's byte-identical-vault rule because it builds its
 vector index in the vault on first use.
 

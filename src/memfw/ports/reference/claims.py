@@ -6,7 +6,9 @@
   contradicts it; anything else is neutral. No model call, no memfw import:
   the second verifier next to ``memfw.dream``'s lexical classifier.
 - ``FileClaimStager``: one JSON file per batch,
-  ``<vault>/_candidates/<name>/<batch_id>.json``, created atomically; a batch
+  ``<vault>/_candidates/<name>/<batch_id>.json`` (``name`` defaults to
+  ``claims-ref``, so it cannot collide with an ingestor named ``claims``),
+  created atomically; a batch
   id that already exists writes nothing and returns ``False``.
 """
 
@@ -33,10 +35,15 @@ STOPWORDS: frozenset[str] = frozenset(
     }
 )  # fmt: skip
 
-#: Negation markers (after tokenizing: ``don't`` → ``don``, ``t``).
+#: Negation markers. Tokenizing splits ``isn't`` into ``isn`` and ``t``; the
+#: stems of unambiguous contractions are listed (not ``t``, ``don`` or ``won``).
 NEGATIONS: frozenset[str] = frozenset(
-    {"not", "no", "never", "none", "without", "t", "cannot", "不", "没", "无", "非"}
-)
+    {
+        "not", "no", "never", "none", "without", "cannot", "isn", "aren", "wasn", "weren",
+        "doesn", "didn", "hasn", "haven", "hadn", "shouldn", "wouldn", "couldn",
+        "不", "没", "无", "非",
+    }
+)  # fmt: skip
 
 _BATCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
@@ -67,7 +74,7 @@ class KeywordClaimVerifier:
 class FileClaimStager:
     """Stages a batch as ``_candidates/<name>/<batch_id>.json``."""
 
-    def __init__(self, *, name: str = "claims") -> None:
+    def __init__(self, *, name: str = "claims-ref") -> None:
         self.name = check_name(name, what="stager")
 
     def stage_claims(

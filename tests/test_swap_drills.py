@@ -51,6 +51,7 @@ from memfw.ports.reference import (
     reference_specs,
     register_reference,
 )
+from memfw.ports.reference._vault import parse_memory, read_memory
 from memfw.ports.reference.ingestors import read_header
 from memfw.ports.testing import (
     ContractError,
@@ -65,7 +66,13 @@ from memfw.ports.testing import (
     tree_digest,
 )
 from memfw.recall import Coordinator, FilterPolicy
-from memfw.recall.builtin import FtsProvider, HybridProvider, MultihopProvider, default_resolvers
+from memfw.recall.builtin import (
+    FtsProvider,
+    HybridProvider,
+    MultihopProvider,
+    default_resolvers,
+    meta_from_document,
+)
 from tests.conversation_fixtures import make_vault
 
 T0 = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
@@ -104,9 +111,10 @@ RECALL: dict[str, Factory] = {
     "hybrid": lambda root: HybridProvider(root, embedder=HashEmbeddingProvider(8)),
     "inmemory": lambda root: InMemoryRecallProvider.from_vault(root),
 }
-#: Providers whose search writes to the vault by design, so the kit's
-#: byte-identical vault check is not applied to them: the hybrid retriever
-#: builds its vector index in the vault on first use (as in
+#: Providers whose search writes to the vault, so the kit's byte-identical
+#: vault check is not applied to them: the hybrid retriever builds its vector
+#: index in the vault on first use and appends ``memory_access`` events on
+#: every search (pre-existing behaviour, tracked separately; as in
 #: ``tests/test_recall_builtin.py``).
 WRITES_VAULT = frozenset({"hybrid"})
 PROJECTORS: dict[str, Callable[[], object]] = {
@@ -243,6 +251,186 @@ def test_mirror_projector_copies_bytes(tmp_path: Path) -> None:
         expected = (repository.memories_dir / name).read_bytes()
         assert (tmp_path / "out" / "memories" / name).read_bytes() == expected
     assert not (tmp_path / "out" / "memories" / "m-priv.md").exists()
+
+
+# --- privacy floor: never looser than core -----------------------------------
+
+RANK = {"none": 0, "local-private": 1, "unknown": 2}
+TAG_CORPUS: list[list[str]] = [
+    [],
+    ["x"],
+    ["sensitivity:private"],
+    ["Sensitivity:PRIVATE"],
+    ["sensitivity: private "],
+    ["sensitivity:secret"],
+    ["sensitivity:local-private"],
+    ["sensitivity:"],
+    ["sensitivity:private", "sensitivity:secret"],
+    ["privacy:none"],
+    ["privacy:public"],
+    ["privacy:fleet"],
+    ["Privacy:Shared"],
+    ["privacy:"],
+    ["privacy:null"],
+    ["privacy:local-private"],
+    ["privacy:LOCAL-PRIVATE"],
+    ["privacy:private"],
+    ["privacy:restricted"],
+    ["privacy:team-only"],
+    ["privacy:none", "privacy:local-private"],
+    ["privacy:local-private", "privacy:none"],
+    ["privacy:none", "sensitivity:private"],
+    ["privacy:local-private", "sensitivity:secret"],
+    ["privacy:restricted", "privacy:none"],
+    ["privacy: x"],
+    ["a 'quoted' tag", "it's", 'say "hi"', "sensitivity:private # not a comment"],
+    ["- dash", "#hash", "sensitivity:Secret"],
+]
+
+
+def test_reference_privacy_class_is_never_looser_than_core(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "vault")
+    repository.init()
+    for index, tags in enumerate(TAG_CORPUS):
+        repository.add(f"Doc {index}", "body", memory_id=f"t{index:02d}", tags=tags)
+    for document in repository.list():
+        core, _mismatch = meta_from_document(document).privacy_class()
+        memory = read_memory(repository.root, document.id)
+        assert memory is not None, document.id
+        reference = memory.privacy_class()
+        assert RANK[reference] >= RANK[core], (document.tags, core, reference)
+        assert reference == core, (document.tags, core, reference)  # exact on this corpus
+
+
+@pytest.mark.parametrize(
+    ("front", "expected"),
+    [
+        ("tags: [sensitivity:private]", None),
+        ("tags: []", "none"),
+        ("tags:\n  - sensitivity:private", None),
+        ("tags:\n    - x", None),
+        ("tags: |\n  sensitivity:private", None),
+        ("tags:\n- a\ntags:\n- b", None),
+        ("tags: {a: 1}", None),
+        ("tags:\n- sensitivity:secret", "unknown"),
+        ("tags:\n- 'privacy:restricted' # comment", "unknown"),
+        ("privacy: restricted", "unknown"),
+        ("sensitivity: private", "local-private"),
+        ('tags:\n- "sensitivity:\\x70rivate"', "local-private"),
+        ('tags:\n- "bad \\q escape"', None),
+    ],
+)
+def test_parser_fails_closed_on_privacy_forms(front: str, expected: str | None) -> None:
+    memory = parse_memory("m1", f"---\nid: m1\n{front}\nversion: 1\n---\nbody\n".encode())
+    assert (None if memory is None else memory.privacy_class()) == expected
+
+
+def test_scalars_drop_inline_comments_like_yaml() -> None:
+    memory = parse_memory(
+        "m1",
+        b"---\nid: m1\ntenant: alpha # team\ntitle: 'It''s # here' # c\nsource: a#b\n---\n",
+    )
+    assert memory is not None
+    assert (memory.text("tenant"), memory.text("title"), memory.text("source")) == (
+        "alpha",
+        "It's # here",
+        "a#b",
+    )
+
+
+def _privacy_vault(tmp_path: Path) -> Repository:
+    repository = Repository(tmp_path / "pvault")
+    repository.init()
+    repository.add("Public", "public body", memory_id="p-pub")
+    repository.add("Secret", "secret body", memory_id="p-secret", tags=["sensitivity:secret"])
+    repository.add("Restricted", "r body", memory_id="p-restr", tags=["privacy:restricted"])
+    repository.add("Private", "private body", memory_id="p-priv", tags=["Sensitivity:PRIVATE"])
+    for memory_id, tags in (("p-flow", "tags: [sensitivity:private]"), ("p-indent", None)):
+        repository.add(memory_id, "hand edited", memory_id=memory_id, tags=["sensitivity:private"])
+        path = repository.memories_dir / f"{memory_id}.md"
+        text = path.read_text(encoding="utf-8")
+        if tags is not None:
+            text = text.replace("tags:\n- sensitivity:private\n", tags + "\n")
+        else:
+            text = text.replace("- sensitivity:private", "  - sensitivity:private")
+        path.write_text(text, encoding="utf-8")
+    return repository
+
+
+@pytest.mark.parametrize("name", sorted(PROJECTORS))
+def test_projectors_apply_the_privacy_floor(tmp_path: Path, name: str) -> None:
+    repository = _privacy_vault(tmp_path)
+    strict = PROJECTORS[name]().export(  # type: ignore[attr-defined]
+        repository.root, tmp_path / "strict", ProjectionPolicy("v1")
+    )
+    assert strict.projected == 1
+    assert strict.skipped == {"private": 1, "privacy_unknown": 2, "unreadable": 2}
+    cleared = PROJECTORS[name]().export(  # type: ignore[attr-defined]
+        repository.root, tmp_path / "cleared", ProjectionPolicy("v1", {"include_private": True})
+    )
+    assert cleared.projected == 2  # unknown and unreadable are never exported
+    assert cleared.skipped == {"privacy_unknown": 2, "unreadable": 2}
+    exported = b"".join((tmp_path / "cleared" / f).read_bytes() for f in cleared.files)
+    for body in (b"secret body", b"r body", b"hand edited"):
+        assert body not in exported
+
+
+@pytest.mark.parametrize("name", sorted(DERIVERS))
+def test_derivers_apply_the_privacy_floor(tmp_path: Path, name: str) -> None:
+    repository = _privacy_vault(tmp_path)
+    ids = ("p-pub", "p-secret", "p-restr", "p-priv", "p-flow", "p-indent")
+    view = DERIVERS[name]().derive(  # type: ignore[attr-defined]
+        repository.root, DeriveRequest(kind="digest", memory_ids=ids)
+    )
+    assert view.cited_ids() == ("p-pub",)
+    cleared = DERIVERS[name]().derive(  # type: ignore[attr-defined]
+        repository.root,
+        DeriveRequest(kind="digest", memory_ids=ids, options={"include_private": True}),
+    )
+    assert set(cleared.cited_ids()) == {"p-pub", "p-priv"}
+
+
+def test_mirror_removes_copies_of_memories_that_became_private(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    out = tmp_path / "out"
+    MirrorProjector().export(repository.root, out, ProjectionPolicy("v1"))
+    assert (out / "memories" / "m-release.md").is_file()
+    repository.update("m-release", tags=["sensitivity:private"])
+    manifest = MirrorProjector().export(repository.root, out, ProjectionPolicy("v1"))
+    assert not (out / "memories" / "m-release.md").exists()
+    assert sorted(p.name for p in (out / "memories").glob("*.md")) == sorted(
+        name.split("/")[-1] for name in manifest.files
+    )
+
+
+@pytest.mark.parametrize("name", sorted(PROJECTORS))
+def test_projectors_refuse_symlinked_outputs(tmp_path: Path, name: str) -> None:
+    repository = _vault(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    linked = tmp_path / "linked"
+    linked.symlink_to(elsewhere, target_is_directory=True)
+    with pytest.raises(ValueError, match="symlink"):
+        PROJECTORS[name]().export(repository.root, linked, ProjectionPolicy("v1"))  # type: ignore[attr-defined]
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "memories").symlink_to(elsewhere, target_is_directory=True)
+    if name == "markdown-mirror":
+        with pytest.raises(ValueError, match="symlink"):
+            MirrorProjector().export(repository.root, out, ProjectionPolicy("v1"))
+    assert list(elsewhere.iterdir()) == []
+
+
+def test_writes_replace_a_symlinked_file_instead_of_following_it(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    target = tmp_path / "victim.txt"
+    target.write_text("keep", encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "memories.jsonl").symlink_to(target)
+    JsonlProjector().export(repository.root, out, ProjectionPolicy("v1"))
+    assert target.read_text(encoding="utf-8") == "keep"
+    assert not (out / "memories.jsonl").is_symlink()
 
 
 # --- Ingestor ---------------------------------------------------------------
@@ -384,7 +572,7 @@ def test_file_claim_stager_writes_one_batch_file(tmp_path: Path) -> None:
     vault = make_vault(tmp_path / "vault")
     stager = FileClaimStager()
     assert stager.stage_claims(vault, "b1", CLAIMS, {"n": 1}, created_at="2026-01-01T00:00:00Z")
-    record = json.loads((vault / "_candidates" / "claims" / "b1.json").read_text("utf-8"))
+    record = json.loads((vault / "_candidates" / "claims-ref" / "b1.json").read_text("utf-8"))
     assert record["claims"][0]["evidence"][0]["ref"] == "conv:codex:s1@0"
     assert record["report"] == {"n": 1}
     with pytest.raises(ValueError, match="batch_id"):

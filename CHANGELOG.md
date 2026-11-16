@@ -18,6 +18,12 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   `ConcatDeriver` and `TimelineDeriver`, `KeywordClaimVerifier`, `FileClaimStager`. Not imported
   by `memfw.ports`; `register_reference()` adds the adapter specs on request, each off until
   enabled. No entry points, no change to any default output.
+- The reference projectors and derivers apply core's privacy classes, never looser
+  (cross-checked against `meta_from_document`): `local-private` only with
+  `include_private`, `unknown` (`sensitivity:secret`, `privacy:restricted`, ...) never. Their
+  front matter reader fails closed: a flow, indented or block form, or a duplicate key, under
+  `tags`/`privacy`/`sensitivity` makes the file unreadable (skipped). `MirrorProjector` removes
+  stale copies; writes go through a temporary file and never follow a symlink.
 - `tests/test_swap_drills.py` runs every implementation of every port (`RecallProvider`,
   `Projector`, `Ingestor`, `Deriver`, `Clock`, `IdGen`, `ClaimVerifier`, `ClaimStager`) through
   the same `memfw.ports.testing` check, and runs the coordinator with the reference recall

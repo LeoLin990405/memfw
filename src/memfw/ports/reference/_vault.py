@@ -2,25 +2,84 @@
 
 The reference adapters read ``<vault>/memories/<id>.md`` directly: a YAML
 front matter block between ``---`` lines, then the body. Only what they need
-is parsed: top-level scalar keys (``key: value``, quotes stripped) and
-top-level lists of scalars (``key:`` followed by ``- item`` lines). Nested
-mappings are ignored. A file that cannot be read or parsed is reported as
-``None`` so the caller counts it as skipped, never guesses.
+is parsed: top-level scalar keys (``key: value``, quotes and inline
+``# comments`` stripped) and top-level block lists of scalars (``key:``
+followed by ``- item`` lines at column 0, the layout the vault writes).
+
+The parser fails closed. A file whose front matter cannot be read, or whose
+privacy-relevant keys (``tags``, ``privacy``, ``sensitivity``) use any other
+YAML form (a flow list, an indented list, a block scalar, a duplicate key),
+is ``None``: the caller counts it as unreadable and skips it, never guesses.
+
+``privacy_class`` mirrors core's rule (``memfw.projection.tag_privacy_class``
+and ``memfw.recall.policy.classify_privacy`` as ``meta_from_document``
+combines them) and may only be stricter: ``tests/test_swap_drills.py``
+cross-checks it against core for a corpus of tag variants.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from ..types import MEMORY_ID_RE
 
 MEMORIES_DIR = "memories"
 
-_KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):(?:\s+(.*))?$")
-_PRIVATE_TAGS = frozenset({"sensitivity:private", "privacy:local-private", "privacy:private"})
+PrivacyClass = Literal["none", "local-private", "unknown"]
+
+_KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):(?:[ \t]+(.*))?$")
+_COMMENT_RE = re.compile(r"[ \t]#")
+#: Front matter keys that decide visibility; any form the parser does not
+#: understand for them makes the whole file unreadable.
+PRIVACY_KEYS: frozenset[str] = frozenset({"tags", "privacy", "sensitivity"})
+#: ``privacy:`` values core treats as public (``memfw.recall.policy``).
+PRIVACY_NONE_VALUES: frozenset[str] = frozenset({"", "none", "null", "public", "fleet", "shared"})
+_RANK: dict[str, int] = {"none": 0, "local-private": 1, "unknown": 2}
+
+
+def _declared_class(value: str) -> PrivacyClass:
+    cleaned = value.strip().lower()
+    if cleaned in PRIVACY_NONE_VALUES:
+        return "none"
+    if cleaned == "local-private":
+        return "local-private"
+    return "unknown"
+
+
+def _sensitivity_class(value: str) -> PrivacyClass:
+    return "local-private" if value.strip().lower() == "private" else "unknown"
+
+
+def strictest(classes: Iterable[PrivacyClass]) -> PrivacyClass:
+    """The strictest class; ``none`` for no classes."""
+
+    found: PrivacyClass = "none"
+    for value in classes:
+        if _RANK[value] > _RANK[found]:
+            found = value
+    return found
+
+
+def tags_privacy_class(tags: Iterable[str]) -> PrivacyClass:
+    """Class from ``privacy:*`` and ``sensitivity:*`` tags, any case, strictest wins.
+
+    ``sensitivity:private`` is ``local-private``, any other ``sensitivity:``
+    value ``unknown``; a ``privacy:`` value is ``none`` for the public values,
+    ``local-private`` for ``local-private`` and ``unknown`` otherwise.
+    """
+
+    classes: list[PrivacyClass] = []
+    for tag in tags:
+        lowered = tag.lower()
+        if lowered.startswith("privacy:"):
+            classes.append(_declared_class(tag.split(":", 1)[1]))
+        elif lowered.startswith("sensitivity:"):
+            classes.append(_sensitivity_class(tag.split(":", 1)[1]))
+    return strictest(classes)
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,24 +103,131 @@ class MemoryFile:
         value = self.text("version")
         return int(value) if value.isdigit() else None
 
-    def is_private(self) -> bool:
-        """Tagged private (any case). The coordinator's policy is stricter; this is a floor."""
+    def privacy_class(self) -> PrivacyClass:
+        """Core's class for this memory, or a stricter one (never looser).
 
-        return any(tag.strip().lower() in _PRIVATE_TAGS for tag in self.tags())
+        Tags as core reads them, plus top-level ``privacy`` / ``sensitivity``
+        keys, which core does not read: counting them can only make a memory
+        stricter.
+        """
+
+        classes = [tags_privacy_class(self.tags())]
+        for key, classify in (("privacy", _declared_class), ("sensitivity", _sensitivity_class)):
+            value = self.front.get(key)
+            if isinstance(value, str):
+                classes.append(classify(value) if value else "none")
+            elif isinstance(value, list):
+                classes.extend(classify(item) for item in value)
+        return strictest(classes)
+
+
+class _Unparsable(ValueError):
+    pass
 
 
 def _scalar(raw: str) -> str:
+    """A plain or quoted scalar with its inline comment removed."""
+
     value = raw.strip()
-    if value in {"null", "~"}:
+    if value[:1] in {"'", '"'}:
+        quote = value[0]
+        index = 1
+        out: list[str] = []
+        while index < len(value):
+            char = value[index]
+            if quote == "'" and char == "'" and value[index + 1 : index + 2] == "'":
+                out.append("'")
+                index += 2
+                continue
+            if quote == '"' and char == "\\":
+                decoded, index = _escape(value, index)
+                out.append(decoded)
+                continue
+            if char == quote:
+                rest = value[index + 1 :].strip()
+                if rest and not rest.startswith("#"):
+                    raise _Unparsable("text after a quoted scalar")
+                return "".join(out)
+            out.append(char)
+            index += 1
+        raise _Unparsable("unterminated quoted scalar")
+    if value.startswith("#"):
         return ""
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-        inner = value[1:-1]
-        return inner.replace("''", "'") if value[0] == "'" else inner
-    return value
+    match = _COMMENT_RE.search(value)
+    if match:
+        value = value[: match.start()].rstrip()
+    return "" if value in {"null", "~"} else value
+
+
+_ESCAPES = {
+    "0": "\0", "a": "\a", "b": "\b", "t": "\t", "\t": "\t", "n": "\n", "v": "\v",
+    "f": "\f", "r": "\r", "e": "\x1b", " ": " ", '"': '"', "/": "/", "\\": "\\",
+    "N": "\x85", "_": "\xa0", "L": "\u2028", "P": "\u2029",
+}  # fmt: skip
+_HEX_ESCAPES = {"x": 2, "u": 4, "U": 8}
+
+
+def _escape(value: str, index: int) -> tuple[str, int]:
+    """Decode the YAML double-quoted escape at ``value[index]`` (a backslash)."""
+
+    code = value[index + 1 : index + 2]
+    if code in _ESCAPES:
+        return _ESCAPES[code], index + 2
+    width = _HEX_ESCAPES.get(code)
+    digits = value[index + 2 : index + 2 + width] if width else ""
+    if not width or len(digits) != width or not all(c in "0123456789abcdefABCDEF" for c in digits):
+        raise _Unparsable("unknown escape in a double-quoted scalar")
+    try:
+        return chr(int(digits, 16)), index + 2 + width
+    except ValueError as exc:
+        raise _Unparsable("escape out of range") from exc
+
+
+def _front(lines: list[str]) -> dict[str, str | list[str]]:
+    front: dict[str, str | list[str]] = {}
+    current: str | None = None
+    for line in lines:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if line.startswith("- ") or line.rstrip() == "-":
+            if current is None:
+                raise _Unparsable("list item outside a list")
+            items = front[current]
+            assert isinstance(items, list)
+            items.append(_scalar(line[1:]))
+            continue
+        if line.startswith((" ", "\t")):
+            # A nested value (an indented list, a mapping, a continuation).
+            if current in PRIVACY_KEYS or _last_key(front) in PRIVACY_KEYS:
+                raise _Unparsable("nested form under a privacy key")
+            continue
+        match = _KEY_RE.match(line)
+        if not match:
+            raise _Unparsable("not a key line")
+        key, raw = match.group(1), (match.group(2) or "")
+        if key in front and key in PRIVACY_KEYS:
+            raise _Unparsable("duplicate privacy key")
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            current = key
+            front[key] = []
+            continue
+        current = None
+        if stripped.startswith(("[", "{", "|", ">", "&", "*", "!")):
+            if key in PRIVACY_KEYS and stripped not in {"[]", "{}"}:
+                raise _Unparsable("flow or block form under a privacy key")
+            front[key] = [] if stripped in {"[]", "{}"} else stripped
+            continue
+        front[key] = _scalar(raw)
+    return front
+
+
+def _last_key(front: dict[str, str | list[str]]) -> str | None:
+    return next(reversed(front), None) if front else None
 
 
 def parse_memory(memory_id: str, raw: bytes) -> MemoryFile | None:
-    """Parse one memory file; ``None`` when it has no well-formed front matter."""
+    """Parse one memory file; ``None`` when it is not well-formed (fail closed)."""
 
     try:
         text = raw.decode("utf-8")
@@ -72,29 +238,9 @@ def parse_memory(memory_id: str, raw: bytes) -> MemoryFile | None:
         return None
     try:
         end = next(index for index in range(1, len(lines)) if lines[index].strip() == "---")
-    except StopIteration:
+        front = _front(lines[1:end])
+    except (StopIteration, _Unparsable):
         return None
-    front: dict[str, str | list[str]] = {}
-    current: str | None = None
-    for line in lines[1:end]:
-        if line.startswith("- ") and current is not None:
-            items = front.setdefault(current, [])
-            if isinstance(items, list):
-                items.append(_scalar(line[2:]))
-            continue
-        if line.startswith((" ", "\t")):
-            continue  # nested value: not needed here
-        match = _KEY_RE.match(line)
-        if not match:
-            current = None
-            continue
-        key, value = match.group(1), match.group(2)
-        if value is None or not value.strip():
-            current = key
-            front[key] = []
-        else:
-            current = None
-            front[key] = [] if value.strip() == "[]" else _scalar(value)
     body = "\n".join(lines[end + 1 :]).strip("\n")
     return MemoryFile(memory_id, raw, front, body)
 
