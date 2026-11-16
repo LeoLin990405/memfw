@@ -113,19 +113,40 @@ open_question:
 
 * **Write gate.** Every path (`add`, `update`, rollback, agent proposals, dream
   candidates) runs the same contract. Each `conflicts` id must exist and share the
-  question's tenant, and none may be the question itself. Only a human creates an
-  open question directly; mechanisms and agents stage candidates.
+  question's tenant, and none may be the question itself. For a writer other than a
+  human, a missing id and an id in another tenant fail with the same message
+  ("missing or not visible").
+* **Who may do what.** Creating an open question, changing a memory's `type` to or from
+  `open-question`, and setting or clearing `resolved_by` need a human actor or an
+  approved proposal; a mechanism or a FULL-permission agent may edit an open question's
+  other fields. No candidate channel carries `type` or `open_question` yet (dream and
+  `memory_remember` cannot stage a new open question; that arrives with U3). An agent
+  can propose a resolution: an `update` proposal with `open_question` and `valid_to`
+  (`valid_to` is proposable only together with `open_question`).
 * **Resolution.** `Repository.resolve_open_question(question_id, answer_id)` (human only)
-  is an ordinary update that sets `open_question.resolved_by` and `valid_to`. The answer
-  must exist, share the tenant, be current, and not be another open question. The
-  question file is kept, so `as_of` before that instant still shows it open.
-  `supersede` of an unresolved question keeps the type, block, tenant and `about`.
+  is an in-place update of the question that sets `open_question.resolved_by` and
+  `valid_to`. The answer must exist, share the tenant, be current, and not be another
+  open question. The question file is kept and its unresolved version stays in
+  `.history/`. Recall without `as_of` hides the resolved question (it has `valid_to`); an
+  `as_of` earlier than the resolution still returns it, read from the current file, so
+  its block already names `resolved_by`. `supersede` of an unresolved question keeps the
+  type, block, tenant and `about`; conflict ids that were deleted or moved to another
+  tenant are dropped and listed as `dropped_conflicts` in the SUPERSEDE event.
 * **Lint.** `fsck` reports `open_question_dangling_conflict`,
-  `open_question_self_conflict`, `open_question_cross_tenant_conflict`,
-  `open_question_dangling_resolution`, `open_question_superseded_resolution`,
+  `open_question_self_conflict`, `open_question_cross_tenant_conflict` (conflict checks
+  skip historical versions that have `valid_to`), `open_question_dangling_resolution`,
+  `open_question_superseded_resolution` (the answer's supersession chain is followed, so
+  a revised answer passes; one whose current version is no longer in force does not),
   `open_question_cross_tenant_resolution`, `open_question_resolved_but_current`,
   `open_question_multiple_unresolved` (two unresolved versions without `valid_to` in one
-  supersession chain), `open_question_missing_block` and `open_question_wrong_type`.
+  supersession chain), `open_question_missing_block`, `open_question_wrong_type` and
+  `open_question_invalid_block` (an unrelated, malformed `open_question` key on another
+  type, which is ignored like an unknown key: the memory stays readable and the file is
+  not rewritten by a read).
+* **Export and hashes.** `memfw okf export` puts `type: open-question` and the block in
+  the `memfw:` envelope. `MemoryDocument.model_dump` leaves out an absent
+  `open_question`, so every other memory dumps, and its proposal and agent snapshot
+  hashes stay, exactly as before.
 * **Compatibility.** Files without the block keep their bytes. memfw 0.2.0 does not
   reject an open question: it reads the file, keeps `type: open-question`, and lists
   `open_question` in `ignored_keys`. A write by 0.2.0 drops the block; this version then

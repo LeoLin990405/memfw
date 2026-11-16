@@ -19,6 +19,7 @@ from typing import Any
 
 import yaml
 
+from memfw.core.epistemic import OPEN_QUESTION_TYPE
 from memfw.core.models import MemoryDocument
 from memfw.core.repository import Repository
 
@@ -115,6 +116,12 @@ def _concept(document: MemoryDocument, generated_by: str) -> tuple[str, str, dic
         memfw["limitations"] = list(document.limitations)
     if document.experience is not None:
         memfw["experience"] = document.experience.model_dump(mode="json")
+    # An open question says what is unknown; a consumer must not read it as a
+    # stated memory, so the type and the block travel in the envelope.
+    if document.type == OPEN_QUESTION_TYPE:
+        memfw["type"] = document.type
+        if document.open_question is not None:
+            memfw["open_question"] = document.open_question.model_dump(mode="json")
     return concept_id, concept_type, front
 
 
@@ -235,9 +242,7 @@ def _is_within(path: Path, parent: Path) -> bool:
         folded = str(parent).casefold()
         return any(str(candidate).casefold() == folded for candidate in (path, *path.parents))
     return any(
-        _same_file(candidate, parent)
-        for candidate in (path, *path.parents)
-        if candidate.exists()
+        _same_file(candidate, parent) for candidate in (path, *path.parents) if candidate.exists()
     )
 
 

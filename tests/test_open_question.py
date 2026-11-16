@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from memfw.agents.models import canonical_payload_hash
 from memfw.core.epistemic import (
     EXPERIENCE_DISCLAIMER,
     MAX_OPEN_QUESTION_CONFLICTS,
@@ -18,6 +20,7 @@ from memfw.core.epistemic import (
 )
 from memfw.core.errors import IntegrityError
 from memfw.core.markdown_parse import _OPTIONAL_DEFAULT_FIELDS
+from memfw.core.models import MemoryDocument
 from memfw.core.repository import Repository
 from memfw.storage.markdown import MarkdownStorageMixin
 from memfw.storage.operations import lookup_current
@@ -377,7 +380,11 @@ def test_lint_reports_a_superseded_answer(tmp_path: Path) -> None:
     answer = repository.add("answer", "x")
     repository.resolve_open_question(question.id, answer.id)
     assert _kinds(repository) == []
-    repository.supersede(answer.id, "answer v2", "x2")
+    # A revised answer is fine: fsck follows the chain to the version in force.
+    revised = repository.supersede(answer.id, "answer v2", "x2")
+    assert _kinds(repository) == []
+    # An answer that simply stopped being valid is not.
+    repository.update(revised.id, valid_to=revised.created_at)
     assert _kinds(repository) == ["open_question_superseded_resolution"]
 
 
@@ -464,17 +471,18 @@ def test_proposed_write_checks_the_vault_when_given_a_lookup(tmp_path: Path) -> 
         "open_question": {"question": "q?", "conflicts": [same.id]},
     }
     validate_proposed_write(None, candidate, actor="mechanism")
-    validate_proposed_open_question(None, candidate, lookup=lookup)
+    validate_proposed_open_question(None, candidate, lookup=lookup, actor="mechanism")
     crossing = {**candidate, "open_question": {"question": "q?", "conflicts": [other.id]}}
     validate_proposed_write(None, crossing, actor="mechanism")  # pure half passes
+    ghost = {"open_question": {"question": "q?", "conflicts": [same.id, "ghost"]}}
+    # A non-human writer gets one message for "missing" and "other tenant".
+    for current_state, change in ((None, crossing), (current, ghost)):
+        with pytest.raises(IntegrityError, match="missing or not visible"):
+            validate_proposed_open_question(current_state, change, lookup=lookup, actor="mechanism")
     with pytest.raises(IntegrityError, match="another tenant"):
-        validate_proposed_open_question(None, crossing, lookup=lookup)
+        validate_proposed_open_question(None, crossing, lookup=lookup, actor="human")
     with pytest.raises(IntegrityError, match="missing memory"):
-        validate_proposed_open_question(
-            current,
-            {"open_question": {"question": "q?", "conflicts": [same.id, "ghost"]}},
-            lookup=lookup,
-        )
+        validate_proposed_open_question(current, ghost, lookup=lookup, actor="human")
 
 
 def test_a_block_dropped_by_an_older_writer(tmp_path: Path) -> None:
@@ -490,3 +498,185 @@ def test_a_block_dropped_by_an_older_writer(tmp_path: Path) -> None:
         repository.update(question.id, body="new body")
     repository.update(question.id, body="new body", open_question={"question": "q?"})
     assert _kinds(repository) == []
+
+
+# --- review fixes ------------------------------------------------------------------
+
+
+def _full_permissions(repository: Repository) -> None:
+    repository.config_path.write_text(
+        repository.config_path.read_text(encoding="utf-8").replace(
+            "permissions: propose_then_confirm", "permissions: full"
+        ),
+        encoding="utf-8",
+    )
+
+
+AGENT = {"actor": "agent:writer", "agent_id": "writer", "signature": "sig-v1"}
+
+
+@pytest.mark.parametrize("who", ["mechanism", "agent"])
+def test_only_a_human_changes_type_or_resolution(tmp_path: Path, who: str) -> None:
+    repository = _vault(tmp_path)
+    _full_permissions(repository)
+    actor: dict[str, Any] = {"actor": "mechanism"} if who == "mechanism" else dict(AGENT)
+    plain = repository.add("plain", "x")
+    answer = repository.add("answer", "y")
+    question = _question(repository)
+    with pytest.raises(IntegrityError, match="change type"):
+        repository.update(
+            plain.id, type=OPEN_QUESTION_TYPE, open_question={"question": "q?"}, **actor
+        )
+    with pytest.raises(IntegrityError, match="change type"):
+        repository.update(question.id, type="note", open_question=None, **actor)
+    with pytest.raises(IntegrityError, match="resolve or reopen"):
+        repository.update(
+            question.id,
+            open_question={"question": "q?", "resolved_by": answer.id},
+            valid_to=repository._now(),
+            **actor,
+        )
+    # Other edits of an open question stay open to the same writer.
+    edited = repository.update(question.id, title="renamed", **actor)
+    assert edited.title == "renamed"
+    resolved = repository.resolve_open_question(question.id, answer.id)
+    with pytest.raises(IntegrityError, match="resolve or reopen"):
+        repository.update(question.id, open_question={"question": "q?"}, valid_to=None, **actor)
+    assert resolved.open_question is not None
+
+
+def test_a_resolve_proposal_applies_after_human_approval(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    question = _question(repository)
+    answer = repository.add("answer", "the port is 8080")
+    block = {
+        "question": "Which port does the service use?",
+        "conflicts": [],
+        "missing": "",
+        "resolved_by": answer.id,
+    }
+    changes = {"open_question": block, "valid_to": "2026-11-16T00:00:00+00:00"}
+    proposal = repository.record_proposal(
+        memory_id=question.id,
+        operation="update",
+        changes=changes,
+        rationale="the config file settles it",
+        agent_id="planner",
+        signature="mock:planner",
+    )
+    result = repository.decide_proposal(
+        proposal.event_id,
+        payload={"memory_id": question.id, "operation": "update", "changes": changes},
+    )
+    assert result is not None
+    assert result.open_question is not None
+    assert result.open_question.resolved_by == answer.id
+    assert result.valid_to is not None
+    # valid_to alone is not proposable.
+    with pytest.raises(IntegrityError, match="valid_to only together"):
+        repository.record_proposal(
+            memory_id=answer.id,
+            operation="update",
+            changes={"valid_to": "2026-11-16T00:00:00+00:00"},
+            rationale="expire it",
+            agent_id="planner",
+            signature="mock:planner",
+        )
+
+
+def test_fsck_skips_conflicts_of_historical_versions(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    left = repository.add("left", "x")
+    right = repository.add("right", "y")
+    question = _question(repository, left.id, right.id)
+    answer = repository.add("answer", "z")
+    repository.resolve_open_question(question.id, answer.id)
+    repository.delete(left.id)
+    assert _kinds(repository) == []
+
+
+def test_supersede_drops_conflicts_that_no_longer_resolve(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    left = repository.add("left", "x")
+    right = repository.add("right", "y")
+    question = _question(repository, left.id, right.id)
+    repository.delete(left.id)
+    assert _kinds(repository) == ["open_question_dangling_conflict"]
+    new = repository.supersede(question.id, "v2", "reworded")
+    assert new.open_question is not None
+    assert new.open_question.conflicts == [right.id]
+    event = next(e for e in reversed(repository.events()) if e.kind.value == "supersede")
+    assert event.details["dropped_conflicts"] == [left.id]
+    assert _kinds(repository) == []
+
+
+def test_unrelated_legacy_open_question_key_is_ignored(tmp_path: Path) -> None:
+    raw = LEGACY.replace("group_key: null\n", "group_key: null\nopen_question: maybe later\n")
+    document = MarkdownStorageMixin.parse(raw, expected_id="legacy-note")
+    assert document.open_question is None
+    assert document.ignored_keys == ("open_question",)
+    repository = _vault(tmp_path)
+    path = repository.root / "memories" / "legacy-note.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(raw, encoding="utf-8")
+    assert [doc.id for doc in repository.list()] == ["legacy-note"]
+    assert repository.get("legacy-note").title == "Legacy note"
+    assert _kinds(repository) == ["open_question_invalid_block"]
+    assert path.read_text(encoding="utf-8") == raw
+    # On an open question a malformed block is still an error.
+    bad = raw.replace("group_key: null\n", "group_key: null\ntype: open-question\n")
+    with pytest.raises(IntegrityError):
+        MarkdownStorageMixin.parse(bad, expected_id="legacy-note")
+
+
+def test_snapshot_hash_of_a_pre_u1_memory_is_unchanged() -> None:
+    stamp = datetime(2026, 11, 1, tzinfo=UTC)
+    document = MemoryDocument(
+        id="pinned",
+        title="Pinned",
+        body="body",
+        tenant="team-a",
+        tags=["x"],
+        created_at=stamp,
+        updated_at=stamp,
+    )
+    # Computed with origin/main df4958b (before U1) over ``model_dump(mode="json")``.
+    assert canonical_payload_hash(document.model_dump(mode="json")) == (
+        "c49a12552b694feb69e20f1fb34f6aaca2d7bc2e9f8e713dd8378663af0cb4c2"
+    )
+    question = document.model_copy(
+        update={"type": OPEN_QUESTION_TYPE, "open_question": OpenQuestion(question="q?")}
+    )
+    assert "open_question" not in document.model_dump()
+    assert "open_question" in question.model_dump(mode="json")
+
+
+def test_okf_export_marks_open_questions(tmp_path: Path) -> None:
+    import yaml
+
+    from memfw.okf import export_okf
+
+    repository = _vault(tmp_path)
+    plain = repository.add("plain", "x")
+    question = _question(repository, plain.id)
+    bundle = tmp_path / "okf"
+    assert export_okf(repository.root, bundle).valid
+    front = yaml.safe_load(
+        (bundle / f"{question.id}.md").read_text(encoding="utf-8").split("---\n")[1]
+    )
+    assert front["memfw"]["type"] == OPEN_QUESTION_TYPE
+    assert front["memfw"]["open_question"]["conflicts"] == [plain.id]
+    plain_text = (bundle / f"{plain.id}.md").read_text(encoding="utf-8")
+    assert "open_question" not in plain_text
+
+
+def test_rollback_restores_an_absent_block(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    plain = repository.add("plain", "x")
+    converted = repository.update(
+        plain.id, type=OPEN_QUESTION_TYPE, open_question={"question": "q?"}
+    )
+    assert converted.open_question is not None
+    restored = repository.rollback(repository.events()[-1].event_id)
+    assert restored.type is None
+    assert restored.open_question is None

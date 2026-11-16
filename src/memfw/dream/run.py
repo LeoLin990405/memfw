@@ -234,7 +234,10 @@ def run_dream(
                     current = None
                 validate_proposed_write(current, proposed, actor="mechanism")
                 validate_proposed_open_question(
-                    current, proposed, lookup=lambda ref: lookup_current(repository, ref)
+                    current,
+                    proposed,
+                    lookup=lambda ref: lookup_current(repository, ref),
+                    actor="mechanism",
                 )
         except MemfwError as exc:
             skipped.append(

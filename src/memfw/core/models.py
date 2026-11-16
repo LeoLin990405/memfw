@@ -6,7 +6,16 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from .epistemic import CausalLevel, CausalRecord, EpistemicType, ExperiencePoint, OpenQuestion
 
@@ -226,6 +235,21 @@ class MemoryDocument(BaseModel):
     @classmethod
     def timestamps_are_utc(cls, value: datetime | None) -> datetime | None:
         return None if value is None else _as_utc(value)
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_open_question(self, handler: SerializerFunctionWrapHandler) -> Any:
+        """Leave ``open_question`` out of a dump while it is absent.
+
+        The key arrived with U1. Proposal and agent snapshot hashes, and other
+        consumers, take ``model_dump`` of a memory; omitting the empty key keeps
+        every memory that is not an open question dumping (and hashing) exactly
+        as before.
+        """
+
+        data = handler(self)
+        if isinstance(data, dict) and data.get("open_question", ...) is None:
+            data.pop("open_question")
+        return data
 
 
 class Event(BaseModel):

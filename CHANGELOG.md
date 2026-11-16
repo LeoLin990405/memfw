@@ -252,10 +252,13 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   `conflicts`, `missing`, `resolved_by`): what is unknown and which memories
   conflict on it. The shared write gate refuses `epistemic`, a causal grade,
   `causal_record` and `experience` on them, and refuses `conflicts` that are
-  missing, in another tenant, or the question itself; only a human creates one
-  directly. `Repository.resolve_open_question` sets `resolved_by` and
-  `valid_to` and keeps the file. `fsck` reports `open_question_*` findings.
-  `Repository.add` accepts `about` and `open_question`. See
+  missing, in another tenant, or the question itself. Creating one, changing
+  `type` to or from it, and resolving or reopening it need a human or an
+  approved proposal. `Repository.resolve_open_question` sets `resolved_by` and
+  `valid_to` in place and keeps the file. `fsck` reports `open_question_*`
+  findings. `Repository.add` accepts `about` and `open_question`; agent
+  `update` proposals accept `open_question` (and `valid_to` only with it). OKF
+  export carries the type and block in the `memfw:` envelope. See
   `docs/epistemic-and-experience.md`.
 - `memfw okf import <bundle> --root <vault> [--dry-run/--apply] [--json]`: an
   OKF Ingestor that path-checks and validates the bundle, then stages each

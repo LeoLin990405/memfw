@@ -159,7 +159,7 @@ class OpenQuestion(BaseModel):
     ``conflicts`` lists memories that contradict each other on the question
     (order kept, duplicates dropped). ``resolved_by`` names the memory that
     answered it; a resolved question also has ``valid_to`` set and its file is
-    kept, so ``as_of`` still shows the question as it stood.
+    kept, and its version before resolution stays in the history.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -518,6 +518,9 @@ def validate_epistemic_write(
         )
 
 
+_OPEN_QUESTION_PROPOSAL_KEYS = EPISTEMIC_FIELDS | {"tenant", "valid_to"}
+
+
 def _merge_proposal(
     current: Mapping[str, Any] | None, changes: Mapping[str, Any], *, keys: frozenset[str]
 ) -> dict[str, Any]:
@@ -561,19 +564,21 @@ def validate_proposed_open_question(
     changes: Mapping[str, Any],
     *,
     lookup: Callable[[str], Any],
+    actor: str,
 ) -> None:
     """Check a proposal-shaped change to an open question against the vault.
 
     The vault half of the gate for agent proposals and dream candidates, run
     after :func:`validate_proposed_write`: the same checks a direct write gets
     (:func:`validate_open_question_references`). ``lookup`` maps a memory id to
-    its current document or ``None``.
+    its current document or ``None``. ``valid_to`` and ``tenant`` in
+    ``changes`` count too: resolving a question sets ``valid_to``.
     """
 
     if not set(changes) & EPISTEMIC_FIELDS:
         return
-    values = _merge_proposal(current, changes, keys=EPISTEMIC_FIELDS | {"tenant"})
-    validate_open_question_references(values, lookup=lookup, previous=current)
+    values = _merge_proposal(current, changes, keys=_OPEN_QUESTION_PROPOSAL_KEYS)
+    validate_open_question_references(values, lookup=lookup, previous=current, actor=actor)
 
 
 def _validate_open_question(
@@ -617,6 +622,7 @@ def validate_open_question_references(
     *,
     lookup: Callable[[str], Any],
     previous: Mapping[str, Any] | None = None,
+    actor: str = "human",
 ) -> None:
     """Check an open question against the vault: what it names must exist.
 
@@ -632,6 +638,10 @@ def validate_open_question_references(
     * ``resolved_by`` requires ``valid_to`` on the question, and the answer must
       exist, share the tenant, be current (no ``valid_to``/``superseded_by``)
       and not be another open question.
+
+    For any ``actor`` other than ``human`` a missing id and an id in another
+    tenant fail with the same message, so the gate is not an existence oracle
+    for memories the writer cannot see.
     """
 
     raw_question = values.get("open_question")
@@ -661,13 +671,7 @@ def validate_open_question_references(
     for conflict in question.conflicts:
         if conflict in known:
             continue
-        target = lookup(conflict)
-        if target is None:
-            raise IntegrityError(f"open_question.conflicts names a missing memory: {conflict}")
-        if str(getattr(target, "tenant", "") or "") != tenant:
-            raise IntegrityError(
-                f"open_question.conflicts names a memory in another tenant: {conflict}"
-            )
+        _check_visible(lookup(conflict), conflict, "conflicts", tenant=tenant, actor=actor)
     answer_id = question.resolved_by
     if answer_id is None:
         return
@@ -679,18 +683,29 @@ def validate_open_question_references(
     if not recheck_all and old is not None and old.resolved_by == answer_id:
         return
     answer = lookup(answer_id)
-    if answer is None:
-        raise IntegrityError(f"open_question.resolved_by names a missing memory: {answer_id}")
-    if str(getattr(answer, "tenant", "") or "") != tenant:
-        raise IntegrityError(
-            f"open_question.resolved_by names a memory in another tenant: {answer_id}"
-        )
+    _check_visible(answer, answer_id, "resolved_by", tenant=tenant, actor=actor)
     if getattr(answer, "valid_to", None) is not None or getattr(answer, "superseded_by", None):
         raise IntegrityError(f"open_question.resolved_by names a superseded memory: {answer_id}")
     if getattr(answer, "type", None) == OPEN_QUESTION_TYPE:
         raise IntegrityError(
             "open_question.resolved_by must name an answer, not another open question: " + answer_id
         )
+
+
+def _check_visible(target: Any, memory_id: str, field: str, *, tenant: str, actor: str) -> None:
+    """A referenced memory must exist in the question's tenant."""
+
+    missing = target is None
+    elsewhere = not missing and str(getattr(target, "tenant", "") or "") != tenant
+    if not (missing or elsewhere):
+        return
+    if actor != "human":
+        raise IntegrityError(
+            f"open_question.{field} names a memory that is missing or not visible: {memory_id}"
+        )
+    if missing:
+        raise IntegrityError(f"open_question.{field} names a missing memory: {memory_id}")
+    raise IntegrityError(f"open_question.{field} names a memory in another tenant: {memory_id}")
 
 
 def _validate_experience_point(

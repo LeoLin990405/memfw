@@ -73,6 +73,9 @@ _PROPOSAL_FIELDS = frozenset(
         "causal_record",
         "limitations",
         "experience",
+        # Only together: resolving an open question sets both (see below).
+        "open_question",
+        "valid_to",
     }
 )
 
@@ -298,7 +301,7 @@ class Repository(
             current = None
         validate_proposed_write(current, changes, actor=actor)
         validate_proposed_open_question(
-            current, changes, lookup=lambda ref: lookup_current(self, ref)
+            current, changes, lookup=lambda ref: lookup_current(self, ref), actor=actor
         )
 
     @staticmethod
@@ -766,6 +769,10 @@ class Repository(
             raise NotFoundError(f"Memory not found: {memory_id}")
         if operation != "delete" and (not changes or set(changes) - _PROPOSAL_FIELDS):
             raise IntegrityError("Proposal changes contain unsupported fields")
+        if "valid_to" in changes and "open_question" not in changes:
+            raise IntegrityError(
+                "A proposal may set valid_to only together with open_question (a resolution)"
+            )
         if operation != "delete":
             # Refuse what approval would later fail on (``layer: bogus``), so a
             # human decision is never recorded for a proposal that cannot apply.
@@ -895,7 +902,7 @@ class Repository(
                 {
                     key: value
                     for key, value in proposal.output.items()
-                    if key in EPISTEMIC_FIELDS
+                    if key in EPISTEMIC_FIELDS or key == "valid_to"
                 },
                 actor=proposal.actor,
             )
