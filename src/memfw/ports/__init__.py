@@ -9,11 +9,21 @@ plugs in through one of four ports (see ``docs/ports-and-recall.md``):
 - ``Deriver``: vault → read-only view with citations and an epistemic cap
 
 plus the ``Clock`` and ``IdGen`` ports the kernel takes time and ids from.
+
+``ContextPack`` (``memfw.ports.context``) is the data contract for the
+session-start context that ``memory_context`` v2 returns.
 """
 
 from __future__ import annotations
 
 from .clock import Clock, FixedClock, IdGen, SeededIdGen, SystemClock, UuidIdGen
+from .context import (
+    ContextEntry,
+    ContextPack,
+    ContextSlot,
+    compute_pack_version,
+    pack_version_payload,
+)
 from .protocols import Deriver, Ingestor, Projector, RecallProvider
 from .registry import (
     ADAPTER_KINDS,
@@ -72,6 +82,9 @@ __all__ = [
     "Candidate",
     "Citation",
     "Clock",
+    "ContextEntry",
+    "ContextPack",
+    "ContextSlot",
     "DeriveRequest",
     "DerivedView",
     "Deriver",
@@ -96,8 +109,10 @@ __all__ = [
     "candidate_id",
     "check_name",
     "check_view_citations",
+    "compute_pack_version",
     "default_registry",
     "missing_modules",
+    "pack_version_payload",
     "register",
     "stage_candidates",
     "validate_candidate",

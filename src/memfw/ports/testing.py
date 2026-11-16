@@ -13,6 +13,7 @@ re-runs the same contract.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import threading
@@ -21,6 +22,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .clock import Clock, IdGen
+from .context import ContextPack, compute_pack_version, pack_version_payload
 from .protocols import Deriver, Ingestor, Projector, RecallProvider
 from .staging import CANDIDATES_DIR
 from .types import (
@@ -361,11 +363,74 @@ def check_id_gen(id_gen: IdGen, *, samples: int = 1000) -> list[str]:
         ids.append(value)
     _require(len(set(ids)) == len(ids), "new_id() repeated an id")
     return ids
+def check_context_pack(
+    pack: object,
+    *,
+    slots: Sequence[str] | None = None,
+    max_tokens: int | None = None,
+    forbidden: Sequence[str] = (),
+) -> ContextPack:
+    """A well-formed pack whose version key carries no content.
+
+    - ``pack`` is exactly a ``ContextPack`` and its ``pack_version`` is the
+      recomputed digest (so a field changed after construction is caught);
+    - ``slots``, when given, is the expected slot order;
+    - per slot: ``overflow == len(truncated_ids)``; at most one entry is both
+      carried and truncated, and it is the slot's last entry; with
+      ``max_tokens``, ``used_tokens_est`` stays within it;
+    - the version payload contains no entry text or title (of 8 characters
+      or more) and none of the ``forbidden`` strings (e.g. the query or a
+      private body the caller knows about);
+    - ``as_dict()`` is JSON serialisable.
+    """
+
+    _require(type(pack) is ContextPack, "context pack must be exactly memfw.ports.ContextPack")
+    assert isinstance(pack, ContextPack)
+    _require(pack.generated_at.tzinfo is not None, "generated_at must include a timezone")
+    _require(
+        pack.pack_version == compute_pack_version(pack.slots, pack.policy),
+        "pack_version does not match the pack contents",
+    )
+    names = [slot.name for slot in pack.slots]
+    if slots is not None:
+        _require(names == list(slots), f"slots are {names}, expected {list(slots)}")
+    _require(len(set(names)) == len(names), "slot names must be unique")
+    for slot in pack.slots:
+        _require(
+            slot.overflow == len(slot.truncated_ids),
+            f"slot {slot.name}: overflow differs from truncated_ids",
+        )
+        carried = [entry.id for entry in slot.entries]
+        partial = [memory_id for memory_id in slot.truncated_ids if memory_id in carried]
+        _require(len(partial) <= 1, f"slot {slot.name}: more than one partial entry")
+        if partial:
+            _require(
+                carried[-1] == partial[0], f"slot {slot.name}: partial entry is not the last one"
+            )
+            _require(
+                slot.truncated_ids[0] == partial[0],
+                f"slot {slot.name}: partial entry must come first in truncated_ids",
+            )
+        if max_tokens is not None:
+            _require(
+                slot.used_tokens_est <= max_tokens,
+                f"slot {slot.name}: used_tokens_est exceeds {max_tokens}",
+            )
+    payload = pack_version_payload(pack.slots, pack.policy).decode("ascii")
+    texts = [entry.text for slot in pack.slots for entry in slot.entries]
+    texts += [entry.title for slot in pack.slots for entry in slot.entries]
+    for text in [*texts, *forbidden]:
+        if len(text) >= 8:
+            encoded = json.dumps(text, ensure_ascii=True)[1:-1]
+            _require(encoded not in payload, "pack_version input contains content")
+    json.dumps(pack.as_dict())
+    return pack
 
 
 __all__ = [
     "ContractError",
     "check_clock",
+    "check_context_pack",
     "check_deriver",
     "check_id_gen",
     "check_ingestor",

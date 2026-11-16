@@ -314,7 +314,7 @@ vault itself.
 | `memory_get` | read one memory by id |
 | `memory_remember` | stage a candidate under `_candidates/remember/` with tags, related ids and suggestions |
 | `memory_related` | derived related-memory edges (tenant-scoped) |
-| `memory_context` | token-budgeted resident context: anchors and procedural memories first |
+| `memory_context` | token-budgeted resident context: anchors and procedural memories first; `v=2` returns a versioned `ContextPack` with overflow and an optional `strict` policy |
 | `memory_status` | vault size, layer and tier counts, log summary |
 | `history_list`, `history_search`, `history_read` | the transcript index: sessions with lineage, redacted snippets with refs, capped windows |
 | `conversations_list`, `conversations_search`, `conversations_get` | the shared conversation store, filtered by the calling app's visibility |
