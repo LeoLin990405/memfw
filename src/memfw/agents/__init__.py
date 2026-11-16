@@ -236,6 +236,7 @@ class DeterministicJudge:
             if not isinstance(pairs, list):
                 raise ValueError("live find_near_duplicates response requires merge_pairs list")
             known_ids = {memory.id for memory in memories}
+            tenants = {memory.id: memory.tenant for memory in memories}
             proposals: list[MergeProposal] = []
             for raw_pair in pairs:
                 if not isinstance(raw_pair, dict):
@@ -265,6 +266,10 @@ class DeterministicJudge:
                 duplicate_ids = cast(list[str], raw_duplicate_ids)
                 disposition = cast(Literal["delete", "retain"], raw_disposition)
                 targets: tuple[str, ...] = (representative_id, *duplicate_ids)
+                if not _same_tenant(targets, tenants):
+                    # Merges are tenant-scoped; review refuses cross-tenant
+                    # merges, so such a pair could never be approved.
+                    continue
                 output_data: JsonObject = {
                     "representative_id": representative_id,
                     "duplicate_ids": cast(JsonValue, duplicate_ids),
@@ -300,6 +305,8 @@ class DeterministicJudge:
         ordered = sorted(memories, key=lambda memory: memory.id)
         for index, left_memory in enumerate(ordered):
             for right_memory in ordered[index + 1 :]:
+                if left_memory.tenant != right_memory.tenant:
+                    continue
                 intersection = (masks[left_memory.id] & masks[right_memory.id]).bit_count()
                 union_count = (
                     gram_counts[left_memory.id] + gram_counts[right_memory.id] - intersection
@@ -385,6 +392,12 @@ class DeterministicJudge:
         ):
             raise ValueError("live wake_intensity response requires intensity in [0, 1]")
         return float(intensity)
+
+
+def _same_tenant(targets: tuple[str, ...], tenants: dict[str, str]) -> bool:
+    """Whether every merge target belongs to one tenant."""
+
+    return len({tenants[target] for target in targets}) <= 1
 
 
 class ClaudeJudge(DeterministicJudge):

@@ -147,6 +147,23 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   partial trailing line, so redaction context (a password after
   `Enter password:`), line numbers and windows match a full rebuild (I1).
 
+### Fixed — budget consolidation scope
+
+- `consolidate_then_forget` groups memories only within one tenant: a memory
+  is no longer consolidated away or forgotten because another tenant holds the
+  same body or `group_key`.
+- Historical records (`valid_to` or `superseded_by` set) join no consolidation
+  group, so a supersede that keeps the body no longer makes the old version the
+  representative and plans the current version for forgetting (or hard
+  deletion with `forget_action: hard`). Budget-triggered merge review skips
+  historical records too. The other policies (`fifo`, `lru`, `decay`,
+  `salience`) rank each record on its own and keep their behaviour, including
+  cooling or deleting historical records under budget pressure.
+- Agent merge proposals (`find_near_duplicates`, mock, live and local MLX)
+  stay within one tenant; a provider pair that spans tenants is dropped, since
+  review would refuse it.
+- Plans for single-tenant vaults without historical duplicates are unchanged.
+
 ### Fixed — service, MCP and index
 
 - A stale memory index is reported as `degraded: true` with

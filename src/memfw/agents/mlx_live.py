@@ -619,6 +619,9 @@ class LocalMLXJudge(DeterministicJudge):
             merge_disposition = cast(Literal["retain", "delete"], disposition)
             merge_confidence = cast(float, confidence)
             targets = (representative_id, *duplicate_ids)
+            if len({known[item].tenant for item in targets}) > 1:
+                # Merges are tenant-scoped; review refuses cross-tenant merges.
+                continue
             reason = self._reason(pair)
             output_data: JsonObject = {
                 "representative_id": representative_id,
