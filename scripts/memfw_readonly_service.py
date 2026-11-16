@@ -71,29 +71,92 @@ from urllib.parse import quote, urlsplit
 import yaml
 
 
-def _load_read_path():
-    """Load the stdlib read-path helper beside this file. It does not import memfw."""
+def _load_library() -> Any:
+    """``memfw.index.readonly``, the read side this entry point serves.
 
-    import importlib.util
+    Without ``memfw`` importable (a standalone copy run by the system
+    interpreter) the module is loaded from ``readonly.py`` beside this file,
+    or from ``src/memfw/index/`` of a checkout. It needs only the standard
+    library and PyYAML, and finds ``read_path.py`` beside itself.
+    """
 
-    path = Path(__file__).with_name("read_path.py")
-    spec = importlib.util.spec_from_file_location("memfw_read_path", path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError("read_path.py is missing")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    try:
+        from memfw.index import readonly
+    except ImportError:
+        import importlib.util
+
+        here = Path(__file__).resolve()
+        for path in (
+            here.with_name("readonly.py"),
+            here.parents[1] / "src" / "memfw" / "index" / "readonly.py",
+        ):
+            if not path.is_file():
+                continue
+            spec = importlib.util.spec_from_file_location("memfw_index_readonly", path)
+            if spec is None or spec.loader is None:
+                continue
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+            return module
+        raise
+    return readonly
 
 
-read_path = _load_read_path()
+_library = _load_library()
 
-CONTRACT = "memfw-http/2"
+# The read side lives in ``memfw.index.readonly``. These names keep the ones
+# this script exported before (tests, eval and deploy checks import them).
+read_path = _library.read_path
+CONTRACT = _library.CONTRACT
+MAX_QUERY_CHARS = _library.MAX_QUERY_CHARS
+MAX_LIMIT = _library.MAX_LIMIT
+MAX_TERMS = _library.MAX_TERMS
+_TERM = _library._TERM
+MAX_SUMMARY_CHARS = _library.MAX_SUMMARY_CHARS
+INTERNAL_MESSAGE = _library.INTERNAL_MESSAGE
+ERROR_CODES = _library.ERROR_CODES
+ServiceError = _library.ServiceError
+_bad_request = _library.bad_request
+_internal = _library.internal_error
+_connect_index = _library._connect_index
+INDEX_SCHEMA_VERSION = _library.INDEX_SCHEMA_VERSION
+INDEX_TABLES = _library.INDEX_TABLES
+INDEX_STALE = _library.INDEX_STALE
+_index_is_current = _library._index_is_current
+_has_table = _library.has_table
+_metadata_from_text = _library._metadata_from_text
+_metadata = _library.read_metadata
+_iso_string = _library.iso_string
+_optional = _library.optional_text
+_recorded_at = _library.recorded_at_text
+_string_list = _library._string_list
+_collapsed = _library._collapsed
+_same_instant = _library._same_instant
+fold_temporal_aliases = _library.fold_temporal_aliases
+_document_payload = _library.document_payload
+_fts_terms = _library._fts_terms
+_shared_query_terms = _library._shared_query_terms
+_query_terms = _library.fts_query_terms
+_fts_query = _library.fts_query
+_quoted_or = _library.quoted_or
+_split_short_terms = _library._split_short_terms
+_SHORT_STOPWORDS = _library._SHORT_STOPWORDS
+_useful_short_term = _library._useful_short_term
+_short_terms_clause = _library._short_terms_clause
+_index_tokenizer = _library._index_tokenizer
+_unsupported_query = _library.unsupported_query
+_normalise_as_of = _library.normalise_as_of
+_temporal_clause = _library._temporal_clause
+_ROW_COLUMNS = _library._ROW_COLUMNS
+_SUBSTRING_COLUMNS = _library._SUBSTRING_COLUMNS
+_row_filters = _library._row_filters
+_search_batch = _library._search_batch
+_score_from_raw = _library._score_from_raw
+_alias_expansion = _library._alias_expansion
+search_vault = _library.search_vault
+
 TOKEN_HEADER = "X-Memfw-Token"
-MAX_QUERY_CHARS = 512
-MAX_LIMIT = 50
-MAX_TERMS = 16
-_TERM = re.compile(r"\w+", re.UNICODE)
-MAX_SUMMARY_CHARS = 500
 MAX_TITLE_CHARS = 200
 MAX_CONTENT_BYTES = 64 * 1024
 SEARCH_BODY_BYTES = 8 * 1024
@@ -105,16 +168,6 @@ CONTROL_CHARACTERS = (
     | {"\u2028", "\u2029"}
 )
 CANDIDATE_DIRECTORY = ("_candidates", "remember")
-INTERNAL_MESSAGE = "internal error"
-ERROR_CODES = {
-    400: "bad_request",
-    401: "unauthorized",
-    403: "forbidden",
-    404: "not_found",
-    409: "conflict",
-    413: "too_large",
-    500: "internal",
-}
 READ_TOKEN_ENV = "MEMFW_READONLY_TOKEN"
 READ_TOKEN_FILE_ENV = "MEMFW_READONLY_TOKEN_FILE"
 WRITE_TOKEN_ENV = "MEMFW_WRITE_TOKEN"
@@ -134,20 +187,6 @@ PROTOCOL_ERROR_STATUS = {
     501: 404,
     505: 400,
 }
-
-
-class ServiceError(Exception):
-    """An error with an HTTP status and a stable contract error code."""
-
-    def __init__(self, status: int, message: str) -> None:
-        super().__init__(message)
-        self.status = status
-        self.code = ERROR_CODES.get(status, ERROR_CODES[500])
-        self.message = message
-
-
-def _bad_request(message: str) -> ServiceError:
-    return ServiceError(400, message)
 
 
 _ENDPOINT_KEYS = frozenset(
@@ -191,10 +230,6 @@ def reject_client_endpoints(payload: dict[str, Any]) -> None:
             found.append(str(key))
     if found:
         raise _bad_request("endpoint fields are not accepted")
-
-
-def _internal() -> ServiceError:
-    return ServiceError(500, INTERNAL_MESSAGE)
 
 
 # ---------------------------------------------------------------------------
@@ -293,61 +328,12 @@ def _root_or_none() -> Path | None:
     return Path(value).expanduser() if value else None
 
 
-# ---------------------------------------------------------------------------
-# SQLite helpers
-# ---------------------------------------------------------------------------
-
-
-def _connect_index(root: Path) -> sqlite3.Connection:
-    path = root / "index.sqlite3"
-    uri = f"file:{quote(str(path), safe='/')}?mode=ro"
-    connection = sqlite3.connect(uri, uri=True, timeout=5)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA query_only=ON")
-    return connection
-
-
 def _connect_related(path: Path) -> sqlite3.Connection:
     uri = f"file:{quote(str(path), safe='/')}?mode=ro"
     connection = sqlite3.connect(uri, uri=True, timeout=5)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA query_only=ON")
     return connection
-
-
-#: Stdlib mirror of ``memfw.index._INDEX_SCHEMA_VERSION`` and ``_INDEX_TABLES``.
-#: ``tests/test_fix_service_index_stale.py`` checks the two stay equal.
-INDEX_SCHEMA_VERSION = 2
-INDEX_TABLES = frozenset({"memory_rows", "memory_temporal", "memory_access", "memory_fts"})
-INDEX_STALE = "index_stale"
-
-
-def _index_is_current(connection: sqlite3.Connection) -> bool:
-    """Read-only twin of ``MemoryIndex.schema_is_current``.
-
-    An index from an earlier schema generation lacks the temporal or tenant
-    projection; reading it would silently drop filtering or return nothing.
-    The service never rebuilds it. Any SQLite error reads as stale.
-    """
-
-    try:
-        version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        names = {
-            str(row[0])
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type IN ('table','view')"
-            )
-        }
-    except (sqlite3.Error, TypeError, ValueError):
-        return False
-    return version == INDEX_SCHEMA_VERSION and INDEX_TABLES <= names
-
-
-def _has_table(connection: sqlite3.Connection, name: str) -> bool:
-    row = connection.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
-    ).fetchone()
-    return row is not None
 
 
 def _has_related_edges(path: Path) -> bool:
@@ -365,683 +351,10 @@ def _has_related_edges(path: Path) -> bool:
         connection.close()
 
 
-# ---------------------------------------------------------------------------
-# Vault document helpers
-# ---------------------------------------------------------------------------
-
-
-def _metadata_from_text(raw: str) -> dict[str, Any]:
-    if not raw.startswith("---\n"):
-        return {}
-    try:
-        _, header, _ = raw.split("---\n", 2)
-        parsed = yaml.safe_load(header)
-    except (ValueError, yaml.YAMLError):
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
-
-def _metadata(path: Path) -> dict[str, Any]:
-    try:
-        return _metadata_from_text(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError):
-        return {}
-
-
-def _iso_string(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, datetime):
-        return value.isoformat()
-    return str(value)
-
-
-def _optional(value: Any) -> Any:
-    text = _iso_string(value)
-    return text or None
-
-
-def _recorded_at(metadata: dict[str, Any]) -> str | None:
-    """When memfw wrote the record (server clock), for the result payload.
-
-    Files from before ``recorded_at`` existed report ``created_at``: memfw
-    stamped that from the same clock at write time. Neither present is None.
-    An aware instant is reported in UTC as ``isoformat`` writes it, the same
-    text MCP gives for the parsed document.
-    """
-    text = _optional(metadata.get("recorded_at")) or _optional(metadata.get("created_at"))
-    if text is None:
-        return None
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        return text
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        return text
-    return parsed.astimezone(UTC).isoformat()
-
-
-def _string_list(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [str(item) for item in value]
-
-
-def _collapsed(text: str, limit: int) -> str:
-    return " ".join(text.split())[:limit]
-
-
-def _same_instant(left: Any, right: Any) -> bool:
-    """Reader-side instant compare. Supersession ids are not parsed as times."""
-    if left == right:
-        return True
-    if left in (None, "") or right in (None, ""):
-        return False
-    try:
-        left_stamp = (
-            left
-            if isinstance(left, datetime)
-            else datetime.fromisoformat(str(left).replace("Z", "+00:00"))
-        )
-        right_stamp = (
-            right
-            if isinstance(right, datetime)
-            else datetime.fromisoformat(str(right).replace("Z", "+00:00"))
-        )
-    except (TypeError, ValueError):
-        return False
-    return left_stamp == right_stamp
-
-
-def fold_temporal_aliases(data: dict[str, Any], *, strict: bool = True) -> dict[str, Any]:
-    """Stdlib copy of the alias fold. This script does not import memfw."""
-    folded = dict(data)
-    specs = (
-        ("valid_until", "valid_to", "instant"),
-        ("superseded", "superseded_by", "exact"),
-    )
-    for alias, canonical, kind in specs:
-        if alias not in folded:
-            continue
-        alias_value = folded.pop(alias)
-        if canonical not in folded:
-            folded[canonical] = alias_value
-            continue
-        current = folded[canonical]
-        same = _same_instant(current, alias_value) if kind == "instant" else current == alias_value
-        if same:
-            continue
-        if strict:
-            raise ValueError(f"{alias} conflicts with {canonical}")
-    return folded
-
-
-def _document_payload(root: Path, identifier: str) -> dict[str, Any] | None:
-    """Read one memory document's authoritative Markdown for the result payload."""
-    if not identifier or "/" in identifier or ".." in identifier or "\\" in identifier:
-        return None
-    path = root / "memories" / f"{identifier}.md"
-    try:
-        raw = path.read_bytes()
-    except OSError:
-        return None
-    text = raw.decode("utf-8", errors="replace")
-    metadata = fold_temporal_aliases(_metadata_from_text(text), strict=False)
-    return {
-        "tenant": str(metadata.get("tenant") or ""),
-        "related": _string_list(metadata.get("related")),
-        "valid_from": _iso_string(metadata.get("valid_from")),
-        "valid_to": _iso_string(metadata.get("valid_to")),
-        "superseded_by": _iso_string(metadata.get("superseded_by")),
-        # Read by MCP. HTTP ``/search`` gains it with memfw-http/3 (roadmap R6);
-        # ``memfw-http/2`` result keys are fixed by the contract fixtures.
-        "recorded_at": _recorded_at(metadata),
-        "content_hash": "sha256:" + hashlib.sha256(raw).hexdigest(),
-        "provenance": str(metadata.get("provenance") or ""),
-        "version": metadata.get("version"),
-    }
-
-
-# ---------------------------------------------------------------------------
-# /search
-# ---------------------------------------------------------------------------
-
-
-def _fts_terms(query: str) -> list[str]:
-    """Stdlib copy of the trigram rules in ``memfw.index.fts_terms.query_terms``."""
-
-    seen: set[str] = set()
-    out: list[str] = []
-    for token in _TERM.findall(query):
-        key = token.casefold()
-        if len(token) < 2 or key in seen:
-            continue
-        seen.add(key)
-        out.append(token)
-        if len(out) == MAX_TERMS:
-            break
-    return out
-
-
-def _shared_query_terms() -> tuple[Any, str | None]:
-    """The shared unicode61 term builder, or ``None`` and why it is unavailable."""
-
-    try:
-        from memfw.index.fts_terms import jieba_segmenter, query_terms
-    except ImportError:
-        return None, "unicode61 query terms unavailable: memfw is not importable; regex terms used"
-    try:
-        jieba_segmenter()
-    except RuntimeError:
-        return None, "unicode61 query terms unavailable: jieba is not installed; regex terms used"
-    return query_terms, None
-
-
-def _query_terms(query: str, tokenizer: str = "trigram") -> list[str]:
-    """Terms for an index built with ``tokenizer``.
-
-    A trigram index keeps the stdlib path and needs no ``memfw`` import. A
-    unicode61 index stores jieba segments, so the terms come from the shared
-    ``memfw.index.fts_terms.query_terms``, the same function the library
-    search uses. When that is unavailable the regex terms are used and
-    ``search_vault`` reports it in ``errors`` with ``degraded`` true.
-    """
-
-    if tokenizer == "unicode61":
-        builder, _note = _shared_query_terms()
-        if builder is not None:
-            terms: list[str] = builder(query, tokenizer)
-            return terms
-    return _fts_terms(query)
-
-
-def _fts_query(query: str, tokenizer: str = "trigram") -> str | None:
-    """Quote each term and join them with OR. ``None`` means there is no term."""
-
-    return _quoted_or(_query_terms(query, tokenizer))
-
-
-def _quoted_or(terms: list[str]) -> str | None:
-    if not terms:
-        return None
-    return " OR ".join('"' + term.replace('"', '""') + '"' for term in terms)
-
-
-def _split_short_terms(terms: list[str], tokenizer: str = "trigram") -> tuple[list[str], list[str]]:
-    """Stdlib copy of ``memfw.index.fts_terms.split_short_terms``.
-
-    A trigram index cannot match a term shorter than three code points, so
-    such terms go to the short list. A unicode61 index keeps every term.
-    """
-
-    if tokenizer != "trigram":
-        return list(terms), []
-    return [term for term in terms if len(term) >= 3], [
-        term for term in terms if len(term) < 3 and _useful_short_term(term)
-    ]
-
-
-#: Stdlib copy of ``memfw.index.fts_terms.SHORT_STOPWORDS``: common English
-#: two-letter words, skipped as short terms when lowercase.
-_SHORT_STOPWORDS = frozenset(
-    {
-        "am",
-        "an",
-        "as",
-        "at",
-        "be",
-        "by",
-        "do",
-        "he",
-        "if",
-        "in",
-        "is",
-        "it",
-        "me",
-        "my",
-        "no",
-        "of",
-        "on",
-        "or",
-        "so",
-        "to",
-        "up",
-        "us",
-        "we",
-    }
-)
-
-
-def _useful_short_term(term: str) -> bool:
-    """Keep CJK and other non-ASCII terms, acronyms (``AI``, ``Q3``) and any
-    ASCII term that is not a lowercase English stopword."""
-
-    if not term.isascii():
-        return True
-    if term.isupper() or any(character.isdigit() for character in term):
-        return True
-    return term.casefold() not in _SHORT_STOPWORDS
-
-
-def _short_terms_clause(columns: list[str], terms: list[str]) -> tuple[str, list[str]]:
-    """Stdlib copy of ``memfw.index.fts_terms.short_terms_clause``.
-
-    ``columns`` are trusted identifiers chosen here, never user input.
-    """
-
-    parts: list[str] = []
-    params: list[str] = []
-    for term in terms:
-        for column in columns:
-            parts.append(f"instr(lower({column}), lower(?)) > 0")
-            params.append(term)
-    if not parts:
-        return "0", []
-    return "(" + " OR ".join(parts) + ")", params
-
-
-def _index_tokenizer(connection: sqlite3.Connection) -> str:
-    """``trigram`` or ``unicode61``, read from the ``memory_fts`` schema."""
-
-    row = connection.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='memory_fts'"
-    ).fetchone()
-    if row is None or row[0] is None:
-        return "trigram"
-    return "trigram" if "trigram" in str(row[0]).lower() else "unicode61"
-
-
-def _unsupported_query(text: str) -> bool:
-    """True for NUL or a lone surrogate, both of which used to become 500."""
-    if "\x00" in text:
-        return True
-    return any(0xD800 <= ord(character) <= 0xDFFF for character in text)
-
-
 def _unit_interval(raw: float) -> float:
     """Map a non-negative relevance sum into ``[0, 1]`` via ``x / (1 + x)``."""
     magnitude = max(0.0, raw)
     return magnitude / (1.0 + magnitude)
-
-
-def _normalise_as_of(value: Any) -> str:
-    if not isinstance(value, str):
-        raise _bad_request("as_of must be an ISO-8601 timestamp")
-    raw = value.strip()
-    if not raw:
-        raise _bad_request("as_of must be an ISO-8601 timestamp")
-    text = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError as exc:
-        raise _bad_request("as_of must be an ISO-8601 timestamp") from exc
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC).isoformat()
-
-
-def _temporal_clause(
-    connection: sqlite3.Connection, include_history: bool, as_of: str | None
-) -> tuple[str, list[Any]]:
-    if include_history or not _has_table(connection, "memory_temporal"):
-        return "", []
-    if as_of is not None:
-        return (
-            "EXISTS (SELECT 1 FROM memory_temporal t WHERE t.id = r.id "
-            "AND (CASE WHEN t.valid_from != '' THEN t.valid_from ELSE r.created_at END) <= ? "
-            "AND (t.valid_to = '' OR t.valid_to > ?))",
-            [as_of, as_of],
-        )
-    return (
-        "NOT EXISTS (SELECT 1 FROM memory_temporal t WHERE t.id = r.id "
-        "AND (t.valid_to != '' OR t.superseded_by != ''))",
-        [],
-    )
-
-
-_ROW_COLUMNS = (
-    "r.id AS id, r.title AS title, r.summary AS summary, "
-    "r.search_body AS search_body, r.source AS source, r.tier AS tier, "
-    "r.layer AS layer, r.provenance AS provenance, r.version AS version"
-)
-_SUBSTRING_COLUMNS = ["r.title", "r.search_body", "r.summary", "r.tags"]
-
-
-def _row_filters(
-    *, source: str, tenant: str, temporal_sql: str, temporal_params: list[Any]
-) -> tuple[list[str], list[Any]]:
-    where = ["a.tenant = ?"]
-    params: list[Any] = [tenant]
-    if source:
-        where.append("r.source = ?")
-        params.append(source)
-    if temporal_sql:
-        where.append(temporal_sql)
-        params.extend(temporal_params)
-    return where, params
-
-
-def _search_batch(
-    connection: sqlite3.Connection,
-    *,
-    needle: str,
-    source: str,
-    tenant: str,
-    temporal_sql: str,
-    temporal_params: list[Any],
-    limit: int,
-    offset: int,
-    tokenizer: str = "trigram",
-) -> list[sqlite3.Row]:
-    filters, filter_params = _row_filters(
-        source=source, tenant=tenant, temporal_sql=temporal_sql, temporal_params=temporal_params
-    )
-    if len(needle) <= 2:
-        # FTS drops tokens this short. Match every field, and fold ASCII case
-        # so "AL" hits the same rows as "al". SQLite lower() covers that range.
-        folded = needle.lower()
-        select = (
-            f"SELECT {_ROW_COLUMNS}, NULL AS raw_score FROM memory_rows r "
-            "JOIN memory_access a ON a.id = r.id"
-        )
-        where = [
-            "(instr(lower(r.title), ?) > 0 OR instr(lower(r.search_body), ?) > 0 "
-            "OR instr(lower(r.summary), ?) > 0 OR instr(lower(r.tags), ?) > 0)",
-            *filters,
-        ]
-        params: list[Any] = [folded, folded, folded, folded, *filter_params]
-        sql = f"{select} WHERE " + " AND ".join(where) + " ORDER BY r.id LIMIT ? OFFSET ?"
-        return list(connection.execute(sql, [*params, limit, offset]).fetchall())
-    terms = _query_terms(needle, tokenizer)
-    long_terms, short_terms = _split_short_terms(terms, tokenizer)
-    match = _quoted_or(long_terms)
-    fts_select = (
-        f"SELECT {_ROW_COLUMNS}, bm25(memory_fts) AS raw_score, 0 AS branch "
-        "FROM memory_fts JOIN memory_rows r ON r.id = memory_fts.id "
-        "JOIN memory_access a ON a.id = r.id WHERE "
-        + " AND ".join(["memory_fts MATCH ?", *filters])
-    )
-    if not short_terms:
-        if match is None:
-            return []
-        sql = fts_select + " ORDER BY raw_score, r.id LIMIT ? OFFSET ?"
-        return list(connection.execute(sql, [match, *filter_params, limit, offset]).fetchall())
-    # A trigram index cannot match a term under three characters, so those
-    # terms are a substring OR over the same fields. FTS hits come first in
-    # rank order, then the substring-only hits by id; one row appears once.
-    clause, clause_params = _short_terms_clause(_SUBSTRING_COLUMNS, short_terms)
-    substring_where = [clause, *filters]
-    substring_params: list[Any] = [*clause_params, *filter_params]
-    if match is not None:
-        substring_where.append(
-            "r.id NOT IN (SELECT memory_fts.id FROM memory_fts WHERE memory_fts MATCH ?)"
-        )
-        substring_params.append(match)
-    substring_select = (
-        f"SELECT {_ROW_COLUMNS}, NULL AS raw_score, 1 AS branch FROM memory_rows r "
-        "JOIN memory_access a ON a.id = r.id WHERE " + " AND ".join(substring_where)
-    )
-    if match is None:
-        sql = substring_select + " ORDER BY id LIMIT ? OFFSET ?"
-        params = [*substring_params, limit, offset]
-    else:
-        sql = (
-            f"{fts_select} UNION ALL {substring_select} "
-            "ORDER BY branch, raw_score, id LIMIT ? OFFSET ?"
-        )
-        params = [match, *filter_params, *substring_params, limit, offset]
-    return list(connection.execute(sql, params).fetchall())
-
-
-def _score_from_raw(raw_score: Any, rank: int) -> tuple[float, float | None, bool]:
-    """Return (score, raw_score, used_bm25) for one result."""
-    if raw_score is None:
-        return 1.0 / (1.0 + rank), None, False
-    raw = float(raw_score)
-    x = max(0.0, -raw)
-    return x / (1.0 + x), raw, True
-
-
-def _alias_expansion(
-    base: Path,
-    query: str,
-    tenant: str,
-    source: str,
-    results: list[dict[str, Any]],
-    limit: int,
-    *,
-    include_history: bool,
-    as_of: str | None,
-    scope: str = "",
-) -> tuple[list[dict[str, Any]], str | None]:
-    """Fuse alias hits into ``results``. No ``concepts/`` directory costs one stat.
-
-    ``scope`` only selects scoped alias labels; it does not filter lexical hits.
-    """
-
-    directory = base / "concepts"
-    if directory.is_symlink() or not directory.is_dir():
-        return [], None
-    try:
-        from memfw.ontology.expand import fuse_rows, matching_memories
-        from memfw.ontology.model import OntologyError
-    except ImportError:
-        del results[limit:]
-        return [], "alias expansion unavailable"
-    try:
-        hits, ambiguities = matching_memories(
-            base,
-            query,
-            tenant=tenant,
-            source=source,
-            include_history=include_history,
-            as_of=as_of,
-            scope=scope,
-        )
-    except OntologyError as exc:
-        # The detail can name a vault file; it goes to the operator log only.
-        sys.stderr.write(f"memfw alias expansion failed: {exc}\n")
-        del results[limit:]
-        return [], "alias expansion unavailable: a concept file is invalid"
-    alias_rows: list[dict[str, Any]] = []
-    for memory_id, why in hits:
-        payload = _document_payload(base, memory_id)
-        if payload is None or payload["tenant"] != tenant:
-            continue
-        meta = _metadata(base / "memories" / f"{memory_id}.md")
-        if source and str(meta.get("source") or "") != source:
-            continue
-        item = {
-            "id": memory_id,
-            "title": str(meta.get("title") or ""),
-            "summary": _collapsed(str(meta.get("summary") or ""), MAX_SUMMARY_CHARS),
-            "source": str(meta.get("source") or ""),
-            "tier": str(meta.get("tier") or ""),
-            "layer": str(meta.get("layer") or ""),
-            "tenant": payload["tenant"],
-            "related": payload["related"],
-            "valid_from": _optional(payload["valid_from"]),
-            "valid_to": _optional(payload["valid_to"]),
-            "superseded_by": _optional(payload["superseded_by"]),
-            "score": 1.0,
-            "raw_score": None,
-            "content_hash": payload["content_hash"],
-            # Present so MCP fts keeps this hit without parsing extra frontmatter
-            # through MemoryDocument, which forbids unknown keys.
-            "updated_at": _iso_string(meta.get("updated_at")),
-            "memory_type": meta.get("type"),
-            "provenance": str(meta.get("provenance") or ""),
-            "why": why,
-        }
-        read_path.annotate(
-            item,
-            provenance=str(payload.get("provenance") or ""),
-            source=str(meta.get("source") or ""),
-            index_version=payload.get("version"),
-            sot_version=payload.get("version"),
-            why=why,
-        )
-        alias_rows.append(item)
-    fused = fuse_rows(results, alias_rows, limit=limit)
-    results[:] = fused
-    return ambiguities, None
-
-
-def search_vault(
-    root: Path | str,
-    query: str,
-    *,
-    limit: int = 10,
-    source: str = "",
-    tenant: str = "",
-    include_history: bool = False,
-    as_of: str | None = None,
-    scope: str = "",
-) -> dict[str, Any]:
-    base = Path(root).expanduser().resolve()
-    if not (base / "vault.yaml").is_file() or not (base / "index.sqlite3").is_file():
-        raise _internal()
-    if not isinstance(query, str):
-        raise _bad_request("query must be 1..512 characters")
-    needle = query.strip()
-    if not needle or len(needle) > MAX_QUERY_CHARS:
-        raise _bad_request("query must be 1..512 characters")
-    if _unsupported_query(needle):
-        raise _bad_request("query contains an unsupported character")
-    if isinstance(limit, bool) or not isinstance(limit, int):
-        raise _bad_request("limit must be an integer")
-    limit = max(1, min(limit, MAX_LIMIT))
-    if not isinstance(source, str):
-        raise _bad_request("source must be a string")
-    if not isinstance(tenant, str):
-        raise _bad_request("tenant must be a string")
-    if scope is None:
-        scope = ""
-    if not isinstance(scope, str):
-        raise _bad_request("scope must be a string")
-    if len(scope) > MAX_QUERY_CHARS:
-        raise _bad_request("scope too long")
-    as_of_normalised = _normalise_as_of(as_of) if as_of is not None else None
-    if not isinstance(include_history, bool):
-        raise _bad_request("include_history must be a boolean")
-
-    connection = _connect_index(base)
-    try:
-        if not _index_is_current(connection):
-            # Never an empty page that looks like "no match": the caller must
-            # rebuild the disposable index (``memfw index rebuild``).
-            return {
-                "contract": CONTRACT,
-                "mode": "fts",
-                "degraded": True,
-                "errors": [INDEX_STALE],
-                "results": [],
-            }
-        temporal_sql, temporal_params = _temporal_clause(
-            connection, include_history, as_of_normalised
-        )
-        tokenizer = _index_tokenizer(connection)
-        term_note = None
-        if tokenizer == "unicode61" and len(needle) > 2:
-            term_note = _shared_query_terms()[1]
-        concepts = base / "concepts"
-        pool = MAX_LIMIT if concepts.is_dir() and not concepts.is_symlink() else limit
-        batch = pool
-        offset = 0
-        matched: list[sqlite3.Row] = []
-        payloads: list[dict[str, Any]] = []
-        while True:
-            rows = _search_batch(
-                connection,
-                needle=needle,
-                source=source,
-                tenant=tenant,
-                temporal_sql=temporal_sql,
-                temporal_params=temporal_params,
-                limit=batch,
-                offset=offset,
-                tokenizer=tokenizer,
-            )
-            if not rows:
-                break
-            offset += len(rows)
-            for row in rows:
-                payload = _document_payload(base, str(row["id"]))
-                if payload is None:
-                    continue
-                if payload["tenant"] != tenant:
-                    continue
-                matched.append(row)
-                payloads.append(payload)
-                if len(matched) >= pool:
-                    break
-            if len(matched) >= pool or len(rows) < batch:
-                break
-    finally:
-        connection.close()
-
-    results = []
-    previous_score: float | None = None
-    for rank, (row, payload) in enumerate(zip(matched, payloads, strict=True)):
-        score, raw_score, _used_bm25 = _score_from_raw(row["raw_score"], rank)
-        if raw_score is None and previous_score is not None:
-            # A substring hit ranked after bm25 hits never outscores them.
-            score = min(score, previous_score)
-        previous_score = score
-        summary = _collapsed(
-            str(row["summary"] or "") or str(row["search_body"] or ""), MAX_SUMMARY_CHARS
-        )
-        item = {
-            "id": str(row["id"]),
-            "title": str(row["title"]),
-            "summary": summary,
-            "source": str(row["source"]),
-            "tier": str(row["tier"]),
-            "layer": str(row["layer"]),
-            "tenant": payload["tenant"],
-            "related": payload["related"],
-            "valid_from": _optional(payload["valid_from"]),
-            "valid_to": _optional(payload["valid_to"]),
-            "superseded_by": _optional(payload["superseded_by"]),
-            "score": score,
-            "raw_score": raw_score,
-            "content_hash": payload["content_hash"],
-        }
-        read_path.annotate(
-            item,
-            provenance=str(payload.get("provenance") or row["provenance"] or ""),
-            source=str(row["source"]),
-            index_version=row["version"],
-            sot_version=payload.get("version"),
-            why="lexical",
-        )
-        results.append(item)
-    ambiguities, alias_error = _alias_expansion(
-        base,
-        needle,
-        tenant,
-        source,
-        results,
-        limit,
-        include_history=include_history,
-        as_of=as_of_normalised,
-        scope=scope.strip(),
-    )
-    errors: list[str] = []
-    if term_note:
-        errors.append(term_note)
-    if alias_error:
-        errors.append(alias_error)
-    response: dict[str, Any] = {
-        "contract": CONTRACT,
-        "mode": "fts",
-        "degraded": term_note is not None,
-        "errors": errors,
-        "results": results,
-    }
-    if ambiguities:
-        response["ambiguity"] = ambiguities
-    return response
 
 
 # ---------------------------------------------------------------------------

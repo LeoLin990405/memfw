@@ -60,8 +60,8 @@ from memfw.dream.run import DreamOptions, run_dream
 from memfw.dream.stage import DREAM_DIR
 from memfw.history import HistoryLimits, TranscriptIndex, default_db, sources_from_config
 from memfw.history.index import split_ref
-from memfw.index import MemoryIndex
-from memfw.memory_hybrid import MemoryHybridRetriever, shared_readonly
+from memfw.index import MemoryIndex, readonly
+from memfw.memory_hybrid import MemoryHybridRetriever
 from memfw.notes import HttpEmbeddingProvider
 from memfw.recall.coordinator import InflightRegistry
 from memfw.related import RelatedIndex
@@ -552,7 +552,7 @@ def _recorded_at_of(path: Path) -> str | None:
     except OSError:
         return None
     stamps = {key: _frontmatter_scalar(raw, key) for key in ("recorded_at", "created_at")}
-    result: str | None = shared_readonly()._recorded_at(stamps)
+    result: str | None = readonly.recorded_at_text(stamps)
     return result
 
 
@@ -690,7 +690,7 @@ def _annotate_hit(row: dict[str, Any], document: Any, item: dict[str, Any], *, w
         index_version = item["index_version"]
     else:
         index_version = ""
-    shared_readonly().read_path.annotate(
+    readonly.read_path.annotate(
         row,
         provenance=str(document.provenance or ""),
         source=str(document.source or ""),
@@ -749,7 +749,7 @@ def _index_row(
     epistemic_label, causal_label = _epistemic_labels_of(memory_path)
     row["epistemic"] = epistemic_label
     row["causal"] = causal_label
-    shared_readonly().read_path.annotate(
+    readonly.read_path.annotate(
         row,
         provenance=str(item.get("provenance") or ""),
         source=str(item.get("source") or ""),
@@ -903,11 +903,10 @@ class Gateway:
             )
         except OntologyError as exc:
             return [], [], _client_message(str(exc), repository.root)
-        service = shared_readonly()
         rows: list[dict[str, Any]] = []
         for memory_id, why in hits:
             path = repository.root / "memories" / f"{memory_id}.md"
-            meta = service._metadata(path)
+            meta = readonly.read_metadata(path)
             if not meta:
                 continue
             if str(meta.get("tenant") or "") != self.tenant:
@@ -922,18 +921,20 @@ class Gateway:
                 "title": str(meta.get("title") or ""),
                 "layer": str(meta.get("layer") or ""),
                 "tier": str(meta.get("tier") or ""),
-                "updated_at": service._iso_string(meta.get("updated_at")),
-                "valid_from": service._optional(service._iso_string(meta.get("valid_from"))),
-                "valid_to": service._optional(service._iso_string(meta.get("valid_to"))),
-                "superseded_by": service._optional(service._iso_string(meta.get("superseded_by"))),
-                "recorded_at": service._recorded_at(meta),
+                "updated_at": readonly.iso_string(meta.get("updated_at")),
+                "valid_from": readonly.optional_text(readonly.iso_string(meta.get("valid_from"))),
+                "valid_to": readonly.optional_text(readonly.iso_string(meta.get("valid_to"))),
+                "superseded_by": readonly.optional_text(
+                    readonly.iso_string(meta.get("superseded_by"))
+                ),
+                "recorded_at": readonly.recorded_at_text(meta),
                 "type": meta.get("type"),
                 "score": 1.0,
                 "source": str(meta.get("source") or ""),
                 "content_hash": _content_hash(path),
                 "why": why,
             }
-            service.read_path.annotate(
+            readonly.read_path.annotate(
                 row,
                 provenance=str(meta.get("provenance") or ""),
                 source=str(meta.get("source") or ""),
@@ -1032,7 +1033,7 @@ class Gateway:
             fts_errors: list[str] = []
             fts_ambiguity: list[Any] = []
             for each in dict.fromkeys(sources):
-                payload = shared_readonly().search_vault(
+                payload = readonly.search_vault(
                     repository.root,
                     query,
                     limit=page,
@@ -1202,18 +1203,14 @@ class Gateway:
         from memfw.recall import Coordinator, FilterPolicy
         from memfw.recall.builtin import default_resolvers
 
-        service = shared_readonly()
         # The same input rules as ``search_vault`` (``mode=fts``), and the same
         # errors, before any provider runs.
         needle = query.strip()
-        if len(needle) > service.MAX_QUERY_CHARS:
-            raise service._bad_request(f"query must be 1..{service.MAX_QUERY_CHARS} characters")
-        if service._unsupported_query(needle):
-            raise service._bad_request("query contains an unsupported character")
+        readonly.check_query_text(needle)
         page = max(1, min(int(limit), 50))
         # Like ``mode=fts``: a timestamp without a timezone is read as UTC.
         parsed_as_of = (
-            datetime.fromisoformat(service._normalise_as_of(as_of)) if as_of is not None else None
+            datetime.fromisoformat(readonly.normalise_as_of(as_of)) if as_of is not None else None
         )
         # Before the coordinator starts its deadline: a rebuild may take a while.
         _ensure_search_index(repository)

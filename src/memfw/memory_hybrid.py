@@ -17,6 +17,7 @@ from typing import Any
 from .core.models import EventKind, MemoryDocument, Tier
 from .core.repository import Repository
 from .entities import EntityIndex, load_dictionary
+from .index.readonly import shared_readonly as shared_readonly  # re-export for old callers
 from .notes import HttpEmbeddingProvider, NotesIndex, NotesRetriever, RetrievalConfig
 from .notes.versioning import (
     IndexCompatibilityError,
@@ -27,44 +28,6 @@ from .notes.versioning import (
     write_manifest,
 )
 from .retrieval import VaultRetriever
-
-_READONLY: Any = None
-
-
-def shared_readonly() -> Any:
-    """Load the readonly service module that owns ``search_vault``.
-
-    The file sits beside this repository, not inside the ``memfw`` package, so
-    the HTTP script can use it without importing ``memfw``.
-    """
-
-    global _READONLY
-    if _READONLY is not None:
-        return _READONLY
-    import importlib.util
-    import sys
-
-    path = _readonly_service_file()
-    spec = importlib.util.spec_from_file_location("memfw_readonly_service_shared", path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"readonly service is not available at {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    _READONLY = module
-    return module
-
-
-def _readonly_service_file() -> Path:
-    """The shared service lives in the wheel, and in ``scripts/`` in a checkout."""
-
-    packaged = Path(__file__).resolve().parent / "memfw_readonly_service.py"
-    if packaged.is_file():
-        return packaged
-    checkout = Path(__file__).resolve().parents[2] / "scripts" / "memfw_readonly_service.py"
-    if checkout.is_file():
-        return checkout
-    raise ImportError("readonly service is not installed")
 
 
 class MemoryHybridRetriever:

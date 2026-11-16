@@ -1,8 +1,8 @@
 """Turn a user query into a quoted FTS5 OR expression.
 
 ``query_terms`` is the one term builder for both index tokenizers. The
-readonly service keeps a stdlib copy of the trigram rules in
-``scripts/memfw_readonly_service.py`` so that path runs without ``memfw``;
+readonly read path keeps a stdlib copy of the trigram rules in
+``memfw.index.readonly`` so the HTTP service runs without ``memfw``;
 for a unicode61 index it calls ``query_terms`` itself, because the terms
 must be segmented by the same jieba call that segmented the stored text.
 ``tests/test_fts_term_query.py`` checks the two paths agree.

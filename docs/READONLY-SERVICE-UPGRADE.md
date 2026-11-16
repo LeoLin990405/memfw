@@ -11,7 +11,11 @@ and `"service": "memfw"`, plus `index_present` and `related_index_present`.
 
 ## Deploy
 
-Install this script in place of the pre-v2 process. Keep the vault root on
+Install this script in place of the pre-v2 process. The script is the HTTP
+entry point; its read path is `memfw.index.readonly`. With `memfw` installed
+for the interpreter that runs it, nothing else is needed. Otherwise copy
+`src/memfw/index/readonly.py` and `src/memfw/index/read_path.py` into the same
+directory as the script (they need only the standard library and PyYAML). Keep the vault root on
 `MEMFW_READONLY_ROOT` or pass `--root` (the flag falls back to that variable).
 Do not bind `0.0.0.0`; the supported unit is `scripts/memfw-readonly.service`
 (loopback by default, or an explicit tailnet `--host`). Read and write tokens

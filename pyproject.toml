@@ -31,7 +31,6 @@ artifacts = ["src/memfw/agents/prompts/*.txt", "src/memfw/eval_data/**/*.json"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "scripts/memfw_readonly_service.py" = "memfw/memfw_readonly_service.py"
-"scripts/read_path.py" = "memfw/read_path.py"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

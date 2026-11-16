@@ -25,8 +25,11 @@ import hashlib
 import json
 import multiprocessing
 import os
+import shutil
 import socket
 import sqlite3
+import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -1895,3 +1898,42 @@ def test_tracked_text_names_no_personal_home_or_volume_paths() -> None:
             continue
         hits += [f"{name.decode()}:{m.group(0)}" for m in pattern.finditer(text)]
     assert hits == []
+
+
+def test_standalone_copy_searches_without_memfw(tmp_path: Path) -> None:
+    """The deployed layout: script, ``readonly.py`` and ``read_path.py`` in one directory."""
+
+    root = seed_vault(tmp_path / "vault")
+    checkout = Path(__file__).resolve().parents[1]
+    deployed = tmp_path / "remote"
+    deployed.mkdir()
+    shutil.copy(checkout / "scripts" / "memfw_readonly_service.py", deployed)
+    shutil.copy(checkout / "src" / "memfw" / "index" / "readonly.py", deployed)
+    shutil.copy(checkout / "src" / "memfw" / "index" / "read_path.py", deployed)
+    probe = """
+import importlib.abc, json, runpy, sys
+
+class RejectMemfw(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if fullname == "memfw" or fullname.startswith("memfw."):
+            raise ModuleNotFoundError(fullname)
+        return None
+
+sys.meta_path.insert(0, RejectMemfw())
+module = runpy.run_path(sys.argv[1], run_name="memfw_readonly_standalone")
+found = module["search_vault"](sys.argv[2], "alpha corpus", limit=5, tenant="tenant-a")
+print(json.dumps(found, sort_keys=True))
+"""
+    completed = subprocess.run(
+        [sys.executable, "-I", "-c", probe, str(deployed / "memfw_readonly_service.py"), str(root)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    standalone = json.loads(completed.stdout)
+    assert standalone == json.loads(
+        json.dumps(search_vault(root, "alpha corpus", limit=5, tenant="tenant-a"), sort_keys=True)
+    )
+    assert standalone["results"]

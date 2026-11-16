@@ -183,9 +183,7 @@ class FtsProvider:
         if self.prepare is None and not (self.root / "index.sqlite3").is_file():
             return Availability.missing("no_index")
         try:
-            from memfw.memory_hybrid import shared_readonly
-
-            shared_readonly()
+            import memfw.index.readonly  # noqa: F401
         except ImportError:
             return Availability.missing("readonly_service_missing")
         return Availability.ok()
@@ -200,7 +198,7 @@ class FtsProvider:
         as_of: datetime | None,
     ) -> Sequence[Candidate]:
         del budget  # one bounded SQLite read; the coordinator enforces the deadline
-        from memfw.memory_hybrid import shared_readonly
+        from memfw.index import readonly
 
         if self.prepare is not None:
             self.prepare(Repository(self.root))
@@ -216,7 +214,7 @@ class FtsProvider:
         merged: list[dict[str, Any]] = []
         payloads: list[dict[str, Any]] = []
         for each in sources:
-            payload = shared_readonly().search_vault(
+            payload = readonly.search_vault(
                 self.root,
                 query,
                 limit=page,
