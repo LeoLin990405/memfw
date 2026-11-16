@@ -11,6 +11,23 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
+### Internal — MCP server split by tool group (A4a)
+
+- `memfw/mcp/server.py` (about 1900 lines) is split into `base`, `schema`,
+  `protocol` and one `tools_*` module per tool group (search, memory, context,
+  history, conversations, dream). `Gateway` in `server.py` composes them; its
+  methods and attributes are unchanged. A pure move: every MCP tool's output,
+  `tools/list` included, is byte-identical to before (timing fields masked;
+  new harness probe `mcp_all_tools`: every MCP method and all 15 tools).
+- Allowlist: the `memfw.mcp` entries name the group modules that now hold each
+  import; keys and site totals are unchanged. The merge-base check now counts debt per
+  edge per unit: an edge's sites may move between modules of its source unit
+  if its total does not grow; a new key, a larger total or an importing module
+  outside the source unit still fails.
+- Module-level names stay importable from `memfw.mcp.server`; tests that
+  monkeypatch `DREAM_*` or `search_multihop` now patch `memfw.mcp.tools_dream`
+  and `memfw.mcp.tools_search`, where the code reads them.
+
 ### Added — corroboration projection (U4)
 
 - `memfw corroboration rebuild` writes a rebuildable `corroboration.sqlite3` at the vault

@@ -148,9 +148,9 @@ def test_bounds_are_enforced(tmp_path: Path, capsys: Any, arguments: dict[str, A
 
 
 def test_candidate_list_is_capped(tmp_path: Path, capsys: Any, monkeypatch: Any) -> None:
-    from memfw.mcp import server
+    from memfw.mcp import tools_dream
 
-    monkeypatch.setattr(server, "DREAM_MAX_CANDIDATES", 0)
+    monkeypatch.setattr(tools_dream, "DREAM_MAX_CANDIDATES", 0)
     root = _vault(tmp_path)
     data = json.loads(_call(_gateway(root), "dream_run", {}, capsys)["content"][0]["text"])
     assert data["candidates"] == [] and data["candidates_truncated"] == 1
@@ -234,10 +234,10 @@ def test_staging_is_rate_limited(tmp_path: Path, capsys: Any) -> None:
 
 
 def test_staged_dreams_per_tenant_are_capped(tmp_path: Path, capsys: Any, monkeypatch: Any) -> None:
-    from memfw.mcp import server
+    from memfw.mcp import tools_dream
 
-    monkeypatch.setattr(server, "DREAM_MAX_STAGED", 1)
-    monkeypatch.setattr(server, "DREAM_STAGE_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(tools_dream, "DREAM_MAX_STAGED", 1)
+    monkeypatch.setattr(tools_dream, "DREAM_STAGE_INTERVAL_SECONDS", 0.0)
     root = _vault(tmp_path)
     assert _call(_gateway(root), "dream_run", {"dry_run": False}, capsys)["isError"] is False
     refused = _call(_gateway(root), "dream_run", {"dry_run": False}, capsys)

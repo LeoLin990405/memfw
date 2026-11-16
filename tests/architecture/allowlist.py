@@ -27,8 +27,13 @@ Steps:
 
 ``tests/test_architecture_layers.py`` fails when a violation is missing here,
 when an entry or site here no longer occurs, and (with git history) when this
-list has more entries or sites than at the merge-base. Delete an entry in the
-PR that fixes it and lower ``ALLOWLIST_SIZE`` in that test.
+list has more entries or sites than at the merge-base. Debt is counted per edge
+per unit; refactors may redistribute it inside the unit: against the
+merge-base, an edge's sites may move between modules of its source unit (A4a
+split ``memfw.mcp.server``) as long as the edge's total does not grow, while a
+new key, a larger total or an importing module outside the source unit fails.
+Delete an entry in the PR that fixes it and lower ``ALLOWLIST_SIZE`` in that
+test.
 """
 
 from __future__ import annotations
@@ -47,50 +52,50 @@ ALLOWLIST: Final[dict[tuple[str, str], tuple[str, Sites]]] = {
     # --- MCP server depends on implementations (spec sections 1 and 9) ---------
     ("memfw.mcp", "memfw.core.repository"): (
         "A3: Repository comes from the Runtime",
-        {"memfw.mcp.server": 1},
+        {"memfw.mcp.base": 1},
     ),
     ("memfw.mcp", "memfw.index"): (
         "A3: MemoryIndex comes from the Runtime",
-        {"memfw.mcp.server": 1},
+        {"memfw.mcp.tools_search": 1},
     ),
     ("memfw.mcp", "memfw.memory_hybrid"): (
         "A3: retriever and readonly service from the Runtime",
-        {"memfw.mcp.server": 1},
+        {"memfw.mcp.tools_search": 1},
     ),
     ("memfw.mcp", "memfw.notes"): (
         "A3: embedder is built by the Runtime",
-        {"memfw.mcp.server": 1},
+        {"memfw.mcp.base": 1},
     ),
     ("memfw.mcp", "memfw.related"): (
         "A3: RelatedIndex comes from the Runtime",
-        {"memfw.mcp.server": 1},
+        {"memfw.mcp.tools_memory": 1},
     ),
     ("memfw.mcp", "memfw.retrieval"): (
         "A3: multihop search comes from the Runtime",
-        {"memfw.mcp.server": 1},
+        {"memfw.mcp.tools_search": 1},
     ),
     ("memfw.mcp", "memfw.core"): (
         "A4: tool groups use port dataclasses, not core models/errors",
-        {"memfw.mcp.server": 2},
+        {"memfw.mcp.base": 2},
     ),
     ("memfw.mcp", "memfw.capture"): (
         "A4: capture tool group behind a protocol",
-        {"memfw.mcp.server": 2},
+        {"memfw.mcp.tools_memory": 2},
     ),
     ("memfw.mcp", "memfw.conversations"): (
         "A4: conversations tool group behind a protocol",
-        {"memfw.mcp.server": 1},
+        {"memfw.mcp.tools_conversations": 1},
     ),
     ("memfw.mcp", "memfw.dream"): (
         "A4: dream tool group behind a protocol",
-        {"memfw.mcp.server": 2},
+        {"memfw.mcp.tools_dream": 2},
     ),
     ("memfw.mcp", "memfw.history"): (
         "A4: history tool group behind a protocol",
-        {"memfw.mcp.server": 2},
+        {"memfw.mcp.tools_history": 2},
     ),
     ("memfw.mcp", "memfw.ontology"): (
         "A4: ontology expansion behind a protocol",
-        {"memfw.mcp.server": 3},
+        {"memfw.mcp.tools_search": 3},
     ),
 }

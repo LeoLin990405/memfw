@@ -85,9 +85,15 @@ number of import lines on that edge. The test fails when:
   in the test);
 - compared with the allowlist at the merge-base with `origin/main` (override the ref with
   `MEMFW_ARCH_BASE_REF`), it has a key the base lacks (a renamed or swapped entry counts),
-  a module with more sites than at the base, more entries, or more sites in total. The check
-  skips when the file did not exist at the merge-base. When the ref or the merge-base is not
-  available it skips locally and fails in CI (`CI` set).
+  an edge with more sites in total than at the base, an importing module outside the
+  edge's source unit, more entries, or more sites in total. The check skips when the file
+  did not exist at the merge-base. When the ref or the merge-base is not available it skips
+  locally and fails in CI (`CI` set).
+
+Debt is counted per edge per unit; refactors may redistribute it inside the unit. Against
+the merge-base, an edge's sites may move between modules of its source unit (A4a moved the
+`memfw.mcp` sites from `memfw.mcp.server` into the tool-group modules); the per-module
+counts in the current allowlist must still match the code exactly.
 
 So the list can only get shorter, and it is empty when the A series is done.
 
@@ -169,6 +175,39 @@ labels for `labels: true`. The MCP server only parses the flag; no import edge w
   (fail closed on unknown names) and `build_runtime(test_config)` for tests.
 - A4 entries (`core`, `capture`, `conversations`, `dream`, `history`, `ontology`) go with
   the MCP split, not A3.
+
+## A4: the MCP split
+
+**A4a (done).** `memfw/mcp/server.py` is split by tool group, a pure move: every tool's
+output, `tools/list` included, is byte-identical (timing fields masked) to the code before it.
+`Gateway` (still in `server.py`, with `serve`, `main` and the tool table `handlers()`) composes
+one mixin per group; each mixin subclasses `GatewayBase`.
+
+| Module | Holds |
+|---|---|
+| `mcp/base.py` | `GatewayBase`: `__init__` (root, tenant, sources, embedder, Runtime), `_repo`, `_visible` |
+| `mcp/schema.py` | `TOOLS`, `SERVER_INFO`, `PROTOCOL`, `INSTRUCTIONS`, `SEARCH_POLICIES` |
+| `mcp/protocol.py` | `ProtocolMixin` (`handle`, `respond`), `_rpc_error`, `client_endpoint_fields`, `_client_message`, `_flag` |
+| `mcp/tools_search.py` | `memory_search` (all modes), row building and freshness (`_RawHashCache`) |
+| `mcp/tools_memory.py` | `memory_get`, `memory_remember`, `memory_related`, `memory_status` |
+| `mcp/tools_context.py` | `memory_context` |
+| `mcp/tools_history.py` | `history_list`, `history_search`, `history_read` |
+| `mcp/tools_conversations.py` | the share the `conversations_*` tools read |
+| `mcp/tools_dream.py` | `dream_run`, `dream_list` and the `DREAM_*` limits |
+
+Each import line moved with the code that uses it, so the allowlist's `memfw.mcp` entries keep
+their keys and site totals but now name the group module (`memfw.mcp.base`,
+`memfw.mcp.tools_*`) instead of `memfw.mcp.server`. The merge-base check allows this because sites
+stay inside the `memfw.mcp` unit and no edge total grew. Names other code imported from
+`memfw.mcp.server` are still importable there; a monkeypatch must target the module that
+reads the name (`memfw.mcp.tools_dream.DREAM_MAX_STAGED`,
+`memfw.mcp.tools_search.search_multihop`). The probe `tests.harness.probes:mcp_all_tools`
+sends every MCP method and all 15 tools (116 messages, error paths included) to one fixture
+vault; `tests/test_mcp_split.py` runs it against `MEMFW_ARCH_BASE_REF` when that is set
+(opt-in, skipped by default).
+
+**A4b (next).** Each group reaches its capability through the `Runtime` or a protocol, and
+its allowlist entries go.
 
 ## Byte-identical harness
 
