@@ -26,6 +26,7 @@ from ..storage.transactions import TransactionMixin, _serialized
 from .common import sha256_text as sha256_text
 from .epistemic import (
     EPISTEMIC_FIELDS,
+    OPEN_QUESTION_TYPE,
     validate_proposed_open_question,
     validate_proposed_write,
 )
@@ -769,10 +770,16 @@ class Repository(
             raise NotFoundError(f"Memory not found: {memory_id}")
         if operation != "delete" and (not changes or set(changes) - _PROPOSAL_FIELDS):
             raise IntegrityError("Proposal changes contain unsupported fields")
-        if "valid_to" in changes and "open_question" not in changes:
-            raise IntegrityError(
-                "A proposal may set valid_to only together with open_question (a resolution)"
-            )
+        if "valid_to" in changes:
+            # ``valid_to`` is proposable only as part of a resolution, so an
+            # "open-question change" can never quietly expire another memory.
+            block = changes.get("open_question")
+            is_question = self.get(memory_id).type == OPEN_QUESTION_TYPE
+            if not (is_question and isinstance(block, dict) and block.get("resolved_by")):
+                raise IntegrityError(
+                    "A proposal may set valid_to only to resolve an open question: the target "
+                    "must be type=open-question and open_question.resolved_by must be set"
+                )
         if operation != "delete":
             # Refuse what approval would later fail on (``layer: bogus``), so a
             # human decision is never recorded for a proposal that cannot apply.

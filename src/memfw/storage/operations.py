@@ -24,7 +24,14 @@ from ..core.epistemic import (
     validate_open_question_references,
 )
 from ..core.errors import DeletedContentUnavailable, IntegrityError, NotFoundError
-from ..core.models import EventKind, Layer, MemoryDocument, Tier, fold_temporal_aliases
+from ..core.models import (
+    EventKind,
+    Layer,
+    MemoryDocument,
+    Tier,
+    _same_instant,
+    fold_temporal_aliases,
+)
 from ..storage.transactions import _serialized
 
 _LOG = logging.getLogger(__name__)
@@ -332,6 +339,25 @@ class MemoryOperationsMixin:
                         "Only a human or an approved proposal may resolve or reopen an open "
                         "question"
                     )
+                if old.type == OPEN_QUESTION_TYPE and not _same_instant(
+                    values.get("valid_to"), old.valid_to
+                ):
+                    raise IntegrityError(
+                        "Only a human or an approved proposal may change valid_to of an open "
+                        "question"
+                    )
+                if old.valid_to is not None and old.open_question is not None:
+                    if isinstance(new_block, OpenQuestion):
+                        new_conflicts = new_block.conflicts
+                    elif isinstance(new_block, dict):
+                        new_conflicts = OpenQuestion.model_validate(new_block).conflicts
+                    else:
+                        new_conflicts = []
+                    if new_conflicts != old.open_question.conflicts:
+                        raise IntegrityError(
+                            "Only a human or an approved proposal may change the conflicts of "
+                            "an open question that is no longer current"
+                        )
             # Runs on every write to an open question, not only gated fields:
             # a tenant change must not leave conflicts in another tenant.
             validate_open_question_references(
@@ -1244,7 +1270,14 @@ class MemoryOperationsMixin:
                 )
         current_documents = _current_documents(self)
         issues.extend(_supersession_issues(current_documents))
-        issues.extend(_open_question_issues(current_documents))
+        successors = {
+            str(event.details["old_memory_id"]): str(event.details["new_memory_id"])
+            for event in self.events()
+            if event.kind == EventKind.SUPERSEDE
+            and event.details.get("old_memory_id")
+            and event.details.get("new_memory_id")
+        }
+        issues.extend(_open_question_issues(current_documents, successors=successors))
         if registered_deletions:
             self.validate_knowledge_cards()
         return issues
@@ -1348,6 +1381,8 @@ def lookup_current(host: RepositoryHost, memory_id: str) -> MemoryDocument | Non
 
 def _open_question_issues(
     documents: builtins.list[MemoryDocument],
+    *,
+    successors: dict[str, str] | None = None,
 ) -> builtins.list[dict[str, str | None]]:
     """Lint ``type: open-question`` memories against the rest of the vault.
 
@@ -1355,7 +1390,8 @@ def _open_question_issues(
       and the block come together or not at all;
     * ``open_question_self_conflict``: ``conflicts`` names the question;
     * ``open_question_dangling_conflict`` / ``open_question_cross_tenant_conflict``;
-    * ``open_question_dangling_resolution`` / ``open_question_superseded_resolution``
+    * ``open_question_dangling_resolution`` (also when the answer's supersession
+      chain ends at a deleted memory) / ``open_question_superseded_resolution``
       / ``open_question_cross_tenant_resolution``: ``resolved_by`` must name an
       existing, current memory in the same tenant;
     * ``open_question_resolved_but_current``: a resolved question has ``valid_to``;
@@ -1379,9 +1415,15 @@ def _open_question_issues(
 
     questions = [doc for doc in documents if doc.type == OPEN_QUESTION_TYPE]
     for doc in documents:
-        if doc.open_question is not None and doc.type != OPEN_QUESTION_TYPE:
-            report(doc.id, "open_question_wrong_type", "open_question requires type=open-question")
-        if doc.type != OPEN_QUESTION_TYPE and "open_question" in doc.ignored_keys:
+        if doc.type != OPEN_QUESTION_TYPE and (
+            doc.open_question is not None or doc.stray_open_question == "block"
+        ):
+            report(
+                doc.id,
+                "open_question_wrong_type",
+                "open_question requires type=open-question (the key was ignored)",
+            )
+        elif doc.type != OPEN_QUESTION_TYPE and "open_question" in doc.ignored_keys:
             report(
                 doc.id,
                 "open_question_invalid_block",
@@ -1428,7 +1470,13 @@ def _open_question_issues(
         ):
             seen.add(head.id)
             head = by_id[head.superseded_by]
-        if answer is None or head is None or answer_id == doc.id:
+        # A deleted successor breaks the chain. ``delete`` clears the pointer to
+        # it, so the SUPERSEDE event log (``successors``) is what remembers it.
+        successor = None
+        if head is not None:
+            successor = head.superseded_by or (successors or {}).get(head.id)
+        broken_chain = successor is not None and successor not in by_id
+        if answer is None or head is None or answer_id == doc.id or broken_chain:
             report(
                 doc.id,
                 "open_question_dangling_resolution",

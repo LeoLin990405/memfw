@@ -117,12 +117,14 @@ open_question:
   human, a missing id and an id in another tenant fail with the same message
   ("missing or not visible").
 * **Who may do what.** Creating an open question, changing a memory's `type` to or from
-  `open-question`, and setting or clearing `resolved_by` need a human actor or an
-  approved proposal; a mechanism or a FULL-permission agent may edit an open question's
-  other fields. No candidate channel carries `type` or `open_question` yet (dream and
+  `open-question`, setting or clearing `resolved_by`, changing an open question's
+  `valid_to`, and changing the `conflicts` of one that already has `valid_to` need a
+  human actor or an approved proposal; a mechanism or a FULL-permission agent may edit
+  an open question's other fields. No candidate channel carries `type` or `open_question` yet (dream and
   `memory_remember` cannot stage a new open question; that arrives with U3). An agent
-  can propose a resolution: an `update` proposal with `open_question` and `valid_to`
-  (`valid_to` is proposable only together with `open_question`).
+  can propose a resolution: an `update` proposal with `open_question` and `valid_to`.
+  `valid_to` is proposable only for that: the target must be an open question and the
+  proposed block must set `resolved_by`.
 * **Resolution.** `Repository.resolve_open_question(question_id, answer_id)` (human only)
   is an in-place update of the question that sets `open_question.resolved_by` and
   `valid_to`. The answer must exist, share the tenant, be current, and not be another
@@ -134,15 +136,16 @@ open_question:
   tenant are dropped and listed as `dropped_conflicts` in the SUPERSEDE event.
 * **Lint.** `fsck` reports `open_question_dangling_conflict`,
   `open_question_self_conflict`, `open_question_cross_tenant_conflict` (conflict checks
-  skip historical versions that have `valid_to`), `open_question_dangling_resolution`,
+  skip historical versions that have `valid_to`), `open_question_dangling_resolution`
+  (also when the answer's supersession chain ends at a deleted memory),
   `open_question_superseded_resolution` (the answer's supersession chain is followed, so
   a revised answer passes; one whose current version is no longer in force does not),
   `open_question_cross_tenant_resolution`, `open_question_resolved_but_current`,
   `open_question_multiple_unresolved` (two unresolved versions without `valid_to` in one
-  supersession chain), `open_question_missing_block`, `open_question_wrong_type` and
-  `open_question_invalid_block` (an unrelated, malformed `open_question` key on another
-  type, which is ignored like an unknown key: the memory stays readable and the file is
-  not rewritten by a read).
+  supersession chain), `open_question_missing_block`, and `open_question_wrong_type` /
+  `open_question_invalid_block` for an `open_question` key on a memory of another type
+  (a well-formed block / anything else). That key is ignored like an unknown key: the
+  memory stays readable and editable, and a read does not rewrite the file.
 * **Export and hashes.** `memfw okf export` puts `type: open-question` and the block in
   the `memfw:` envelope. `MemoryDocument.model_dump` leaves out an absent
   `open_question`, so every other memory dumps, and its proposal and agent snapshot

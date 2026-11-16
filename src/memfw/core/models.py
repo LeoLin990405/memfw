@@ -193,12 +193,21 @@ class MemoryDocument(BaseModel):
     #: come from ``parse`` (a fresh document), so ``render`` applies its normal
     #: omission rule. Parsed documents always record the full observed set.
     _observed_default_fields: tuple[str, ...] = PrivateAttr(default=())
+    #: ``"block"`` or ``"invalid"`` when the source file carried an
+    #: ``open_question`` key on a memory that is not an open question (ignored).
+    _stray_open_question: str | None = PrivateAttr(default=None)
 
     @property
     def ignored_keys(self) -> tuple[str, ...]:
         """Frontmatter keys this version did not know and ignored when parsing."""
 
         return self._ignored_keys
+
+    @property
+    def stray_open_question(self) -> str | None:
+        """Whether an ignored ``open_question`` key was a well-formed block."""
+
+        return self._stray_open_question
 
     @property
     def observed_default_fields(self) -> tuple[str, ...]:

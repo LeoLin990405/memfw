@@ -573,7 +573,7 @@ def test_a_resolve_proposal_applies_after_human_approval(tmp_path: Path) -> None
     assert result.open_question.resolved_by == answer.id
     assert result.valid_to is not None
     # valid_to alone is not proposable.
-    with pytest.raises(IntegrityError, match="valid_to only together"):
+    with pytest.raises(IntegrityError, match="valid_to only to resolve"):
         repository.record_proposal(
             memory_id=answer.id,
             operation="update",
@@ -680,3 +680,86 @@ def test_rollback_restores_an_absent_block(tmp_path: Path) -> None:
     restored = repository.rollback(repository.events()[-1].event_id)
     assert restored.type is None
     assert restored.open_question is None
+
+
+def _propose(repository: Repository, memory_id: str, changes: dict[str, Any]) -> Any:
+    return repository.record_proposal(
+        memory_id=memory_id,
+        operation="update",
+        changes=changes,
+        rationale="r",
+        agent_id="planner",
+        signature="mock:planner",
+    )
+
+
+def test_valid_to_is_proposable_only_as_a_resolution(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    plain = repository.add("plain", "x")
+    question = _question(repository)
+    stamp = "2026-11-16T00:00:00+00:00"
+    for target, changes in (
+        (plain.id, {"open_question": None, "valid_to": stamp}),
+        (question.id, {"open_question": {"question": "q?"}, "valid_to": stamp}),
+        (
+            question.id,
+            {"open_question": {"question": "q?", "resolved_by": None}, "valid_to": stamp},
+        ),
+    ):
+        with pytest.raises(IntegrityError, match="valid_to only to resolve"):
+            _propose(repository, target, changes)
+    assert repository.get(plain.id).valid_to is None
+
+
+@pytest.mark.parametrize("who", ["mechanism", "agent"])
+def test_valid_to_and_closed_conflicts_need_a_human(tmp_path: Path, who: str) -> None:
+    repository = _vault(tmp_path)
+    _full_permissions(repository)
+    actor: dict[str, Any] = {"actor": "mechanism"} if who == "mechanism" else dict(AGENT)
+    left = repository.add("left", "x")
+    right = repository.add("right", "y")
+    answer = repository.add("answer", "z")
+    question = _question(repository, left.id)
+    with pytest.raises(IntegrityError, match="change valid_to"):
+        repository.update(question.id, valid_to=repository._now(), **actor)
+    repository.resolve_open_question(question.id, answer.id)
+    block = {"question": "Which port does the service use?", "resolved_by": answer.id}
+    with pytest.raises(IntegrityError, match="change the conflicts"):
+        repository.update(question.id, open_question={**block, "conflicts": [right.id]}, **actor)
+    with pytest.raises(IntegrityError, match="change valid_to"):
+        repository.update(question.id, valid_to=None, **actor)
+    # Unchanged conflicts and valid_to are still fine for the same writer.
+    edited = repository.update(
+        question.id, open_question={**block, "conflicts": [left.id], "missing": "m"}, **actor
+    )
+    assert edited.open_question is not None and edited.open_question.missing == "m"
+
+
+def test_lint_reports_a_deleted_answer_head_as_dangling(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    question = _question(repository)
+    answer = repository.add("answer", "x")
+    repository.resolve_open_question(question.id, answer.id)
+    revised = repository.supersede(answer.id, "answer v2", "x2")
+    # Deleting the revised answer clears the pointer to it; the chain still ends
+    # at a deleted memory, and stays reported that way on every fsck.
+    repository.delete(revised.id)
+    for _ in range(2):
+        assert _kinds(repository) == ["open_question_dangling_resolution"]
+
+
+def test_valid_block_on_another_type_is_ignored(tmp_path: Path) -> None:
+    block = "open_question:\n  question: q?\n  conflicts: []\n  missing: ''\n  resolved_by: null\n"
+    raw = LEGACY.replace("group_key: null\n", "group_key: null\n" + block)
+    document = MarkdownStorageMixin.parse(raw, expected_id="legacy-note")
+    assert document.open_question is None
+    assert document.ignored_keys == ("open_question",)
+    assert document.stray_open_question == "block"
+    repository = _vault(tmp_path)
+    path = repository.root / "memories" / "legacy-note.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(raw, encoding="utf-8")
+    assert _kinds(repository) == ["open_question_wrong_type"]
+    # The stray key does not block gated edits.
+    updated = repository.update("legacy-note", body="new body", epistemic="fact")
+    assert updated.epistemic == "fact"
