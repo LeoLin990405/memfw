@@ -209,6 +209,39 @@ vault; `tests/test_mcp_split.py` runs it against `MEMFW_ARCH_BASE_REF` when that
 **A4b (next).** Each group reaches its capability through the `Runtime` or a protocol, and
 its allowlist entries go.
 
+## A5: swap drills
+
+**A5a (done).** Every port has at least two implementations, and each implementation passes the
+same `memfw.ports.testing` check (architecture section 9: "each port has two implementations
+passing one contract kit"). The ones memfw lacked live in `memfw.ports.reference`: stdlib only,
+importing only `memfw.ports`, under the `memfw.ports` L0 unit (no layer-map or allowlist
+entry). `tests/test_ports_isolation.py` now walks `memfw/ports` recursively and imports
+`memfw.ports.reference` in a subprocess; `import memfw.ports` does not load it.
+
+| Port | Implementations | Contract check |
+|---|---|---|
+| `RecallProvider` | `FtsProvider`, `MultihopProvider`, `HybridProvider` (`memfw.recall.builtin`); `InMemoryRecallProvider` (BM25-lite) | `check_recall_provider` |
+| `Projector` | `JsonlProjector` (`jsonl-index`: ids, metadata, `body_sha256`, no bodies), `MirrorProjector` (`markdown-mirror`: memory files byte-for-byte) | `check_projector` |
+| `Ingestor` | `JsonIngestor` (`json`, through `stage_candidates`), `MarkdownIngestor` (`markdown`, Markdown candidates with a JSON header) | `check_ingestor` |
+| `Deriver` | `ConcatDeriver` (`concat`, titles in request order), `TimelineDeriver` (`timeline`, by `created_at`) | `check_deriver` |
+| `Clock` | `SystemClock`, `FixedClock` (`memfw.ports.clock`) | `check_clock` |
+| `IdGen` | `UuidIdGen`, `SeededIdGen` (`memfw.ports.clock`) | `check_id_gen` |
+| `ClaimVerifier` | `DreamClaimVerifier` (`memfw.dream.claims`); `KeywordClaimVerifier` | `check_claim_verifier` |
+| `ClaimStager` | `DreamClaimStager` (`memfw.dream.claims`); `FileClaimStager` (`_candidates/claims/<batch>.json`) | `check_claim_stager` |
+
+`tests/test_swap_drills.py` parametrizes each port over that column and fails if a port drops
+below two. Its coordinator drill runs the recall pipeline with `InMemoryRecallProvider` in
+place of `FtsProvider` on one fixture vault: the same route, no degraded provider, and the
+filter policy still drops private, retired and other-tenant memories, even when the provider
+itself ignores tenants. A third drill fuses FTS with the reference provider. The hybrid
+provider is checked without the kit's byte-identical-vault rule because it builds its
+vector index in the vault on first use.
+
+Nothing is registered by default. `memfw.ports.reference.register_reference(registry)` adds
+the recall, projector, ingestor and deriver specs (`inmemory` takes a `vault` setting); each
+stays off until an `AdaptersConfig` enables it. No entry points are declared, so discovery
+and every default output are unchanged.
+
 ## Byte-identical harness
 
 [`tests/harness/byte_identical.py`](../tests/harness/byte_identical.py) runs one probe against

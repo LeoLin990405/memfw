@@ -42,7 +42,8 @@ def _imports(path: Path, package: str) -> set[str]:
 
 
 def _absolute_imports(path: Path) -> set[str]:
-    return _imports(path, f"memfw.{path.parent.name}")
+    package = ".".join(("memfw", *path.parent.relative_to(SRC).parts))
+    return _imports(path, package)
 
 
 def _imported_after(statement: str) -> list[str]:
@@ -67,9 +68,14 @@ def _imported_after(statement: str) -> list[str]:
 
 
 def test_ports_sources_import_only_stdlib() -> None:
+    """Every module under ``memfw/ports`` (subpackages such as ``reference`` included)."""
+
     stdlib = set(sys.stdlib_module_names) | {"__future__"}
-    for path in sorted((SRC / "ports").glob("*.py")):
+    paths = sorted((SRC / "ports").rglob("*.py"))
+    assert SRC / "ports" / "reference" / "__init__.py" in paths
+    for path in paths:
         for name in _absolute_imports(path):
+            assert name != "<escapes-package>", path.name
             if name.startswith("memfw.ports"):
                 continue
             assert name.split(".")[0] in stdlib, f"{path.name} imports {name}"
@@ -93,6 +99,13 @@ def test_scanner_resolves_relative_imports_inside_functions(tmp_path: Path) -> N
 def test_importing_ports_loads_no_other_memfw_module() -> None:
     added = _imported_after("import memfw.ports, memfw.ports.testing")
     assert added
+    assert all(name.startswith("memfw.ports") for name in added), added
+    assert "memfw.ports.reference" not in added  # opt-in, never loaded by the ports
+
+
+def test_importing_reference_loads_only_ports() -> None:
+    added = _imported_after("import memfw.ports.reference")
+    assert "memfw.ports.reference" in added
     assert all(name.startswith("memfw.ports") for name in added), added
 
 
