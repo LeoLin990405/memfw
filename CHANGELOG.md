@@ -153,16 +153,24 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   is no longer consolidated away or forgotten because another tenant holds the
   same body or `group_key`.
 - Historical records (`valid_to` or `superseded_by` set) join no consolidation
-  group, so a supersede that keeps the body no longer makes the old version the
-  representative and plans the current version for forgetting (or hard
-  deletion with `forget_action: hard`). Budget-triggered merge review skips
-  historical records too. The other policies (`fifo`, `lru`, `decay`,
-  `salience`) rank each record on its own and keep their behaviour, including
-  cooling or deleting historical records under budget pressure.
+  group. Before, a supersede that kept the body grouped old and new versions,
+  the old one won as representative, and the plan listed the current version
+  as forgotten. `run_forget` never applies consolidation `forgotten_ids`
+  directly, so the harm was a misleading plan plus a pending merge review
+  proposal with `disposition: delete` against the current version, which an
+  approval would have applied. Budget-triggered merge review now skips any
+  pair that names a historical record; the judge still sees every document,
+  so existing review proposal ids do not change. The other policies (`fifo`,
+  `lru`, `decay`, `salience`) rank each record on its own and keep their
+  behaviour, including cooling or deleting historical records under budget
+  pressure.
 - Agent merge proposals (`find_near_duplicates`, mock, live and local MLX)
-  stay within one tenant; a provider pair that spans tenants is dropped, since
-  review would refuse it.
-- Plans for single-tenant vaults without historical duplicates are unchanged.
+  stay within one tenant; a provider pair that spans tenants is dropped (review
+  refuses cross-tenant merges) and counted in the judge's
+  `dropped_cross_tenant_pairs`, with a debug log line that carries no memory
+  text.
+- Plans for single-tenant vaults without historical duplicates or a shared
+  `group_key` with a historical record are unchanged.
 
 ### Fixed — service, MCP and index
 

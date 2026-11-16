@@ -208,3 +208,102 @@ def test_single_tenant_plan_is_unchanged() -> None:
         ("m02", ("m09",), 0.9047619),
         ("m05", ("m06",), 1.0),
     ]
+
+
+def test_live_judge_counts_dropped_cross_tenant_pairs() -> None:
+    documents = [_doc("a1", "body", tenant="A"), _doc("b1", "body", tenant="B")]
+    pairs = [{"representative_id": "a1", "duplicate_ids": ["b1"], "confidence": 0.9}]
+    judge = DeterministicJudge(
+        mode="live", transport=lambda _p, _r: {"merge_pairs": pairs}, clock=lambda: NOW
+    )
+    assert judge.find_near_duplicates(documents) == []
+    assert judge.dropped_cross_tenant_pairs == 1
+
+
+class _MergeInference:
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+    def infer(self, **_kwargs: Any) -> Any:
+        text = self.text
+
+        class Result:
+            elapsed_seconds = 0.1
+            cold_load_seconds = None
+            input_tokens = 1
+            output_tokens = 1
+            peak_memory_bytes = 1
+            cold_peak_memory_bytes = 1
+            total_seconds = 0.1
+            input_truncated_bytes = 0
+            raw_input_hash = ""
+            submitted_input_hash = ""
+
+        result = Result()
+        result.text = text  # type: ignore[attr-defined]
+        return result
+
+
+def test_mlx_judge_drops_and_counts_cross_tenant_pairs() -> None:
+    from memfw.agents.mlx_live import LocalMLXJudge
+
+    pair = (
+        '{{"representative_id":"a1","duplicate_ids":{dups},"match_basis":"semantic",'
+        '"disposition":"retain","confidence":0.9,"reason":"same fact"}}'
+    )
+    text = (
+        '{"merge_pairs":['
+        + ",".join(pair.format(dups=dups) for dups in ('["b1"]', '["a2","b1"]', '["a2"]'))
+        + "]}"
+    )
+    judge = LocalMLXJudge(
+        inference=_MergeInference(text),
+        model_name="local/model",
+        quantization="4bit",
+        clock=lambda: NOW,
+    )
+    documents = [
+        _doc("a1", "body", tenant="A"),
+        _doc("a2", "body", tenant="A"),
+        _doc("b1", "body", tenant="B"),
+    ]
+    proposals = judge.find_near_duplicates(documents)
+    assert [(p.representative_id, p.duplicate_ids) for p in proposals] == [("a1", ("a2",))]
+    assert judge.dropped_cross_tenant_pairs == 2
+
+
+# Review proposal ids for this vault were captured from the code before the fix
+# (99c8ad7 and 39084e4 agree). The judge still sees every document, so ids are
+# stable; only the pairs naming the superseded ``a-old`` are gone.
+_PRE_FIX_REVIEW_IDS = {
+    "28f616765fdc7a9e229b428c52e0f534": ("a-old", "m-copy"),
+    "33839676b7bc10b8f1bc86fa5f694c8d": ("a-old", "z-new"),
+    "10fcb15421c821ad8907b7507f520914": ("c-one", "c-two"),
+    "746cfb7381d20c5c3bfbc02518476c32": ("m-copy", "z-new"),
+}
+
+
+def test_review_ids_with_history_match_pre_fix_minus_historical_pairs(tmp_path: Path) -> None:
+    from memfw.curation.engine import _record_consolidation_review
+
+    stamp = datetime(2026, 10, 18, tzinfo=UTC)
+    counter = iter(f"event-{index}" for index in range(1000))
+    repo = Repository(tmp_path / "v", clock=lambda: stamp, id_factory=lambda: next(counter))
+    repo.init()
+    body = "the deploy plan uses blue green rollout"
+    repo.add("Plan", body, memory_id="a-old")
+    repo.supersede("a-old", "Plan", body, memory_id_new="z-new")
+    repo.add("Plan", body, memory_id="m-copy")
+    repo.add("Cache", "cache entries expire after ten minutes", memory_id="c-one")
+    repo.add("Cache", "cache entries expire after ten minutes!", memory_id="c-two")
+    repo.add("Lone", "something entirely different here", memory_id="l-one")
+    documents = [doc for doc in repo.list() if not doc.is_stub]
+
+    ids = _record_consolidation_review(repo, documents, stamp, record=False)
+
+    expected = [
+        proposal_id
+        for proposal_id, targets in _PRE_FIX_REVIEW_IDS.items()
+        if "a-old" not in targets
+    ]
+    assert sorted(ids) == sorted(expected)
