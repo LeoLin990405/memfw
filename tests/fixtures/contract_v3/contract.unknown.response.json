@@ -1,0 +1,7 @@
+{
+  "contract": "memfw-http/2",
+  "error": {
+    "code": "bad_request",
+    "message": "contract is not available"
+  }
+}

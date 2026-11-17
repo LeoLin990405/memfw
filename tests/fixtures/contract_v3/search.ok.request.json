@@ -1,0 +1,5 @@
+{
+  "limit": 3,
+  "query": "corpus keyword",
+  "tenant": "tenant-a"
+}

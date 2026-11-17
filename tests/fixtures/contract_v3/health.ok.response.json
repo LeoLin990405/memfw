@@ -1,0 +1,22 @@
+{
+  "contract": "memfw-http/3",
+  "contracts": [
+    "memfw-http/2",
+    "memfw-http/3"
+  ],
+  "endpoints": [
+    "/health",
+    "/search",
+    "/related",
+    "/stage",
+    "/context",
+    "/forget"
+  ],
+  "index_present": true,
+  "modes": [
+    "fts"
+  ],
+  "ok": true,
+  "related_index_present": true,
+  "service": "memfw"
+}

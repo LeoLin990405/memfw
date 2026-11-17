@@ -76,6 +76,29 @@ rules. A file whose front matter repeats a key (two `privacy:` or
 `sensitivity:` lines) is `unknown` under a clearance, as core refuses it.
 Without a clearance nothing changes.
 
+## memfw-http/3 beside v2
+
+The same three files serve `memfw-http/3` to clients that send the request
+header `MemFW-Contract: memfw-http/3`; without it every answer is the v2 one,
+byte for byte, so existing clients need no change. v3 adds `POST /forget`
+(write token only; it records a deletion request under
+`<vault>/_candidates/forget/` and never deletes) and `POST /context` (the
+`memory_context` v2 pack). `/context` needs the `memfw` package installed
+where the script runs; without it `/context` answers 404 and the v3 `/health`
+leaves it out of `endpoints`. `READ_PATH_VERSION` stays `2`: v3 changed
+neither `read_path.py` nor `readonly.py`, but deploy the three files from one
+revision as always.
+
+Every `/health` answer carries the header `MemFW-Contracts: memfw-http/2,
+memfw-http/3`. To see the v3 body:
+
+```sh
+curl -s -H 'MemFW-Contract: memfw-http/3' http://127.0.0.1:<port>/health
+```
+
+`--check-url` still checks for `memfw-http/2`, which a v3 service keeps
+serving.
+
 ## Check a URL
 
 `check_readonly_contract(url)` performs one `GET /health`. Pass either the

@@ -35,6 +35,32 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 - `WorkState.session_labels` (read-only). Without the new options the output
   of every command and tool is byte-identical to before.
 
+### Added
+
+- **`memfw-http/3` beside `memfw-http/2`; `POST /forget` and `memfw forget
+  residue` (roadmap R5/R6).** The read-only service selects the contract per
+  request from the `MemFW-Contract` header; without it (or with
+  `memfw-http/2`) every answer is byte-identical to before, `/forget` and
+  `/context` included (404). An unknown value is 400 `contract is not
+  available`. Every `/health` answer carries `MemFW-Contracts: memfw-http/2,
+  memfw-http/3`, and the v3 body adds `contracts`, `modes` and `endpoints`.
+  v3 `/search` adds `recorded_at` to each hit and keeps `mode` to the served
+  vocabulary (`fts`); v3 `/related` adds `why` and `provenance_type`; v3
+  `POST /context` returns the `memory_context` v2 pack (`core` slot) built
+  read-only through `memfw.runtime.http` (no cache, no access events, no usage
+  signals; needs the `memfw` package, else 404). v3 `POST /forget` (write
+  token only) records one deletion-request candidate under
+  `<vault>/_candidates/forget/` and never deletes; the target must be visible
+  to the caller (tenant and clearance), hidden and missing targets answer the
+  same 404, and `request_id` makes it idempotent (replay `duplicate: true`,
+  different content 409). Tenant binding and the MM0 clearance (sensitivity
+  key included) apply to every v3 addition. `memfw forget requests` lists the
+  requests; `memfw forget residue <id>` checks, read-only, that a forgotten
+  memory is gone from the FTS index, the related, corroboration, usage and
+  (optionally) entity projections, naming the rebuild for each store that
+  still carries it. Hard delete is unchanged. New v3 sample set in
+  `tests/fixtures/contract_v3/`; the v2 set is unchanged.
+
 ### Added — `current` context slot (U6, off by default)
 
 - `memory_context(v=2, slots=["current"])` and `memfw://context/current`: short-lived

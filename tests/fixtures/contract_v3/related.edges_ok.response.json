@@ -1,0 +1,20 @@
+{
+  "contract": "memfw-http/3",
+  "degraded": false,
+  "memory_id": "mem-alpha",
+  "mode": "edges",
+  "results": [
+    {
+      "id": "mem-beta",
+      "provenance_type": "imported",
+      "reasons": [
+        "lexical",
+        "link",
+        "shared_tag"
+      ],
+      "score": 0.75,
+      "title": "Beta corpus note",
+      "why": "related"
+    }
+  ]
+}

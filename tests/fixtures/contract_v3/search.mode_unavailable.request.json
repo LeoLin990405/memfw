@@ -1,0 +1,5 @@
+{
+  "mode": "multihop",
+  "query": "corpus keyword",
+  "tenant": "tenant-a"
+}

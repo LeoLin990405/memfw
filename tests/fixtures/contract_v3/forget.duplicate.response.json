@@ -1,0 +1,11 @@
+{
+  "authority": false,
+  "candidate_id": "forget-forget-sample",
+  "contract": "memfw-http/3",
+  "deleted": false,
+  "duplicate": true,
+  "memory_id": "mem-beta",
+  "path": "_candidates/forget/forget-forget-sample.md",
+  "request_id": "forget-sample",
+  "requested": true
+}
