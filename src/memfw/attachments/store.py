@@ -138,6 +138,46 @@ def committed_records(events: Iterable[Event]) -> dict[str, str]:
     return committed
 
 
+def embedded_total(events: Iterable[Event], store: BlobStore) -> int:
+    """Bytes the vault's embedded blobs take, for the ``attachments_max_total_bytes`` check.
+
+    Each blob is counted once, by the ``attach`` event that stored it
+    (``details.blob == "new"``) while its attachment is committed. A log with
+    a committed ``attach`` event that predates ``details.size`` (or carries a
+    malformed ``size`` / ``blob``) falls back to
+    the sizes (``lstat``) of the files in the blob directory. Neither way
+    parses a record, so the cost of an add does not grow with record parses.
+    """
+
+    sizes: dict[str, int] = {}
+    owners: set[str] = set()
+    legacy = False
+    for event in events:
+        if event.kind != EventKind.ATTACH:
+            continue
+        details = event.details
+        if details.get("storage", "embedded") != "embedded":
+            continue
+        size = details.get("size")
+        blob = details.get("blob")
+        # Anything but a non-negative int size and a known blob value is read
+        # as an event without them (an old or hand-edited log): fall back.
+        if (
+            isinstance(size, bool)
+            or not isinstance(size, int)
+            or size < 0
+            or blob not in {"new", "shared"}
+        ):
+            legacy = True
+            break
+        sizes[event.memory_id] = size
+        if blob == "new":
+            owners.add(event.memory_id)
+    if legacy:
+        return store.stored_bytes()
+    return sum(sizes[identifier] for identifier in owners)
+
+
 def _vault_id(host: RepositoryHost) -> str | None:
     if not host.config_path.exists():
         return None
@@ -297,17 +337,20 @@ class AttachmentStoreMixin:
         config = self.read_config()
         if _vault_id(self) is None:
             raise IntegrityError("vault has no vault_id; run the add again")
-        store = blob_store(self, create=True)
+        # Opened without creating anything: ``link`` refuses a blob staged under
+        # another root (the root changed in between) before it makes a directory.
+        store = blob_store(self)
         assert store is not None
+        if staged.temporary.parent != store.staging:
+            staged.discard()
+            raise IntegrityError("the blob root changed while the original was staged; retry")
         events = self.events()
-        committed = committed_records(events)
-        stored_sizes: dict[str, int] = {}
-        # One log pass: the record files are read directly, not via get_attachment.
-        for _, existing in _load_committed(self, committed):
-            if isinstance(existing, AttachmentRecord):
-                stored_sizes[existing.sha256] = existing.size
+        deduplicated = store.has(sha256)
         max_total = _config_int(config, MAX_TOTAL_KEY, DEFAULT_MAX_TOTAL_BYTES)
-        if sha256 not in stored_sizes and sum(stored_sizes.values()) + size > max_total:
+        # The same bytes again add nothing to the total. Otherwise the total
+        # comes from the log (no record is parsed), or from the stored blobs'
+        # sizes for a log written before ``attach`` events carried ``size``.
+        if not deduplicated and embedded_total(events, store) + size > max_total:
             raise ValueError(
                 f"the vault's attachments would exceed {MAX_TOTAL_KEY} ({max_total} bytes); "
                 "referenced attachments (--reference) are not supported yet"
@@ -330,8 +373,14 @@ class AttachmentStoreMixin:
             attachment_id,
             actor="human",
             after_hash=hashlib.sha256(raw).hexdigest(),
-            # Event details never carry content or fingerprints (design H7).
-            details={"storage": record.storage},
+            # Event details never carry content or fingerprints (design H7):
+            # the size and whether this add stored new bytes are enough to keep
+            # the vault's total without reading any record.
+            details={
+                "storage": record.storage,
+                "size": record.size,
+                "blob": "shared" if deduplicated else "new",
+            },
         )
         return AttachResult(record, deduplicated)
 
@@ -497,6 +546,16 @@ class AttachmentStoreMixin:
                         problems.append(AttachmentProblem(None, "blob_orphan", sha))
                 for name in store.stale_stages():
                     problems.append(AttachmentProblem(None, "blob_stage_stale", message=name))
+                # Another vault's (or an untagged) stage is only counted, never named.
+                foreign = store.foreign_stale_stages()
+                if foreign:
+                    problems.append(
+                        AttachmentProblem(
+                            None,
+                            "blob_stage_foreign",
+                            message=f"{foreign} stale staging file(s) of other vaults",
+                        )
+                    )
         return wanted, problems
 
     def attachment_fsck_issues(self: RepositoryHost) -> list[dict[str, str | None]]:
@@ -586,5 +645,6 @@ __all__ = [
     "AttachmentStoreMixin",
     "blob_store",
     "committed_records",
+    "embedded_total",
     "validate_attachment_config",
 ]

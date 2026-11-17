@@ -272,6 +272,29 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   symlink or a non-directory is still refused (`BlobLocationError`).
   Missing parents are made as before.
 
+### Fixed — MM1a review follow-ups (attachment quota, staging, location guard)
+
+- `attach add` no longer parses every attachment record under the vault lock
+  to check `attachments_max_total_bytes` (400 attachments made an add ~10x
+  slower). New `attach` events carry `details.size` and `details.blob`
+  (`new` | `shared`); the total is summed from the log, and a log with an
+  older `attach` event falls back to the sizes (`lstat`) of the stored blob
+  files. No record is parsed whatever the number of attachments.
+- Staging files under the shared `<blob root>/.staging` are named
+  `.stage-<tag>-….tmp`, where `<tag>` is the first 16 hex of the sha256 of the
+  vault's resolved path (a moved vault gets a new tag, so its older stale
+  stages are then only counted, never deleted). `attach verify` / `fsck` report only this vault's
+  stale stages by name; other vaults' (and untagged) ones are a count
+  (`attachment_blob_stage_foreign`, a warning). `BlobStore.reclaim_stale_stages`
+  removes only this vault's.
+- A blob root that changed between staging and the vault lock is refused
+  before `<new root>/<vault_id>` is created (no empty directory is left).
+  The unused `BlobStore.stage` is removed.
+- The conversation store, worker state and handoff folders
+  (`check_private_location`) now also refuse `~/Documents` and `~/Desktop`
+  (macOS iCloud "Desktop & Documents") and a synced-folder marker's symlink
+  target, the same rules as the attachment blob root.
+
 ## [0.3.0] — 2026-11-17
 
 The second numbered release: a layered core behind swappable ports, recall and
