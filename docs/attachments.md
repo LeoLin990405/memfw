@@ -429,6 +429,10 @@ printed and nothing is written:
   treated as unreferenced), `absent`, or `none` for a referenced attachment,
   whose original is **never touched** (it is not memfw's copy).
 * `stores`: the SQLite stores in the vault, and `irrecoverable_copies`.
+* `proxies`: the attachment's proxy files (`attachments/proxies/prx-*.md`,
+  MM2a). **A purge does not remove them yet**; proxy deletion arrives with
+  the MM2b wiring. Until then the proxy text stays in the vault, and the
+  plan says so.
 
 With `--yes` one `attach_purge` event commits the purge (only the id and what
 happened to the blob), then the blob is removed when no other record names
@@ -449,8 +453,9 @@ A vault's blobs live in `<blob root>/<vault_id>`, outside the vault, so a copy
 of the vault (`cp -r`, a filesystem snapshot, a test or eval vault made from
 it) shares its `vault_id` and therefore the **same blob directory**. To keep
 a copy from deleting the original's blobs, the directory carries an owner
-marker (`.owner`: the `vault_id` and the 16-hex tag of the vault's resolved
-path), written by the first write into it:
+marker (`.owner`: the `vault_id`, the 16-hex tag of the vault's resolved
+path and that path itself; it stays on this machine, in the private blob
+root), written by the first write into it:
 
 * purge, `purge --orphans` and the recovery of an interrupted purge delete
   nothing unless the marker names this vault; the purge plan says
@@ -465,7 +470,11 @@ To resolve it:
   writes a new `vault_id` and copies every blob the copy's records name into
   the copy's own directory; the shared directory is not changed.
 * **the original, moved** to a new path (its tag changed): `memfw attach
-  reown --yes` marks the directory as this vault's again.
+  reown --yes` marks the directory as this vault's again. It is refused
+  while the path recorded in the marker still holds a vault with the same
+  `vault_id`: then this vault is a copy, and taking the directory over would
+  let its purges delete blobs the original still uses. `--force-take-over`
+  does it anyway (only when the recorded vault is known to be a stale copy).
 * a directory written before markers existed is marked by its first add (or
   by `reown --yes`); until then purges refuse.
 
@@ -475,7 +484,8 @@ attachments or purges.
 `purge --orphans [--yes]` removes blobs that no committed record names and
 this vault's stale staging files. It removes no orphan while any committed
 record is missing or unreadable (records are the only place a blob's sha256
-is kept) and says so in `blocked`.
+is kept), or while the blob directory is not this vault's, and says so in
+`blocked`; with `--yes` a blocked run prints `"purged": false` and exits 1.
 
 **What a purge cannot reach:** external backups (Time Machine, rsync, cloud
 backup) of the vault or the blob root; filesystem or NAS snapshots (for
@@ -491,7 +501,8 @@ where they live.
 bulk registration (design section 8): `files`, `bytes`, `by_media_type`,
 `likely_private` (by path words only, such as `private`, `bank`, `invoice`,
 `身份证`; a hint for the report, never a privacy decision),
-`over_embed_limit`, `already_registered`, `refused_symlinks`,
+`over_embed_limit`, `already_registered`, `hard_linked` (files with more than
+one hard link, which `--reference` refuses), `refused_symlinks`,
 `refused_names` (names a location cannot hold), `other_entries`,
 `unreadable_dirs`, `truncated`; with `--hash` also `duplicates` (groups and
 files with the same sha256, hashing only files whose size repeats). It reads

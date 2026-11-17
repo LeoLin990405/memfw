@@ -930,3 +930,65 @@ def test_recover_scrubs_stores_like_a_purge(
             repository.purge_attachment(record.id, confirm=True)
     repository.recover_pending()
     assert MARKER.encode() not in database.read_bytes()
+
+
+# --- re-review follow-ups ---------------------------------------------------------------
+
+
+def test_plain_reown_in_a_copy_is_refused_while_the_original_exists(tmp_path: Path) -> None:
+    from memfw.attachments.blobs import BlobOwnerError
+
+    live, _ = _kh(tmp_path)
+    kept = live.add_attachment(_outside_file(tmp_path, "a.txt", b"live blob")).record
+    store = live.attachment_blob_store()
+    assert store is not None
+    marker = store.owner_marker()
+    assert marker is not None and marker["vault_path"] == str(live.root.resolve())
+    copy = _copy_vault(live, tmp_path / "snapshot")
+    # The purge error names the real problem: another vault owns the directory.
+    with pytest.raises(BlobOwnerError, match="belongs to another vault"):
+        copy.purge_attachment(kept.id, confirm=True)
+    with pytest.raises(BlobOwnerError, match="--new-vault-id"):
+        copy.reown_blob_store(confirm=True)
+    refused = _cli("attach", "reown", "--yes", "-r", str(copy.root))
+    assert refused.exit_code == 1 and "--new-vault-id" in refused.output
+    assert store.owner_status() == "own"  # still the live vault's
+    # The explicit, documented escape hatch.
+    taken = _cli("attach", "reown", "--yes", "--force-take-over", "-r", str(copy.root))
+    assert taken.exit_code == 0, taken.output
+    assert copy.attachment_blob_store().owner_status() == "own"  # type: ignore[union-attr]
+    assert store.owner_status() == "foreign"
+
+
+def test_blocked_orphan_purge_reports_not_purged(tmp_path: Path) -> None:
+    live, _ = _kh(tmp_path)
+    live.add_attachment(_outside_file(tmp_path, "a.txt", b"live blob"))
+    copy = _copy_vault(live, tmp_path / "snapshot")
+    result = _cli("attach", "purge", "--orphans", "--yes", "-r", str(copy.root))
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["purged"] is False
+    assert "belongs to another vault" in payload["blocked"]
+
+
+def test_purge_plan_lists_proxies_it_does_not_remove_yet(tmp_path: Path) -> None:
+    fixtures = Path(__file__).parent / "fixtures" / "proxies"
+    repository, _ = _kh(tmp_path)
+    source = _outside_file(tmp_path, "scan.pdf", (fixtures / "source.pdf").read_bytes())
+    record = repository.add_attachment(source).record
+    proxy = repository.import_proxy(record.id, fixtures / "ocr-pdf-v1.json")
+    plan = repository.attachment_purge_plan(record.id)
+    expected = f"attachments/proxies/{proxy.id}.md"
+    assert plan.proxies == (expected,)
+    assert any("NOT removed" in notice and expected in notice for notice in plan.notices)
+    # Purging today does not crash; the proxy file stays until MM2b wires deletion.
+    result = repository.purge_attachment(record.id, confirm=True)
+    assert result.plan.proxies == (expected,)
+    assert (repository.root / expected).is_file()
+
+
+def test_scan_counts_hard_linked_files(tmp_path: Path) -> None:
+    repository, root = _kh(tmp_path)
+    os.link(root / "papers" / "a.pdf", root / "img" / "a-link.pdf")
+    report = json.loads(_cli("attach", "scan", "kh:", "-r", str(repository.root)).output)
+    assert report["hard_linked"] == 2

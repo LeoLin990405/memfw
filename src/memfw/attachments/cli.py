@@ -318,7 +318,10 @@ def purge(
     try:
         if orphans:
             if yes:
-                _dump({**repository.purge_orphan_blobs(confirm=True).to_json(), "purged": True})
+                done = repository.purge_orphan_blobs(confirm=True)
+                _dump({**done.to_json(), "purged": done.blocked is None})
+                if done.blocked is not None:
+                    raise typer.Exit(code=1)
             else:
                 _dump({**repository.attachment_orphan_plan().to_json(), "purged": False})
             return
@@ -345,6 +348,16 @@ def reown(
         ),
     ] = False,
     yes: Annotated[bool, typer.Option("--yes", help="Confirm")] = False,
+    force_take_over: Annotated[
+        bool,
+        typer.Option(
+            "--force-take-over",
+            help=(
+                "Take the directory over although the recorded owner vault still exists "
+                "(it can then lose blobs to this vault's purges)"
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Make the vault's blob directory its own (after a move), or split a copy off (--new-vault-id).
 
@@ -364,7 +377,9 @@ def reown(
         )
         return
     try:
-        result = repository.reown_blob_store(new_vault_id=new_vault_id, confirm=True)
+        result = repository.reown_blob_store(
+            new_vault_id=new_vault_id, confirm=True, force_take_over=force_take_over
+        )
     except (MemfwError, OSError) as exc:
         _fail(exc)
         return

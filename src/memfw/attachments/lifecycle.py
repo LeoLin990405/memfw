@@ -30,6 +30,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
 
+import yaml
+
 from memfw.core.errors import IntegrityError, MemfwError, NotFoundError
 from memfw.core.models import (
     NON_MEMORY_MARKER_KEY,
@@ -39,9 +41,10 @@ from memfw.core.models import (
 )
 from memfw.storage.transactions import _serialized
 
-from .blobs import REOWN_HINT, BlobLocationError, BlobOwnerError, hash_stream, stage_blob
+from .blobs import REOWN_HINT, BlobLocationError, BlobOwnerError, BlobStore, hash_stream, stage_blob
 from .locations import Location, location_for_path, looks_like_location, open_location
-from .records import AttachmentRecord, check_attachment_id, render_record
+from .proxies import PROXIES_DIR, proxy_log
+from .records import ATTACHMENTS_DIR, AttachmentRecord, check_attachment_id, render_record
 from .scrub import scrub_stores, vault_sqlite_stores
 from .store import (
     PREVIOUS_SUFFIX,
@@ -93,6 +96,8 @@ class PurgePlan:
     stores: tuple[str, ...] = ()
     #: The id that owns the kept blob from now on (quota accounting), if any.
     heir: str | None = None
+    #: Proxy files of the attachment (``attachments/proxies/...``); not removed yet.
+    proxies: tuple[str, ...] = ()
     notices: tuple[str, ...] = ()
 
     def to_json(self) -> dict[str, Any]:
@@ -106,6 +111,7 @@ class PurgePlan:
             "mentioned_by": list(self.mentioned_by),
             "record_readable": self.record_readable,
             "stores": list(self.stores),
+            "proxies": list(self.proxies),
             "notices": list(self.notices),
             "irrecoverable_copies": list(IRRECOVERABLE_COPIES),
         }
@@ -149,6 +155,37 @@ def _target(text: str | Path, roots: dict[str, Path]) -> Location:
     if looks_like_location(raw, roots):
         return Location.parse(raw)
     return location_for_path(Path(text), roots)
+
+
+def _owner_problem(store: BlobStore) -> str:
+    """Why ``store`` is not this vault's, in words."""
+
+    if store.owner_status() == "foreign":
+        return (
+            "the blob directory belongs to another vault (this vault is probably a copy "
+            "that shares its vault_id)"
+        )
+    return "the blob directory is not marked as this vault's yet"
+
+
+def _live_owner(marker: dict[str, Any] | None, vault_id: str, here: Path) -> str | None:
+    """The recorded owner's path when it still holds a vault with ``vault_id`` (not ``here``)."""
+
+    if marker is None:
+        return None
+    recorded = marker.get("vault_path")
+    if not isinstance(recorded, str) or not recorded:
+        return None
+    owner = Path(recorded)
+    if owner == here.expanduser().resolve():
+        return None
+    try:
+        config = yaml.safe_load((owner / "vault.yaml").read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return None
+    if isinstance(config, dict) and config.get(VAULT_ID_KEY) == vault_id:
+        return recorded
+    return None
 
 
 class AttachmentLifecycleMixin:
@@ -239,12 +276,20 @@ class AttachmentLifecycleMixin:
 
     @_serialized
     def reown_blob_store(
-        self: RepositoryHost, *, new_vault_id: bool = False, confirm: bool = False
+        self: RepositoryHost,
+        *,
+        new_vault_id: bool = False,
+        confirm: bool = False,
+        force_take_over: bool = False,
     ) -> dict[str, Any]:
         """Make this vault's blob directory its own again (needs ``confirm``).
 
         * default: mark ``<blob root>/<vault_id>`` as this vault's (the vault
-          moved to a new path, or the directory predates owner markers);
+          moved to a new path, or the directory predates owner markers). It
+          is refused while the vault path recorded in the marker still holds
+          a vault with the same ``vault_id`` (this vault is then a copy, and
+          taking the directory over would let it purge the original's blobs)
+          unless ``force_take_over``;
         * ``new_vault_id``: for a copy of a vault (snapshot, eval vault). A new
           ``vault_id`` is written and every blob this vault's committed
           records name is **copied** from the shared directory into the new
@@ -258,9 +303,18 @@ class AttachmentLifecycleMixin:
         if not new_vault_id:
             if old is None:
                 raise IntegrityError("vault has no vault_id; nothing to re-own")
-            if old.owner_status() == "absent":
+            status = old.owner_status()
+            if status == "absent":
                 old.ensure()
             else:
+                holder = _live_owner(old.owner_marker(), old.directory.name, self.root)
+                if status == "foreign" and holder is not None and not force_take_over:
+                    raise BlobOwnerError(
+                        f"the vault at {holder} still owns this blob directory and has the "
+                        "same vault_id: this vault is a copy. Run `memfw attach reown "
+                        "--new-vault-id --yes`; `--force-take-over` would let this vault "
+                        "delete blobs the original still uses"
+                    )
                 old.write_owner()
             return {"vault_id": old.directory.name, "copied": 0, "missing": []}
         committed = committed_records(self.events())
@@ -420,12 +474,21 @@ class AttachmentLifecycleMixin:
                 blob = "absent"
             elif store.owner_status() != "own":
                 blob = "refused_owner"
-                notices.append(
-                    "the blob directory is not marked as this vault's (a copy of a vault "
-                    f"shares its vault_id), so nothing is purged; {REOWN_HINT}"
-                )
+                notices.append(f"{_owner_problem(store)}, so nothing is purged; {REOWN_HINT}")
             else:
                 blob = "delete"
+        log = proxy_log(events)
+        proxies = tuple(
+            f"{ATTACHMENTS_DIR}/{PROXIES_DIR}/{proxy_id}.md"
+            for proxy_id, owner in log.attachments.items()
+            if owner == identifier and proxy_id in log.committed
+        )
+        if proxies:
+            notices.append(
+                f"{len(proxies)} proxy file(s) of this attachment are NOT removed by this "
+                "purge yet (proxy deletion arrives with the MM2b wiring); they keep the "
+                "proxy text until then: " + ", ".join(proxies)
+            )
         if cited or mentioned:
             notices.append(
                 "memories cite this attachment; purge does not change them: review "
@@ -443,6 +506,7 @@ class AttachmentLifecycleMixin:
             record_readable=record is not None,
             stores=stores,
             heir=heir,
+            proxies=proxies,
             notices=tuple(notices),
         )
 
@@ -457,10 +521,9 @@ class AttachmentLifecycleMixin:
         events = self.events()
         plan = AttachmentLifecycleMixin.attachment_purge_plan(self, attachment_id, events=events)
         if plan.blob == "refused_owner":
-            raise BlobOwnerError(
-                "the blob directory is not marked as this vault's; nothing was purged; "
-                + REOWN_HINT
-            )
+            store_now = blob_store(self)
+            problem = _owner_problem(store_now) if store_now is not None else "no blob directory"
+            raise BlobOwnerError(f"{problem}; nothing was purged; {REOWN_HINT}")
         identifier = plan.attachment_id
         state = attachment_states(events)[identifier]
         path = _record_path(self, identifier)
@@ -521,9 +584,7 @@ class AttachmentLifecycleMixin:
             return OrphanPlan((), ())
         stages = tuple(store.stale_stages())
         if store.owner_status() not in {"own", "absent"}:
-            return OrphanPlan(
-                (), stages, blocked=f"the blob directory is not this vault's; {REOWN_HINT}"
-            )
+            return OrphanPlan((), stages, blocked=f"{_owner_problem(store)}; {REOWN_HINT}")
         shas = _committed_embedded_shas(self, committed)
         if shas is None:
             return OrphanPlan(

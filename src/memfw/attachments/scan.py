@@ -132,6 +132,7 @@ def scan_root(
     private = 0
     over_limit = 0
     already = 0
+    hard_linked = 0
     by_type: dict[str, dict[str, int]] = {}
     by_size: dict[int, list[Location]] = {}
     for item in walk_root(name, roots, start=start, stats=stats, max_entries=max_entries):
@@ -148,6 +149,8 @@ def scan_root(
             private += 1
         if item.size > max_bytes:
             over_limit += 1
+        if item.links > 1:
+            hard_linked += 1
         if str(item.location) in registered:
             already += 1
         if hash_files:
@@ -161,6 +164,8 @@ def scan_root(
         "likely_private": private,
         "over_embed_limit": over_limit,
         "already_registered": already,
+        # `attach add --reference` refuses these (several hard links).
+        "hard_linked": hard_linked,
         "refused_symlinks": stats.symlinks,
         "refused_names": stats.unsafe_names,
         "other_entries": stats.other,

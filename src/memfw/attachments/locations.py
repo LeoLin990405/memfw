@@ -329,6 +329,8 @@ class TreeFile:
 
     location: Location
     size: int
+    #: ``st_nlink``: more than one means the bytes are reachable under another path.
+    links: int = 1
 
 
 @dataclass
@@ -422,7 +424,7 @@ def walk_root(
                             continue
                         pending.append((child, parts))
                     elif stat.S_ISREG(info.st_mode):
-                        yield TreeFile(Location(root_name, parts), info.st_size)
+                        yield TreeFile(Location(root_name, parts), info.st_size, info.st_nlink)
                     else:
                         stats.other += 1
             except OSError:

@@ -443,7 +443,11 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   directory another vault marked (a copy shares `vault_id`), and verify/fsck
   report `blob_store_foreign_owner`. `memfw attach reown --new-vault-id --yes`
   splits a copy off (new `vault_id`, blobs copied); `memfw attach reown --yes`
-  re-owns after a move.
+  re-owns after a move, and is refused while the vault path recorded in the
+  marker still holds a vault with the same `vault_id` (`--force-take-over`
+  overrides). The purge plan lists the attachment's MM2a proxies, which a
+  purge does not remove until the MM2b wiring; `scan` counts hard-linked
+  files; a blocked `purge --orphans --yes` reports `purged: false`, exit 1.
 - `fsck` only `lstat`s referenced originals (`fsck --hash-referenced`
   re-hashes); directory listings are cached per pass. An empty root or one
   whose every original is gone is `referenced_unavailable`, never missing;
