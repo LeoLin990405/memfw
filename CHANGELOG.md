@@ -276,6 +276,25 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   `scripts/qmd_notes_consistency.py` (builtin notes index vs the adapter;
   overlap only, not a gate).
 
+### Added — PageIndex recall adapter (`memfw-adapter-pageindex` 0.1.0, off by default)
+
+- New workspace package `packages/adapters/memfw-adapter-pageindex`: a
+  `RecallProvider` for long documents that searches PageIndex-style
+  (VectifyAI/PageIndex, MIT; tree format of PageIndex 0.7.0, no PageIndex code
+  imported or copied). A `ModelBackend` reads each document's table-of-contents
+  tree (titles, node ids, page ranges, optional short summaries; never body
+  text) and names the sections; `mode: titles` ranks titles without a model.
+- Returns path refs `kh:<path>#<heading>` and `att:<id>#page=<n>` (the page
+  part of the multimodal locator) with `extra` limited to `kind`, `page`, `why`.
+- Gates: a non-local backend needs `cloud: true` in the adapter settings;
+  `local-private` trees are never sent to a non-local backend; a per-run token
+  and call budget; a backend must declare the `pageindex_tree_search` task.
+- `memfw-pageindex build-md | import-tree | list`: explicit offline tree
+  building (Markdown headings) and import (PageIndex PDF output, `text`
+  dropped), stored as `0600` JSON outside the vault.
+- Registered through the `memfw.adapters` entry point `pageindex`; disabled
+  until listed. memfw does not import it; default output is unchanged.
+
 ### Added — two-stage conversation search and tag filters (M3c)
 
 - `memfw conversations search` and MCP `conversations_search` gain tag
