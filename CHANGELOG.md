@@ -202,16 +202,18 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   per-segment confidence when the engine gives one.
 - Engines sit behind the adapter's own `OcrBackend` interface: `mcp` (an OCR
   server named in the settings, run as a child process over the MCP stdio
-  protocol; sync and async OCR tools, private `out_dir`, timeouts and a page
-  budget), `pdftotext` (text-layer PDFs) or any `module:factory`. Engine paths
-  come only from configuration.
+  protocol; synchronous OCR tools by default, async jobs only with
+  `allow_async_jobs`; private `out_dir`, a hard deadline with a watchdog, the
+  whole process group stopped at the end, a page budget), `pdftotext`
+  (text-layer PDFs, capped and page-limited) or any `module:factory` (outside
+  the local-only guarantee). Engine paths come only from configuration.
 - Local only, nothing uploaded; only privacy levels in `clearance` (default
   `public`, `shared`) are handed to an engine; the original's sha256 is checked
   before and after; the engine reads a private copy.
 - `memfw-ocr-proxy run | check`, and the `ocr` deriver through the
   `memfw.adapters` entry point (disabled until listed). The output is MM2a's
-  `memfw.proxy` v1 import format, mirrored from MM2a's draft (MM2a is not on
-  `main` yet) and validated with `memfw.ports.proxies` once that exists.
+  `memfw.proxy` v1 import format; constants and validation come from
+  `memfw.ports.proxies` when installed (MM2a, #91), mirrored until then.
   memfw does not import the package; default output is unchanged.
 
 ### Added — attachments as observation evidence (MM3)
