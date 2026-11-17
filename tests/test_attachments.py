@@ -415,6 +415,7 @@ def test_size_limits(tmp_path: Path) -> None:
     assert store is not None
     assert len(list(store.stored())) == 1
     assert not list(store.directory.glob(".stage-*"))
+    assert not list(store.staging.glob(".stage-*"))
 
 
 def test_audio_and_video_need_embed(tmp_path: Path) -> None:
@@ -762,3 +763,46 @@ def test_vault_id_is_random_even_with_a_seeded_id_factory(tmp_path: Path) -> Non
     assert _blob_dir(first) != _blob_dir(second)
     assert first.verify_attachments() == ([a.id], [])
     assert second.verify_attachments() == ([b.id], [])
+
+
+_CONCURRENT_ADD = """
+import sys, time
+from pathlib import Path
+from memfw.core.repository import Repository
+
+vault, source, go = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
+while not go.exists():
+    time.sleep(0.001)
+Repository(vault).add_attachment(source)
+"""
+
+
+def test_concurrent_first_adds_agree_on_one_vault_id(tmp_path: Path, private_home: Path) -> None:
+    import subprocess
+    import sys
+
+    vault = tmp_path / "vault"
+    Repository(vault).init()
+    go = tmp_path / "go"
+    sources = [_file(tmp_path, f"s{index}.txt", f"bytes {index}".encode()) for index in range(6)]
+    environment = {**os.environ, "HOME": str(private_home)}
+    workers = [
+        subprocess.Popen(
+            [sys.executable, "-c", _CONCURRENT_ADD, str(vault), str(source), str(go)],
+            env=environment,
+        )
+        for source in sources
+    ]
+    go.write_text("go")
+    assert [worker.wait(timeout=120) for worker in workers] == [0] * len(workers)
+    repository = Repository(vault)
+    kinds = [event.kind for event in repository.events()]
+    assert kinds.count(EventKind.CONFIG_CHANGE) == 1
+    assert kinds.count(EventKind.ATTACH) == len(sources)
+    checked, problems = repository.verify_attachments()
+    assert len(checked) == len(sources)
+    assert problems == []
+    blob_root = private_home / ".local/share/memfw/blobs"
+    assert sorted(path.name for path in blob_root.iterdir()) == sorted(
+        [".staging", repository.read_config()["vault_id"]]
+    )

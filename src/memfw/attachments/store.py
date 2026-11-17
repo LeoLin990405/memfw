@@ -30,7 +30,7 @@ from memfw.core.models import ATTACHMENT_EVENT_KINDS, Event, EventKind
 from memfw.ports.privacy import privacy_value
 from memfw.storage.transactions import _serialized
 
-from .blobs import DEFAULT_BLOB_ROOT, BlobLocationError, BlobStore
+from .blobs import DEFAULT_BLOB_ROOT, BlobLocationError, BlobStore, StagedBlob, stage_blob
 from .records import (
     ATTACHMENTS_DIR,
     DEFAULT_ATTACHMENT_PRIVACY,
@@ -178,12 +178,23 @@ class AttachmentStoreMixin:
     # -- configuration -----------------------------------------------------------
 
     def ensure_vault_id(self: RepositoryHost) -> str:
-        """This vault's ``vault_id``, generated (one ``config_change``) on first use."""
+        """This vault's ``vault_id``, generated (one ``config_change``) on first use.
+
+        Generation holds the vault lock and re-reads ``vault.yaml`` under it,
+        so concurrent first uses agree on one id and write it once.
+        """
 
         existing = _vault_id(self)
         if existing is not None:
             return existing
-        self.init()
+        with self._locked():
+            self.init()
+            existing = _vault_id(self)
+            if existing is not None:
+                return existing
+            return AttachmentStoreMixin._write_vault_id(self)
+
+    def _write_vault_id(self: RepositoryHost) -> str:
         config = self.read_config()
         # Always random, never from ``id_factory``: a seeded factory (``--id-seed``)
         # would give vaults that share one blob root the same blob directory.
@@ -258,27 +269,30 @@ class AttachmentStoreMixin:
             # A value that would not read back is refused before anything is written.
             render_record(draft)
             AttachmentStoreMixin.ensure_vault_id(self)
-            store = blob_store(self, create=True)
-            assert store is not None
+            # Staged under the blob root, independent of the vault id; the
+            # vault's blob directory is resolved under the lock below.
             with os.fdopen(handle, "rb", closefd=False) as stream:
-                staged = store.stage(stream, max_bytes=max_bytes)
+                staged = stage_blob(
+                    _blob_root(self.read_config()), stream, vault=self.root, max_bytes=max_bytes
+                )
         finally:
             os.close(handle)
         try:
-            result: AttachResult = cast(Any, self).add_attachment_record(
-                draft, staged.sha256, staged.size, staged
-            )
+            result: AttachResult = cast(Any, self).add_attachment_record(draft, staged)
             return result
         finally:
             staged.discard()
 
     @_serialized
     def add_attachment_record(
-        self: RepositoryHost, draft: AttachmentRecord, sha256: str, size: int, staged: Any
+        self: RepositoryHost, draft: AttachmentRecord, staged: StagedBlob
     ) -> AttachResult:
         """Link the staged blob and commit the record plus one ``attach`` event."""
 
+        sha256, size = staged.sha256, staged.size
         config = self.read_config()
+        if _vault_id(self) is None:
+            raise IntegrityError("vault has no vault_id; run the add again")
         store = blob_store(self, create=True)
         assert store is not None
         events = self.events()

@@ -31,6 +31,8 @@ CHUNK_BYTES: Final = 1024 * 1024
 #: Default blob root, relative to the home directory (next to the conversation store).
 DEFAULT_BLOB_ROOT: Final = Path(".local/share/memfw/blobs")
 _SHA_RE: Final = re.compile(r"^[0-9a-f]{64}$")
+#: Staging area under the blob root (never a vault id: those are UUIDs).
+STAGING_DIR: Final = ".staging"
 
 #: Synced-folder markers under the home directory. Same list as
 #: ``memfw.history.transcripts.SYNCED_MARKERS`` (kept equal by a test; the
@@ -130,11 +132,73 @@ class BlobCheck:
     loose_mode: bool = False
 
 
+def checked_root(root: Path, *, vault: Path, extra_synced: Sequence[Path] = ()) -> Path:
+    """``root`` resolved and location-checked; nothing is created.
+
+    ``root`` itself may not be a symlink (its parents may: ``/tmp`` is one on macOS).
+    """
+
+    expanded = root.expanduser()
+    if expanded.is_symlink():
+        raise BlobLocationError("blob root is a symlink")
+    return check_blob_location(expanded, vault=vault, extra_synced=extra_synced)
+
+
+def _stage_into(directory: Path, source: BinaryIO, *, max_bytes: int) -> StagedBlob:
+    _private_dir(directory)
+    handle, name = tempfile.mkstemp(prefix=".stage-", suffix=".tmp", dir=directory)
+    temporary = Path(name)
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        os.fchmod(handle, 0o600)
+        with os.fdopen(handle, "wb") as target:
+            while chunk := source.read(CHUNK_BYTES):
+                size += len(chunk)
+                if size > max_bytes:
+                    raise ValueError(f"attachment is larger than {max_bytes} bytes")
+                digest.update(chunk)
+                target.write(chunk)
+            target.flush()
+            os.fsync(target.fileno())
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    return StagedBlob(digest.hexdigest(), size, temporary)
+
+
+def stage_blob(
+    root: Path,
+    source: BinaryIO,
+    *,
+    vault: Path,
+    max_bytes: int,
+    extra_synced: Sequence[Path] = (),
+) -> StagedBlob:
+    """Copy ``source`` into ``<root>/.staging`` (0600) while hashing it.
+
+    The staging area does not depend on a vault id, so an original can be
+    staged before the vault lock is taken; :meth:`BlobStore.link` then moves
+    it into the vault's blob directory under the same root.
+    Raises ``ValueError`` (and leaves nothing behind) past ``max_bytes``.
+    """
+
+    resolved_root = checked_root(root, vault=vault, extra_synced=extra_synced)
+    _private_dir(resolved_root)
+    return _stage_into(resolved_root / STAGING_DIR, source, max_bytes=max_bytes)
+
+
 class BlobStore:
     """The blob directory of one vault (``<root>/<vault id>``)."""
 
     def __init__(self, directory: Path) -> None:
         self.directory = directory
+
+    @property
+    def staging(self) -> Path:
+        """The root's staging area (shared by every vault under the root)."""
+
+        return self.directory.parent / STAGING_DIR
 
     @classmethod
     def open(
@@ -152,10 +216,7 @@ class BlobStore:
         on macOS). With ``create`` the directories are made 0700.
         """
 
-        expanded = root.expanduser()
-        if expanded.is_symlink():
-            raise BlobLocationError("blob root is a symlink")
-        resolved_root = check_blob_location(expanded, vault=vault, extra_synced=extra_synced)
+        resolved_root = checked_root(root, vault=vault, extra_synced=extra_synced)
         directory = resolved_root / vault_id
         if create:
             _private_dir(resolved_root)
@@ -169,31 +230,10 @@ class BlobStore:
         return self.directory / sha[:2] / sha
 
     def stage(self, source: BinaryIO, *, max_bytes: int) -> StagedBlob:
-        """Copy ``source`` into a 0600 temp file here while hashing it.
+        """Copy ``source`` into the root's staging area while hashing it."""
 
-        Raises ``ValueError`` (and leaves nothing behind) past ``max_bytes``.
-        """
-
-        _private_dir(self.directory)
-        handle, name = tempfile.mkstemp(prefix=".stage-", suffix=".tmp", dir=self.directory)
-        temporary = Path(name)
-        digest = hashlib.sha256()
-        size = 0
-        try:
-            os.fchmod(handle, 0o600)
-            with os.fdopen(handle, "wb") as target:
-                while chunk := source.read(CHUNK_BYTES):
-                    size += len(chunk)
-                    if size > max_bytes:
-                        raise ValueError(f"attachment is larger than {max_bytes} bytes")
-                    digest.update(chunk)
-                    target.write(chunk)
-                target.flush()
-                os.fsync(target.fileno())
-        except BaseException:
-            temporary.unlink(missing_ok=True)
-            raise
-        return StagedBlob(digest.hexdigest(), size, temporary)
+        _private_dir(self.directory.parent)
+        return _stage_into(self.staging, source, max_bytes=max_bytes)
 
     def link(self, staged: StagedBlob) -> bool:
         """Move ``staged`` to its content address. ``False``: the blob was already there.
@@ -204,6 +244,9 @@ class BlobStore:
         """
 
         target = self.path_for(staged.sha256)
+        if staged.temporary.parent != self.staging:
+            staged.discard()
+            raise IntegrityError("the blob root changed while the original was staged; retry")
         _private_dir(target.parent)
         existing = self.check(staged.sha256, expected_size=staged.size)
         if existing.status == "ok":
@@ -259,12 +302,15 @@ class BlobStore:
 __all__ = [
     "CHUNK_BYTES",
     "DEFAULT_BLOB_ROOT",
+    "STAGING_DIR",
     "SYNCED_MARKERS",
     "BlobCheck",
     "BlobLocationError",
     "BlobStore",
     "StagedBlob",
     "check_blob_location",
+    "checked_root",
     "check_sha",
     "hash_stream",
+    "stage_blob",
 ]
