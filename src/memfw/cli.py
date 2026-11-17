@@ -2110,7 +2110,8 @@ def forget_residue(
     """Check that a forgotten memory left nothing in the index or projections.
 
     Read-only. Exit 0 when clean, 1 when a store still carries the memory
-    (each one names its rebuild remedy), 2 when the memory is live.
+    (each one names its rebuild remedy), 2 on a usage error (bad id or root),
+    3 when the memory is still live.
     """
     from .curation.residue import projection_residue
 
@@ -2120,7 +2121,8 @@ def forget_residue(
         raise typer.BadParameter(str(exc)) from exc
     typer.echo(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
     if report["clean"] is None:
-        raise typer.Exit(code=2)
+        # Not 2: typer uses 2 for usage errors (BadParameter).
+        raise typer.Exit(code=3)
     if not report["clean"]:
         raise typer.Exit(code=1)
 

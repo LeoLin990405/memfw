@@ -100,7 +100,7 @@ def test_live_memory_is_not_forgotten(tmp_path: Path, home: Path) -> None:
     assert report["state"] == "live"
     assert report["clean"] is None
     result = runner.invoke(app, ["forget", "residue", "mem-a", "--root", str(repository.root)])
-    assert result.exit_code == 2, result.output
+    assert result.exit_code == 3, result.output
     assert json.loads(result.output)["state"] == "live"
 
 
@@ -209,6 +209,23 @@ def test_residue_rejects_bad_ids(tmp_path: Path) -> None:
             projection_residue(repository.root, bad)
     result = runner.invoke(app, ["forget", "residue", "../x", "--root", str(repository.root)])
     assert result.exit_code != 0
+
+
+def test_residue_exit_codes_do_not_collide(tmp_path: Path, home: Path) -> None:
+    """0 clean, 1 residue, 2 usage error (typer), 3 live: a script can tell them apart."""
+
+    repository = _vault(tmp_path)
+    root = str(repository.root)
+    bad_id = runner.invoke(app, ["forget", "residue", "../x", "--root", root])
+    assert bad_id.exit_code == 2, bad_id.output
+    bad_root = runner.invoke(app, ["forget", "residue", "mem-a", "--root", str(tmp_path / "no")])
+    assert bad_root.exit_code == 2, bad_root.output
+    live = runner.invoke(app, ["forget", "residue", "mem-a", "--root", root])
+    assert live.exit_code == 3, live.output
+    assert json.loads(live.output)["clean"] is None
+    absent = runner.invoke(app, ["forget", "residue", "mem-never", "--root", root])
+    assert absent.exit_code in (0, 1), absent.output
+    assert json.loads(absent.output)["clean"] is (absent.exit_code == 0)
 
 
 def test_entities_projection_is_checked_when_given(tmp_path: Path, home: Path) -> None:

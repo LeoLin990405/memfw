@@ -484,7 +484,8 @@ never-existing) id may appear in none of them; a closed memory
 (`valid_to`/`superseded_by`) may keep FTS rows for history queries but must
 not be listed as current, and may not appear in the current-only related
 projection. The JSON report names each store, its row counts, whether it is
-residue and the rebuild that clears it; exit 0 is clean, 1 residue, 2 a live
+residue and the rebuild that clears it; exit 0 is clean, 1 residue, 2 a
+usage error (bad id or vault root, as for every typer command), 3 a live
 memory. An unreadable store counts as residue (fail closed). OKF exports on
 disk are not checked.
 

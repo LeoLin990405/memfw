@@ -62,7 +62,8 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   requests; `memfw forget residue <id>` checks, read-only, that a forgotten
   memory is gone from the FTS index, the related, corroboration, usage and
   (optionally) entity projections, naming the rebuild for each store that
-  still carries it. Hard delete is unchanged. New v3 sample set in
+  still carries it (exit 0 clean, 1 residue, 2 usage error, 3 the memory is
+  still live). Hard delete is unchanged. New v3 sample set in
   `tests/fixtures/contract_v3/`; the v2 set is unchanged.
 
 ### Added — `current` context slot (U6, off by default)
