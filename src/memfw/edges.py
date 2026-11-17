@@ -90,6 +90,7 @@ from .core.local_data import (
     VaultIdentity,
     ensure_private_dir,
     projection_file,
+    read_vault,
     vault_identity,
 )
 from .core.models import MemoryDocument
@@ -701,14 +702,20 @@ def rebuild(repository: Repository, store: SqliteProjectionStore | None = None) 
     The vault is read (its identity and every edge) under the vault lock, the
     one writers hold, so a rebuild running beside a write sees the vault
     before or after it, never a pending transaction; the file is written
-    after the lock is released (it is outside the vault).
+    after the lock is released (it is outside the vault). A read-only vault,
+    whose lock file cannot be opened, is read without it, between two
+    fingerprints (``local_data.read_vault``).
     """
 
-    with repository._locked():
-        target = store or vault_store(repository)
-        if target.identity is not None:
-            target.identity = vault_identity(repository)
-        found = collect_edges(repository)
+    target = store or vault_store(repository)
+
+    def read() -> tuple[VaultIdentity | None, list[Edge]]:
+        identity = vault_identity(repository) if target.identity is not None else None
+        return identity, collect_edges(repository)
+
+    identity, found = read_vault(repository, read)
+    if identity is not None:
+        target.identity = identity
     return target.rebuild(found)
 
 

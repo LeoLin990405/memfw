@@ -46,15 +46,22 @@ once its first event is written: rebuild then, as after any write.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
 import re
 import stat
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import AbstractContextManager, ExitStack
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final, Protocol
+from typing import Any, Final, Protocol, TypeVar
+
+from .errors import IntegrityError, MemfwError
+
+_T = TypeVar("_T")
 
 #: Under the home directory: memfw's local data directory.
 DATA_ROOT: Final = Path(".local") / "share" / "memfw"
@@ -181,6 +188,64 @@ def _catalog_first_hash(path: Path) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+class LockingHost(Protocol):
+    """What :func:`read_vault` needs from a vault (``Repository`` has it)."""
+
+    def _locked(self) -> AbstractContextManager[None]: ...
+
+    def _tree_fingerprint(self) -> str: ...
+
+
+class VaultBusyError(MemfwError):
+    """An unlocked read kept seeing the vault change (message is safe to show)."""
+
+
+#: Lock-open errors that mean "may not write the lock file", not "broken".
+_LOCK_DENIED: Final = frozenset({errno.EACCES, errno.EPERM, errno.EROFS})
+#: Unlocked reads tried before giving up (each between two fingerprints).
+UNLOCKED_ATTEMPTS: Final = 3
+
+
+def read_vault(
+    host: LockingHost, read: Callable[[], _T], *, attempts: int = UNLOCKED_ATTEMPTS
+) -> _T:
+    """Run ``read`` (read-only on the vault) on a consistent view of the vault.
+
+    Normally under the vault lock, the one writers hold. When the lock file
+    cannot be opened for permission reasons (a read-only vault directory or
+    file system, a lock file owned by another user), ``read`` runs unlocked
+    between two transaction fingerprints, and is retried (up to ``attempts``
+    times, with a short back-off) when they differ or a write was pending;
+    then :class:`VaultBusyError`. Other lock errors propagate.
+    """
+
+    stack = ExitStack()
+    try:
+        stack.enter_context(host._locked())
+    except OSError as exc:
+        stack.close()
+        if exc.errno not in _LOCK_DENIED:
+            raise
+    else:
+        with stack:
+            return read()
+    for attempt in range(attempts):
+        before = host._tree_fingerprint()
+        try:
+            result = read()
+        except IntegrityError:
+            result = None
+            changed = True  # e.g. a write was pending: try again
+        else:
+            changed = host._tree_fingerprint() != before
+        if not changed:
+            return result  # type: ignore[return-value]
+        time.sleep(0.05 * 2**attempt)
+    raise VaultBusyError(
+        "the vault changed during every unlocked read (its lock file is not writable): try again"
+    )
+
+
 def vault_identity(host: VaultHost) -> VaultIdentity:
     """The identity of the vault ``host`` opens (see the module docstring).
 
@@ -207,6 +272,10 @@ __all__ = [
     "DATA_ROOT",
     "IDENTITY_KEYS",
     "OTHER_VAULT",
+    "UNLOCKED_ATTEMPTS",
+    "LockingHost",
+    "VaultBusyError",
+    "read_vault",
     "VaultHost",
     "VaultIdentity",
     "vault_identity",

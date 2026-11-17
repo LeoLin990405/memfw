@@ -168,6 +168,10 @@ A projection from the release before (schema 1, no identity) is refused as
 - a moved (or copied) vault has a new key, so it starts with no projection:
   run `memfw graph rebuild` at the new path. The old file stays where it
   was, unused, until you delete it;
+- a read-only vault (its `.memfw.lock` cannot be opened) can still be
+  rebuilt: the vault is read without the lock, between two transaction
+  fingerprints, retried up to 3 times if a write lands in between, then the
+  rebuild fails with a "try again" message;
 - a vault rooted at `$HOME` itself cannot have an edge projection: the file
   would be inside the vault, and `graph rebuild` refuses that. The same holds
   for the corroboration projection.

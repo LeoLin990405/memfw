@@ -491,3 +491,54 @@ def test_free_text_concepts_never_list_the_vault(
     assert len(paths) == 9  # the 10 memories about "free text 1", less the start
     assert calls["list"] == 0
     assert calls["get"] <= 20  # the start, its concept's 10 memories: each read once
+
+
+def test_a_read_only_vault_can_still_be_rebuilt(tmp_path: Path) -> None:
+    """M2: no writable lock file: read unlocked between two fingerprints."""
+
+    repository = _vault(tmp_path / "vault", share=True)
+    _corroborated(repository)
+    repository.add("m-2", "b", memory_id="m-2", about=["concept:x"], privacy="public")
+    (repository.root / ".memfw.lock").unlink(missing_ok=True)
+    repository.root.chmod(0o555)
+    try:
+        reader = Repository(repository.root)
+        assert rebuild_edge_projection(reader)["edges"] > 0
+        assert corroboration.rebuild(reader, _rules(reader)) == {"memories": 1, "mentions": 2}
+        runner = CliRunner()
+        root = str(repository.root)
+        assert runner.invoke(cli_app, ["graph", "rebuild", "-r", root]).exit_code == 0
+        built = runner.invoke(cli_app, ["corroboration", "rebuild", "--root", root])
+        assert built.exit_code == 0, built.output
+        assert _ids(graph_match(reader, start="m-2", path="about>")) == [["m-2", "concept:x"]]
+        assert not (repository.root / ".memfw.lock").exists()
+    finally:
+        repository.root.chmod(0o755)
+
+
+def test_an_unlocked_read_retries_while_the_vault_changes(tmp_path: Path) -> None:
+    from memfw.core.local_data import VaultBusyError, read_vault
+
+    class Host:
+        def __init__(self, prints: list[str]) -> None:
+            self.prints = iter(prints)
+
+        def _locked(self) -> Any:
+            raise PermissionError(13, "Permission denied")
+
+        def _tree_fingerprint(self) -> str:
+            return next(self.prints)
+
+    reads: list[int] = []
+    # Changes during the first read, steady during the second.
+    assert read_vault(Host(["a", "b", "b", "b"]), lambda: reads.append(1) or 7) == 7
+    assert len(reads) == 2
+    with pytest.raises(VaultBusyError, match="try again"):
+        read_vault(Host(["a", "b", "c", "d", "e", "f"]), lambda: 1)
+
+    class Broken(Host):
+        def _locked(self) -> Any:
+            raise OSError(5, "I/O error")
+
+    with pytest.raises(OSError, match="I/O error"):
+        read_vault(Broken([]), lambda: 1)

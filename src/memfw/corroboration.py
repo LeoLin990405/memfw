@@ -97,6 +97,7 @@ from .core.local_data import (
     VaultIdentity,
     ensure_private_dir,
     projection_file,
+    read_vault,
     vault_identity,
 )
 from .core.models import EventKind, MemoryDocument
@@ -472,7 +473,8 @@ def rebuild(
 
     Read-only on the vault. Writes a fresh file and renames it into place, so a
     reader never sees a half-built projection. The vault is read under its
-    lock; the file is written after it is released. ``path`` defaults to
+    lock (unlocked between two fingerprints when the lock file cannot be
+    opened: a read-only vault); the file is written after it is released. ``path`` defaults to
     :func:`projection_path`; a path inside the vault is refused. ``identity``
     (default: the vault's, ``vault_identity``) is recorded in the meta table.
     """
@@ -486,9 +488,14 @@ def rebuild(
         raise CorroborationError("refusing a symlinked corroboration projection")
     # Read under the vault lock (the one writers hold): a rebuild beside a
     # write sees the vault before or after it, never a pending transaction.
-    with repository._locked():
-        stamp = identity if identity is not None else vault_identity(repository)
-        data = collect(repository, rules)
+    # A read-only vault is read unlocked between two fingerprints.
+    stamp, data = read_vault(
+        repository,
+        lambda: (
+            identity if identity is not None else vault_identity(repository),
+            collect(repository, rules),
+        ),
+    )
     if not target.parent.exists():
         try:
             ensure_private_dir(target.parent)
