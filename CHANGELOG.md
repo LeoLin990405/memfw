@@ -11,6 +11,26 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
+### Fixed — loopback requests never go through an environment proxy (security)
+
+- `memfw.notes.http.open_http` (embeddings for notes, memory hybrid search
+  and the notes model helpers) kept urllib's default `ProxyHandler`: with
+  `HTTP_PROXY` / `HTTPS_PROXY` set and `no_proxy` not listing the host, a
+  request to a local embedding or model service on `localhost` or
+  `127.0.0.1` was sent through the proxy, memory and note text included.
+  A request to this host now always goes direct: `localhost`, `127.0.0.0/8`,
+  `::1`, `::ffff:127.x`, the short and numeric IPv4 forms the socket layer
+  reads as 127/8 (`127.1`, `2130706433`, `0x7f.0.0.1`) and the unspecified
+  `0.0.0.0` / `::` (all decided on the literal host, never by DNS). Other
+  hosts still honour the environment's proxy settings. Helpers:
+  `bypasses_proxy` (that rule) and the stricter `is_loopback_host` /
+  `is_loopback_url` (canonical loopback only, for "text stays on this
+  machine" decisions).
+- The local relevance judge (`MEMFW_JUDGE_URL`, `local_judge_transport`)
+  used plain `urlopen`: the same proxy leak, and it followed redirects with
+  memory text. It now goes through `open_http` (direct for this host, 3xx
+  refused). `scripts/day11_runner.py` (Ollama calls) does too.
+
 ### Fixed — a top-level `sensitivity:` key is read the same at every exit
 
 - A hand-added top-level `sensitivity:` front matter key was treated as

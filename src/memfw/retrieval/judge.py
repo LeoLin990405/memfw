@@ -15,6 +15,8 @@ import urllib.request
 from collections.abc import Callable
 from typing import Any, Protocol
 
+from memfw.notes import http as notes_http
+
 JudgeTransport = Callable[[str, str, str, str], float]
 
 
@@ -70,7 +72,8 @@ def local_judge_transport(endpoint: str, question: str, passage: str, context: s
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=2) as response:
+        # No redirects, and a local judge is never reached through an env proxy.
+        with notes_http.open_http(request, timeout=2) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except (TimeoutError, OSError, json.JSONDecodeError, RuntimeError, AssertionError) as exc:
         raise TimeoutError("local judge timed out") from exc
