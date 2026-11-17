@@ -19,13 +19,17 @@ from the vault, so "rebuild" means start empty: the file may be deleted at
 any time (``reset()``), and only usage signals are lost. Nothing in memfw
 ranks or filters by it; the C4 coverage/waste eval reads it (``counts``,
 ``rows``). The file is created with mode 0600 (``O_EXCL``/``O_NOFOLLOW``, so a
-planted file or symlink is refused) and kept at 0600; its directory is 0700.
+planted file or symlink is refused) and kept at 0600; its directory is
+0700 (an existing one the user owns is tightened to 0700 on every write).
 
 **Retention.** Every ``record`` prunes in the same transaction: rows older
 than ``max_age_days`` (default ``DEFAULT_MAX_AGE_DAYS`` = 90, measured from
-the new signal's time), then the oldest rows beyond ``max_rows`` (default
-``DEFAULT_MAX_ROWS`` = 100000, a few MB). Together with the 100-id cap per
-signal this bounds the file.
+the new signal's time; an index on ``at_epoch`` keeps this a range delete),
+then the oldest rows beyond ``max_rows`` (default ``DEFAULT_MAX_ROWS`` =
+100000: about 7.4 MB at the cap with short ids, plus about 1.5 MB for the
+``at_epoch`` index), as a rowid range below the ``max_rows``-th newest rowid,
+so a write never sorts the table. Together with the 100-id cap per signal
+this bounds the file.
 """
 
 from __future__ import annotations
@@ -55,6 +59,8 @@ _SCHEMA = (
     " memory_id TEXT NOT NULL, session_ref TEXT NOT NULL, app TEXT NOT NULL, at TEXT NOT NULL,"
     " at_epoch REAL NOT NULL)",
     "CREATE INDEX IF NOT EXISTS used_memory ON used (memory_id)",
+    # Added after schema 1 shipped; IF NOT EXISTS adds it to an existing file.
+    "CREATE INDEX IF NOT EXISTS used_at ON used (at_epoch)",
 )
 
 
@@ -77,11 +83,19 @@ def projection_path(root: Path | str, *, home: Path | None = None) -> Path:
 
 
 def _private_dir(path: Path) -> None:
-    """Create the store's directory (and parents) with mode 0700; refuse a symlink."""
+    """Create the store's directory (and parents) with mode 0700; refuse a symlink.
+
+    An existing directory the current user owns is tightened to 0700 too (its
+    parents are left alone; a directory owned by someone else is not touched).
+    """
 
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
     if path.is_symlink() or not path.is_dir():
         raise UsageStoreError("usage directory is not a directory")
+    info = os.lstat(path)
+    getuid = getattr(os, "getuid", None)
+    if stat.S_IMODE(info.st_mode) != 0o700 and (getuid is None or info.st_uid == getuid()):
+        os.chmod(path, 0o700)
 
 
 def _private_file(path: Path) -> None:
@@ -146,9 +160,11 @@ class SqliteUsageSink:
                     )
                     # Retention: by age, then by count (oldest rows first).
                     connection.execute("DELETE FROM used WHERE at_epoch < ?", (cutoff,))
+                    # The same rows as "keep the newest max_rows by rowid", without
+                    # a sort: walk back max_rows on the rowid b-tree, drop the rest.
                     connection.execute(
-                        "DELETE FROM used WHERE rowid NOT IN"
-                        " (SELECT rowid FROM used ORDER BY rowid DESC LIMIT ?)",
+                        "DELETE FROM used WHERE rowid <="
+                        " (SELECT rowid FROM used ORDER BY rowid DESC LIMIT 1 OFFSET ?)",
                         (self.max_rows,),
                     )
         except sqlite3.Error as exc:

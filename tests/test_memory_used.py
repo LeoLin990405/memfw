@@ -292,6 +292,83 @@ def test_retention_prunes_by_age_and_count(tmp_path: Path) -> None:
         SqliteUsageSink(tmp_path / "x", max_age_days=0)
 
 
+def test_count_retention_keeps_the_newest_rows_despite_rowid_gaps(tmp_path: Path) -> None:
+    sink = SqliteUsageSink(tmp_path / "u.sqlite3", max_rows=3, max_age_days=10)
+
+    def signal(day: int, memory_id: str) -> UsageSignal:
+        return UsageSignal(
+            memory_ids=(memory_id,), session_ref="s1", app="", at=T0 + timedelta(days=day)
+        )
+
+    # An out-of-order (older) signal pruned by age leaves a hole in the rowids:
+    # count retention still keeps the newest max_rows rows, not fewer.
+    for day, memory_id in ((11, "m-a"), (0, "m-b"), (11, "m-c"), (11, "m-d")):
+        sink.record(signal(day, memory_id))
+    assert [row["memory_id"] for row in sink.rows()] == ["m-a", "m-c", "m-d"]
+    sink.record(signal(11, "m-e"))
+    assert [row["memory_id"] for row in sink.rows()] == ["m-c", "m-d", "m-e"]
+
+
+def test_existing_store_gains_the_at_epoch_index(tmp_path: Path) -> None:
+    import sqlite3
+
+    path = tmp_path / "u.sqlite3"
+    with sqlite3.connect(path) as connection:  # a file written before the index existed
+        connection.execute(
+            "CREATE TABLE used (memory_id TEXT NOT NULL, session_ref TEXT NOT NULL,"
+            " app TEXT NOT NULL, at TEXT NOT NULL, at_epoch REAL NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO used VALUES ('m-old', 's0', '', ?, ?)", (T0.isoformat(), T0.timestamp())
+        )
+    os.chmod(path, 0o600)
+    sink = SqliteUsageSink(path)
+    sink.record(_signals()[0])
+    with sqlite3.connect(path) as connection:
+        indexes = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'used'"
+            )
+        }
+    assert {"used_at", "used_memory"} <= indexes
+    assert sink.counts() == {"m-old": 1, "m-a": 1, "m-b": 1}
+
+
+def test_existing_usage_directory_is_tightened(tmp_path: Path) -> None:
+    directory = tmp_path / "usage"
+    directory.mkdir(mode=0o755)
+    os.chmod(directory, 0o755)
+    SqliteUsageSink(directory / "u.sqlite3").record(_signals()[0])
+    assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+
+
+def test_a_write_at_the_row_cap_does_not_scan_the_table(tmp_path: Path) -> None:
+    import sqlite3
+    import time
+
+    path = tmp_path / "u.sqlite3"
+    sink = SqliteUsageSink(path)
+    sink.record(_signals()[0])
+    with sqlite3.connect(path) as connection:
+        connection.executemany(
+            "INSERT INTO used (memory_id, session_ref, app, at, at_epoch) VALUES (?, ?, ?, ?, ?)",
+            (
+                (f"m-{n:06x}", "conv:kimi:s2@4", "codex", T0.isoformat(), T0.timestamp())
+                for n in range(100_000)
+            ),
+        )
+    timings = []
+    for _ in range(5):
+        start = time.perf_counter()
+        sink.record(_signals()[1])
+        timings.append(time.perf_counter() - start)
+    assert len(sink.rows()) == 100_000
+    # The old NOT IN (... ORDER BY rowid DESC LIMIT 100000) delete took ~30-40 ms
+    # here; the rowid-range delete is a few ms. The bound is generous for slow CI.
+    assert sorted(timings)[2] < 0.020
+
+
 def test_missing_vault_is_not_cached(tmp_path: Path) -> None:
     root = tmp_path / "late"
     runtime = build_runtime(root)

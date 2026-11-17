@@ -327,6 +327,103 @@ def test_locator_held_back_in_a_forced_pass_is_reread_once_settled(fx: Fixture) 
     assert fx.ingest(30, now=NOW + timedelta(hours=2))["sessions_unchanged"] == 1
 
 
+class _ToggleReader(_SharedDbReader):
+    """A shared-database reader that can read nothing (locked, mid-rewrite)."""
+
+    def __init__(self, stamp: datetime | None) -> None:
+        super().__init__(stamp)
+        self.empty = False
+
+    def read(self, locator: SessionLocator, *, after: int = -1) -> Any:
+        if self.empty:
+            return iter(())
+        return super().read(locator, after=after)
+
+
+def test_force_marker_survives_a_busy_read_with_zero_rows(tmp_path: Path) -> None:
+    (tmp_path / "store.db").write_text("db")
+    quiet = (NOW - timedelta(hours=2)).timestamp()
+    os.utime(tmp_path / "store.db", (quiet, quiet))
+    db = tmp_path / "conv.sqlite"
+    store = ConversationStore(db)
+    reader = _ToggleReader(NOW - timedelta(minutes=1))
+    store.ingest(reader, [tmp_path])  # stored with a cursor by a plain ingest
+    with sqlite3.connect(db) as connection:
+        connection.execute("DELETE FROM conversation_meta WHERE key = 'labels_version:fake'")
+    counts = store.ingest(reader, [tmp_path], settled_minutes=30, now=NOW)
+    assert counts.extra["relabelled"] is True and counts.extra["sessions_unsettled"] == 1
+    assert len(_meta(db, "force:fake:")) == 1
+    # Settled now, but the forced full re-read finds nothing readable: busy, and
+    # the owed re-read is kept rather than dropped.
+    reader.empty = True
+    later = NOW + timedelta(hours=1)
+    counts = store.ingest(reader, [tmp_path], settled_minutes=30, now=later)
+    assert counts.sessions_busy == 1
+    assert len(_meta(db, "force:fake:")) == 1
+    # Readable again, file unchanged: still re-read in full once, then the marker goes.
+    reader.empty = False
+    counts = store.ingest(reader, [tmp_path], settled_minutes=30, now=later)
+    assert counts.sessions_read == 1 and counts.sessions_unchanged == 0
+    assert _meta(db, "force:fake:") == []
+
+
+def test_optout_forced_pass_on_a_locked_locator_keeps_the_reread(tmp_path: Path) -> None:
+    (tmp_path / "store.db").write_text("db")
+    db = tmp_path / "conv.sqlite"
+    reader = _ToggleReader(NOW - timedelta(hours=2))
+    ConversationStore(db).ingest(reader, [tmp_path])  # stored, opt-out rules recorded
+    # The cwd opt-out rules change (a forced full pass), but the store is locked.
+    changed = ConversationStore(db, optout=OptOut(cwd_globs=("/elsewhere/*",)))
+    reader.empty = True
+    assert changed.ingest(reader, [tmp_path]).sessions_busy == 1
+    assert len(_meta(db, "force:fake:")) == 1
+    # Readable again, unchanged file, no longer a forced pass: still re-read once.
+    reader.empty = False
+    counts = changed.ingest(reader, [tmp_path])
+    assert counts.sessions_read == 1 and counts.sessions_unchanged == 0
+    assert _meta(db, "force:fake:") == []
+    assert changed.ingest(reader, [tmp_path]).sessions_unchanged == 1
+
+
+def test_future_mtime_without_timestamps_falls_back_to_ctime(fx: Fixture) -> None:
+    fx.append("s1", "user", "no stamps, clock ahead", None)
+    real_now = datetime.now(UTC)
+    ahead = (real_now + timedelta(days=30)).timestamp()
+    os.utime(fx.path("s1"), (ahead, ahead))  # the ctime moves to the present
+    # Within the settled window of the ctime: still active.
+    assert fx.ingest(30, now=real_now)["sessions_unsettled"] == 1
+    # Once the ctime is quiet long enough the session settles (the future mtime
+    # alone kept it unsettled until the clock caught up).
+    counts = fx.ingest(30, now=real_now + timedelta(hours=1))
+    assert counts["sessions_unsettled"] == 0 and counts["records_new"] == 1
+    assert fx.archive("s1")["archived"] is True
+
+
+def test_no_ctime_fallback_on_windows(fx: Fixture, monkeypatch: pytest.MonkeyPatch) -> None:
+    # On Windows st_ctime is the creation time: a future mtime stays untrusted.
+    fx.append("s1", "user", "no stamps, clock ahead", None)
+    real_now = datetime.now(UTC)
+    ahead = (real_now + timedelta(days=30)).timestamp()
+    os.utime(fx.path("s1"), (ahead, ahead))
+    locator = SessionLocator("claude", fx.path("s1"), "demo/s1.jsonl", "s1")
+    store = fx.store
+    store._now = real_now + timedelta(hours=1)
+    store._settled = store._now - timedelta(minutes=30)
+    assert store._is_settled(None, locator) is True
+    with monkeypatch.context() as patch:  # undone before the fixtures' teardown
+        patch.setattr(os, "name", "nt")
+        assert store._is_settled(None, locator) is False
+
+
+def test_unstatable_path_is_unknown_not_an_error(tmp_path: Path) -> None:
+    store = ConversationStore(tmp_path / "conv.sqlite")
+    store._now = NOW
+    store._settled = NOW - timedelta(minutes=30)
+    locator = SessionLocator("fake", tmp_path / "bad\0name", "bad#s1", "s1", fingerprint="m1")
+    assert store._is_settled(None, locator) is False
+    assert store._is_settled(NOW - timedelta(hours=1), locator) is True
+
+
 def test_resume_resets_the_settled_marker(fx: Fixture) -> None:
     fx.append("s1", "user", "first", NOW - timedelta(hours=2))
     fx.ingest(30)
