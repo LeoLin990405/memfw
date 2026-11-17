@@ -716,8 +716,12 @@ def note_level(text: str, legacy: str) -> tuple[str, int]:
     """
 
     bom = text.startswith("\ufeff")
-    lines = text.removeprefix("\ufeff").splitlines(keepends=True)
-    if not lines or lines[0].strip() != "---":
+    body = text.removeprefix("\ufeff")
+    lines = body.splitlines(keepends=True)
+    # The block is split exactly like memfw.notes.index._split_frontmatter: it
+    # opens only when the text starts with "---" and its first line is "---",
+    # and it closes only on the next line that is "---" (never on "...").
+    if not body.startswith("---") or not lines or lines[0].strip() != "---":
         head = lines[:_HEAD_LINES]
         first = next((line.strip() for line in head if line.strip()), "")
         if first == "---" or any(_PRIVACY_HINT.match(line) for line in head):

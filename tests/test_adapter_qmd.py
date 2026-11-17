@@ -521,6 +521,25 @@ YAML_LEAK_FORMS = [
     "---\nprivacy: shared\nsensitivity: [private]\n---\n",
     "---\nprivacy: shared\ntags: [a, 'privacy:local-private']\n---\n",
 ]
+#: A ``...`` line never closes the block (the kernel closes only on ``---``).
+DOCUMENT_END_FORMS = [
+    "---\ndesc: |\n  ...\nprivacy: local-private\n---\n",
+    "---\nprivacy: public\n...\ntags: [privacy:local-private]\n---\n",
+]
+#: Texts for the split-parity check (where the body starts).
+SPLIT_CASES = [
+    *DOCUMENT_END_FORMS,
+    "",
+    "# Title\n",
+    "---\n---\nbody\n",
+    "---\nprivacy: shared\n---\nbody\n---\nmore\n",
+    "---\nprivacy: shared\n  ---  \nbody\n",
+    "---  \nprivacy: shared\n---\nbody\n",
+    "---x\nprivacy: shared\n---\nbody\n",
+    "  ---\nprivacy: public\n---\nbody\n",
+    "---\r\nprivacy: shared\r\n---\r\nbody\r\n",
+    "---\nprivacy: shared\n...\n---\nbody\n",
+]
 #: Read exactly as the kernel reads them.
 SAME_AS_KERNEL = [
     "",
@@ -583,10 +602,38 @@ def test_note_level_is_never_looser_than_the_kernel(front: str, legacy: str) -> 
         assert adapter in ("local-private", "unknown"), front
 
 
+@pytest.mark.parametrize("front", DOCUMENT_END_FORMS)
+@pytest.mark.parametrize("legacy", LEGACY_LEVELS)
+def test_a_document_end_line_never_hides_a_private_key(front: str, legacy: str) -> None:
+    text = front + "# Heading\n"
+    adapter = note_level(text, legacy)[0]
+    kernel = _kernel_level(text, legacy)
+    assert kernel in ("local-private", "unknown"), front  # the kernel's own reading
+    assert _RANK[adapter] >= _RANK[kernel] and adapter in ("local-private", "unknown"), front
+
+
+@pytest.mark.parametrize("text", SPLIT_CASES)
+def test_the_block_split_matches_the_kernel_split(text: str) -> None:
+    """Same opening and closing rule as ``memfw.notes.index._split_frontmatter``."""
+
+    level, body_start = note_level(text, "shared")
+    try:
+        frontmatter, _body, offset = _split_frontmatter(text)
+    except NoteParseError:
+        assert level == "unknown", text  # the kernel withholds it; so do we
+        return
+    if offset == 0:  # no frontmatter for the kernel
+        assert body_start == 0, text
+        assert _RANK[level] >= _RANK[metadata_level({}, "shared")], text
+    else:
+        assert body_start == offset, text
+        assert _RANK[level] >= _RANK[metadata_level(frontmatter, "shared")], text
+
+
 def test_every_private_yaml_form_is_withheld_end_to_end(fake: FakeQmd, tmp_path: Path) -> None:
     root = tmp_path / "kh"
     root.mkdir()
-    forms = [*YAML_LEAK_FORMS, *STRICTER_THAN_KERNEL[1:]]
+    forms = [*YAML_LEAK_FORMS, *DOCUMENT_END_FORMS, *STRICTER_THAN_KERNEL[1:]]
     names = [f"note{index:02d}.md" for index in range(len(forms))]
     for name, front in zip(names, forms, strict=True):
         (root / name).write_text(front + "# Heading\n\nbody\n", encoding="utf-8")
