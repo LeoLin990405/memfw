@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import importlib.util
 import math
+import os
 import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -51,7 +52,7 @@ from ._ports import (
     parse_clearance,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 #: The bm25s release this adapter is pinned to and tested with.
 BM25S_VERSION: Final = "0.3.16"
 NAME: Final = "bm25s"
@@ -116,6 +117,29 @@ class Settings:
         )
 
 
+def _inside(path: Path, vault: Path) -> bool:
+    """Whether ``path`` is the vault or below it, by name and by file identity.
+
+    The resolved names catch symlinks; comparing each existing ancestor with
+    the vault by device and inode (``os.path.samefile``) also catches a path
+    that names the vault in another case on a case-insensitive file system
+    (``<parent>/VAULT/idx``), where the names differ but the directory is the same.
+    """
+
+    resolved, root = path.resolve(), vault.resolve()
+    if resolved == root or root in resolved.parents:
+        return True
+    if not root.exists():
+        return False
+    for ancestor in (resolved, *resolved.parents):
+        try:
+            if ancestor.exists() and os.path.samefile(ancestor, root):
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def _missing_dependency() -> str | None:
     for module in ("bm25s", "numpy", "jieba"):
         if importlib.util.find_spec(module) is None:
@@ -135,16 +159,20 @@ class Bm25sProvider:
         self.projection_version = ""
         self._lock = threading.Lock()
         self._built: store.Built | None = None
-        index = self.index_dir().expanduser().resolve()
-        vault = self.root.resolve()
-        if index == vault or vault in index.parents:
+        # Resolved once, here: a relative data_dir (or HOME) changing later must
+        # not move the index, and the vault check below must hold for the path
+        # that is actually used.
+        base = settings.data_dir or store.default_data_dir()
+        self._base = base.expanduser().resolve()
+        if _inside(self._base / store.vault_key(self.root), self.root):
             raise ValueError("data_dir must be outside the vault")
 
     # --- the index ------------------------------------------------------------
 
     def index_dir(self) -> Path:
-        base = self.settings.data_dir or store.default_data_dir()
-        return base / store.vault_key(self.root)
+        """``<data_dir>/<vault key>``, absolute (resolved when the provider was built)."""
+
+        return self._base / store.vault_key(self.root)
 
     def _fingerprint(self) -> str:
         settings = self.settings

@@ -14,6 +14,16 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 
 ## [Unreleased]
 
+### Fixed — bm25s adapter data_dir checks (memfw-adapter-bm25s 0.1.1)
+
+- A `data_dir` that names the vault in another case on a case-insensitive file
+  system (`<parent>/VAULT/idx`) is now refused like one under the vault: each
+  existing ancestor is compared with the vault by device and inode
+  (`os.path.samefile`), besides the resolved names.
+- A relative `data_dir` (or the default under `HOME`) is resolved once when the
+  provider is built; `index_dir()` is always that absolute path, so a later
+  working-directory change neither moves the index nor escapes the vault check.
+
 ### Fixed — Qdrant adapter response cap is deterministic (memfw-adapter-qdrant 0.1.1)
 
 - Embedding and Qdrant responses are read through one bounded reader: a

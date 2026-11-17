@@ -1,6 +1,6 @@
 # bm25s recall adapter
 
-`packages/adapters/memfw-adapter-bm25s` (import `memfw_adapter_bm25s`, version 0.1.0) is a
+`packages/adapters/memfw-adapter-bm25s` (import `memfw_adapter_bm25s`, version 0.1.1) is a
 `RecallProvider` (see [Ports and the recall coordinator](ports-and-recall.md)) that ranks a
 vault's memories with [bm25s](https://github.com/xhluca/bm25s) inside the memfw process. It is
 a second lexical provider next to the built-in FTS: it returns `memory_id` refs, scores and
@@ -41,7 +41,7 @@ Options (anything else is refused):
 | Option | Default | Meaning |
 |---|---|---|
 | `clearance` | `public,shared` | privacy levels to index (comma separated: `public`, `shared`, `local-private`) |
-| `data_dir` | `~/.local/share/memfw/adapters/bm25s` | where the index lives |
+| `data_dir` | `~/.local/share/memfw/adapters/bm25s` | where the index lives; resolved once when the provider is built; refused at or under the vault (by name or by file identity) |
 | `name` | `bm25s` | provider name (labels, `providers` on rows) |
 | `k1`, `b` | 1.5, 0.75 | BM25 parameters (bm25s `lucene` scoring) |
 

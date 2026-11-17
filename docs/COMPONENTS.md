@@ -129,7 +129,7 @@ only to the provider's API host. memfw never imports the adapter; it is built as
 
 ## bm25s recall adapter
 
-`packages/adapters/memfw-adapter-bm25s` (wheel `memfw_adapter_bm25s`, version 0.1.0) is an
+`packages/adapters/memfw-adapter-bm25s` (wheel `memfw_adapter_bm25s`, version 0.1.1) is an
 in-process `RecallProvider` that ranks memories with bm25s 0.3.16 (MIT), jieba-segmented. It is
 **off by default**: MCP `memory_search` `mode=two_stage` runs it only when `vault.yaml` lists
 `memfw_adapter_bm25s:factory` under `runtime.recall.adapters`. It indexes only memories whose
