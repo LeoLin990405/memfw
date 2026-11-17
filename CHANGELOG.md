@@ -157,8 +157,8 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   `evidence_attachment_invalid`.
 - Backlinks: `attachment_backlinks` (read-only); `memfw attach show` `cited_by` now
   matches every spelling.
-- `memfw eval causal --multimodal`: 56 synthetic cases (spurious multimodal causal
-  claims, 34 bypass attempts, hygiene, legacy/update cases, controls); 0 spurious
+- `memfw eval causal --multimodal`: 59 synthetic cases (spurious multimodal causal
+  claims, 37 bypass attempts, hygiene, legacy/update cases, controls); 0 spurious
   promotions, 0 fact upgrades, every bypass blocked. Write-time hashing of cited files
   is bounded (size must match an original; 32 files / 64 MiB per write; fail closed).
 - **Changed:** a new `att:` pointer that does not resolve is now refused (it was stored

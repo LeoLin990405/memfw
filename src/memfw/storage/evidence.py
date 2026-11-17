@@ -58,6 +58,7 @@ from ..core.evidence_refs import (
     embedded_attachment_ids,
     embedded_attachment_references,
     embedded_hashes,
+    may_carry_digest,
     parse_attachment_reference,
     parse_locator,
     path_pointer,
@@ -266,7 +267,7 @@ def _could_name_attachment(reference: str) -> bool:
     if evidence_source_class(reference) not in {"raw", "link"}:
         return False
     return bool(
-        embedded_hashes(reference) or embedded_attachment_ids(reference) or path_pointer(reference)
+        may_carry_digest(reference) or embedded_attachment_ids(reference) or path_pointer(reference)
     )
 
 
@@ -283,7 +284,7 @@ def _citations(reference: str, index: _AttachmentIndex) -> list[tuple[str, Citat
     digits = sha256_pointer_hex(reference)
     if digits is not None:
         found.extend((item, "sha256") for item in index.match_sha_prefix(digits))
-    for sha in embedded_hashes(reference):
+    for sha in embedded_hashes(reference, index.by_sha):
         found.extend((item, "embedded") for item in index.by_sha.get(sha, []))
     for identifier in embedded_attachment_ids(reference):
         if index.known(identifier):

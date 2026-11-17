@@ -26,6 +26,7 @@ import math
 import re
 import unicodedata
 import urllib.parse
+from collections.abc import Container, Iterator
 from dataclasses import dataclass
 from typing import Final
 
@@ -43,12 +44,9 @@ _ATTACHMENT_ID_RE: Final = re.compile(
     r"att-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
 )
 _SCHEME_RE: Final = re.compile(r"^([a-z][a-z0-9+.-]{0,31}):(.*)$", re.DOTALL | re.IGNORECASE)
-#: Characters dropped between hex groups before looking for a 64-hex run:
-#: whitespace (NBSP folds to a space under NFKC), punctuation used as a group
-#: separator, and the Unicode dashes U+2010–U+2015 and minus U+2212.
-_HEX_SEPARATORS: Final = frozenset(
-    " \t\n\r\f\v,;:/\\|._-'\"()[]{}<>" + "".join(chr(c) for c in range(0x2010, 0x2016)) + "\u2212"
-)
+#: Most characters of one pointer scanned for an embedded digest (residual
+#: risk: a digest placed after this many characters is not found).
+MAX_DIGEST_SCAN: Final = 64 * 1024
 _HEX_RUN_RE: Final = re.compile(r"[0-9a-f]{64,}")
 #: A run of base64/base64url characters long enough to hold a 32-byte digest
 #: (43 characters unpadded).
@@ -300,39 +298,56 @@ def _digest_from_base64(text: str) -> str | None:
     return raw.hex() if len(raw) == 32 else None
 
 
-def embedded_hashes(reference: str) -> frozenset[str]:
-    """Every sha256 digest the pointer *could* be spelling (lowercase hex).
+def _digest_windows(reference: str) -> Iterator[str]:
+    """Every sha256 digest the pointer *could* be spelling, one at a time (lowercase hex).
 
-    Best effort across encodings, on the canonical form:
+    Scans the first :data:`MAX_DIGEST_SCAN` characters of the canonical form:
 
-    * hex: separators between hex groups are dropped (:data:`_HEX_SEPARATORS`)
-      and every 64-character window of a hex run counts, so
-      ``data:e3b0c442 98fc…``, ``e3b0-c442-…`` and a digest glued to other hex
-      are all found;
-    * base64/base64url: ``=`` is dropped anywhere, and every 43-character
-      window of a base64 run counts when it decodes to 32 bytes, so
-      ``sha256-<b64>`` (SRI), ``sha256=<b64>``, ``sha-256=:<b64>:``
-      (Content-Digest) and a bare ``result:<b64>`` are found.
-
-    The result is a candidate set, not a claim: the caller compares it with
-    the registered originals' hashes, so a candidate that names no original
-    changes nothing. Not found: a digest split across several pointers, or
-    encrypted or otherwise transformed.
+    * hex: every character that is not a letter or digit is dropped (so any
+      separator between hex groups, ``+ * = # & ~`` and Unicode dashes
+      included), then every 64-character window of a hex run is a candidate;
+    * base64/base64url: whitespace and ``=`` are dropped anywhere (groups of
+      four, any padding), then every 43-character window of a base64 run that
+      decodes to 32 bytes is a candidate.
     """
 
-    canonical = canonical_reference(reference)
-    found: set[str] = set()
-    compact = "".join(char for char in canonical.lower() if char not in _HEX_SEPARATORS)
+    canonical = canonical_reference(reference)[:MAX_DIGEST_SCAN]
+    compact = "".join(char for char in canonical.lower() if char.isalnum())
     for match in _HEX_RUN_RE.finditer(compact):
         run = match.group(0)
-        found.update(run[start : start + 64] for start in range(len(run) - 63))
-    for match in _B64_RUN_RE.finditer(canonical.replace("=", "")):
+        for start in range(len(run) - 63):
+            yield run[start : start + 64]
+    joined = "".join(canonical.split()).replace("=", "")
+    for match in _B64_RUN_RE.finditer(joined):
         run = match.group(0)
         for start in range(len(run) - _B64_DIGEST_CHARS + 1):
             digest = _digest_from_base64(run[start : start + _B64_DIGEST_CHARS])
             if digest is not None:
-                found.add(digest)
-    return frozenset(found)
+                yield digest
+
+
+def may_carry_digest(reference: str) -> bool:
+    """Whether :func:`embedded_hashes` could find anything (cheap, no decoding)."""
+
+    canonical = canonical_reference(reference)[:MAX_DIGEST_SCAN]
+    compact = "".join(char for char in canonical.lower() if char.isalnum())
+    if _HEX_RUN_RE.search(compact):
+        return True
+    return _B64_RUN_RE.search("".join(canonical.split()).replace("=", "")) is not None
+
+
+def embedded_hashes(reference: str, known: Container[str]) -> frozenset[str]:
+    """The registered digests in ``known`` that the pointer spells, in any common encoding.
+
+    Best effort (see :func:`_digest_windows`): each candidate window is
+    checked against ``known`` as it is produced, so memory stays flat however
+    long the pointer is. A value that names no registered original yields
+    nothing. Not found: a digest split across several pointers, encrypted or
+    otherwise transformed, or past the first :data:`MAX_DIGEST_SCAN`
+    characters.
+    """
+
+    return frozenset(digest for digest in _digest_windows(reference) if digest in known)
 
 
 def embedded_attachment_references(reference: str) -> tuple[AttachmentReference, ...]:
@@ -414,6 +429,7 @@ __all__ = [
     "embedded_attachment_references",
     "embedded_hashes",
     "is_attachment_reference",
+    "may_carry_digest",
     "parse_attachment_reference",
     "parse_locator",
     "path_pointer",

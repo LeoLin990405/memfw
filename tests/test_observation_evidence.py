@@ -406,6 +406,21 @@ def _bypass_pointers(repository: Repository, tmp_path: Path) -> tuple[Any, list[
         "data:cafe" + sha,
         "sha256:" + base64.b64encode(bytes.fromhex(sha)).decode() + "==",
         "sha256:" + base64.urlsafe_b64encode(bytes.fromhex(sha)).decode() + "=",
+        # Second re-review: base64 split by whitespace, hex split by any punctuation.
+        "data:"
+        + " ".join(
+            base64.b64encode(bytes.fromhex(sha)).decode()[i : i + 4] for i in range(0, 44, 4)
+        ),
+        "data:"
+        + "\n".join(
+            base64.b64encode(bytes.fromhex(sha)).decode()[i : i + 4] for i in range(0, 44, 4)
+        ),
+        "data:" + "+".join(sha[i : i + 4] for i in range(0, 64, 4)),
+        "data:" + "*".join(sha[i : i + 8] for i in range(0, 64, 8)),
+        "data:" + "=".join(sha[i : i + 8] for i in range(0, 64, 8)),
+        "data:" + "#".join(sha[i : i + 8] for i in range(0, 64, 8)),
+        "data:" + "&".join(sha[i : i + 8] for i in range(0, 64, 8)),
+        "data:" + "~".join(sha[i : i + 8] for i in range(0, 64, 8)),
         f"see <ATT:{shot.id.upper()}>",
     ]
     return shot, pointers
@@ -788,3 +803,23 @@ def test_relative_paths_resolve_against_the_vault_not_cwd(
         "file:copy.png": "observation"
     }
     assert shot.sha256 == hashlib.sha256(b"png bytes").hexdigest()
+
+
+def test_digest_scan_is_bounded_on_big_pointers(tmp_path: Path) -> None:
+    import time
+    import tracemalloc
+
+    sha = hashlib.sha256(b"x").hexdigest()
+    big = "data:" + ("0123456789abcdef" * 65536)  # 1 MiB of hex
+    tracemalloc.start()
+    started = time.perf_counter()
+    assert evidence_refs.embedded_hashes(big, {sha}) == frozenset()
+    elapsed = time.perf_counter() - started
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    assert peak < 16 * 1024 * 1024
+    assert elapsed < 10
+    # Within the scanned prefix a digest is found; past it, it is not (documented).
+    assert evidence_refs.embedded_hashes("data:" + sha, {sha}) == {sha}
+    late = "data:" + "z" * evidence_refs.MAX_DIGEST_SCAN + sha
+    assert evidence_refs.embedded_hashes(late, {sha}) == frozenset()
