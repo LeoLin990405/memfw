@@ -1,4 +1,89 @@
 {
+ "delete": {
+  "doc_id": "doc-2, doc-3, doc-4",
+  "message": "Document deletion started.",
+  "status": "deletion_started"
+ },
+ "documents_page": {
+  "documents": [
+   {
+    "chunks_count": 1,
+    "content_length": 10,
+    "content_summary": "",
+    "created_at": "2026-11-17T12:00:00",
+    "error_msg": null,
+    "file_path": "m-backup.v3.aaaaaaaaaaaa.md",
+    "id": "doc-1",
+    "metadata": {},
+    "status": "PROCESSED",
+    "track_id": "insert_1",
+    "updated_at": "2026-11-17T12:00:00"
+   },
+   {
+    "chunks_count": 1,
+    "content_length": 10,
+    "content_summary": "",
+    "created_at": "2026-11-17T12:00:00",
+    "error_msg": null,
+    "file_path": "m-release.v2.cccccccccccc.md",
+    "id": "doc-2",
+    "metadata": {},
+    "status": "PROCESSED",
+    "track_id": "insert_1",
+    "updated_at": "2026-11-17T12:00:00"
+   },
+   {
+    "chunks_count": 1,
+    "content_length": 10,
+    "content_summary": "",
+    "created_at": "2026-11-17T12:00:00",
+    "error_msg": null,
+    "file_path": "m-private.v1.bbbbbbbbbbbb.md",
+    "id": "doc-3",
+    "metadata": {},
+    "status": "PROCESSED",
+    "track_id": "insert_1",
+    "updated_at": "2026-11-17T12:00:00"
+   },
+   {
+    "chunks_count": 1,
+    "content_length": 10,
+    "content_summary": "",
+    "created_at": "2026-11-17T12:00:00",
+    "error_msg": null,
+    "file_path": "m-gone.v1.dddddddddddd.md",
+    "id": "doc-4",
+    "metadata": {},
+    "status": "PROCESSED",
+    "track_id": "insert_1",
+    "updated_at": "2026-11-17T12:00:00"
+   },
+   {
+    "chunks_count": 1,
+    "content_length": 10,
+    "content_summary": "",
+    "created_at": "2026-11-17T12:00:00",
+    "error_msg": null,
+    "file_path": "ai_basics.pdf",
+    "id": "doc-5",
+    "metadata": {},
+    "status": "PROCESSED",
+    "track_id": "insert_1",
+    "updated_at": "2026-11-17T12:00:00"
+   }
+  ],
+  "pagination": {
+   "has_next": false,
+   "has_prev": false,
+   "page": 1,
+   "page_size": 200,
+   "total_count": 5,
+   "total_pages": 1
+  },
+  "status_counts": {
+   "PROCESSED": 5
+  }
+ },
  "external": "lightrag-server",
  "external_version": "1.5.7",
  "health": {

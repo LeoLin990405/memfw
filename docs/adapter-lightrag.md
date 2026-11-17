@@ -48,14 +48,21 @@ shows its configuration) and refuses to go on unless:
 
 ## What it sends and reads
 
-- `sync(vault, memory_ids)`: one `POST /documents/text` per memory, body
+- `sync(vault, memory_ids)`: first lists the server's documents (`POST /documents/paginated`,
+  every page) and deletes, in one `DELETE /documents/delete_document`
+  (`delete_llm_cache: true`), each document named like this adapter's whose memory is gone,
+  no longer shareable, or no longer at that version and hash, whether or not it is in the
+  request; documents with other names are left alone. A refused deletion (`busy`,
+  `not_allowed`) stops the sync before anything is sent. Then one `POST /documents/text` per
+  requested memory not already there under its current name, body
   `{"text": "# <title>\n\n<body>", "file_source": "<id>.v<version>.<hash>.md"}`, where
   `<hash>` is the first 12 hex digits of the SHA-256 of that text: every change to a memory,
   versioned or not, is a new name. Only `public` or
   `shared` memories are sent: the fail-closed reference reader must class a memory `none` and
   its MM0 level must be `public` or `shared`; `local-private`, `unknown`, a `sensitivity:*`
   tag or **no `privacy` field** (MM0 fallback `local-private`) never leaves. Bodies are cut to
-  `max_chars`. A 409 (that name is already there) counts as `present`.
+  `max_chars`. A 409 (that name is already there) counts as `present`. Run `sync` after the
+  vault changes: until then stale server copies are only filtered out of views, not removed.
 - `derive(vault, DeriveRequest("graph", ids, {"query": ..., "mode": ...}))`:
   `POST /query/data` with `{"query", "mode", "top_k"}`. The view holds entity rows (`name`,
   `entity_type`, `description`) and relation rows (`source`, `target`, `keywords`,

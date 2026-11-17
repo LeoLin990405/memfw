@@ -109,6 +109,8 @@ class FakeServer:
             "POST /documents/text": RECORDED["insert"],
             "POST /query/data": RECORDED["query_data"],
             "POST /query": RECORDED["query_answer"],
+            "POST /documents/paginated": RECORDED["documents_page"],
+            "DELETE /documents/delete_document": RECORDED["delete"],
         }
         self.requests: list[dict[str, Any]] = []  # everything but the /health gate
         self.health_calls = 0
@@ -271,25 +273,82 @@ def test_unknown_kind_is_refused(vault: Path) -> None:
 # -- sync --------------------------------------------------------------------------------------
 
 
-def test_sync_sends_only_shareable_memories_named_by_id_and_version(vault: Path) -> None:
+def test_sync_deletes_stale_copies_then_sends_only_new_shareable_memories(vault: Path) -> None:
     deriver, server = make()
     result = deriver.sync(vault, IDS)
-    assert result.inserted == ("m-backup", "m-release")
+    # The server already holds m-backup under its current name.
+    assert (result.inserted, result.present) == (("m-release",), ("m-backup",))
     assert result.skipped == ("m-private", "m-legacy", "m-none")
-    bodies = [request["body"] for request in server.requests]
-    assert [body["file_source"] for body in bodies] == [
-        name_of(vault, "m-backup"),
-        name_of(vault, "m-release"),
-    ]
-    assert re.fullmatch(r"m-backup\.v3\.[0-9a-f]{12}\.md", bodies[0]["file_source"])
-    assert bodies[0]["text"] == "# m-backup title\n\nThe nightly backup job copies the vault."
+    assert result.deleted == (
+        "m-release.v2.cccccccccccc.md",  # an older version
+        "m-private.v1.bbbbbbbbbbbb.md",  # private now
+        "m-gone.v1.dddddddddddd.md",  # no longer in the vault
+    )
+    paths = [request["path"] for request in server.requests]
+    assert paths == ["/documents/paginated", "/documents/delete_document", "/documents/text"]
+    delete = server.requests[1]
+    assert delete["method"] == "DELETE"
+    assert delete["body"] == {
+        "doc_ids": ["doc-2", "doc-3", "doc-4"],
+        "delete_file": False,
+        "delete_llm_cache": True,
+    }  # the foreign ai_basics.pdf is left alone
+    sent = server.requests[2]["body"]
+    assert sent["file_source"] == name_of(vault, "m-release")
+    assert re.fullmatch(r"m-release\.v3\.[0-9a-f]{12}\.md", sent["file_source"])
+    assert sent["text"] == "# m-release title\n\nRelease 0.4.0 ships the registry."
     assert PRIVATE_MARKER not in json.dumps(server.requests)
-    assert {request["path"] for request in server.requests} == {"/documents/text"}
+
+
+def test_a_changed_memory_gets_a_new_name_and_the_old_copy_goes(vault: Path) -> None:
+    path = vault / "memories" / "m-backup.md"
+    path.write_text(path.read_text().replace("copies the vault", "copies the whole vault"))
+    deriver, server = make()
+    result = deriver.sync(vault, ("m-backup",))
+    assert result.inserted == ("m-backup",)
+    assert result.deleted[0].startswith("m-backup.v3.")  # the old text's name
+
+
+def test_sync_stops_when_the_server_will_not_delete(vault: Path) -> None:
+    server = FakeServer()
+    server.routes["DELETE /documents/delete_document"] = {
+        "status": "busy",
+        "message": "",
+        "doc_id": "",
+    }
+    with pytest.raises(LightRagError, match="delete_busy"):
+        make(server)[0].sync(vault, IDS)
+    assert "/documents/text" not in [request["path"] for request in server.requests]
+
+
+def test_sync_reads_every_page(vault: Path) -> None:
+    pages = []
+    for has_next in (True, False):
+        page = json.loads(json.dumps(RECORDED["documents_page"]))
+        page["pagination"]["has_next"] = has_next
+        pages.append(page)
+
+    class Paged(FakeServer):
+        def __call__(self, request: urllib.request.Request, timeout: float) -> Any:
+            if request.full_url.endswith("/documents/paginated"):
+                self.routes["POST /documents/paginated"] = pages[
+                    json.loads(request.data)["page"] - 1
+                ]
+            return super().__call__(request, timeout)
+
+    server = Paged()
+    make(server)[0].sync(vault, IDS)
+    listed = [r["body"]["page"] for r in server.requests if r["path"] == "/documents/paginated"]
+    assert listed == [1, 2]
 
 
 def test_sync_counts_a_409_as_already_present(vault: Path) -> None:
     server = FakeServer()
     server.routes["POST /documents/text"] = 409
+    server.routes["POST /documents/paginated"] = {
+        "documents": [],
+        "pagination": {"has_next": False},
+    }
     result = make(server)[0].sync(vault, ("m-backup",))
     assert (result.inserted, result.present) == ((), ("m-backup",))
 

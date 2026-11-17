@@ -52,8 +52,9 @@ from ._ports import (
     DeriveRequest,
     IngestItem,
     MemoryFile,
+    read_memory,
 )
-from ._select import shareable_memories
+from ._select import is_shareable, shareable_memories
 
 __version__ = "0.1.0"
 
@@ -488,11 +489,17 @@ def candidates(view: DerivedView) -> list[IngestItem]:
 
 @dataclass(frozen=True)
 class SyncResult:
-    """Memory ids sent (``inserted``), already on the server (``present``), or held back."""
+    """Memory ids sent (``inserted``), already on the server (``present``), or held back,
+    and the server documents removed as stale (``deleted``, by source name)."""
 
     inserted: tuple[str, ...]
     present: tuple[str, ...]
     skipped: tuple[str, ...]
+    deleted: tuple[str, ...] = ()
+
+
+#: Most pages of ``/documents/paginated`` one ``sync`` reads (200 documents each).
+MAX_PAGES = 1_000
 
 
 class LightRagDeriver:
@@ -552,14 +559,73 @@ class LightRagDeriver:
         if refused:
             raise LightRagError(refused)
 
+    def server_documents(self) -> list[tuple[str, str]]:
+        """``(document id, source name)`` of every server document named like this adapter's."""
+
+        found: list[tuple[str, str]] = []
+        for page in range(1, MAX_PAGES + 1):
+            payload = {"page": page, "page_size": 200, "sort_field": "id", "sort_direction": "asc"}
+            reply = self.client.call("POST", "/documents/paginated", payload)
+            documents = reply.get("documents") if isinstance(reply, dict) else None
+            pagination = reply.get("pagination") if isinstance(reply, dict) else None
+            if not isinstance(documents, list) or not isinstance(pagination, dict):
+                raise LightRagError("bad_response")
+            for document in documents:
+                if not isinstance(document, Mapping):
+                    continue
+                doc_id, name = document.get("id"), document.get("file_path")
+                if isinstance(doc_id, str) and isinstance(name, str) and SOURCE_RE.fullmatch(name):
+                    found.append((doc_id, name))
+            if pagination.get("has_next") is not True:
+                return found
+        raise LightRagError("too_many_documents")
+
+    def _stale(self, vault: Path, documents: Sequence[tuple[str, str]]) -> list[tuple[str, str]]:
+        """Server documents whose memory is gone, no longer shareable, or changed since."""
+
+        root = Path(vault).expanduser()
+        stale: list[tuple[str, str]] = []
+        for doc_id, name in documents:
+            memory = read_memory(root, name.split(".v", 1)[0])
+            if memory is None or not is_shareable(memory):
+                stale.append((doc_id, name))
+            elif source_name(memory, self.settings.max_chars) != name:
+                stale.append((doc_id, name))
+        return stale
+
     def sync(self, vault: Path, memory_ids: Sequence[str]) -> SyncResult:
-        """Offer the shareable requested memories to the server, one document each."""
+        """Bring the server in line with the vault for this adapter's documents.
+
+        First every server document named ``<id>.v<version>.<hash>.md`` whose
+        memory is gone, no longer shareable, or no longer has that version and
+        hash is deleted (``DELETE /documents/delete_document``), for any id,
+        requested or not. Then each shareable requested memory not already
+        there under its current name is sent (``POST /documents/text``).
+        """
 
         self.check_server()
         memories = self._memories(vault, memory_ids)
+        documents = self.server_documents()
+        stale = self._stale(vault, documents)
+        if stale:
+            body = {
+                "doc_ids": [doc_id for doc_id, _ in stale],
+                "delete_file": False,
+                "delete_llm_cache": True,
+            }
+            reply = self.client.call("DELETE", "/documents/delete_document", body)
+            status = reply.get("status") if isinstance(reply, dict) else None
+            if status != "deletion_started":
+                raise LightRagError(
+                    f"delete_{status}" if isinstance(status, str) else "bad_response"
+                )
+        on_server = {name for _, name in documents} - {name for _, name in stale}
         inserted: list[str] = []
         present: list[str] = []
         for memory_id, memory in memories.items():
+            if source_name(memory, self.settings.max_chars) in on_server:
+                present.append(memory_id)
+                continue
             text = document_text(memory, self.settings.max_chars)
             if not text.strip():
                 continue
@@ -580,7 +646,7 @@ class LightRagDeriver:
             for memory_id in dict.fromkeys(memory_ids)
             if memory_id not in inserted and memory_id not in present
         )
-        return SyncResult(tuple(inserted), tuple(present), skipped)
+        return SyncResult(tuple(inserted), tuple(present), skipped, tuple(n for _, n in stale))
 
     def _query(self, request: DeriveRequest) -> tuple[str, str]:
         query = request.options.get("query")
