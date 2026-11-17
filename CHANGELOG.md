@@ -286,8 +286,9 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   text) and names the sections; `mode: titles` ranks titles without a model.
 - Returns path refs `kh:<path>#<heading>` and `att:<id>#page=<n>` (the page
   part of the multimodal locator) with `extra` limited to `kind`, `page`, `why`.
-  The kernel has no `kh:`/`att:` resolver yet, so the coordinator drops these
-  candidates as `unresolved` until a separate kernel PR adds one.
+  `kh:` refs follow `parse_kh_ref`, so a registered `NotesSegmentResolver`
+  resolves them; with the default resolvers (and for `att:` until MM2b) the
+  coordinator drops them as `unresolved`.
 - Gates: a non-local backend needs `cloud: true` in the adapter settings;
   `local-private` trees are never sent to a non-local backend; a per-run token
   and call budget; a backend must declare the `pageindex_tree_search` task.

@@ -614,9 +614,22 @@ def test_prompt_cap_holds_for_cjk_titles(tmp_path: Path) -> None:
         tiny.search("漂移", limit=3, budget=RecallBudget(), tenant="", as_of=None)
 
 
+def test_heading_refs_parse_with_the_kernel_kh_grammar(tmp_path: Path) -> None:
+    from memfw.recall.resolve import parse_kh_ref
+
+    tree = build_markdown_tree(_kh(tmp_path), "kh:notes/field notes.md", privacy="shared")
+    provider = _provider(tmp_path / "index", mode="titles")
+    write_tree(tmp_path / "index", tree)
+    (hit,) = provider.search(
+        "sensor drift checks", limit=1, budget=RecallBudget(), tenant="", as_of=None
+    )
+    assert parse_kh_ref(hit.ref) == ("notes/field notes.md", "Sensor drift checks")
+
+
 def test_coordinator_drops_every_candidate_as_unresolved_today(tmp_path: Path) -> None:
-    # The kernel has no kh:/att: resolver yet (a separate kernel PR adds one), so
-    # the coordinator drops every PageIndex candidate as unresolved, without error.
+    # The default resolvers register no scheme resolver (kh: needs a registered
+    # NotesSegmentResolver, att: waits for MM2b), so every PageIndex candidate is
+    # dropped as unresolved, without error.
     from memfw.core.repository import Repository
     from memfw.recall import Coordinator, FilterPolicy, ProviderConfig
     from memfw.recall.builtin import default_resolvers

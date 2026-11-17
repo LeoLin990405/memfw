@@ -128,9 +128,11 @@ angle brackets, backslash, backtick, control characters, `%` and `#` are
 percent-encoded (UTF-8). `extra` holds only `kind` (`section`), `page` (PDF)
 and `why` (`tree_search` or `title_match`).
 
-**Today these refs do not reach a caller.** The kernel has no `kh:`/`att:`
-resolver yet, so the coordinator drops every PageIndex candidate as
-`unresolved` (counted in `metrics.dropped`, no error, other providers
-unaffected). A resolver for them comes in a separate kernel PR; until then
-enabling this adapter only costs the search (and, in `reasoning` mode, the
-model call).
+**Resolution.** `kh:` refs use the grammar of the kernel's `parse_kh_ref`
+(percent-encoded UTF-8), so the kernel's `NotesSegmentResolver` (#98) can
+resolve them to sections of the built-in notes index, with the notes privacy
+rules, once a caller registers it (`default_resolvers(..., schemes={"kh":
+...})`). With the default resolvers (no schemes) every PageIndex candidate is
+dropped as `unresolved` (counted in `metrics.dropped`, no error, other
+providers unaffected), and `att:` refs stay unresolved until MM2b adds their
+resolver.
