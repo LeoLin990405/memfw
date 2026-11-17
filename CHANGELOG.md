@@ -42,7 +42,8 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   `memfw project obsidian` leaves the counts out with a warning.
 - **K4 live check:** a concept node that is neither a concept of the vault
   (file or alias) nor named in `about`/`applies_to` by a memory the caller may
-  see is hidden.
+  see is hidden. Only the memories linked to that node in the projection are
+  re-read (cost grows with the node's degree, not the vault).
 - **Corroboration moves out of the vault**, to
   `~/.local/share/memfw/corroboration/<key>.sqlite3` (0600, directory 0700),
   so it never counts toward the physical-size budget or the transaction
@@ -54,6 +55,9 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 - Edge and corroboration rebuilds read the vault under its lock, so a rebuild
   beside a write no longer fails with "A pending transaction needs explicit
   `memfw recover`".
+  On a read-only vault (the lock file cannot be opened) the vault is read
+  without the lock, between two transaction fingerprints, retried up to 3
+  times, then the rebuild fails with "try again".
 - `memfw forget residue` checks the corroboration projection at its new
   place, and a leftover vault-root `corroboration.sqlite3` too (store
   `corroboration_legacy`, listed only when the file exists; remedy: delete it).
