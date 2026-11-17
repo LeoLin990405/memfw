@@ -74,6 +74,7 @@ first:
 | human decision | the write-level `HUMAN_DECISION` flag | overrides the pointer rules for chat/LLM sources |
 | raw | `data:`, `dataset:`, `design:`, `experiment:`, `result:`, `test:`, `code:`, `file:`, `sha256:`, `pr:`, `commit:`, `issue:`, `repo:` | replayable raw data or a design |
 | link | `http://`, `https://` | points outside the vault, but cannot be verified by the vault |
+| observation | `att:<id>[#locator]` (MM3) | what was seen or heard; **not** outside-vault evidence (below) |
 | chat | `chat:`, `conversation:`, `session:`, `transcript:`, `message:`, `turn:` | narrative only |
 | generated | `llm:`, `reflection:`, `reasoning:`, `explanation:`, `dream:`, `distil:`, `summary:` | narrative only |
 
@@ -81,6 +82,39 @@ A prefix with nothing after it (`data:`, `https://`) is not a pointer. Anything 
 (including a bare memory id) is not outside-vault evidence. Evidence that only points at
 chat text, only at LLM explanations/reflections, or at no raw source at all cannot make a
 memory `verified`; it stays `hypothesis`.
+
+**An observation is not a cause, and not on its own a fact (MM3).** An `att:` pointer
+names a registered original (screenshot, scanned page, recording) or a place in it
+(`#page=3&bbox=x0,y0,x1,y1` in pt with a bottom-left origin on a PDF; `#bbox=` in px
+with a top-left origin on an image; `#t=start,end` or `#frame=t:seconds` on audio and
+video). When a memory's evidence holds an observation and no raw or link pointer,
+`epistemic` cannot be `fact` and `causal` stops at `hypothesis`. The check runs before
+the gate's early return, so `epistemic: fact` with `causal: none` is refused too.
+`experience`, `inference`, `judgment` and a causal `hypothesis` remain allowed.
+
+The repository layer (`memfw.storage.evidence`) does the vault half and hands the gate
+already-classified evidence, so the gate stays pure:
+
+* every `att:` pointer a write *adds* must name a committed, readable attachment, and a
+  locator must fit its media type (and its bounds, when the record has them); a locator
+  resolves at attachment level until proxy segments exist;
+* `att:` is the one way to cite an original. A `sha256:` pointer to a registered
+  original's hash (or an 8+ hex prefix of it), a `file:` pointer to its blob, a copy of
+  it or its recorded location, and any raw or link pointer carrying its id or full hash
+  are classified as observation. Spelling is folded first (case, percent-encoding,
+  Unicode compatibility forms, invisible format characters such as U+200B). Without
+  any attachment-like pointer the gate gets no classes and reads nothing, so other
+  memories behave exactly as before;
+* **legacy rule:** a memory that is already `verified` or `fact` and that this rule would
+  now refuse (a file it cites was registered as an attachment later) is not refused on
+  later writes that keep its level: only evidence the write adds is reclassified. A
+  write that *raises* the level (into `fact` or `verified`) reclassifies all of the
+  evidence, so a pointer added at `hypothesis` cannot be carried into `verified`.
+  `memfw fsck` lists such memories as `evidence_observation_review`, and `att:`
+  evidence that no longer resolves as `evidence_attachment_invalid`.
+
+Backlinks (attachment → memories that cite it) are computed from `evidence` on read
+(`memfw attach show` → `cited_by`); nothing is written.
 
 **A bare web link is not raw data.** When `source` is a chat source or `provenance` is
 LLM-derived, `causal: verified` requires a replayable raw pointer (the `raw` row above)

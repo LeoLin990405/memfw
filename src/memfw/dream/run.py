@@ -29,6 +29,7 @@ from memfw.history import (
     default_db,
     sources_from_config,
 )
+from memfw.storage.evidence import gate_evidence_classes
 from memfw.storage.operations import lookup_current
 
 from .budget import budget_candidates, check_budget
@@ -278,7 +279,16 @@ def run_dream(
                     current: dict[str, Any] | None = repository.get(memory_id).model_dump()
                 except (MemfwError, OSError):
                     current = None
-                validate_proposed_write(current, proposed, actor="mechanism")
+                merged = dict(current or {})
+                merged.update(proposed)
+                # MM3: classes only when some pointer names an attachment.
+                classes = gate_evidence_classes(repository, merged, current)
+                if classes:
+                    validate_proposed_write(
+                        current, proposed, actor="mechanism", evidence_classes=classes
+                    )
+                else:
+                    validate_proposed_write(current, proposed, actor="mechanism")
                 validate_proposed_open_question(
                     current,
                     proposed,

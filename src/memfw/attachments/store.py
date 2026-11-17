@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 from memfw.core.errors import IntegrityError, MemfwError, NotFoundError
 from memfw.core.models import ATTACHMENT_EVENT_KINDS, Event, EventKind
 from memfw.ports.privacy import privacy_value
+from memfw.storage.evidence import attachment_backlinks
 from memfw.storage.transactions import _serialized
 
 from .blobs import DEFAULT_BLOB_ROOT, BlobLocationError, BlobStore, StagedBlob, stage_blob
@@ -411,17 +412,15 @@ class AttachmentStoreMixin:
         return _load_committed(self, committed_records(self.events()))
 
     def attachment_citations(self: RepositoryHost, attachment_id: str) -> list[str]:
-        """Ids of memories whose ``evidence`` cites ``att:<id>`` (with or without a locator)."""
+        """Ids of memories whose ``evidence`` names the attachment (read-only).
+
+        ``att:<id>`` with or without a locator, in any spelling, plus the other
+        pointers the MM3 gate treats as naming it (its hash, its blob path, its
+        id inside another pointer); see ``memfw.storage.evidence``.
+        """
 
         identifier = check_attachment_id(attachment_id)
-        reference = f"att:{identifier}"
-        return sorted(
-            document.id
-            for document in self.list()
-            if any(
-                item == reference or item.startswith(reference + "#") for item in document.evidence
-            )
-        )
+        return sorted({link.memory_id for link in attachment_backlinks(self, identifier)})
 
     # -- integrity ----------------------------------------------------------------
 
