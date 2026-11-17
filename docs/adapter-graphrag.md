@@ -77,7 +77,7 @@ refuses when the file or its hash differs from what the current settings would w
 (`settings_changed`), when `${` appears in it (`settings_placeholder`), or when `<root>/.env`
 exists (`dotenv_present`; GraphRAG would read it). `pass_env` may not name a variable ending in
 `_BASE`, `_BASE_URL`, `_ENDPOINT`, `_HOST` or `_PROXY`, nor `ALL_PROXY`, `NO_PROXY`,
-`PYTHONPATH`, `PYTHONSTARTUP`, `PYTHONHOME`, or any `DYLD_*` / `LD_*` loader variable. It also refuses when `stage_input` has not run
+any `PYTHON*` variable, or any `DYLD_*` / `LD_*` loader variable. It also refuses when `stage_input` has not run
 (`no_input`), when the command does not resolve (`missing_dependency`), or when the GraphRAG
 installed in the command's environment is not 3.3.0 (`version_mismatch`) or cannot be told
 (`version_unknown`). The version is read from that environment's

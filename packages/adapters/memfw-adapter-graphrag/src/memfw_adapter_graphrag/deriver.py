@@ -89,8 +89,8 @@ _MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$")
 #: ... nor one that routes traffic or changes what code loads.
 _ENDPOINT_ENV_RE = re.compile(
     r"(?:_BASE|_BASE_URL|_ENDPOINT|_HOST|_PROXY)$"
-    r"|^(?:ALL_PROXY|NO_PROXY|PYTHONPATH|PYTHONSTARTUP|PYTHONHOME)$"
-    r"|^(?:DYLD_|LD_)"
+    r"|^(?:ALL_PROXY|NO_PROXY)$"
+    r"|^(?:PYTHON|DYLD_|LD_)"
 )
 #: The key GraphRAG's openai provider is handed; a local endpoint ignores it.
 LOCAL_API_KEY = "memfw-local-no-key"
