@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -25,7 +27,22 @@ from memfw.core.epistemic import OPEN_QUESTION_TYPE
 from memfw.core.repository import Repository
 from memfw.mcp.schema import MEMORY_USED_TOOL, TOOLS
 
-runner = CliRunner(env={"COLUMNS": "200"})
+# Environment-independent output: no colour and a fixed wide terminal, whatever
+# the CI sets (FORCE_COLOR, GITHUB_ACTIONS, a narrow COLUMNS). Assertions read
+# the output with ANSI escapes stripped as well (as test_cli_okf_schedule_candidates).
+TERMINAL_ENV = {
+    "NO_COLOR": "1",
+    "FORCE_COLOR": None,
+    "TERM": "dumb",
+    "COLUMNS": "200",
+    "_TYPER_FORCE_DISABLE_TERMINAL": "1",
+}
+runner = CliRunner(env=TERMINAL_ENV)
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    return ANSI.sub("", text)
 
 
 def _vault(tmp_path: Path) -> Repository:
@@ -35,7 +52,12 @@ def _vault(tmp_path: Path) -> Repository:
 
 
 def _run(*args: str) -> Any:
-    return runner.invoke(app, list(args))
+    result = runner.invoke(app, list(args))
+    return SimpleNamespace(
+        exit_code=result.exit_code,
+        output=_plain(result.output),
+        stdout=_plain(result.stdout),
+    )
 
 
 def _memories(repository: Repository) -> list[Path]:
@@ -393,7 +415,7 @@ def test_every_top_level_entry_has_a_panel() -> None:
 
 
 def test_help_shows_the_panels() -> None:
-    result = runner.invoke(app, ["--help"], env={"COLUMNS": "120"})
+    result = _run("--help")
     assert result.exit_code == 0
     for panel in ("Daily", "Approval", "Ops", "Export"):
         assert f"─ {panel} " in result.stdout
