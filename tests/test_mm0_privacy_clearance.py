@@ -1309,3 +1309,136 @@ def test_dream_reads_the_sensitivity_key_as_private() -> None:
     assert is_private(keyed) and not is_private(plain)
     assert pair_privacy(keyed, plain) == "local-private"
     assert pair_privacy(plain, plain) == "public"
+
+
+# ---------------------------------------------------------------------------
+# Write side: a rewrite keeps a hand-added ``sensitivity`` key (tighten-only)
+# ---------------------------------------------------------------------------
+
+
+def _hand_add_key(
+    repository: Repository, memory_id: str, line: str = "sensitivity: Private"
+) -> None:
+    path = repository.memories_dir / f"{memory_id}.md"
+    text = path.read_text(encoding="utf-8")
+    path.write_text(text.replace("\n---\n", f"\n{line}\n---\n", 1), encoding="utf-8")
+
+
+def _file(repository: Repository, memory_id: str) -> str:
+    return (repository.memories_dir / f"{memory_id}.md").read_text(encoding="utf-8")
+
+
+def test_rewrite_without_the_key_keeps_its_bytes(tmp_path: Path) -> None:
+    for document, _admitted in CASES:
+        rendered = MarkdownStorageMixin.render(document)
+        reparsed = parse_memory_markdown(rendered, expected_id=document.id)
+        assert not reparsed.has_top_level_sensitivity
+        assert MarkdownStorageMixin.render(reparsed) == rendered
+    repository = _private_vault(tmp_path)
+    repository.add("x", "body", memory_id="x", privacy="public")
+    repository.update("x", body="new body")
+    assert "sensitivity" not in _file(repository, "x")
+
+
+def test_update_keeps_the_key_and_it_is_not_reported_as_ignored(tmp_path: Path) -> None:
+    repository = _private_vault(tmp_path)
+    repository.add("x", "body", memory_id="x", privacy="public")
+    _hand_add_key(repository, "x")
+    assert repository.get("x").ignored_keys == ()
+    repository.update("x", actor="mechanism", body="agent edit")
+    repository.update("x", actor="human", tags=["other"])
+    document = repository.get("x")
+    assert document.top_level_sensitivity == "Private"
+    assert "sensitivity: Private" in _file(repository, "x")
+    assert (
+        privacy.effective_level(
+            document.privacy, document.tags, sensitivity=document.top_level_sensitivity
+        )
+        == "local-private"
+    )
+
+
+@pytest.mark.parametrize("change", [None, ""])
+def test_non_human_writes_cannot_remove_or_loosen_the_key(tmp_path: Path, change) -> None:
+    repository = _private_vault(tmp_path)
+    # The field already says local-private: the key itself is still protected.
+    repository.add("x", "body", memory_id="x", privacy="local-private")
+    _hand_add_key(repository, "x")
+    with pytest.raises(IntegrityError, match="loosen"):
+        repository.update("x", actor="mechanism", sensitivity=change)
+    assert repository.get("x").top_level_sensitivity == "Private"
+    repository.update("x", actor="human", sensitivity=change)
+    assert repository.get("x").has_top_level_sensitivity == (change is not None)
+
+
+def test_non_human_writes_may_add_or_tighten_the_key(tmp_path: Path) -> None:
+    repository = _private_vault(tmp_path)
+    repository.add("x", "body", memory_id="x", privacy="public")
+    repository.update("x", actor="mechanism", sensitivity="private")
+    assert "sensitivity: private" in _file(repository, "x")
+    repository.update("x", actor="mechanism", sensitivity="secret")
+    assert repository.get("x").top_level_sensitivity == "secret"
+    with pytest.raises(IntegrityError, match="loosen"):
+        repository.update("x", actor="mechanism", sensitivity="private")
+
+
+def test_supersede_keeps_the_key(tmp_path: Path) -> None:
+    repository = _private_vault(tmp_path)
+    repository.add("old", "body", memory_id="old", privacy="public")
+    _hand_add_key(repository, "old")
+    new = repository.supersede("old", "new", "new body", memory_id_new="new")
+    assert new.top_level_sensitivity == "Private"
+    assert "sensitivity: Private" in _file(repository, "new")
+    assert repository.get("old").top_level_sensitivity == "Private"
+    assert repository.get("old").superseded_by == "new"
+
+
+def test_rollback_restores_the_key_and_only_a_human_may_drop_it(tmp_path: Path) -> None:
+    repository = _private_vault(tmp_path)
+    config = repository.read_config()
+    config["history_keep"] = 10
+    repository.configure(config)
+    repository.add("x", "body", memory_id="x", privacy="public")
+    repository.update("x", body="second")
+    first = [event for event in repository.events() if event.kind == EventKind.UPDATE][-1]
+    _hand_add_key(repository, "x")
+    repository.update("x", body="third")  # a recorded version with the key
+    # Restoring the version without the key would loosen it.
+    with pytest.raises(IntegrityError, match="loosen"):
+        repository.rollback(first.event_id, actor="mechanism")
+    assert repository.get("x").top_level_sensitivity == "Private"
+    repository.update("x", actor="human", sensitivity=None)
+    removal = [event for event in repository.events() if event.kind == EventKind.UPDATE][-1]
+    # Rolling the removal back restores the key, by any actor (it tightens).
+    repository.rollback(removal.event_id, actor="mechanism")
+    assert repository.get("x").top_level_sensitivity == "Private"
+    assert "sensitivity: Private" in _file(repository, "x")
+    repository.rollback(first.event_id, actor="human")
+    assert not repository.get("x").has_top_level_sensitivity
+
+
+def _merge_proposal(output: dict) -> object:
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        proposal_id="p-merge",
+        output=output,
+        target_ids=(output["representative_id"], *output["duplicate_ids"]),
+    )
+
+
+def test_merge_keeps_the_key_and_refuses_a_stricter_duplicate(tmp_path: Path) -> None:
+    from memfw.curation.review import _apply_merge, _validate_merge
+
+    repository = _private_vault(tmp_path)
+    repository.add("rep", "rep body", memory_id="rep", privacy="public")
+    repository.add("dup", "dup body", memory_id="dup", privacy="public")
+    retain = {"representative_id": "rep", "duplicate_ids": ["dup"], "disposition": "retain"}
+    _hand_add_key(repository, "dup")
+    with pytest.raises(IntegrityError, match="more private"):
+        _validate_merge(repository, _merge_proposal(retain))  # type: ignore[arg-type]
+    _hand_add_key(repository, "rep")
+    merged = _apply_merge(repository, _merge_proposal(retain))  # type: ignore[arg-type]
+    assert merged.top_level_sensitivity == "Private"
+    assert "dup body" in merged.body
+    assert "sensitivity: Private" in _file(repository, "rep")

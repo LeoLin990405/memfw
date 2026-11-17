@@ -17,7 +17,7 @@ The level a reader acts on is the strictest of:
 * every ``sensitivity:<value>`` tag, read like
   ``memfw.projection.tag_privacy_class``: ``private`` → local-private, any
   other value → unknown;
-* a top-level ``sensitivity`` key (a hand edit; memfw never writes it), read
+* a top-level ``sensitivity`` key (a hand edit, kept on rewrite), read
   like the fail-closed reference reader (``memfw.ports.reference._vault``):
   no value, ``null``, ``""`` or an empty list adds nothing; ``private`` (any
   case, surrounding space ignored) → local-private; any other value,

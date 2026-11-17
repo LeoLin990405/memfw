@@ -27,6 +27,14 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   exhaustive matrix. Without a clearance nothing changes. Deploy note:
   `read_path.py` changed, so ship the HTTP service's three files together
   (`docs/READONLY-SERVICE-UPGRADE.md`).
+- Write side: a rewrite no longer drops the key. `render` writes the parsed
+  value back (files without it keep their bytes), and `update`, `supersede`,
+  cold archive/restore and `rollback` carry it. `update(sensitivity=...)`
+  sets it (`None` removes it). Like the `privacy` field, only a human or an
+  approved proposal may remove or loosen it, and a non-human rollback that
+  would drop it is refused. It is no longer listed in `ignored_keys`. A
+  reviewed merge now refuses a duplicate that is more private than its
+  representative (field, tags or key), since the merge copies its text.
 
 ### Added — CLI tidy-up: open questions, `--json`, grouped help
 

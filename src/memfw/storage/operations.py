@@ -32,7 +32,13 @@ from ..core.models import (
     _same_instant,
     fold_temporal_aliases,
 )
-from ..ports.privacy import effective_level, is_looser, privacy_value
+from ..ports.privacy import (
+    effective_level,
+    is_looser,
+    privacy_value,
+    sensitivity_key_levels,
+    strictest,
+)
 from ..storage import with_archived_body
 from ..storage.transactions import _serialized
 
@@ -78,6 +84,7 @@ class MemoryOperationsMixin:
         open_question: OpenQuestion | dict[str, Any] | None = None,
         privacy: str | None = None,
         _stamp_privacy_default: bool = True,
+        _sensitivity_key: tuple[Any, ...] = (),
     ) -> MemoryDocument:
         try:
             privacy = privacy_value(privacy)
@@ -162,6 +169,8 @@ class MemoryOperationsMixin:
             updated_at=now,
             recorded_at=now,
         )
+        # Only ``supersede`` passes one: the replacement keeps a hand-added key.
+        document._sensitivity_key = _sensitivity_key
         markdown = self.render(document)
         digest = self._write_version(identifier, markdown)
         self._atomic_write(path, markdown.encode("utf-8"))
@@ -296,6 +305,9 @@ class MemoryOperationsMixin:
             # Privacy level (MM0); only a human (or an approved proposal) may
             # loosen it, see below.
             "privacy",
+            # A hand-added top-level ``sensitivity`` key (not a field): ``None``
+            # removes it. Same tighten-only rule as ``privacy``.
+            "sensitivity",
         }
         if (
             actor != "human"
@@ -320,6 +332,14 @@ class MemoryOperationsMixin:
         # Fold aliases before they meet the stored document. A conflict is only
         # two names in this request, and it raises before any write.
         folded_changes = fold_temporal_aliases(dict(changes))
+        sensitivity_change = "sensitivity" in folded_changes
+        if sensitivity_change:
+            raw_sensitivity = folded_changes.pop("sensitivity")
+            new_sensitivity_key: tuple[Any, ...] = (
+                () if raw_sensitivity is None else (raw_sensitivity,)
+            )
+        else:
+            new_sensitivity_key = old._sensitivity_key
         new_target = folded_changes.get("superseded_by")
         if new_target is not None and new_target != old.superseded_by:
             _check_supersession_target(self, memory_id, str(new_target))
@@ -335,17 +355,36 @@ class MemoryOperationsMixin:
             # Unset reads as the vault's defaults, which may change later: an
             # explicit level is cleared only by a human decision (MM0).
             raise IntegrityError("Only a human or an approved proposal may clear privacy")
-        if {"privacy", "tags"} & set(folded_changes) and actor != "human" and not approved:
-            # Fail closed (MM0): the level is the strictest of the field and the
-            # ``privacy:``/``sensitivity:`` tags, so both are compared as a whole.
-            # Without a human decision a write may keep or tighten it, never loosen.
+        if (
+            ({"privacy", "tags"} & set(folded_changes) or sensitivity_change)
+            and actor != "human"
+            and not approved
+        ):
+            # Fail closed (MM0): the level is the strictest of the field, the
+            # ``privacy:``/``sensitivity:`` tags and a top-level ``sensitivity``
+            # key, so they are compared as a whole. Without a human decision a
+            # write may keep or tighten it, never loosen.
             legacy = self.legacy_privacy_default()
-            before = effective_level(old.privacy, old.tags, legacy=legacy)
-            after = effective_level(values.get("privacy"), values.get("tags") or [], legacy=legacy)
-            if is_looser(after, before):
+            before = effective_level(
+                old.privacy, old.tags, legacy=legacy, sensitivity=old.top_level_sensitivity
+            )
+            after = effective_level(
+                values.get("privacy"),
+                values.get("tags") or [],
+                legacy=legacy,
+                sensitivity=new_sensitivity_key[0] if new_sensitivity_key else None,
+            )
+            # The key on its own may not be removed or loosened either, even
+            # when the field or a tag already holds the level.
+            key_before = strictest(sensitivity_key_levels(old.top_level_sensitivity) or ["public"])
+            key_after = strictest(
+                sensitivity_key_levels(new_sensitivity_key[0] if new_sensitivity_key else None)
+                or ["public"]
+            )
+            if is_looser(after, before) or is_looser(key_after, key_before):
                 raise IntegrityError(
                     "Only a human or an approved proposal may loosen privacy "
-                    "(the privacy field or privacy:/sensitivity: tags)"
+                    "(the privacy field, privacy:/sensitivity: tags or the sensitivity key)"
                 )
         # One gate for every write path. A human approval of an agent proposal
         # counts as a human decision; a bare agent write can edit an
@@ -421,6 +460,7 @@ class MemoryOperationsMixin:
         # Carry the source file's optional-field spelling across the rebuild so a
         # write does not silently drop lines the file already had.
         new_doc._observed_default_fields = old._observed_default_fields
+        new_doc._sensitivity_key = new_sensitivity_key
         if new_doc.is_stub:
             with_archived_body(self, new_doc)
         # A restored archive may have had its duplicate history object removed.
@@ -612,6 +652,8 @@ class MemoryOperationsMixin:
             # An unset predecessor stays unset (legacy level), never stamped
             # with ``new_privacy_default``, which could be looser.
             _stamp_privacy_default=False,
+            # A hand-added ``sensitivity`` key carries over too (never looser).
+            _sensitivity_key=old._sensitivity_key,
             **inherited,
         )
         # One instant for both sides of the handoff. Taking a fresh ``_now()``
@@ -1141,6 +1183,9 @@ class MemoryOperationsMixin:
         restored.setdefault("open_question", None)
         # Same for ``privacy`` (MM0): a version without the field restores unset.
         restored.setdefault("privacy", None)
+        # And the top-level ``sensitivity`` key: restored as that version had it
+        # (``None`` removes it); a non-human rollback may not loosen it.
+        restored["sensitivity"] = old_doc.top_level_sensitivity
         stale_target = restored.get("superseded_by")
         if (
             stale_target is not None

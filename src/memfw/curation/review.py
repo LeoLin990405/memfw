@@ -18,6 +18,7 @@ from memfw.agents.models import (
 from memfw.core.errors import IntegrityError
 from memfw.core.models import EventKind, Layer, Tier
 from memfw.core.repository import Repository
+from memfw.ports.privacy import effective_level, is_looser
 
 
 def list_pending(repository: Repository) -> list[dict[str, Any]]:
@@ -427,6 +428,25 @@ def _validate_merge(repository: Repository, proposal: Proposal) -> tuple[Any, li
         # A merge copies duplicate bodies into the representative: across
         # tenants that would publish one tenant's text to another.
         raise IntegrityError("Merge targets must all belong to the representative's tenant")
+    # Same for privacy (MM0): a merge must not copy a stricter memory's text
+    # into a representative that more readers may see. The level counts the
+    # field, the privacy:/sensitivity: tags and a top-level sensitivity key.
+    legacy = repository.legacy_privacy_default()
+
+    def level(document: Any) -> str:
+        return effective_level(
+            document.privacy,
+            document.tags,
+            legacy=legacy,
+            sensitivity=document.top_level_sensitivity,
+        )
+
+    floor = level(representative)
+    if any(is_looser(floor, level(document)) for document in documents):
+        raise IntegrityError(
+            "Merge targets must not be more private than the representative; "
+            "tighten the representative's privacy first"
+        )
     return representative, documents
 
 
