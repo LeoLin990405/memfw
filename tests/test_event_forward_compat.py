@@ -295,3 +295,48 @@ def test_a_vault_without_foreign_events_reports_as_before(tmp_path: Path) -> Non
     verify = json.loads(_cli("log", "verify", "--root", str(repository.root)).output)
     assert not any(key.startswith("unknown_") for key in verify)
     assert repository.fsck() == []
+
+
+_BASE_EVENT: dict[str, Any] = {
+    "event_id": "e",
+    "memory_id": "m",
+    "timestamp": "2026-11-17T00:00:00Z",
+    "actor": "a",
+    "event_hash": "0" * 64,
+}
+
+
+@pytest.mark.parametrize("name", ["create", "attach", "Bad Name", ""])
+def test_a_foreign_kind_instance_must_be_an_unknown_well_formed_name(name: str) -> None:
+    with pytest.raises(ValueError, match="not a foreign event kind"):
+        Event(**{**_BASE_EVENT, "kind": ForeignEventKind(name), "details": dict(MARKER)})
+
+
+def test_a_foreign_kind_instance_must_carry_the_marker() -> None:
+    with pytest.raises(ValueError, match="not marked"):
+        Event(**{**_BASE_EVENT, "kind": ForeignEventKind("proxy_retire")})
+    event = Event(**{**_BASE_EVENT, "kind": ForeignEventKind("proxy_retire"), "details": MARKER})
+    assert event.is_foreign_kind and event.kind not in MEMORY_EVENT_KINDS
+
+
+def test_a_foreign_kind_reserves_its_memory_id(tmp_path: Path) -> None:
+    repository = Repository(_newer_vault(tmp_path))
+    with pytest.raises(IntegrityError, match="already used"):
+        repository.add("Clash", "Same id as a proxy.", memory_id="p-0001")
+
+
+def test_a_foreign_summary_row_without_its_event_line_is_refused(tmp_path: Path) -> None:
+    from memfw.log.store import _canonical_json, _parse_segment_summaries, _summarize_events
+
+    events = Repository(_newer_vault(tmp_path)).events()[:2]
+    rows = [json.loads(row) for row in _summarize_events(events, "0" * 64)[0]]
+    assert "event_line" in rows[1]
+    previous = "0" * 64
+    for row in rows:
+        row.pop("event_line", None)
+        row["previous_summary_hash"] = previous
+        payload = {key: value for key, value in row.items() if key != "summary_hash"}
+        row["summary_hash"] = previous = hashlib.sha256(_canonical_json(payload)).hexdigest()
+    raw = b"".join(json.dumps(row).encode() + b"\n" for row in rows)
+    with pytest.raises(IntegrityError, match="lacks its event line"):
+        _parse_segment_summaries(raw, "0" * 64, "0" * 64)

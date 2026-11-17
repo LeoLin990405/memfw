@@ -188,6 +188,11 @@ _EVENT_KIND_ADAPTER: TypeAdapter[EventKind] = TypeAdapter(EventKind)
 
 def _validate_event_kind(value: Any, handler: ValidatorFunctionWrapHandler) -> Any:
     if isinstance(value, ForeignEventKind):
+        # Only a name this version does not know, in the foreign name form.
+        if str(value) in EventKind._value2member_map_ or not _FOREIGN_KIND_NAME.fullmatch(
+            value
+        ):
+            raise ValueError(f"not a foreign event kind: {str(value)!r}")
         return value
     # Same validation and error as a plain ``EventKind`` field, so an unmarked
     # unknown kind fails exactly as in 0.3.0 (``input_value='<kind>'``).
@@ -474,6 +479,19 @@ class Event(BaseModel):
         ):
             return {**data, "kind": ForeignEventKind(kind)}
         return data
+
+    @model_validator(mode="after")
+    def foreign_kind_is_marked(self) -> Event:
+        # Also for a ``ForeignEventKind`` passed in directly, not only from JSON.
+        if (
+            self.is_foreign_kind
+            and self.details.get(NON_MEMORY_MARKER_KEY) != NON_MEMORY_MARKER_VALUE
+        ):
+            raise ValueError(
+                f"event kind {str(self.kind)!r} is unknown and not marked "
+                f'details.{NON_MEMORY_MARKER_KEY} == "{NON_MEMORY_MARKER_VALUE}"'
+            )
+        return self
 
     @field_serializer("kind")
     def serialize_kind(
