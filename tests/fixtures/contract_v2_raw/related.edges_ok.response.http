@@ -1,0 +1,6 @@
+HTTP/1.0 200 OK
+Server: memfw 
+Content-Type: application/json; charset=utf-8
+Content-Length: 213
+
+{"contract": "memfw-http/2", "mode": "edges", "degraded": false, "memory_id": "mem-alpha", "results": [{"id": "mem-beta", "title": "Beta corpus note", "score": 0.75, "reasons": ["lexical", "link", "shared_tag"]}]}

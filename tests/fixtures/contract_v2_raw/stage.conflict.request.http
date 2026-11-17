@@ -1,0 +1,17 @@
+POST /stage HTTP/1.1
+Host: localhost
+X-Memfw-Token: {write_token}
+Content-Type: application/json
+Content-Length: 172
+Connection: close
+
+{
+  "content": "Different body.",
+  "proposal_id": "sample-ok",
+  "source": "conductor",
+  "tags": [
+    "sample"
+  ],
+  "tenant": "tenant-a",
+  "title": "Staged sample"
+}

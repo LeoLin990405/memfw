@@ -1,0 +1,121 @@
+{
+  "delete.not_found": {
+    "before": [],
+    "headers_only": false,
+    "related": true
+  },
+  "get.not_found": {
+    "before": [],
+    "headers_only": false,
+    "related": true
+  },
+  "head.health": {
+    "before": [],
+    "headers_only": false,
+    "related": true
+  },
+  "health.ok": {
+    "before": [],
+    "headers_only": false,
+    "related": true
+  },
+  "post.context_not_found": {
+    "before": [],
+    "headers_only": false,
+    "related": true
+  },
+  "post.forget_not_found": {
+    "before": [],
+    "headers_only": false,
+    "related": true
+  },
+  "post.not_found": {
+    "before": [],
+    "headers_only": false,
+    "related": true
+  },
+  "put.not_found": {
+    "before": [],
+    "headers_only": false,
+    "related": true
+  },
+  "related.edges_ok": {
+    "before": [],
+    "headers_only": false,
+    "related": true
+  },
+  "related.fts_degraded": {
+    "before": [],
+    "headers_only": false,
+    "related": false
+  },
+  "related.not_found": {
+    "before": [],
+    "headers_only": false,
+    "related": true
+  },
+  "search.as_of_superseded_after_t": {
+    "before": [],
+    "headers_only": false,
+    "related": true
+  },
+  "search.bad_json": {
+    "before": [],
+    "headers_only": false,
+    "related": true
+  },
+  "search.empty_query": {
+    "before": [],
+    "headers_only": false,
+    "related": true
+  },
+  "search.ok": {
+    "before": [],
+    "headers_only": false,
+    "related": true
+  },
+  "search.too_large": {
+    "before": [],
+    "headers_only": true,
+    "related": true
+  },
+  "search.unauthorized": {
+    "before": [],
+    "headers_only": false,
+    "related": true
+  },
+  "search.wrong_token": {
+    "before": [],
+    "headers_only": false,
+    "related": true
+  },
+  "stage.conflict": {
+    "before": [
+      "stage.ok"
+    ],
+    "headers_only": false,
+    "related": true
+  },
+  "stage.duplicate": {
+    "before": [
+      "stage.ok"
+    ],
+    "headers_only": false,
+    "related": true
+  },
+  "stage.forbidden_read_token": {
+    "before": [],
+    "headers_only": false,
+    "related": true
+  },
+  "stage.ok": {
+    "before": [],
+    "headers_only": false,
+    "related": true
+  },
+  "stage.too_large": {
+    "before": [],
+    "headers_only": false,
+    "related": true
+  }
+}

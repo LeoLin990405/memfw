@@ -1,0 +1,10 @@
+POST /context HTTP/1.1
+Host: localhost
+X-Memfw-Token: {read_token}
+Content-Type: application/json
+Content-Length: 27
+Connection: close
+
+{
+  "tenant": "tenant-a"
+}

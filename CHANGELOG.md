@@ -64,7 +64,9 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   (optionally) entity projections, naming the rebuild for each store that
   still carries it (exit 0 clean, 1 residue, 2 usage error, 3 the memory is
   still live). Hard delete is unchanged. New v3 sample set in
-  `tests/fixtures/contract_v3/`; the v2 set is unchanged.
+  `tests/fixtures/contract_v3/`; the v2 set is unchanged, and
+  `tests/fixtures/contract_v2_raw/` pins the raw v2 bytes (status line,
+  headers, body) recorded from the service before v3.
 
 ### Added — `current` context slot (U6, off by default)
 

@@ -1,0 +1,12 @@
+POST /stage HTTP/1.1
+Host: localhost
+X-Memfw-Token: {read_token}
+Content-Type: application/json
+Content-Length: 110
+Connection: close
+
+{
+  "content": "Forbidden sample body.",
+  "proposal_id": "sample-forbidden",
+  "title": "Forbidden sample"
+}

@@ -1,0 +1,9 @@
+POST /search HTTP/1.1
+Host: localhost
+Content-Type: application/json
+Content-Length: 32
+Connection: close
+
+{
+  "query": "corpus keyword"
+}

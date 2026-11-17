@@ -1057,30 +1057,88 @@ def test_v3_related_carries_why_and_provenance_type(
     assert all(set(item) == {"id", "title", "score", "reasons"} for item in v2["results"])
 
 
-def test_v2_body_bytes_are_unchanged_for_a_seeded_vault(
-    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The handler's raw v2 bytes equal a canonical-free re-dump of the v2 fixture.
+# ---------------------------------------------------------------------------
+# Golden raw bytes: v2 answers equal those of the service before v3
+# ---------------------------------------------------------------------------
 
-    ``_send`` writes ``json.dumps(payload, ensure_ascii=False)``; comparing the
-    parsed body with the fixture (``test_v2_samples_dual_run``) checks the
-    values, this checks that no key moved or appeared.
+RAW_V2_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "contract_v2_raw"
+RAW_CASES: dict[str, dict] = json.loads((RAW_V2_FIXTURES / "cases.json").read_text("utf-8"))
+#: The one header v3 adds to a v2 answer, on ``/health`` only.
+V3_HEALTH_HEADER = f"{service.CONTRACTS_HEADER}: memfw-http/2, memfw-http/3".encode()
+
+
+def _raw_request(name: str, *, explicit_v2: bool) -> bytes:
+    raw = (RAW_V2_FIXTURES / f"{name}.request.http").read_bytes()
+    raw = raw.replace(b"{read_token}", READ_TOKEN.encode()).replace(
+        b"{write_token}", WRITE_TOKEN.encode()
+    )
+    if RAW_CASES[name]["headers_only"]:
+        # Answered 413 from Content-Length alone; an unread body would turn
+        # the server's close into a reset.
+        raw = raw.partition(b"\r\n\r\n")[0] + b"\r\n\r\n"
+    if explicit_v2:
+        raw = raw.replace(b"\r\n", f"\r\n{service.CONTRACT_HEADER}: {V2}\r\n".encode(), 1)
+    return raw
+
+
+def _raw_exchange(port: int, raw: bytes) -> bytes:
+    import socket
+
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as sock:
+        sock.sendall(raw)
+        chunks = []
+        while piece := sock.recv(65536):
+            chunks.append(piece)
+    head, separator, body = b"".join(chunks).partition(b"\r\n\r\n")
+    lines = [line for line in head.split(b"\r\n") if not line.lower().startswith(b"date:")]
+    return b"\r\n".join(lines) + separator + body
+
+
+@pytest.mark.parametrize("name", sorted(RAW_CASES))
+@pytest.mark.parametrize("explicit_v2", [False, True], ids=["bare", "explicit-v2"])
+def test_v2_raw_bytes_equal_the_pre_v3_service(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, explicit_v2: bool
+) -> None:
+    """Status line, headers (``Date`` aside) and body bytes equal the pre-v3 goldens.
+
+    ``tests/fixtures/contract_v2_raw/`` was recorded from the service as it
+    was before ``memfw-http/3`` (see its README). The only allowed difference
+    is the documented ``MemFW-Contracts`` header on ``/health``.
     """
 
+    for variable in (service.TENANT_ENV, service.CLEARANCE_ENV):
+        monkeypatch.delenv(variable, raising=False)
+    case = RAW_CASES[name]
     root = seed_vault(tmp_path / "vault")
     build_related(root)
-    _use_vault(monkeypatch, root, related=True)
-    for path, body in (
-        ("/search", SCENARIOS["search.ok"]["body"]),
-        ("/related", SCENARIOS["related.edges_ok"]["body"]),
-    ):
-        status, raw, _ = _request(httpd, "POST", path, body, token=READ_TOKEN)
-        assert status == 200
-        parsed = json.loads(raw)
-        assert raw == json.dumps(parsed, ensure_ascii=False).encode("utf-8")
-        name = "search.ok" if path == "/search" else "related.edges_ok"
-        fixture = json.loads((V2_FIXTURES / f"{name}.response.json").read_text(encoding="utf-8"))
-        assert list(parsed) == [key for key in parsed if key in fixture]
-        assert set(parsed) == set(fixture)
-        for item, expected in zip(parsed["results"], fixture["results"], strict=True):
-            assert set(item) == set(expected)
+    _use_vault(monkeypatch, root, related=case["related"])
+    port = int(urlsplit(httpd).port or 0)
+    for previous in case["before"]:
+        _raw_exchange(port, _raw_request(previous, explicit_v2=explicit_v2))
+    got = _raw_exchange(port, _raw_request(name, explicit_v2=explicit_v2))
+    expected = (RAW_V2_FIXTURES / f"{name}.response.http").read_bytes()
+    got_head, _, got_body = got.partition(b"\r\n\r\n")
+    want_head, _, want_body = expected.partition(b"\r\n\r\n")
+    assert got_body == want_body, name
+    got_lines = got_head.split(b"\r\n")
+    request_line = (RAW_V2_FIXTURES / f"{name}.request.http").read_bytes().split(b"\r\n", 1)[0]
+    if request_line == b"GET /health HTTP/1.1":
+        assert V3_HEALTH_HEADER in got_lines, name
+        got_lines.remove(V3_HEALTH_HEADER)
+    assert got_lines == want_head.split(b"\r\n"), name
+
+
+def test_v2_raw_fixtures_are_complete_and_clean() -> None:
+    names = {path.name.split(".request.http")[0] for path in RAW_V2_FIXTURES.glob("*.request.http")}
+    assert names == set(RAW_CASES)
+    assert set(SCENARIOS) <= names  # every v2 sample, plus error and method cases
+    for path in RAW_V2_FIXTURES.iterdir():
+        data = path.read_bytes()
+        for forbidden in (
+            b"/Users/",
+            b"/home/",
+            b"/private/",
+            READ_TOKEN.encode(),
+            WRITE_TOKEN.encode(),
+        ):
+            assert forbidden not in data, (path.name, forbidden)

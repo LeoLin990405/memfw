@@ -1,0 +1,7 @@
+HTTP/1.0 404 Not Found
+Server: memfw 
+Content-Type: application/json; charset=utf-8
+Content-Length: 91
+Connection: close
+
+{"contract": "memfw-http/2", "error": {"code": "not_found", "message": "memory not found"}}

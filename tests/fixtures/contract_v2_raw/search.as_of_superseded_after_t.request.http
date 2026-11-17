@@ -1,0 +1,13 @@
+POST /search HTTP/1.1
+Host: localhost
+X-Memfw-Token: {read_token}
+Content-Type: application/json
+Content-Length: 110
+Connection: close
+
+{
+  "as_of": "2026-11-06T00:15:00+00:00",
+  "limit": 5,
+  "query": "corpus keyword",
+  "tenant": "tenant-a"
+}
