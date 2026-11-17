@@ -12,8 +12,10 @@ opened ``immutable=1``; one with a pending ``-wal`` or ``-journal`` is
 copied (with that sidecar) into a private temporary directory and the copy
 is read, so committed rows still in the WAL are counted. Caveat: either way
 the check reads a snapshot and assumes no writer is changing the store at
-that moment; run it after a rebuild finishes, not during one. A torn read
-fails closed (``error: "unreadable"``, counted as residue).
+that moment; run it after a rebuild finishes, not during one. The store
+and its sidecars are stat-ed before and after each read; if they changed
+the read runs once more, and a second change, like any torn read, fails
+closed (``error: "unreadable"``, counted as residue).
 
 The memory's *state* decides what counts as residue:
 
@@ -22,7 +24,8 @@ The memory's *state* decides what counts as residue:
   is residue, and so is a leftover ``.history/<id>`` directory;
 * ``closed`` (the file is there with ``valid_to`` or ``superseded_by`` set):
   the FTS index may keep its rows (``as_of`` and ``include_history`` read
-  them) but must not list it as current; the related projection is
+  them) but must not list it as current (rows whose current state cannot
+  be told, with no ``memory_temporal`` row, count as residue); the related projection is
   current-only, so any item or edge is residue. Corroboration and usage
   rows of a closed memory are reported as ``retained``, not residue: the
   memory still exists and those rows hold ids, counts and times only;
@@ -50,11 +53,11 @@ import re
 import shutil
 import sqlite3
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, TypeVar
 from urllib.parse import quote
 
 import yaml
@@ -63,6 +66,8 @@ from ..core.models import EventKind
 from ..core.repository import Repository
 from ..corroboration import projection_path as corroboration_path
 from ..usage import projection_path as usage_path
+
+_T = TypeVar("_T")
 
 _ID_RE: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 #: Where ``memfw memory-related-build`` writes by default, relative to the vault.
@@ -138,6 +143,38 @@ def _open_ro(path: Path) -> Iterator[sqlite3.Connection]:
             yield connection
 
 
+def _signature(path: Path) -> tuple[tuple[int, int] | None, ...]:
+    """``(mtime_ns, size)`` of the store and each sidecar (``None`` when absent)."""
+
+    out: list[tuple[int, int] | None] = []
+    for candidate in (path, *(path.with_name(path.name + s) for s in ("-wal", "-journal"))):
+        try:
+            stat = candidate.stat()
+        except FileNotFoundError:
+            out.append(None)
+        else:
+            out.append((stat.st_mtime_ns, stat.st_size))
+    return tuple(out)
+
+
+def _read_stable(path: Path, read: Callable[[sqlite3.Connection], _T]) -> _T:
+    """``read`` on a snapshot of ``path``; retried once if the store changed meanwhile.
+
+    An ``immutable=1`` read assumes no writer, so the store and its sidecars
+    are checked before and after; a change (a writer, a new ``-wal``) means
+    the read may be torn and it runs once more. A second change raises
+    ``OSError``, which callers report as ``unreadable`` (fail closed).
+    """
+
+    for _attempt in range(2):
+        before = _signature(path)
+        with _open_ro(path) as connection:
+            result = read(connection)
+        if _signature(path) == before:
+            return result
+    raise OSError("store changed while it was read")
+
+
 def _tables(connection: sqlite3.Connection) -> set[str]:
     return {
         str(row[0])
@@ -151,32 +188,44 @@ def _count_rows(path: Path, queries: dict[str, tuple[str, str, tuple[Any, ...]]]
     check = StoreCheck(store="", present=path.is_file())
     if not check.present:
         return check
+    def read(connection: sqlite3.Connection) -> dict[str, int]:
+        rows: dict[str, int] = {}
+        tables = _tables(connection)
+        for label, (table, where, params) in queries.items():
+            if table not in tables:
+                rows[label] = 0
+                continue
+            row = connection.execute(
+                f'SELECT COUNT(*) FROM "{table}" WHERE {where}', params
+            ).fetchone()
+            rows[label] = int(row[0]) if row else 0
+        return rows
+
     try:
-        with _open_ro(path) as connection:
-            tables = _tables(connection)
-            for label, (table, where, params) in queries.items():
-                if table not in tables:
-                    check.rows[label] = 0
-                    continue
-                row = connection.execute(
-                    f'SELECT COUNT(*) FROM "{table}" WHERE {where}', params
-                ).fetchone()
-                check.rows[label] = int(row[0]) if row else 0
+        check.rows = _read_stable(path, read)
     except (sqlite3.Error, OSError):
         check.error = "unreadable"
     return check
 
 
 def _index_current(path: Path, memory_id: str) -> bool | None:
-    """Whether the index lists ``memory_id`` as current (no ``valid_to``/``superseded_by``)."""
+    """Whether the index lists ``memory_id`` as current (no ``valid_to``/``superseded_by``).
+
+    ``None`` when that cannot be told: the store is unreadable, or it has no
+    ``memory_temporal`` row for the id. Callers that found rows for the id
+    treat ``None`` as residue (fail closed).
+    """
+
+    def read(connection: sqlite3.Connection) -> tuple[Any, ...] | None:
+        if "memory_temporal" not in _tables(connection):
+            return None
+        row = connection.execute(
+            "SELECT valid_to, superseded_by FROM memory_temporal WHERE id = ?", (memory_id,)
+        ).fetchone()
+        return tuple(row) if row is not None else None
 
     try:
-        with _open_ro(path) as connection:
-            if "memory_temporal" not in _tables(connection):
-                return None
-            row = connection.execute(
-                "SELECT valid_to, superseded_by FROM memory_temporal WHERE id = ?", (memory_id,)
-            ).fetchone()
+        row = _read_stable(path, read)
     except (sqlite3.Error, OSError):
         return None
     if row is None:
@@ -237,7 +286,13 @@ def projection_residue(
         if gone:
             index.residue = any(index.rows.values())
         elif state == "closed" and any(index.rows.values()):
-            if _index_current(repository.index_path, memory_id):
+            current = _index_current(repository.index_path, memory_id)
+            if current is None:
+                # Rows name the id but whether they list it as current cannot
+                # be told: fail closed.
+                index.residue = True
+                index.detail = "index state of the memory is unknown"
+            elif current:
                 index.residue = True
                 index.detail = "index lists the memory as current"
     checks.append(index)

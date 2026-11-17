@@ -509,12 +509,16 @@ not be listed as current, and may not appear in the current-only related
 projection. The JSON report names each store, its row counts, whether it is
 residue and the rebuild that clears it; exit 0 is clean, 1 residue, 2 a
 usage error (bad id or vault root, as for every typer command), 3 a live
-memory. An unreadable store counts as residue (fail closed). No SQLite
+memory. An unreadable store counts as residue (fail closed), and so do FTS
+rows of a closed memory whose current state cannot be told (no
+`memory_temporal` row). No SQLite
 sidecar is created, so a store in a read-only directory is read: a file
 without a pending `-wal`/`-journal` is opened `immutable=1`, one with a
 pending sidecar is copied (with it) to a private temporary directory and the
 copy is read. Either way the check reads a snapshot and assumes no writer is
-changing the store meanwhile; run it after a rebuild, not during one. OKF exports on
+changing the store meanwhile; run it after a rebuild, not during one. The
+store and its sidecars are stat-ed before and after the read: a change
+re-runs it once, a second change reports the store unreadable. OKF exports on
 disk are not checked.
 
 ### Fixtures

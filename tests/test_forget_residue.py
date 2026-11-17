@@ -178,6 +178,63 @@ def test_stale_index_listing_a_closed_memory_as_current(tmp_path: Path, home: Pa
     assert index["remedy"] == "memfw index rebuild"
 
 
+def test_closed_memory_with_unknown_index_state_is_residue(tmp_path: Path, home: Path) -> None:
+    """Rows name a closed memory but no ``memory_temporal`` row says how: fail closed."""
+
+    repository = _vault(tmp_path)
+    path = repository.memories_dir / "mem-c.md"
+    text = path.read_text(encoding="utf-8")
+    path.write_text(
+        text.replace("---\n", "---\nvalid_to: '2026-11-07T00:00:00+00:00'\n", 1), encoding="utf-8"
+    )
+    with sqlite3.connect(repository.index_path) as connection:
+        connection.execute("DELETE FROM memory_temporal WHERE id = 'mem-c'")
+    connection.close()
+    report = projection_residue(repository.root, "mem-c", home=home)
+    assert report["state"] == "closed"
+    index = _checks(report)["index"]
+    assert index["rows"]["memory_rows"] == 1 and index["rows"]["memory_temporal"] == 0
+    assert index["residue"] is True
+    assert index["detail"] == "index state of the memory is unknown"
+    assert report["clean"] is False
+
+
+def test_store_changing_during_the_read_is_retried_then_unreadable(
+    tmp_path: Path, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import memfw.curation.residue as residue
+
+    repository = _vault(tmp_path)
+    path = repository.memories_dir / "mem-c.md"
+    text = path.read_text(encoding="utf-8")
+    path.write_text(
+        text.replace("---\n", "---\nvalid_to: '2026-11-07T00:00:00+00:00'\n", 1), encoding="utf-8"
+    )
+    calls = {"count": 0}
+    real = residue._signature
+
+    def changing_once(path: Path) -> tuple:
+        calls["count"] += 1
+        # The first read of the index sees a change after it; the retry is stable.
+        if path == repository.index_path and calls["count"] == 2:
+            return ("changed",)
+        return real(path)
+
+    monkeypatch.setattr(residue, "_signature", changing_once)
+    index = _checks(projection_residue(repository.root, "mem-c", home=home))["index"]
+    # Retried, then read: the stale index still lists the closed memory as current.
+    assert index.get("error") is None and index["residue"] is True
+    assert index["detail"] == "index lists the memory as current"
+
+    def always_changing(path: Path) -> tuple:
+        calls["count"] += 1
+        return (calls["count"],) if path == repository.index_path else real(path)
+
+    monkeypatch.setattr(residue, "_signature", always_changing)
+    index = _checks(projection_residue(repository.root, "mem-c", home=home))["index"]
+    assert index["error"] == "unreadable" and index["residue"] is True
+
+
 def test_absent_id_and_unreadable_store(tmp_path: Path, home: Path) -> None:
     repository = _vault(tmp_path)
     report = projection_residue(repository.root, "mem-never", home=home)
