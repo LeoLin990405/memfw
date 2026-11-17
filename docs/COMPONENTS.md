@@ -9,6 +9,10 @@ Optional pieces built on the memfw engine. The README links here.
 - `notes_get`, `notes_status`;
 - `retrieval_feedback`, `retrieval_trace`.
 
+Under `--clearance` / `MEMFW_NOTES_CLEARANCE` (with `--legacy-privacy-default`) every tool sees
+only notes whose privacy level the clearance admits, read from the note file; `notes_status`
+counts only visible notes. Unset, nothing is filtered.
+
 ## Notes index
 
 `memfw.notes` is a derived, section-level index for a Markdown notes tree. It is
@@ -74,7 +78,14 @@ remain authoritative.
 The two library files need only the standard library and PyYAML. The script loads its read
 path from `readonly.py` beside it, else the checkout's `src/memfw/index/`, else an installed
 `memfw`, and logs which one it chose; with none of them it exits with an error naming the
-missing files. It never writes, so run `memfw index rebuild` once after an upgrade. See
+missing files. `read_path.py` carries `READ_PATH_VERSION` (2 in 0.3.0); the script and
+`readonly.py` refuse to start with an older copy, so a partial upgrade fails at startup instead
+of on every `/search`. It never writes, so run `memfw index rebuild` once after an upgrade.
+
+`--clearance` / `MEMFW_READONLY_CLEARANCE` (for example `public,shared`) limits `/search` and
+`/related` to those privacy levels; unset, nothing is filtered. A memory without a `privacy`
+field takes the vault's `legacy_privacy_default` (`local-private` when unset), so set that
+first or every older memory is withheld. See
 [`READONLY-SERVICE-UPGRADE.md`](READONLY-SERVICE-UPGRADE.md).
 
 
@@ -89,7 +100,7 @@ Two uv workspace members build wheels from memfw's own `src/memfw/ports` and
 | `memfw-recall` (`packages/memfw-recall`) | `memfw_recall` | the recall coordinator, without memfw's built-in vault providers |
 
 An adapter author can install them and run the contract checks without installing memfw. Both
-carry `memfw.ports.PORTS_API_VERSION` (currently `0.1.0`). They are wheels only (no sdist, no
+carry `memfw.ports.PORTS_API_VERSION` (currently `0.2.0`). They are wheels only (no sdist, no
 editable install) and are **not published to PyPI**:
 
 ```bash
@@ -101,6 +112,19 @@ The CI job `standalone-wheels` builds both, installs them into a fresh venv with
 runs `tests/standalone/wheel_smoke.py`. memfw itself does not depend on them. Inside a memfw
 process use `memfw.ports`; `memfw_ports` is a separate copy whose classes never match memfw's.
 See [`ports-and-recall.md`](ports-and-recall.md#11-packaging-boundaries).
+
+
+## DeepSeek tagging adapter
+
+`packages/adapters/memfw-adapter-deepseek` (wheel `memfw_adapter_deepseek`, version 0.1.0)
+implements the `ModelBackend` port with the standard library only. It gives the conversation
+worker a `conv-v2` summary plus tags (project, task type, components, intent, outcome) per
+chunk and session; it extracts no facts or claims. It is **off by default**: the worker uses it
+only when `vault.yaml` sets `conversations: {backend: "memfw_adapter_deepseek:factory", cloud:
+true}` and `DEEPSEEK_API_KEY` is set, and each run has a token and cost budget. The key is sent
+only to the provider's API host. memfw never imports the adapter; it is built as its own wheel
+(`uv build --wheel --package memfw-adapter-deepseek`) and not published to PyPI. See
+[`conversations-share.md`](conversations-share.md#deepseek-tagging-adapter).
 
 
 ## Corroboration projection
@@ -118,9 +142,26 @@ memfw corroboration rebuild --root ./vault
 memfw corroboration show MEMORY_ID --as-app codex --root ./vault
 ```
 
-`show` trims the answer to the apps `--as-app` may read. It is off by default: nothing else
-reads the projection, and it is not on MCP yet. See
+`show` trims the answer to the apps `--as-app` may read. MCP `memory_search` with
+`labels: true` adds `corroboration` (`count`, `apps`, `sessions`, `first_seen`, `last_seen`) to
+every row, trimmed to the server app's `can_read`, or `{"degraded": CODE}` when it cannot be
+shown; without `labels` the output is unchanged. `memfw corroboration queue` lists unresolved
+open questions in review order, those whose conflicts are corroborated by at least two visible
+apps first (read-only, `--policy strict` by default). See
 [`epistemic-and-experience.md`](epistemic-and-experience.md#corroboration-derived).
+
+
+## Obsidian projection
+
+`memfw project obsidian --out DIR [--root VAULT] [--clearance public,shared] [--tenant T]`
+writes a read-only Obsidian board: a page per memory, open-question and concept pages, wikilinks
+for `about`, supersession, open-question conflicts and answers, concept `broader` / `narrower`,
+Bases views and a sha256 manifest. It implements the `Projector` port. The output is
+deterministic (no run timestamps, stable order), so it can be committed and diffed. A memory the
+clearance hides leaves no page, link, count or concept page. The vault is only read, and the
+output may not be inside the vault or a protected path. A rebuild touches only files listed in
+the previous manifest. Nothing runs unless the command is invoked. See
+[`obsidian-projection.md`](obsidian-projection.md).
 
 
 ## Concept taxonomy and relation types
