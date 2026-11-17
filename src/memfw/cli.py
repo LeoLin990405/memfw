@@ -2816,7 +2816,7 @@ def corroboration_queue(
 def graph_rebuild(
     root: Annotated[Path, typer.Option("--root", "-r", help="memfw vault (read only)")] = Path("."),
 ) -> None:
-    """Rebuild edges.sqlite3 from the vault's typed relations (the vault is only read)."""
+    """Rebuild the typed-edge projection (kept outside the vault; the vault is only read)."""
     from .runtime.graph import rebuild_edge_projection
 
     repository = _repo(root)
@@ -2826,6 +2826,12 @@ def graph_rebuild(
         _projection_fail(exc)
         return
     typer.echo(json.dumps(payload, ensure_ascii=False))
+    if "legacy_file" in payload:
+        typer.echo(
+            f"note: {payload['legacy_file']} at the vault root is from an earlier build and is"
+            " no longer used; you may delete it (memfw will not).",
+            err=True,
+        )
 
 
 @graph_app.command("match")

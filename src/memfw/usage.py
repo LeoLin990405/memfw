@@ -34,7 +34,6 @@ this bounds the file.
 
 from __future__ import annotations
 
-import hashlib
 import os
 import sqlite3
 import stat
@@ -44,12 +43,13 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any, Final
 
+from memfw.core import local_data
 from memfw.ports.usage import UsageSignal
 
 SCHEMA_VERSION: Final = 1
 FILENAME: Final = "usage.sqlite3"
-#: Under the home directory: memfw's local data directory (as the conversation store).
-DATA_DIR: Final = Path(".local") / "share" / "memfw" / "usage"
+#: Under the home directory: memfw's local data directory (``memfw.core.local_data``).
+DATA_DIR: Final = local_data.DATA_ROOT / "usage"
 DEFAULT_MAX_ROWS: Final = 100_000
 DEFAULT_MAX_AGE_DAYS: Final = 90
 
@@ -71,15 +71,13 @@ class UsageStoreError(OSError):
 def vault_key(root: Path | str) -> str:
     """The first 24 hex digits of sha256 of the vault's resolved path."""
 
-    resolved = str(Path(root).expanduser().resolve())
-    return hashlib.sha256(resolved.encode("utf-8")).hexdigest()[:24]
+    return local_data.vault_key(root)
 
 
 def projection_path(root: Path | str, *, home: Path | None = None) -> Path:
     """Where the vault's usage projection lives: outside it, under the home directory."""
 
-    base = home if home is not None else Path.home()
-    return base / DATA_DIR / f"{vault_key(root)}.sqlite3"
+    return local_data.projection_file(root, "usage", home=home)
 
 
 def _private_dir(path: Path) -> None:

@@ -114,17 +114,28 @@ it.
 
 ## K3: the typed-edge projection
 
-`memfw graph rebuild` reads the vault and writes `edges.sqlite3` at the vault
-root (next to `index.sqlite3` and `corroboration.sqlite3`; mode 0600, written
-to a temporary file and renamed into place, refused inside `memories/` and
-through a symlink). It can be deleted at any time; nothing else reads it, and
-building it never writes the vault. The same vault gives the same file bytes
-and the same `version`.
+`memfw graph rebuild` reads the vault and writes the edge projection
+**outside the vault**, in memfw's local data directory and keyed by the vault:
+`~/.local/share/memfw/edges/<key>.sqlite3`, where `<key>` is the first 24 hex
+digits of the sha256 of the vault's resolved path (the rule the usage
+projection follows, `memfw.core.local_data`; the home directory is `$HOME`).
+The file is mode 0600 (a directory it creates is 0700), written to a
+temporary file and renamed into place, and refused inside the vault and
+through a symlink. Outside the vault it never counts toward the physical-size
+budget (which total-mode budget enforcement acts on; a hard forget deletes
+memories) or the transaction fingerprint, however large it grows. It can be
+deleted at any time; nothing else reads it, and building it never writes the
+vault. The same vault gives the same file bytes and the same `version`.
 
 ```console
 $ memfw graph rebuild --root ~/vault
-{"path": "edges.sqlite3", "edges": 412, "version": "edges-v1:3f…"}
+{"path": "~/.local/share/memfw/edges/<key>.sqlite3", "edges": 412, "version": "edges-v1:3f…"}
 ```
+
+(`path` is printed in full.) An `edges.sqlite3` at the vault root, left by a
+pre-release build, is ignored: `graph rebuild` adds `"legacy_file":
+"edges.sqlite3"` to its answer and prints a one-line note on stderr
+suggesting you delete it. memfw never deletes it.
 
 **Edges** (`memfw.edges.collect_edges`). One edge per `(relation, source,
 target)`, each with the vault field it came from:
@@ -244,8 +255,8 @@ semantics yet (moving it needs an evaluation).
   an oid or a list of oids (a malformed value such as `null` or `{}` is left
   out); 0.2.0 dropped it.
 - Neither version expands queries along `broader`.
-- K3/K4 add `memfw graph rebuild` / `memfw graph match` and the
-  `edges.sqlite3` file; no existing command reads the file or changes its
+- K3/K4 add `memfw graph rebuild` / `memfw graph match` and the edge
+  projection file (outside the vault); no existing command reads it or changes its
   output when it exists. `memfw concepts relations` prints the two new rows
   (`conflicts`, `resolved_by`); `memfw concepts list` adds
   `broader_on_merged` (and a cycle through a merged concept) only for a merged

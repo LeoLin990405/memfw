@@ -316,7 +316,7 @@ at `node` that `edge_visible` admits for an `EdgeScope(tenant, clearance)`, sort
 clearance is required: a store can never be asked for everything, a private or `unknown`
 endpoint hides the edge, and another tenant's endpoint never shows.
 
-Implementations: `memfw.edges.SqliteProjectionStore` (`edges.sqlite3`, mode 0600) and
+Implementations: `memfw.edges.SqliteProjectionStore` (`~/.local/share/memfw/edges/<key>.sqlite3`, outside the vault, mode 0600) and
 `MemoryProjectionStore` in `memfw.ports.reference`. `check_projection_store(store, *, vault=None,
 vault_exclude=(), edges=SAMPLE_EDGES)` is the contract (answers equal the reference `select` for
 every node, direction and `SAMPLE_SCOPES` scope; deletion on rebuild; refusals).

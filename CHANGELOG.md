@@ -51,8 +51,12 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 ### Added — typed-edge projection and path patterns (K3/K4)
 
 - **K3 typed-edge projection and K4 bounded path patterns.** `memfw graph
-  rebuild` builds `edges.sqlite3` (0600, rebuildable, never writes the vault)
-  from the relation table's fields: `about`, `applies_to`, `broader`,
+  rebuild` builds the edge projection outside the vault, at
+  `~/.local/share/memfw/edges/<key>.sqlite3` (keyed like the usage
+  projection, via the shared `memfw.core.local_data` rule; 0600, rebuildable,
+  never writes the vault, never counted by the physical budget or the
+  transaction fingerprint; a vault-root `edges.sqlite3` from a pre-release
+  build is ignored and noted, never deleted) from the relation table's fields: `about`, `applies_to`, `broader`,
   `superseded_by` (concept `supersedes` read backwards), `evidence` with
   `observed_in`/`cites`, causal and experience links, `related`, concept
   relations, and the open-question `conflicts`/`resolved_by` (two new rows in

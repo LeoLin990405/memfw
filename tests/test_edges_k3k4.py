@@ -48,6 +48,15 @@ EVERY = frozenset({"public", "shared", "local-private"})
 PUBLIC = frozenset({"public"})
 
 
+@pytest.fixture(autouse=True)
+def _home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """The projection lives under the home directory: give every test its own."""
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    return home
+
+
 def _concept(root: Path, slug: str, oid: str, **extra: Any) -> Path:
     meta: dict[str, Any] = {
         "oid": oid,
@@ -329,17 +338,19 @@ def test_concept_privacy_only_when_the_file_states_it(tmp_path: Path) -> None:
 
 def test_rebuild_is_deterministic_private_and_never_writes_the_vault(food: Repository) -> None:
     root = food.root
-    before = tree_digest(root, exclude=(FILENAME, ".memfw.lock"))
+    before = tree_digest(root, exclude=(".memfw.lock",))
     first = rebuild_edge_projection(food)
     path = projection_path(root)
     data = path.read_bytes()
     second = rebuild_edge_projection(food)
-    assert first == second and first["path"] == FILENAME
+    assert first == second and first["path"] == str(path)
     assert path.read_bytes() == data
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
-    assert tree_digest(root, exclude=(FILENAME, ".memfw.lock")) == before
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert tree_digest(root, exclude=(".memfw.lock",)) == before
     assert vault_store(food).version() == first["version"]
-    assert not list(root.glob(f".{FILENAME}.*.tmp"))
+    assert not list(path.parent.glob(f".{path.name}.*.tmp"))
+    assert not any("edges" in item.name for item in root.rglob("*"))
 
 
 def test_rebuild_deletes_edges_whose_fields_are_gone(food: Repository) -> None:
@@ -366,6 +377,9 @@ def test_rebuild_refuses_memories_dir_and_symlinks(food: Repository, tmp_path: P
     inside = SqliteProjectionStore(food.memories_dir / "x.sqlite3", forbid=food.memories_dir)
     with pytest.raises(EdgeError):
         inside.rebuild([])
+    in_vault = SqliteProjectionStore(food.root / "edges.sqlite3", forbid=food.root)
+    with pytest.raises(EdgeError):
+        in_vault.rebuild([])
     link = tmp_path / "link.sqlite3"
     link.symlink_to(tmp_path / "elsewhere.sqlite3")
     with pytest.raises(EdgeError):
@@ -645,7 +659,7 @@ def test_cli_rebuild_and_match(food: Repository) -> None:
     assert missing.exit_code == 2 and "memfw graph rebuild" in missing.output
     built = runner.invoke(cli_app, ["graph", "rebuild", "-r", root])
     assert built.exit_code == 0, built.output
-    assert json.loads(built.output)["path"] == FILENAME
+    assert json.loads(built.output)["path"] == str(projection_path(food.root))
     result = runner.invoke(
         cli_app,
         [
@@ -708,6 +722,87 @@ def test_mcp_tools_list_is_unchanged() -> None:
     for path in mcp.rglob("*.py"):
         text = path.read_text(encoding="utf-8")
         assert "runtime.graph" not in text and "graph_match" not in text, path.name
+
+
+# --- the projection lives outside the vault (budget, fingerprint) ------------------------
+
+
+def test_projection_path_is_outside_the_vault_and_keyed_like_usage(
+    food: Repository, _home: Path
+) -> None:
+    from memfw.core.local_data import projection_file, vault_key
+    from memfw.usage import projection_path as usage_path
+
+    path = projection_path(food.root)
+    assert (
+        path == _home / ".local" / "share" / "memfw" / "edges" / f"{vault_key(food.root)}.sqlite3"
+    )
+    assert path == projection_file(food.root, "edges")
+    assert path.name == usage_path(food.root).name  # one key per vault, one rule
+    assert food.root.resolve() not in path.resolve().parents
+    other = Path("/elsewhere-home")
+    assert projection_path(food.root, home=other).parent == other / ".local/share/memfw/edges"
+
+
+def test_a_large_projection_never_drives_total_budget_forgetting(tmp_path: Path) -> None:
+    """Reviewer scenario: 20 memories, budget_mode=total, max_bytes = vault + 64 KB,
+    hard forget, a projection far larger than the headroom: nothing is forgotten."""
+
+    from datetime import UTC, datetime
+
+    from memfw.curation.engine import enforce_budget
+    from memfw.stats import measure_physical_disk_bytes
+
+    repository = _vault(tmp_path)
+    _concept(repository.root, "hub", "concept:hub")
+    for number in range(20):
+        _add(repository, f"m-{number:02d}", f"memory {number}", about=["concept:hub"])
+    physical = measure_physical_disk_bytes(repository.root)
+    config = repository.read_config()
+    config.update(
+        budget_mode="total",
+        max_bytes=physical + 64 * 1024,
+        forget_action="hard",
+        budget_scope="all",
+    )
+    repository.configure(config)
+    physical = measure_physical_disk_bytes(repository.root)
+    fingerprint = repository._tree_fingerprint()
+    big = [
+        Edge(
+            "related",
+            f"m-{number % 20:02d}",
+            f"x-{number:06d}-" + "p" * 200,
+            "memory",
+            "external",
+            "related",
+            source_tenant="",
+            source_privacy="public",
+        )
+        for number in range(40_000)
+    ]
+    vault_store(repository).rebuild(big)
+    assert projection_path(repository.root).stat().st_size > 4 * 1024 * 1024
+    assert measure_physical_disk_bytes(repository.root) == physical
+    assert repository._tree_fingerprint() == fingerprint
+    result = enforce_budget(repository, now=datetime(2026, 11, 17, 9, 0, tzinfo=UTC))
+    assert result.applied_ids == ()
+    assert len(repository.list()) == 20
+
+
+def test_a_legacy_vault_root_file_is_ignored_noted_and_kept(food: Repository) -> None:
+    legacy = food.root / FILENAME
+    legacy.write_bytes(b"not a projection")
+    runner = CliRunner()
+    built = runner.invoke(cli_app, ["graph", "rebuild", "-r", str(food.root)])
+    assert built.exit_code == 0, built.output
+    assert "no longer used" in built.stderr and FILENAME in built.stderr
+    assert json.loads(built.stdout)["legacy_file"] == FILENAME
+    assert legacy.read_bytes() == b"not a projection"  # never deleted or rewritten
+    payload = graph_match(food, start="concept:food", path="<about")
+    assert ["concept:food", "m-bread"] in _ids(payload)
+    legacy.unlink()
+    assert "legacy_file" not in rebuild_edge_projection(food)
 
 
 def test_edges_module_is_a_projection_layer() -> None:

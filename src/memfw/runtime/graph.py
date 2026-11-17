@@ -32,11 +32,11 @@ from memfw.core.errors import MemfwError
 from memfw.core.models import MemoryDocument
 from memfw.core.repository import Repository
 from memfw.edges import (
-    FILENAME,
     INVERSE_ALIASES,
     EdgeError,
     concept_level,
     concept_ref,
+    legacy_path,
     rebuild,
     vault_store,
 )
@@ -61,10 +61,21 @@ class GraphError(ValueError):
 
 
 def rebuild_edge_projection(repository: Repository) -> dict[str, Any]:
-    """Rebuild ``edges.sqlite3`` from the vault: ``{path, edges, version}``."""
+    """Rebuild the edge projection from the vault: ``{path, edges, version}``.
 
-    result = rebuild(repository)
-    return {"path": FILENAME, **result.as_dict()}
+    ``path`` is the projection file (outside the vault, ``memfw.edges``). When
+    an ``edges.sqlite3`` from an earlier build sits at the vault root, the
+    answer also carries ``legacy_file`` (its name): it is ignored and never
+    deleted here, and the caller may suggest removing it.
+    """
+
+    store = vault_store(repository)
+    result = rebuild(repository, store)
+    payload: dict[str, Any] = {"path": str(store.path), **result.as_dict()}
+    legacy = legacy_path(repository.root)
+    if legacy.is_file() or legacy.is_symlink():
+        payload["legacy_file"] = legacy.name
+    return payload
 
 
 class _LiveCheck:
@@ -161,7 +172,7 @@ def graph_match(
 ) -> dict[str, Any]:
     """Paths from ``start`` along ``path`` that the caller may see.
 
-    ``store`` defaults to the vault's ``edges.sqlite3``; a missing projection
+    ``store`` defaults to the vault's edge projection; a missing projection
     raises ``GraphError`` (run ``memfw graph rebuild``). The answer is
     ``{from, path, paths, truncated}``; ``path`` is the canonical spelling
     (inverse names resolved).

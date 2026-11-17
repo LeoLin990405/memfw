@@ -215,9 +215,9 @@ USAGE_SINKS: dict[str, Callable[[Path], object]] = {
 
 #: ``ProjectionStore`` (K3): the SQLite edge projection and the in-memory reference.
 PROJECTION_STORES: dict[str, Callable[[Path], object]] = {
-    # At the vault root, as ``memfw graph rebuild`` writes it.
+    # Outside the vault, as ``memfw graph rebuild`` writes it.
     "sqlite": lambda vault: SqliteProjectionStore(
-        vault / "edges.sqlite3", forbid=vault / "memories"
+        vault.parent / "edges" / "edges.sqlite3", forbid=vault
     ),
     "memory": lambda _vault: MemoryProjectionStore(),
 }
@@ -949,5 +949,5 @@ def test_projection_stores_pass_the_same_contract(tmp_path: Path, name: str) -> 
     check_projection_store(
         store,  # type: ignore[arg-type]
         vault=repository.root,
-        vault_exclude=(*LOCK, "edges.sqlite3"),
+        vault_exclude=LOCK,
     )

@@ -3,9 +3,20 @@
 ``collect_edges`` reads vault fields and turns them into ``memfw.ports.Edge``
 values, one relation of the K2 relation table (``ontology/relations.yaml``)
 each; ``SqliteProjectionStore`` stores them behind the ``ProjectionStore``
-port. The file (``edges.sqlite3`` next to ``index.sqlite3``, mode 0600) is
-never the authority: it can be deleted and rebuilt, and building it only
-reads the vault. Nothing on the search or context path reads it.
+port. The file is never the authority: it can be deleted and rebuilt, and
+building it only reads the vault. Nothing on the search or context path
+reads it.
+
+**Where it lives** (``projection_path``): outside the vault, in memfw's local
+data directory and keyed by the vault (``memfw.core.local_data``, the rule
+the usage projection follows): ``~/.local/share/memfw/edges/<key>.sqlite3``,
+``<key>`` the first 24 hex digits of the sha256 of the vault's resolved path;
+the file is 0600, a directory it creates 0700. Outside the vault it never
+counts toward the physical-size budget (``measure_physical_disk_bytes``,
+which drives total-mode budget enforcement) or the transaction fingerprint,
+however many edges it holds. An ``edges.sqlite3`` left at the vault root by
+an earlier build is ignored (``legacy_path``); ``memfw graph rebuild`` notes
+it, and nothing deletes it.
 
 **What becomes an edge** (``field`` names where it was read):
 
@@ -65,6 +76,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from .core.errors import MemfwError
+from .core.local_data import ensure_private_dir, projection_file
 from .core.models import MemoryDocument
 from .core.repository import Repository
 from .ontology.model import AliasIndex, Concept, _resolve, load_concepts, project_aliases
@@ -95,6 +107,8 @@ from .ports.types import Availability
 
 SCHEMA_VERSION: Final = 1
 FILENAME: Final = "edges.sqlite3"
+#: The ``memfw.core.local_data`` kind: ``~/.local/share/memfw/edges/<key>.sqlite3``.
+KIND: Final = "edges"
 #: Stored relation → the inverse name a pattern may use for it (walked backwards).
 INVERSE_ALIASES: Final[dict[str, str]] = {"supersedes": "superseded_by", "narrower": "broader"}
 _MEMORY_PREFIXES: Final = ("memory:", "mem:")
@@ -106,8 +120,14 @@ class EdgeError(MemfwError):
     """The edge projection cannot be built or read (message is safe to show)."""
 
 
-def projection_path(root: Path | str) -> Path:
-    """Where the projection lives: next to ``index.sqlite3`` at the vault root."""
+def projection_path(root: Path | str, *, home: Path | None = None) -> Path:
+    """Where the vault's projection lives: outside it, under the home directory."""
+
+    return projection_file(root, KIND, home=home)
+
+
+def legacy_path(root: Path | str) -> Path:
+    """Where an earlier build put the projection (the vault root). Never read or deleted."""
 
     return Path(root) / FILENAME
 
@@ -385,8 +405,9 @@ class SqliteProjectionStore:
     """The ``ProjectionStore`` the CLI uses: one SQLite file, replaced whole on rebuild.
 
     ``forbid`` names a directory the file may never be written into (the
-    vault's ``memories/``). The file is created 0600 with ``O_EXCL`` and
-    renamed into place, so a reader never sees a half-built projection.
+    vault). The file is created 0600 with ``O_EXCL`` and renamed into place,
+    so a reader never sees a half-built projection; a missing parent
+    directory is created 0700.
     """
 
     name = "sqlite"
@@ -412,10 +433,14 @@ class SqliteProjectionStore:
             forbidden = self.forbid.resolve()
             resolved = target.resolve()
             if resolved == forbidden or forbidden in resolved.parents:
-                raise EdgeError("refusing to write the edge projection inside memories/")
+                raise EdgeError("refusing to write the edge projection inside the vault")
         if target.is_symlink():
             raise EdgeError("refusing a symlinked edge projection")
-        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.parent.exists():
+            try:
+                ensure_private_dir(target.parent)
+            except NotADirectoryError as exc:
+                raise EdgeError(str(exc)) from exc
         temporary = target.with_name(f".{target.name}.{secrets.token_hex(8)}.tmp")
         flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
         os.close(os.open(temporary, flags, 0o600))
@@ -513,9 +538,9 @@ class SqliteProjectionStore:
 
 
 def vault_store(repository: Repository) -> SqliteProjectionStore:
-    """The store at the vault's default path, refusing ``memories/``."""
+    """The store at the vault's projection path (outside it), refusing the vault itself."""
 
-    return SqliteProjectionStore(projection_path(repository.root), forbid=repository.memories_dir)
+    return SqliteProjectionStore(projection_path(repository.root), forbid=repository.root)
 
 
 def rebuild(repository: Repository, store: SqliteProjectionStore | None = None) -> RebuildResult:
@@ -527,12 +552,14 @@ def rebuild(repository: Repository, store: SqliteProjectionStore | None = None) 
 __all__ = [
     "FILENAME",
     "INVERSE_ALIASES",
+    "KIND",
     "SCHEMA_VERSION",
     "EdgeError",
     "SqliteProjectionStore",
     "collect_edges",
     "concept_level",
     "concept_ref",
+    "legacy_path",
     "projection_path",
     "rebuild",
     "vault_store",
