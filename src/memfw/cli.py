@@ -2845,6 +2845,8 @@ def corroboration_show(
         return
     payload = {"id": memory_id, "corroboration": answer[memory_id].as_dict()}
     typer.echo(json.dumps(payload, ensure_ascii=False))
+    if not projection_path(repository.root).is_file():
+        typer.echo("note: projection missing: run `memfw corroboration rebuild`", err=True)
 
 
 @corroboration_app.command("queue")

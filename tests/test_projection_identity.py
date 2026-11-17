@@ -558,3 +558,16 @@ def test_a_projection_built_before_the_first_event_says_so(tmp_path: Path) -> No
     assert vault_identity(repository).mismatch({"vault_path": "/x"}) == OTHER_VAULT
     built_empty = VaultIdentity(vault_identity(repository).path).meta()
     assert vault_identity(repository).mismatch(built_empty) == BEFORE_FIRST_EVENT
+
+
+def test_show_notes_a_missing_projection(tmp_path: Path) -> None:
+    """L4: stdout unchanged, one stderr note."""
+
+    repository = _vault(tmp_path / "vault", share=True)
+    _corroborated(repository)
+    shown = CliRunner().invoke(
+        cli_app, ["corroboration", "show", "m-1", "--root", str(repository.root)]
+    )
+    assert shown.exit_code == 0
+    assert json.loads(shown.stdout)["corroboration"]["count"] == 0
+    assert "projection missing: run `memfw corroboration rebuild`" in shown.stderr
