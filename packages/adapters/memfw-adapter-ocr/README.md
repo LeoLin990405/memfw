@@ -119,6 +119,9 @@ memfw-ocr-proxy run --settings ocr-settings.json --attachment-id att-… \
     --source FILE --sha256 HEX --media-type application/pdf --privacy shared --out proxy.json
 ```
 
+`--source` must lie under one of the settings' `source_roots` (no symlinks),
+the same rule as the deriver.
+
 or through the adapter registry as the `ocr` deriver (`adapters: {enabled:
 [ocr], ocr: {...}}`): `DeriveRequest(kind="ocr_proxy", memory_ids=("att-…",),
 options={"source": "<path under a source root>", "root": 0, "sha256": …,

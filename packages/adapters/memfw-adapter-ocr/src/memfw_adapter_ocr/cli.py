@@ -5,8 +5,9 @@
     memfw-ocr-proxy check --settings SETTINGS.json
 
 ``SETTINGS.json`` holds the adapter settings (the ``adapters.ocr`` mapping).
-``run`` hands the engine only a private copy of FILE, and only when the
-settings' ``clearance`` admits LEVEL; it verifies FILE's sha256 before and
+``run`` accepts FILE only under one of the settings' ``source_roots`` (no
+symlinks, like the deriver), hands the engine only a private copy of it, and
+only when the settings' ``clearance`` admits LEVEL; it verifies FILE's sha256 before and
 after, writes OUT (``0600``, never replaced) and prints a one-line summary
 (no text). ``check`` prints the backend's availability. Errors print
 ``{"error": "<code>"}`` and exit 1.
@@ -20,7 +21,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from .backend import OcrError
-from .deriver import OcrDeriver, Settings
+from .deriver import OcrDeriver, Settings, resolve_source
 from .proxy import generate_proxy, write_proxy
 
 MAX_SETTINGS_BYTES = 1 << 20
@@ -33,6 +34,19 @@ def _settings(path: Path) -> Settings:
     if not isinstance(raw, dict):
         raise OcrError("bad_settings")
     return Settings.from_mapping(raw)
+
+
+def _confined(settings: Settings, source: Path) -> Path:
+    """``source`` checked like the deriver's: under one of ``source_roots``, no symlinks."""
+
+    if not settings.source_roots:
+        raise OcrError("no_source_roots")
+    target = source.absolute()
+    for index, root in enumerate(settings.source_roots):
+        base = Path(root).absolute()
+        if target.is_relative_to(base):
+            return resolve_source(settings.source_roots, index, target.relative_to(base).as_posix())
+    raise OcrError("outside_source_roots")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -62,7 +76,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if deriver.backend is None:
             raise OcrError(deriver.reason or "no_backend")
         candidate = generate_proxy(
-            args.source,
+            _confined(settings, args.source),
             backend=deriver.backend,
             attachment_id=args.attachment_id,
             sha256=args.sha256.strip().lower(),

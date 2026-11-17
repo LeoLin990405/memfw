@@ -734,6 +734,18 @@ def test_cli_writes_a_private_file_once(
     assert cli_main(argv) == 1
     assert json.loads(capsys.readouterr().out) == {"error": "out_exists"}
     assert cli_main(["check", "--settings", str(settings)]) == 0
+    capsys.readouterr()
+    outside = tmp_path / "elsewhere.pdf"
+    outside.write_bytes(path.read_bytes())
+    link = path.parent / "link.pdf"
+    link.symlink_to(outside)
+    for source, code in ((outside, "outside_source_roots"), (link, "symlink_refused")):
+        other = [*argv]
+        other[other.index("--source") + 1] = str(source)
+        other[other.index("--out") + 1] = str(tmp_path / "other.json")
+        assert cli_main(other) == 1
+        assert json.loads(capsys.readouterr().out) == {"error": code}
+    assert not (tmp_path / "other.json").exists()
 
 
 def test_write_proxy_refuses_existing(tmp_path: Path) -> None:
