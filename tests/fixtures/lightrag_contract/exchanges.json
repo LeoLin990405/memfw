@@ -1,0 +1,185 @@
+{
+ "external": "lightrag-server",
+ "external_version": "1.5.7",
+ "health": {
+  "api_version": "0261",
+  "auth_mode": "enabled",
+  "core_version": "1.5.7",
+  "pipeline_busy": false,
+  "status": "healthy"
+ },
+ "insert": {
+  "message": "Text successfully received. Processing will continue in background.",
+  "status": "success",
+  "track_id": "insert_20261117_120000_abcd1234"
+ },
+ "provenance": "Response bodies shaped by the lightrag-server 1.5.7 route models (QueryResponse, QueryDataResponse, InsertResponse, /health) and the /query/data route example; not captured from a live server.",
+ "query_answer": {
+  "llm_generated": true,
+  "references": [
+   {
+    "content": null,
+    "file_path": "m-backup.v3.md",
+    "reference_id": "1"
+   },
+   {
+    "content": null,
+    "file_path": "m-release.v3.md",
+    "reference_id": "2"
+   }
+  ],
+  "response": "The nightly backup job copies the vault to the NAS; release 0.4.0 ships the adapter registry.",
+  "response_time": 1.25
+ },
+ "query_answer_foreign": {
+  "llm_generated": true,
+  "references": [
+   {
+    "content": null,
+    "file_path": "m-backup.v3.md",
+    "reference_id": "1"
+   },
+   {
+    "content": null,
+    "file_path": "/documents/ai_basics.pdf",
+    "reference_id": "2"
+   }
+  ],
+  "response": "Neural networks are a subset of machine learning.",
+  "response_time": 0.9
+ },
+ "query_answer_no_context": {
+  "llm_generated": false,
+  "references": [],
+  "response": "Sorry, I'm not able to provide an answer to that question.[no-context]",
+  "response_time": 0.1
+ },
+ "query_data": {
+  "data": {
+   "chunks": [
+    {
+     "chunk_id": "chunk-1",
+     "content": "The nightly backup job copies the vault to the NAS.",
+     "file_path": "m-backup.v3.md",
+     "reference_id": "1"
+    }
+   ],
+   "entities": [
+    {
+     "created_at": "2026-11-17 12:00:00",
+     "description": "Nightly job that copies the vault to the NAS.",
+     "entity_name": "Backup Job",
+     "entity_type": "service",
+     "file_path": "m-backup.v3.md",
+     "reference_id": "1",
+     "source_id": "chunk-1"
+    },
+    {
+     "created_at": "2026-11-17 12:00:00",
+     "description": "Storage target of the backup job.",
+     "entity_name": "NAS",
+     "entity_type": "equipment",
+     "file_path": "m-backup.v3.md",
+     "reference_id": "1",
+     "source_id": "chunk-1"
+    },
+    {
+     "created_at": "2026-11-17 12:00:00",
+     "description": "Shipped in release 0.4.0; also mentioned by the backup notes.",
+     "entity_name": "Adapter Registry",
+     "entity_type": "concept",
+     "file_path": "m-release.v3.md<SEP>m-backup.v3.md",
+     "reference_id": "2",
+     "source_id": "chunk-2<SEP>chunk-1"
+    },
+    {
+     "created_at": "2026-11-17 12:00:00",
+     "description": "Merged with a private document.",
+     "entity_name": "Backup Keys",
+     "entity_type": "concept",
+     "file_path": "m-backup.v3.md<SEP>m-private.v1.md",
+     "reference_id": "1",
+     "source_id": "chunk-1<SEP>chunk-9"
+    },
+    {
+     "created_at": "2026-11-16 12:00:00",
+     "description": "From a version that is no longer current.",
+     "entity_name": "Old Release",
+     "entity_type": "event",
+     "file_path": "m-release.v2.md",
+     "reference_id": "3",
+     "source_id": "chunk-7"
+    },
+    {
+     "created_at": "2026-11-15 12:00:00",
+     "description": "From a document memfw never sent.",
+     "entity_name": "Neural Networks",
+     "entity_type": "concept",
+     "file_path": "/documents/ai_basics.pdf",
+     "reference_id": "4",
+     "source_id": "chunk-8"
+    },
+    {
+     "created_at": "",
+     "description": "No source.",
+     "entity_name": "Orphan",
+     "entity_type": "concept",
+     "file_path": "unknown_source",
+     "reference_id": "",
+     "source_id": ""
+    }
+   ],
+   "references": [
+    {
+     "file_path": "m-backup.v3.md",
+     "reference_id": "1"
+    },
+    {
+     "file_path": "m-release.v3.md",
+     "reference_id": "2"
+    }
+   ],
+   "relationships": [
+    {
+     "created_at": "2026-11-17 12:00:00",
+     "description": "The backup job writes to the NAS.",
+     "file_path": "m-backup.v3.md",
+     "keywords": "backup, storage",
+     "reference_id": "1",
+     "source_id": "chunk-1",
+     "src_id": "Backup Job",
+     "tgt_id": "NAS",
+     "weight": 1.0
+    },
+    {
+     "created_at": "2026-11-17 12:00:00",
+     "description": "Merged with a private document.",
+     "file_path": "m-private.v1.md",
+     "keywords": "keys",
+     "reference_id": "5",
+     "source_id": "chunk-9",
+     "src_id": "Backup Job",
+     "tgt_id": "Backup Keys",
+     "weight": 1.0
+    }
+   ]
+  },
+  "message": "Query executed successfully",
+  "metadata": {
+   "keywords": {
+    "high_level": [
+     "backup"
+    ],
+    "low_level": [
+     "NAS"
+    ]
+   },
+   "processing_info": {
+    "total_entities_found": 7,
+    "total_relations_found": 2
+   },
+   "query_mode": "mix"
+  },
+  "status": "success"
+ }
+}
