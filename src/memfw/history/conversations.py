@@ -46,9 +46,15 @@ Settled ingest (``settled_minutes``; absent means every change is ingested as
 before). A locator whose last activity is within ``settled_minutes`` of now is
 skipped this round (``sessions_unsettled``): no turn is written and its cursor
 is left as it was, so the next round reads it again (an archived session that
-became active again loses its archive row). Last activity is the
-newest timestamp among the turns read this round, else the file's mtime. A
-locator holding several sessions settles once all of them are quiet. The
+became active again loses its archive row). Last activity of a locator with a
+file of its own is the later of the newest turn timestamp read this round and
+the file's mtime (some readers stamp replies with the prompt time or skip
+lines without a timestamp); for a session in a shared database (``path#id``
+key or a per-session marker) it is the newest turn timestamp, else the mtime.
+A timestamp more than :data:`CLOCK_SKEW` in the future is ignored. A locator
+holding several sessions settles once all of them are quiet. A forced pass
+(re-label, opt-out change) does not wait for unsettled locators: each keeps a
+``force:`` marker and is re-read in full once it settles. The
 cwd opt-out still applies to an unsettled locator (its stored rows are dropped).
 
 When a settled locator's content is in the store (just written, or unchanged
@@ -107,6 +113,8 @@ LABELS_VERSION = "2"
 """Bumped when session labelling (origin, parent) changes: the next ingest of
 each agent re-reads every session once, so existing stores are re-labelled."""
 BUSY_RETRIES = 3
+CLOCK_SKEW = timedelta(minutes=5)
+"""Settled ingest: a turn timestamp later than now plus this is not trusted."""
 ARCHIVE_TABLE = "conversation_archive"
 TS_FUNCTION = "memfw_ts_key"
 """Consecutive empty re-reads of one unchanged fingerprint before ingest gives up."""
@@ -155,6 +163,10 @@ def _parse_ts(value: str | None) -> datetime | None:
     except ValueError:
         return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _stamp(value: datetime) -> str:
+    return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _scrub(value: str) -> str:
@@ -223,6 +235,7 @@ class ConversationStore:
         self._force = False
         self._settled: datetime | None = None
         self._now = datetime.now(UTC)
+        self._pending: frozenset[str] = frozenset()
 
     @contextmanager
     def _open(self) -> Iterator[sqlite3.Connection]:
@@ -510,11 +523,17 @@ class ConversationStore:
                     "DELETE FROM conversation_cursors WHERE agent = ?", (reader.agent,)
                 )
                 connection.execute(f"DELETE FROM {ARCHIVE_TABLE} WHERE agent = ?", (reader.agent,))
+                prefix = f"force:{reader.agent}:"
+                connection.execute(
+                    "DELETE FROM conversation_meta WHERE substr(key, 1, ?) = ?",
+                    (len(prefix), prefix),
+                )
                 counts.extra["opted_out"] = True
                 return counts
             self._force = self._optout_changed(connection, reader.agent)
             relabel = self._labels_changed(connection, reader.agent)
             self._force = self._force or relabel
+            self._pending = self._pending_force(connection, reader.agent)
             for item in roots:
                 root = item if isinstance(item, StoreRoot) else StoreRoot(Path(item).resolve())
                 try:
@@ -528,15 +547,12 @@ class ConversationStore:
                 except Exception:
                     connection.rollback()
                     counts.roots_failed += 1
-            done = not (
-                counts.roots_failed
-                or counts.sessions_failed
-                or counts.sessions_busy
-                or counts.extra.get("sessions_unsettled")
-            )
+            done = not (counts.roots_failed or counts.sessions_failed or counts.sessions_busy)
             if relabel and done:
                 # Recorded only once every session was re-read (none failed or was
                 # skipped as busy), so an interrupted pass runs again next ingest.
+                # A locator held back as unsettled carries its own force marker
+                # and is re-read once it settles, so it does not keep the pass open.
                 self._save_labels_version(connection, reader.agent)
             counts.extra["relabelled"] = relabel
         return counts
@@ -580,9 +596,10 @@ class ConversationStore:
             (agent, key),
         ).fetchone()
         after = -1
+        forced = self._force or key in self._pending
         if cursor is not None:
             previous = json.loads(cursor["fingerprint"])
-            same_version = cursor["parser_version"] == version and not self._force
+            same_version = cursor["parser_version"] == version and not forced
             if previous == fingerprint and same_version:
                 counts.sessions_unchanged += 1
                 if (
@@ -636,6 +653,7 @@ class ConversationStore:
         except SessionTooLarge:
             # Over the reader's limit: keep what was stored, wait for the file to change.
             counts.sessions_too_large += 1
+            self._clear_force(connection, agent, key)
             self._clear_busy(connection, agent, key)
             self._save_cursor(connection, agent, key, fingerprint, -1, version)
             return
@@ -671,16 +689,18 @@ class ConversationStore:
                     f"DELETE FROM {ARCHIVE_TABLE} WHERE agent = ? AND session_id = ?",
                     (agent, session),
                 )
+            self._clear_force(connection, agent, key)
             self._clear_busy(connection, agent, key)
             self._save_cursor(connection, agent, key, fingerprint, -1, version)
             return
         if self._settled is not None and not self._is_settled(
-            max((stamp for stamp in (_parse_ts(row[5]) for row in rows) if stamp), default=None),
-            locator,
+            self._newest([_parse_ts(row[5]) for row in rows]), locator
         ):
             # Still active: no turn is written and the cursor stays, so the next
             # round reads it again. A session resumed after it was archived is
-            # no longer archived (its stored turns are not its final form).
+            # no longer archived (its stored turns are not its final form): that
+            # covers the sessions this locator holds and those it just yielded
+            # (new turns of a session stored under another locator).
             counts.sessions_read -= 1
             counts.extra["sessions_unsettled"] += 1
             connection.execute(
@@ -689,7 +709,18 @@ class ConversationStore:
                 " WHERE agent = ? AND locator = ?)",
                 (agent, agent, key),
             )
+            for session in labels:
+                connection.execute(
+                    f"DELETE FROM {ARCHIVE_TABLE} WHERE agent = ? AND session_id = ?",
+                    (agent, session),
+                )
+            self._mark_settled(connection, agent, key, "")
+            if forced and key not in self._pending:
+                # A forced pass (re-label, opt-out change) still owes this locator a
+                # full re-read: keep a marker so it is re-read once it settles.
+                self._note_force(connection, agent, key)
             return
+        self._clear_force(connection, agent, key)
         if after < 0 and not rows:
             had = connection.execute(
                 "SELECT 1 FROM conversation_turn_locators WHERE agent = ? AND locator = ? LIMIT 1",
@@ -791,37 +822,88 @@ class ConversationStore:
 
     # -- settled ingest and archive state --------------------------------------------
 
+    def _newest(self, stamps: Iterable[datetime | None]) -> datetime | None:
+        """The newest trusted timestamp: one beyond now plus :data:`CLOCK_SKEW` is ignored."""
+
+        limit = self._now + CLOCK_SKEW
+        return max((stamp for stamp in stamps if stamp and stamp <= limit), default=None)
+
     def _is_settled(self, activity: datetime | None, locator: SessionLocator) -> bool:
-        """Whether the last activity (else the file's mtime) is before the settled cutoff."""
+        """Whether the locator's last activity is before the settled cutoff.
+
+        A locator with a file of its own: the later of ``activity`` (newest
+        trusted turn timestamp) and the file's mtime, since some readers stamp
+        replies with the prompt time or skip lines without a timestamp. A
+        session inside a shared database (``path#session`` key, or a reader's
+        per-session marker): the file's mtime moves with every other session,
+        so ``activity`` decides and the mtime is only the fallback. Unknown
+        activity (no trusted timestamp, no readable or trusted mtime) is never
+        settled.
+        """
 
         assert self._settled is not None
-        if activity is None:
-            try:
-                mtime = os.stat(locator.path, follow_symlinks=False).st_mtime
-            except OSError:
-                return False  # unknown activity is never taken as settled
-            activity = datetime.fromtimestamp(mtime, UTC)
-        return activity <= self._settled
+        mtime: datetime | None = None
+        try:
+            mtime = datetime.fromtimestamp(
+                os.stat(locator.path, follow_symlinks=False).st_mtime, UTC
+            )
+        except (OSError, OverflowError, ValueError):
+            mtime = None
+        mtime = self._newest([mtime])
+        shared = "#" in locator.key or getattr(locator, "fingerprint", None) is not None
+        if shared:
+            last = activity or mtime
+        else:
+            last = max((value for value in (activity, mtime) if value), default=None)
+        return last is not None and last <= self._settled
 
-    @staticmethod
-    def _stored_activity(connection: sqlite3.Connection, agent: str, key: str) -> datetime | None:
-        """The newest stored timestamp among the turns this locator holds."""
+    def _stored_activity(
+        self, connection: sqlite3.Connection, agent: str, key: str
+    ) -> datetime | None:
+        """The newest trusted stored timestamp among the turns this locator holds."""
 
+        bound = ts_key(_stamp(self._now + CLOCK_SKEW))
         row = connection.execute(
             f"SELECT MAX({TS_FUNCTION}(NULLIF(t.ts, ''))) FROM conversation_turns t"
             " JOIN conversation_turn_locators o ON o.agent = t.agent"
             " AND o.session_id = t.session_id AND o.offset = t.offset"
-            " WHERE o.agent = ? AND o.locator = ?",
-            (agent, key),
+            f" WHERE o.agent = ? AND o.locator = ? AND {TS_FUNCTION}(NULLIF(t.ts, '')) <= ?",
+            (agent, key, bound),
         ).fetchone()
-        return _parse_ts(row[0]) if row is not None and row[0] else None
+        return self._newest([_parse_ts(row[0])]) if row is not None and row[0] else None
+
+    @staticmethod
+    def _pending_force(connection: sqlite3.Connection, agent: str) -> frozenset[str]:
+        """Locators a forced pass skipped as unsettled (re-read in full once settled)."""
+
+        prefix = f"force:{agent}:"
+        return frozenset(
+            str(row[0])[len(prefix) :]
+            for row in connection.execute(
+                "SELECT key FROM conversation_meta WHERE substr(key, 1, ?) = ?",
+                (len(prefix), prefix),
+            )
+        )
+
+    @staticmethod
+    def _note_force(connection: sqlite3.Connection, agent: str, key: str) -> None:
+        connection.execute(
+            "INSERT OR REPLACE INTO conversation_meta (key, value) VALUES (?, '1')",
+            (f"force:{agent}:{key}",),
+        )
+
+    def _clear_force(self, connection: sqlite3.Connection, agent: str, key: str) -> None:
+        if key in self._pending:
+            connection.execute(
+                "DELETE FROM conversation_meta WHERE key = ?", (f"force:{agent}:{key}",)
+            )
 
     def _archive(
         self, connection: sqlite3.Connection, agent: str, key: str, counts: IngestCounts
     ) -> None:
         """Record every session this locator holds as archived in its current shape."""
 
-        stamp = self._now.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        stamp = _stamp(self._now)
         sessions = [
             str(row[0])
             for row in connection.execute(

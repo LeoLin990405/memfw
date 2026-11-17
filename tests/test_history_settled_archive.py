@@ -23,7 +23,7 @@ from memfw.conversations.share import ConversationShare
 from memfw.conversations.store import ConversationError
 from memfw.conversations.worker import Budgets, ConversationWorker, WorkState, fingerprint
 from memfw.history.conversations import ConversationStore, HistoryError, OptOut
-from memfw.history.sources.base import StoreRoot
+from memfw.history.sources.base import ConversationRecord, SessionLocator, StoreRoot
 from memfw.history.sources.claude import READER as CLAUDE
 from tests.conversation_fixtures import (
     isolated_home,  # noqa: F401  (fixture)
@@ -82,6 +82,12 @@ class Fixture:
         count = len(path.read_text().splitlines()) if path.exists() else 0
         with path.open("a", encoding="utf-8") as handle:
             handle.write(_line(session, f"u{count}", role, text, ts, self.cwd))
+        if ts is not None:
+            # The writer's mtime matches the line it just wrote.
+            os.utime(path, (ts.timestamp(), ts.timestamp()))
+
+    def touch(self, session: str, when: datetime) -> None:
+        os.utime(self.path(session), (when.timestamp(), when.timestamp()))
 
     def ingest(self, settled: float | None = 30, now: datetime = NOW) -> dict[str, Any]:
         if settled is None:
@@ -179,11 +185,74 @@ def test_session_without_timestamps_falls_back_to_file_mtime(fx: Fixture) -> Non
     assert fx.archive("s1")["archived"] is True
 
 
-def test_timestamps_win_over_a_fresh_mtime(fx: Fixture) -> None:
-    fx.append("s1", "user", "copied long ago", NOW - timedelta(days=3))
-    os.utime(fx.path("s1"), (NOW.timestamp(), NOW.timestamp()))
+def test_fresh_mtime_with_old_timestamps_is_still_active(fx: Fixture) -> None:
+    # A reader that stamps a reply with the prompt time (or skips lines without a
+    # timestamp): the file is still being written although its stamps are old.
+    fx.append("s1", "user", "a long single prompt", NOW - timedelta(hours=1))
+    fx.touch("s1", NOW - timedelta(minutes=2))
+    counts = fx.ingest(30)
+    assert counts["sessions_unsettled"] == 1 and fx.store.turns("claude", "s1") == []
+    # Already stored and archived, then the file keeps moving: archive row goes.
+    fx.touch("s1", NOW - timedelta(hours=1))
+    assert fx.ingest(30)["sessions_archived"] == 1
+    with fx.path("s1").open("a", encoding="utf-8") as handle:
+        handle.write("{}\n")  # a line without a timestamp (not a turn)
+    fx.touch("s1", NOW - timedelta(minutes=1))
+    assert fx.ingest(30)["sessions_unsettled"] == 1
+    assert fx.archive("s1")["archived"] is False
+
+
+class _SharedDbReader:
+    """Sessions inside one database file (``db#id`` keys), like opencode or cursor_ide."""
+
+    agent = "fake"
+    default_roots: tuple[str, ...] = ()
+    parser_version = "1"
+    append_only = False
+
+    def __init__(self, stamp: datetime | None) -> None:
+        self.stamp = stamp
+
+    def sessions(self, root: Path) -> Any:
+        yield SessionLocator(self.agent, root / "store.db", "store.db#s1", "s1")
+
+    def read(self, locator: SessionLocator, *, after: int = -1) -> Any:
+        ts = _stamp(self.stamp) if self.stamp else ""
+        yield ConversationRecord("fake", "s1", 0, 0, "user", "hello", timestamp=ts)
+
+
+def test_shared_database_session_uses_its_timestamps_not_the_mtime(tmp_path: Path) -> None:
+    (tmp_path / "store.db").write_text("db")
+    fresh = NOW - timedelta(minutes=1)
+    os.utime(tmp_path / "store.db", (fresh.timestamp(), fresh.timestamp()))
+    store = ConversationStore(tmp_path / "conv.sqlite")
+    # Another session keeps the shared file's mtime fresh; this one is quiet.
+    counts = store.ingest(
+        _SharedDbReader(NOW - timedelta(hours=2)), [tmp_path], settled_minutes=30, now=NOW
+    )
+    assert counts.extra["sessions_unsettled"] == 0 and counts.extra["sessions_archived"] == 1
+    # Without any timestamp the mtime is the fallback.
+    other = ConversationStore(tmp_path / "conv2.sqlite")
+    counts = other.ingest(_SharedDbReader(None), [tmp_path], settled_minutes=30, now=NOW)
+    assert counts.extra["sessions_unsettled"] == 1
+
+
+def test_future_timestamps_fall_back_to_mtime(fx: Fixture) -> None:
+    fx.append("s1", "user", "clock was wrong", NOW + timedelta(days=30))
+    fx.touch("s1", NOW - timedelta(hours=1))
     counts = fx.ingest(30)
     assert counts["sessions_unsettled"] == 0 and counts["sessions_archived"] == 1
+    # Stored, unchanged and plainly ingested: the stored future stamp is ignored too.
+    fx2 = Fixture(fx.root.parent / "second")
+    fx2.append("s2", "user", "skewed", NOW + timedelta(days=30))
+    fx2.touch("s2", NOW - timedelta(hours=1))
+    fx2.ingest(None)
+    assert fx2.ingest(30)["sessions_archived"] == 1
+    # A small skew (within five minutes) still counts as fresh activity.
+    fx3 = Fixture(fx.root.parent / "third")
+    fx3.append("s3", "user", "slightly ahead", NOW + timedelta(minutes=2))
+    fx3.touch("s3", NOW - timedelta(hours=1))
+    assert fx3.ingest(30)["sessions_unsettled"] == 1
 
 
 def test_one_active_session_does_not_hold_back_another(fx: Fixture) -> None:
@@ -217,16 +286,83 @@ def test_agent_optout_forgets_archive_rows(fx: Fixture) -> None:
     assert fx.archive_row("s1") is None
 
 
-def test_relabel_pass_is_not_recorded_while_a_session_is_held_back(fx: Fixture) -> None:
-    fx.append("s1", "user", "still typing", NOW - timedelta(minutes=1))
-    assert fx.ingest(30)["relabelled"] is True
+def _meta(db: Path, prefix: str) -> list[str]:
+    with sqlite3.connect(db) as connection:
+        return [
+            str(row[0])
+            for row in connection.execute(
+                "SELECT key FROM conversation_meta WHERE key LIKE ?", (prefix + "%",)
+            )
+        ]
+
+
+def test_active_file_does_not_keep_the_relabel_pass_open(fx: Fixture) -> None:
+    for index in range(3):
+        fx.append(f"quiet{index}", "user", "done", NOW - timedelta(hours=3))
+    fx.append("live", "user", "always typing", NOW - timedelta(minutes=1))
+    first = fx.ingest(30)
+    assert first["relabelled"] is True and first["sessions_unsettled"] == 1
+    assert _meta(fx.db, "labels_version:claude")  # the pass is recorded
+    # Later runs: the settled files take the unchanged fast path, only "live" is read.
+    for minutes in (15, 30, 45):
+        now = NOW + timedelta(minutes=minutes)
+        fx.append("live", "user", f"still typing {minutes}", now - timedelta(minutes=1))
+        counts = fx.ingest(30, now=now)
+        assert counts["relabelled"] is False
+        assert counts["sessions_unchanged"] == 3 and counts["sessions_unsettled"] == 1
+
+
+def test_locator_held_back_in_a_forced_pass_is_reread_once_settled(fx: Fixture) -> None:
+    fx.append("live", "user", "typing", NOW - timedelta(minutes=1))
+    fx.ingest(None)  # stored with a cursor by a plain ingest
     with sqlite3.connect(fx.db) as connection:
-        row = connection.execute(
-            "SELECT value FROM conversation_meta WHERE key = 'labels_version:claude'"
-        ).fetchone()
-    assert row is None  # the held-back session is re-read (and re-labelled) later
-    assert fx.ingest(30, now=NOW + timedelta(hours=1))["relabelled"] is True
-    assert fx.ingest(30, now=NOW + timedelta(hours=2))["relabelled"] is False
+        connection.execute("DELETE FROM conversation_meta WHERE key = 'labels_version:claude'")
+    counts = fx.ingest(30)  # a re-label pass while "live" is active
+    assert counts["relabelled"] is True and counts["sessions_unsettled"] == 1
+    assert _meta(fx.db, "labels_version:claude") and len(_meta(fx.db, "force:claude:")) == 1
+    # Quiet now and the file unchanged: still re-read in full once, then the marker goes.
+    later = fx.ingest(30, now=NOW + timedelta(hours=1))
+    assert later["sessions_read"] == 1 and later["sessions_unchanged"] == 0
+    assert _meta(fx.db, "force:claude:") == []
+    assert fx.ingest(30, now=NOW + timedelta(hours=2))["sessions_unchanged"] == 1
+
+
+def test_resume_resets_the_settled_marker(fx: Fixture) -> None:
+    fx.append("s1", "user", "first", NOW - timedelta(hours=2))
+    fx.ingest(30)
+
+    def marker() -> str:
+        with sqlite3.connect(fx.db) as connection:
+            return str(
+                connection.execute(
+                    "SELECT settled_fingerprint FROM conversation_cursors"
+                ).fetchone()[0]
+            )
+
+    assert marker() != ""
+    fx.append("s1", "user", "again", NOW - timedelta(minutes=1))
+    assert fx.ingest(30)["sessions_unsettled"] == 1
+    assert marker() == ""
+
+
+def test_resumed_turns_in_another_locator_unarchive_the_session(tmp_path: Path) -> None:
+    home = Fixture(tmp_path / "a")
+    mirror = tmp_path / "b" / "projects"
+    home.append("s1", "user", "first", NOW - timedelta(hours=2))
+    store = home.store
+    store.ingest(CLAUDE, [StoreRoot(home.root)], settled_minutes=30, now=NOW)
+    assert home.archive("s1")["archived"]
+    # The same session continues in a copy under another root (a Worker home).
+    (mirror / "demo").mkdir(parents=True)
+    copy = mirror / "demo" / "s1.jsonl"
+    copy.write_text(home.path("s1").read_text())
+    with copy.open("a", encoding="utf-8") as handle:
+        handle.write(_line("s1", "u9", "user", "resumed here", NOW - timedelta(minutes=1), "/w"))
+    counts = store.ingest(
+        CLAUDE, [StoreRoot(home.root), StoreRoot(mirror)], settled_minutes=30, now=NOW
+    )
+    assert counts.extra["sessions_unsettled"] == 1
+    assert home.archive("s1")["archived"] is False
 
 
 def test_settled_minutes_is_validated(fx: Fixture) -> None:
@@ -447,6 +583,8 @@ def test_worker_cli_settled_ingest_keeps_active_sessions_out(
     (projects / "done.jsonl").write_text(
         _line("done", "a", "user", "all finished", real_now - timedelta(hours=3), "/w")
     )
+    done_at = (real_now - timedelta(hours=3)).timestamp()
+    os.utime(projects / "done.jsonl", (done_at, done_at))
     vault = make_vault(tmp_path / "vault")
     db = tmp_path / "data" / "conversations.sqlite"
     common = ("conversations", "worker", "--root", str(vault), "--store", str(db))

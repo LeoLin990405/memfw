@@ -123,18 +123,27 @@ memfw conversations worker --root VAULT --settled-minutes 30   # or both in one 
 - **Settled.** A transcript (one locator: a file, or a session in a database
   store) whose last activity is within `N` minutes is skipped for this round
   (`sessions_unsettled`): no turn is written and its cursor is not moved, so the
-  next round reads it again. Last activity is the newest timestamp among the
-  turns read this round; a transcript without timestamps uses the file's
-  mtime. A locator holding several sessions is settled once all of them are
-  quiet. The cwd opt-out still applies to a skipped transcript.
+  next round reads it again. Last activity of a transcript with a file of its
+  own is the later of the newest turn timestamp and the file's mtime (some
+  readers stamp a reply with its prompt's time or skip lines without a
+  timestamp, so the mtime catches a long single-prompt session). For a session
+  inside a shared database (opencode, cursor_ide, glm sqlite: `file#id`
+  locators) the mtime moves with every other session, so the newest turn
+  timestamp decides and the mtime is only the fallback. A timestamp more than
+  five minutes in the future is ignored. A locator holding several sessions is
+  settled once all of them are quiet. The cwd opt-out still applies to a
+  skipped transcript.
+- **Forced passes.** A re-label or opt-out-change pass does not wait for active
+  transcripts: each skipped one keeps a marker and is re-read in full once it
+  settles, so settled files go back to the unchanged fast path at once.
 - **Archived.** When a settled transcript's content is in the store (written
   now, or unchanged since an earlier ingest), each of its sessions gets a row in
   `conversation_archive`: `archived_at` and `archived_fingerprint`
   (`turns:last_offset:updated_at`, the same value the worker keys its jobs by).
   `sessions_archived` counts sessions archived in a new shape this round.
 - **Resumed.** A session is archived only while its fingerprint matches its
-  stored turns. When it becomes active again, the settled ingest drops its
-  archive row; new turns written by a plain ingest change the fingerprint. Either
+  stored turns. When it becomes active again (in its own transcript or in a
+  copy under another root), the settled ingest drops its archive row; new turns written by a plain ingest change the fingerprint. Either
   way it reads as not archived until it has been idle again and the next settled
   ingest re-archives it.
 - **Worker.** The worker still waits `idle_minutes` before it processes a

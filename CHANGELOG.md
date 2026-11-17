@@ -14,7 +14,9 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 ### Added — settled ingest and archive state (M3e-a)
 
 - `memfw history ingest --settled-minutes N` skips transcripts whose last
-  activity (newest turn timestamp, else file mtime) is within `N` minutes, and
+  activity (the later of newest turn timestamp and file mtime; timestamp first
+  for sessions in a shared database; future stamps ignored) is within `N`
+  minutes, and
   archives the settled sessions: new store table `conversation_archive`
   (`archived_at`, `archived_fingerprint`) and cursor column
   `settled_fingerprint`, both added on open without a cursor reset. A session
