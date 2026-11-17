@@ -61,6 +61,8 @@ RELATIONS = frozenset(
         "runs_on",
     }
 )
+#: Concept-file keys the taxonomy lint owns (``memfw.ontology.taxonomy``).
+_TAXONOMY_KEYS = frozenset({"broader"})
 _MAX_CHAIN = 16
 _SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _CLASS_DIR = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
@@ -189,6 +191,8 @@ def lint_concepts(concepts: dict[str, Concept]) -> list[dict[str, Any]]:
                 }
             )
         for key, value in concept.extras.items():
+            if key in _TAXONOMY_KEYS:
+                continue
             if key not in RELATIONS:
                 items.append(
                     {
@@ -254,6 +258,9 @@ def lint_concepts(concepts: dict[str, Concept]) -> list[dict[str, Any]]:
                     "oids": list(chain),
                 }
             )
+    from .taxonomy import lint_taxonomy
+
+    items.extend(lint_taxonomy(concepts))
     return items
 
 
@@ -597,6 +604,7 @@ def _concept_from_entry(entry: dict[str, Any]) -> Concept:
     if not oid:
         raise OntologyError("seed entry has no oid")
     merged = entry.get("merged_into")
+    extras = {"broader": entry["broader"]} if "broader" in entry else {}
     return Concept(
         oid=oid,
         class_name=str(entry.get("class") or ""),
@@ -606,6 +614,7 @@ def _concept_from_entry(entry: dict[str, Any]) -> Concept:
         status=str(entry.get("status") or "active"),
         merged_into=str(merged) if isinstance(merged, str) and merged else None,
         definition=str(entry.get("definition") or ""),
+        extras=extras,
     )
 
 
