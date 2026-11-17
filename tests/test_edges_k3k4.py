@@ -204,6 +204,22 @@ def test_broader_on_a_merged_concept_is_reported_and_its_cycle_found(tmp_path: P
     assert cycles == [["concept:mid", "concept:top"]]
 
 
+def test_a_self_loop_made_only_by_a_merge_is_no_cycle(tmp_path: Path) -> None:
+    # child says broader: old; old was merged into child -> child ⊂ child after merging.
+    _concept(tmp_path, "child", "concept:child", broader=["concept:old"])
+    _concept(tmp_path, "old", "concept:old", merged_into="concept:child")
+    # gone (merged into keep) says broader: keep -> keep ⊂ keep after merging.
+    _concept(tmp_path, "keep", "concept:keep")
+    _concept(tmp_path, "gone", "concept:gone", merged_into="concept:keep", broader=["concept:keep"])
+    # A literal self reference stays a cycle.
+    _concept(tmp_path, "self", "concept:self", broader=["concept:self"])
+    review = lint_concepts(load_concepts(tmp_path))
+    cycles = [item["oids"] for item in review if item["kind"] == "broader_cycle"]
+    assert cycles == [["concept:self"]]
+    kinds = {item["kind"] for item in review}
+    assert {"broader_merged", "broader_on_merged"} <= kinds  # still reported as such
+
+
 def test_lint_docstring_no_longer_promises_every_exit_hides_cross_tenant() -> None:
     from memfw.ontology import relations_lint
 

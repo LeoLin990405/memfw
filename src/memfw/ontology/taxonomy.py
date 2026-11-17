@@ -80,6 +80,11 @@ def lint_taxonomy(concepts: dict[str, Concept]) -> list[dict[str, Any]]:
                         "resolved": target,
                     }
                 )
+            if target == source and parent != oid:
+                # A self loop made only by following merges (A broader B, B merged
+                # into A; or a merged concept's broader naming its target) is
+                # not a cycle in the taxonomy. A literal ``broader: [self]`` is.
+                continue
             if target not in edges:
                 edges.append(target)
         if edges:
