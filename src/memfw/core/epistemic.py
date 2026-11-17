@@ -506,7 +506,8 @@ def validate_epistemic_write(
     if capped:
         raise IntegrityError(
             "evidence is observation only (att: originals or their proxies, or a "
-            "file:/sha256: pointer to a registered attachment): an observation records "
+            "file:/sha256: pointer to a registered attachment, or a local file the vault "
+            "could not hash within its per-write budget): an observation records "
             "what was seen or heard, so epistemic cannot be fact and causal stops at "
             "hypothesis; refused: " + ", ".join(capped)
         )

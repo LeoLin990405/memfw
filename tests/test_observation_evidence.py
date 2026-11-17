@@ -661,3 +661,70 @@ def test_eval_causal_multimodal_cli(tmp_path: Path) -> None:
     text = CliRunner().invoke(app, ["eval", "causal", "--multimodal"])
     assert text.exit_code == 0
     assert "spurious_promotions: 0" in text.output
+
+
+# --- review M3: bounded write-time hashing ------------------------------------------
+
+
+def _count_hashes(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+    hashed: list[Path] = []
+    real = storage_evidence._hash_file
+
+    def counting(path: Path) -> str | None:
+        hashed.append(path)
+        return real(path)
+
+    monkeypatch.setattr(storage_evidence, "_hash_file", counting)
+    return hashed
+
+
+def test_no_hashing_without_attachments_or_a_size_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hashed = _count_hashes(monkeypatch)
+    repository = _repo(tmp_path)
+    cited = _original(tmp_path, "data.csv", b"0123456789")
+    repository.add("claim", "body", **_verified(evidence=[f"file:{cited}"]))
+    assert hashed == []  # the vault has no attachments
+    _attach(repository, _original(tmp_path, "s.png", b"png bytes"), "image/png")
+    repository.add("claim", "body", **_verified(evidence=[f"file:{cited}"]))
+    assert hashed == []  # no original has this file's size
+    same_size = _original(tmp_path, "same.bin", b"png bytez")
+    repository.add("claim", "body", **_verified(evidence=[f"file:{same_size}"]))
+    assert hashed == [same_size]
+
+
+def test_hash_budget_per_write_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hashed = _count_hashes(monkeypatch)
+    repository = _repo(tmp_path)
+    _attach(repository, _original(tmp_path, "s.png", b"0000"), "image/png")
+    pointers = []
+    for number in range(storage_evidence.MAX_HASH_FILES + 8):
+        path = _original(tmp_path, f"f{number}.bin", f"{number + 1:04d}".encode())
+        pointers.append(f"file:{path}")
+    classes = gate_evidence_classes(repository, {"evidence": pointers})
+    assert len(hashed) == storage_evidence.MAX_HASH_FILES
+    # Past the budget, the remaining candidates count as observation.
+    assert sorted(classes) == sorted(pointers[storage_evidence.MAX_HASH_FILES :])
+    assert set(classes.values()) == {"observation"}
+    monkeypatch.setattr(storage_evidence, "MAX_HASH_FILES", 0)
+    with pytest.raises(IntegrityError, match="per-write budget"):
+        repository.add("claim", "body", **_verified(evidence=[pointers[1]]))
+
+
+def test_fsck_hash_budget_is_per_memory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repository = _repo(tmp_path)
+    _attach(repository, _original(tmp_path, "s.png", b"0000"), "image/png")
+    for memory in range(3):
+        paths = [
+            _original(tmp_path, f"m{memory}-{n}.bin", f"{memory}{n:03d}".encode())
+            for n in range(storage_evidence.MAX_HASH_FILES)
+        ]
+        repository.add(
+            "claim", "body", epistemic="inference", evidence=[f"file:{path}" for path in paths]
+        )
+    hashed = _count_hashes(monkeypatch)
+    repository.fsck()
+    assert len(hashed) == 3 * storage_evidence.MAX_HASH_FILES

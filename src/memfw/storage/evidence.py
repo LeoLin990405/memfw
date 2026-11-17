@@ -70,6 +70,12 @@ from ..core.evidence_refs import (
 _MAX_BYTES_KEY: Final = "attachments_max_bytes"
 _DEFAULT_MAX_BYTES: Final = 25 * 1024 * 1024
 _CHUNK: Final = 1024 * 1024
+#: Write-time hashing budget (review M3): at most this many bytes and files are
+#: hashed to match a cited file against the originals, per write (and per
+#: memory in ``fsck``). A candidate file left unhashed is treated as naming an
+#: attachment (fail closed).
+MAX_HASH_BYTES: Final = 64 * 1024 * 1024
+MAX_HASH_FILES: Final = 32
 #: Schemes whose value may name a registered location (MM1b ``referenced``).
 _LOCATION_SCHEMES: Final = ("kh", "ha500")
 
@@ -121,7 +127,19 @@ class _AttachmentIndex:
     blob_dir: Path | None = None
     max_bytes: int = _DEFAULT_MAX_BYTES
     vault: Path | None = None
+    sizes: set[int] = field(default_factory=set)
+    #: Hash budget left (bytes, files); reset per write / per fsck memory.
+    bytes_left: int = MAX_HASH_BYTES
+    files_left: int = MAX_HASH_FILES
+    #: A candidate file was left unhashed (budget spent) since the last reset.
+    unchecked: bool = False
+    #: ``False`` for read queries: never hash, never count unchecked files.
+    hashing: bool = True
     _content: dict[tuple[int, int, int, int], str | None] = field(default_factory=dict)
+
+    def reset_budget(self) -> None:
+        self.bytes_left = MAX_HASH_BYTES
+        self.files_left = MAX_HASH_FILES
 
     @property
     def empty(self) -> bool:
@@ -140,16 +158,31 @@ class _AttachmentIndex:
         return found
 
     def content_match(self, path: Path) -> list[str]:
-        """Ids whose original has the bytes of the regular file ``path``."""
+        """Ids whose original has the bytes of the regular file ``path``.
 
+        Only a regular file whose size equals a registered original's is
+        hashed, within the budget; past it, ``unchecked`` is set instead.
+        """
+
+        if not self.by_sha or not self.hashing:
+            return []
         try:
             info = os.stat(path)
         except (OSError, ValueError):
             return []
-        if not stat.S_ISREG(info.st_mode) or info.st_size > self.max_bytes:
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_size > self.max_bytes
+            or info.st_size not in self.sizes
+        ):
             return []
         key = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
         if key not in self._content:
+            if self.files_left < 1 or info.st_size > self.bytes_left:
+                self.unchecked = True
+                return []
+            self.files_left -= 1
+            self.bytes_left -= info.st_size
             self._content[key] = _hash_file(path)
         digest = self._content[key]
         return list(self.by_sha.get(digest, [])) if digest else []
@@ -168,6 +201,7 @@ def _hash_file(path: Path) -> str | None:
 
 def _load_index(host: Any) -> _AttachmentIndex:
     index = _AttachmentIndex(vault=Path(host.root))
+    index.reset_budget()
     loader = getattr(host, "attachment_records", None)
     if loader is None:
         return index
@@ -177,6 +211,7 @@ def _load_index(host: Any) -> _AttachmentIndex:
             continue
         index.records[identifier] = record
         index.by_sha.setdefault(str(record.sha256), []).append(identifier)
+        index.sizes.add(int(record.size))
         for text in (getattr(record, "location", None), getattr(record, "origin", None)):
             if text:
                 index.by_location.setdefault(_fold_location(str(text)), []).append(identifier)
@@ -363,10 +398,12 @@ def _observation_overrides(
         if evidence_source_class(reference) == "observation":
             continue
         scheme = split_scheme(reference)
+        index.unchecked = False
         if (
             (scheme is not None and scheme[0] == "att")
             or embedded_attachment_references(reference)
             or _citations(reference, index)
+            or index.unchecked
         ):
             overrides[reference] = "observation"
     return overrides
@@ -501,7 +538,7 @@ def attachment_backlinks(
                     )
             if index is None:
                 index = _load_index(host)
-                index.max_bytes = -1  # never hash files for a read query
+                index.hashing = False  # a read query never hashes files
             seen: set[str] = set()
             for identifier, via in _citations(reference, index):
                 if identifier in seen or wanted not in (None, identifier):
@@ -534,6 +571,7 @@ def evidence_fsck_issues(host: Any, documents: Iterable[Any]) -> list[dict[str, 
     index = _load_index(host)
     issues: list[dict[str, str | None]] = []
     for document in candidates:
+        index.reset_budget()
         for pointer in (
             item for reference in _strings(document.evidence) for item in _att_pointers(reference)
         ):

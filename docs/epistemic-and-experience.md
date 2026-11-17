@@ -115,6 +115,14 @@ already-classified evidence, so the gate stays pure:
   `memfw fsck` lists such memories as `evidence_observation_review`, and `att:`
   evidence that no longer resolves as `evidence_attachment_invalid`.
 
+Matching a cited file by content is bounded: nothing is hashed when the vault has no
+attachments, only a regular file whose size equals a registered original's (and at
+most `attachments_max_bytes`) is hashed, and one write hashes at most 32 files / 64 MiB
+(`fsck`: per memory). A candidate file left unhashed past that budget is treated as an
+observation (fail closed; the error says so). Backlinks never hash files. An original
+larger than `attachments_max_bytes` (a referenced original, once MM1b adds them) is
+matched only by its registered location, hash or id, never by the content of a copy.
+
 The cap is only as strong as raw pointers are honest: the gate cannot check what a
 `file:` or `dataset:` pointer that names no registered attachment really is, so a
 pointer to a file that does not exist (`file:/nonexistent`) still counts as raw and
