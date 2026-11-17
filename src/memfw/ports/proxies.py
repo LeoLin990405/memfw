@@ -64,6 +64,8 @@ _ATT_RE: Final = re.compile(
 _LANG_RE: Final = re.compile(r"^[A-Za-z]{2,8}(-[A-Za-z0-9]{1,8})*$")
 _APP_MANUAL_RE: Final = re.compile(r"^app-manual:[^\s\x00-\x1f\x7f]{1,100}$")
 _MARKER_PREFIX: Final = "<!-- memfw:segment"
+#: C0 and C1 controls, DEL, bidi embeddings/overrides and isolates (``clean_text``).
+_FORBIDDEN_CHAR: Final = re.compile("[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]")
 
 _TOP_KEYS: Final = frozenset(
     {
@@ -117,7 +119,10 @@ def medium_for(media_type: str) -> str:
 def _number(value: Any, what: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ProxyFormatError(f"{what} must be a number")
-    number = float(value)
+    try:
+        number = float(value)
+    except OverflowError:
+        raise ProxyFormatError(f"{what} is too large") from None
     if not math.isfinite(number):
         raise ProxyFormatError(f"{what} must be finite")
     return number
@@ -284,6 +289,8 @@ class CoordinateSpace:
         dpi = None if raw.get("dpi") is None else _number(raw["dpi"], "coordinates.dpi")
         if dpi is not None and not dpi > 0:
             raise ProxyFormatError("coordinates.dpi must be positive")
+        if dpi is not None and unit != "px":
+            raise ProxyFormatError("coordinates.dpi applies only to unit px")
         return cls(unit=unit, origin=origin, dpi=dpi, time_unit=time_unit)
 
 
@@ -555,15 +562,29 @@ def check_producer(raw: Any) -> str | dict[str, str]:
 
 
 def clean_text(value: Any, what: str = "segment text") -> str:
-    """A segment's text: newlines normalised, outer whitespace stripped, no NUL, not empty."""
+    """A segment's text: newlines normalised, outer whitespace stripped, not empty.
+
+    ``\r\n``, ``\r``, U+2028 and U+2029 become ``\n``. Any other C0 or C1
+    control character (``\t`` is kept) and the bidirectional override and
+    isolate characters (U+202A–U+202E, U+2066–U+2069) are refused, so a
+    proxy cannot hide or reorder text when shown.
+    """
 
     if not isinstance(value, str):
         raise ProxyFormatError(f"{what} must be a string")
-    text = value.replace("\r\n", "\n").replace("\r", "\n").strip()
+    text = (
+        value.replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .replace("\u2028", "\n")
+        .replace("\u2029", "\n")
+        .strip()
+    )
     if not text:
         raise ProxyFormatError(f"{what} is empty")
-    if "\x00" in text or len(text) > MAX_SEGMENT_CHARS:
-        raise ProxyFormatError(f"{what} has a NUL or is over {MAX_SEGMENT_CHARS} characters")
+    if len(text) > MAX_SEGMENT_CHARS:
+        raise ProxyFormatError(f"{what} is over {MAX_SEGMENT_CHARS} characters")
+    if any(char not in "\n\t" and _FORBIDDEN_CHAR.match(char) for char in text):
+        raise ProxyFormatError(f"{what} has a control or bidirectional override character")
     if any(line.lstrip().startswith(_MARKER_PREFIX) for line in text.split("\n")):
         raise ProxyFormatError(f"{what} contains a memfw segment marker")
     return text
@@ -727,7 +748,7 @@ def parse_proxy_import(
     if payload["format"] != PROXY_FORMAT:
         raise ProxyFormatError(f"format must be {PROXY_FORMAT!r}")
     version = payload["version"]
-    if isinstance(version, bool) or version != PROXY_FORMAT_VERSION:
+    if type(version) is not int or version != PROXY_FORMAT_VERSION:
         raise ProxyFormatError(f"unsupported version {version!r} (this memfw reads 1)")
     kind = payload["kind"]
     if payload.get("speaker_labels", "unverified") != "unverified":
@@ -776,9 +797,12 @@ def _segment(
         raise ProxyFormatError("unknown keys: " + ", ".join(sorted(map(str, unknown))))
     if "text" not in raw:
         raise ProxyFormatError("text is required")
-    where = raw.get("locator") or {}
+    # Only an absent or null locator means "the whole attachment".
+    where = raw.get("locator")
+    if where is None:
+        where = {}
     if not isinstance(where, Mapping):
-        raise ProxyFormatError("locator must be an object")
+        raise ProxyFormatError("locator must be an object (or null)")
     extra = set(where) - {"page", "bbox", "t", "frame"}
     if extra:
         raise ProxyFormatError("unknown locator keys: " + ", ".join(sorted(map(str, extra))))
@@ -842,6 +866,8 @@ def load_proxy_import(
         raise
     except (ValueError, UnicodeDecodeError) as exc:
         raise ProxyFormatError(f"not valid JSON: {exc}") from None
+    except RecursionError:
+        raise ProxyFormatError("not valid JSON: nested too deeply") from None
     return parse_proxy_import(payload, media_type=media_type, known=known)
 
 

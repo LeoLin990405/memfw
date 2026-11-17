@@ -28,7 +28,9 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   origin, image pixels with a top-left origin, seconds for audio and video.
   Producers may write pixels at a DPI, top-left points, fractions or
   milliseconds (`coordinates`) and memfw converts. Pages, boxes and times
-  outside the declared dimensions are refused and nothing is stored.
+  outside the dimensions the producer declares in `source` are refused and
+  nothing is stored (memfw does not read the original; record-level
+  dimensions are a later step). PDF boxes are in unrotated page space.
 - Proxies live in `attachments/proxies/<prx-id>.md`, default to
   `local-private`, can never be less private than their attachment, and
   have their own budget (`attachments_proxy_max_bytes`, 64 MiB): they are

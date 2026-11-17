@@ -51,7 +51,7 @@ files: `tests/fixtures/proxies/ocr-pdf-v1.json`,
 
 | Key | Required | Meaning |
 |---|---|---|
-| `format`, `version` | yes | exactly `"memfw.proxy"` and `1`; another version is refused |
+| `format`, `version` | yes | exactly `"memfw.proxy"` and the integer `1` (`1.0`, `"1"` and other versions are refused) |
 | `kind` | yes | `ocr`, `transcript`, `keyframes`, `extract` or `caption` |
 | `source_sha256` | yes | sha256 of the bytes the proxy was made from; must equal the attachment's `sha256` |
 | `coverage` | yes | `{"status": "full" \| "partial", "detail": "…"}`; a `keyframes` proxy is always `partial` |
@@ -68,9 +68,12 @@ files: `tests/fixtures/proxies/ocr-pdf-v1.json`,
 
 Unknown keys (top level, in `coverage`, `source`, `coordinates`, a segment or
 a locator) and duplicate keys are refused, so a typo never passes silently.
-Segment text has `\r\n` normalised and outer whitespace stripped; it may not
-be empty, hold a NUL, exceed 65 536 characters, or contain a line starting
-with `<!-- memfw:segment`. `speaker` is allowed in transcripts only and is
+Segment text has `\r\n`, `\r`, U+2028 and U+2029 turned into `\n` and outer
+whitespace stripped; it may not be empty, exceed 65 536 characters, hold any
+other C0/C1 control character (`\t` is kept) or a bidirectional override or
+isolate (U+202A–U+202E, U+2066–U+2069), or contain a line starting with
+`<!-- memfw:segment`. Numbers too large for a float are refused, and so is
+JSON nested too deeply to parse. `speaker` is allowed in transcripts only and is
 never taken as verified. `confidence` is 0..1.
 
 ### Locators and units
@@ -85,9 +88,13 @@ Stored locators are always in canonical units (design v2.1):
 | video (`video/*`) | `t: [start, end]` or `frame` (one keyframe) | seconds |
 | anything else | `page` | 1-based |
 
-No locator (or `{}`) means the segment is about the whole attachment.
+No locator (absent, `null` or `{}`) means the segment is about the whole
+attachment; any other non-object (`[]`, `""`, `0`) is refused.
 `bbox` is `[x0, y0, x1, y1]` with `x0 < x1`, `y0 < y1`, all `>= 0`.
-Values are kept to three decimals.
+Values are kept to three decimals. PDF boxes are in the page's **unrotated**
+space: the page as its MediaBox lies, ignoring `/Rotate`, with the origin at
+its lower-left corner. A producer that read a rotated page must map its boxes
+back before writing them.
 
 `coordinates` lets a producer keep its own space; memfw converts on import:
 
@@ -95,7 +102,8 @@ Values are kept to three decimals.
   `fraction` (0..1 of the page or image, needs its size in `source`);
 * `origin`: `bottom-left` or `top-left` (flipping needs the page or image
   height in `source`);
-* `dpi`: required for `px` boxes on a PDF page (`pt = px * 72 / dpi`);
+* `dpi`: required for `px` boxes on a PDF page (`pt = px * 72 / dpi`), and
+  refused with any other unit;
 * `time_unit`: `s` (default) or `ms`.
 
 For example a page rendered at 144 dpi, box `[144, 144, 1080, 216]` px from
@@ -104,9 +112,12 @@ the top-left on a 612x792 pt page, is stored as `page=1&bbox=72,684,540,720`.
 ### Bounds
 
 Every locator is checked against the original's dimensions when they are
-known: those declared in `source`, and those memfw already has for the
-attachment (`known=`; attachment records do not carry dimensions yet, so
-today this is `source` only, and the two must agree when both are present).
+known. **Today that means the dimensions the producer declares in `source`
+only**: memfw does not read the original, and attachment records do not carry
+dimensions yet. A proxy without `source` gets only the shape checks (pages
+from 1, non-negative ordered boxes and times). The `known=` hook of
+`parse_proxy_import` is where record metadata (MM1b/MM2b) will plug in; the
+two must then agree where both say something.
 A page past the last page, a box outside its page or image, or a time past
 the duration refuses the whole import; nothing is stored partially. A locator
 key the medium does not allow (`t` on a PDF, `page` on an image) is refused
@@ -165,7 +176,11 @@ Invoice 2026-031
 Both are non-memory kinds (skipped by `replay`), and carry the forward-compat
 marker `projection: "none"`. They carry ids and counts, never text or the
 original's hash. A superseded proxy keeps its file but is no longer active
-(MM2b search skips it); a proxy can be superseded once.
+(MM2b search skips it); a proxy can be superseded once. The replacing
+`proxy_add`'s `details.supersedes` is what makes the old proxy inactive; the
+`proxy_supersede` event confirms it, so a crash between the two appends
+never leaves two active proxies (and a retry is refused as "already
+superseded").
 
 ### Privacy
 
@@ -181,8 +196,8 @@ OKF, the notes and memfw MCP servers and every projection read only
 
 Proxies are accounted on their own (design v2.1, "预算"):
 `attachments_proxy_max_bytes` in `vault.yaml` (default 67 108 864, 64 MiB)
-caps all proxy files together, superseded ones included; an import that would
-pass it is refused. Proxy files are **not** part of the vault's physical size
+caps everything under `attachments/proxies/` together (superseded proxies and
+stray files included); an import that would pass it is refused. Proxy files are **not** part of the vault's physical size
 (`memfw stats`, `memfw budget`, `memfw forget` with a total budget), so they
 can never make a forgetting policy pick a memory. `memfw attach proxy budget`
 prints `{"files", "bytes", "max_bytes"}`.
@@ -190,9 +205,12 @@ prints `{"files", "bytes", "max_bytes"}`.
 ### Integrity
 
 `fsck` reports `proxy_record_missing`, `proxy_record_modified`,
-`proxy_record_invalid`, `proxy_record_untracked` (a file in
-`attachments/proxies/` no event committed), `proxy_attachment_missing` and
-`proxy_source_mismatch`. It never registers an `external_delete` and never
+`proxy_record_invalid`, `proxy_record_untracked` (anything under
+`attachments/proxies/`, subdirectories included, that is not a committed
+`prx-*.md`), `proxy_attachment_missing`, `proxy_source_mismatch` and
+`proxy_supersede_missing` (a replacement committed but its `proxy_supersede`
+confirmation was not written, e.g. after a crash; the old proxy is already
+inactive). It never registers an `external_delete` and never
 changes a proxy. On a vault without proxies it adds nothing. `memfw recover`
 after an interrupted import removes the uncommitted proxy file.
 

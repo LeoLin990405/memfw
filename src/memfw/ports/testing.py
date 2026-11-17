@@ -724,7 +724,10 @@ def check_proxy_import(
         raise ContractError(f"proxy file breaks the format: {exc}") from exc
     if source_sha256 is not None:
         _require(parsed.source_sha256 == source_sha256, "source_sha256 is not the original's")
-    again = load_proxy_import(json.dumps(parsed.to_json()), media_type=media_type, known=known)
+    try:
+        again = load_proxy_import(json.dumps(parsed.to_json()), media_type=media_type, known=known)
+    except ProxyFormatError as exc:
+        raise ContractError(f"the canonical form does not read back: {exc}") from exc
     _require(again == parsed, "the canonical form does not read back identically")
     return parsed
 

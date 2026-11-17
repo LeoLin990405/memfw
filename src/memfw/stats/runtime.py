@@ -94,19 +94,17 @@ def measure_logical_breakdown(repository: Repository) -> dict[str, int]:
 def proxy_path_test(root: Path) -> Callable[[Path], bool]:
     """A predicate: does a path under ``root`` belong to the separately budgeted proxies?
 
-    Attachment proxies (``attachments/proxies/``) and their search index
-    (``proxy_index.sqlite3``) have their own budget (``memfw attach proxy
-    budget``, design v2.1 "预算"), so they are never part of the vault's
-    physical size and can never make a forgetting policy pick a memory. A
-    string prefix test, so the size scans stay as cheap as before.
+    Attachment proxies (``attachments/proxies/``) have their own budget
+    (``memfw attach proxy budget``, design v2.1 "预算"), so they are never part
+    of the vault's physical size and can never make a forgetting policy pick a
+    memory. (Their search index lives outside the vault.) A string prefix
+    test, so the size scans stay as cheap as before.
     """
 
     proxies = os.path.join(str(root), "attachments", "proxies") + os.sep
-    index = os.path.join(str(root), "proxy_index.sqlite3")
 
     def test(path: Path) -> bool:
-        text = str(path)
-        return text.startswith(proxies) or text.startswith(index)
+        return str(path).startswith(proxies)
 
     return test
 

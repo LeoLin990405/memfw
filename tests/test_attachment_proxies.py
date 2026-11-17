@@ -646,3 +646,105 @@ def test_fixture_is_not_mutated_by_parsing() -> None:
     before = copy.deepcopy(payload)
     parse_proxy_import(payload, media_type="application/pdf")
     assert payload == before
+
+
+# --- review fixes (PR #91) -------------------------------------------------------------
+
+
+def test_crash_between_add_and_supersede_leaves_one_active_proxy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = _repo(tmp_path)
+    attachment_id = _attach(repository, tmp_path)
+    first = repository.import_proxy(attachment_id, FIXTURES / "ocr-pdf-v1.json")
+    original_append = Repository._append_event
+
+    def crash_on_supersede(self: Repository, kind: EventKind, *args: Any, **kw: Any) -> Any:
+        if kind == EventKind.PROXY_SUPERSEDE:
+            raise KeyboardInterrupt
+        return original_append(self, kind, *args, **kw)
+
+    monkeypatch.setattr(Repository, "_append_event", crash_on_supersede)
+    with pytest.raises(KeyboardInterrupt):
+        repository.import_proxy(attachment_id, FIXTURES / "ocr-pdf-v1.json", supersedes=first.id)
+    monkeypatch.setattr(Repository, "_append_event", original_append)
+    repository.recover_pending()
+    active = [row[0] for row in repository.proxy_records(attachment_id)]
+    assert len(active) == 1 and active[0] != first.id
+    assert repository.proxy_state().superseded_by[first.id] == active[0]
+    issues = [(issue["kind"], issue["memory_id"]) for issue in repository.fsck()]
+    assert issues == [("proxy_supersede_missing", first.id)]
+    with pytest.raises(ValueError, match="already superseded"):
+        repository.import_proxy(attachment_id, FIXTURES / "ocr-pdf-v1.json", supersedes=first.id)
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        (lambda p: p["segments"][0].update(confidence=10**400), "too large"),
+        (lambda p: p["segments"][0]["locator"].update(bbox=[0, 0, 10**400, 1]), "too large"),
+        (lambda p: p.update(version=1.0), "unsupported version"),
+        (lambda p: p["segments"][0].update(locator=[]), "locator must be an object"),
+        (lambda p: p["segments"][0].update(locator=""), "locator must be an object"),
+        (lambda p: p["segments"][0].update(locator=0), "locator must be an object"),
+        (lambda p: p.update(coordinates={"unit": "pt", "dpi": 72}), "only to unit px"),
+        (lambda p: p["segments"][0].update(text="a\x01b"), "control"),
+        (lambda p: p["segments"][0].update(text="a\x85b"), "control"),
+        (lambda p: p["segments"][0].update(text="evil‮etxt"), "bidirectional"),
+        (lambda p: p["segments"][0].update(text="iso⁦late"), "bidirectional"),
+    ],
+)
+def test_review_format_refusals(change: Any, message: str) -> None:
+    payload = _fixture()
+    change(payload)
+    with pytest.raises(ProxyFormatError, match=message):
+        parse_proxy_import(payload, media_type="application/pdf")
+
+
+def test_null_locator_and_line_separators_are_accepted() -> None:
+    payload = _fixture()
+    payload["segments"][2]["locator"] = None
+    payload["segments"][2]["text"] = "one two three\tfour"
+    parsed = parse_proxy_import(payload, media_type="application/pdf")
+    assert parsed.segments[2].locator == Locator()
+    assert parsed.segments[2].text == "one\ntwo\nthree\tfour"
+
+
+def test_deep_json_is_a_format_error_and_a_contract_error() -> None:
+    deep = "[" * 100_000 + "]" * 100_000
+    with pytest.raises(ProxyFormatError, match="nested too deeply|not valid JSON"):
+        load_proxy_import(deep, media_type="application/pdf")
+    with pytest.raises(ContractError):
+        check_proxy_import(deep, media_type="application/pdf")
+
+
+def test_stray_files_count_toward_the_budget_and_fsck(tmp_path: Path) -> None:
+    repository = _repo(tmp_path)
+    attachment_id = _attach(repository, tmp_path)
+    record = repository.import_proxy(attachment_id, FIXTURES / "ocr-pdf-v1.json")
+    directory = proxies_dir(repository)
+    size = (directory / f"{record.id}.md").stat().st_size
+    (directory / "notes.txt").write_bytes(b"x" * 10)
+    (directory / "sub").mkdir()
+    (directory / "sub" / f"{record.id}.md").write_bytes(b"y" * 5)
+    assert repository.proxy_usage()["files"] == 3
+    assert repository.proxy_usage()["bytes"] == size + 15
+    untracked = sorted(
+        issue["message"] or ""
+        for issue in repository.fsck()
+        if issue["kind"] == "proxy_record_untracked"
+    )
+    assert untracked == ["notes.txt", f"sub/{record.id}.md"]
+
+
+def test_privacy_is_rechecked_under_the_lock(tmp_path: Path) -> None:
+    repository = _repo(tmp_path)
+    attachment_id = _attach(repository, tmp_path)  # local-private
+    record = repository.import_proxy(attachment_id, FIXTURES / "ocr-pdf-v1.json")
+    from dataclasses import replace
+
+    looser = replace(record, privacy="shared", supersedes=None)
+    before = _snapshot(repository)
+    with pytest.raises(ValueError, match="less private"):
+        repository.add_proxy_record(looser)
+    assert _snapshot(repository) == before
