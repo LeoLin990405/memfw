@@ -470,6 +470,22 @@ def test_defaults_are_not_changed_by_the_evaluation(tmp_path: Path) -> None:
     assert ce.DEFAULT_LIMIT_TOKENS == 2000
 
 
+def test_timed_builds_are_cold_never_served_from_the_c3_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from memfw.runtime import runtime as runtime_module
+
+    def served(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("a timed core build was served from the C3 cache")
+
+    monkeypatch.setattr(runtime_module, "cached_core_candidates", served)
+    fixture = known_vault(tmp_path)
+    report = evaluate_snapshot(fixture.vault, options=CLEARED)
+    assert report["settings"]["latency"] == "cold"
+    assert _row(report, "core", 500)["degraded"] is None
+    assert _row(report, "core", 500)["latency_ms"]["n"] == CLEARED.repeats
+
+
 # --- the command -------------------------------------------------------------------
 
 

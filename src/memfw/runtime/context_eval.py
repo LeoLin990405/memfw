@@ -20,7 +20,9 @@ it (``runtime.context.current``) or ``--current`` simulates that switch
     one of the session's searches" (``estimated_from_hits``).
 **latency**
     P50 and P95 of the real slot providers (the ones ``memory_context``
-    runs, from ``Runtime.context_slot_provider``), ``repeats`` builds each.
+    runs, from ``Runtime.context_slot_provider``), ``repeats`` builds each,
+    cold: the runtime has no C3 context cache, so every ``core`` build reads
+    the vault (``settings.latency: cold``; a served pack can be faster).
 **token cost**
     The slot's ``used_tokens_est`` (the budget's own estimate).
 
@@ -811,7 +813,8 @@ def _evaluate_copy(
         allowed_sources=settings.allowed_sources,
         embedder=None,
         entity_enabled=False,
-        context_cache=True,
+        # Cold timings: no C3 cache, so every timed core build reads the vault.
+        context_cache=False,
         usage_signal=False,
         record_access=False,
         clearance=settings.clearance,
@@ -909,6 +912,7 @@ def _evaluate_copy(
             "synthetic_sessions": options.sessions,
             "synthetic_queries": options.queries,
             "repeats": options.repeats,
+            "latency": "cold",
             "session_gap_minutes": options.session_gap_minutes,
             "now": now.astimezone(UTC).isoformat(),
             "conversation_store": conversations is not None,
