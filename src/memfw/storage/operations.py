@@ -87,6 +87,7 @@ class MemoryOperationsMixin:
         privacy: str | None = None,
         _stamp_privacy_default: bool = True,
         _sensitivity_key: tuple[Any, ...] = (),
+        _evidence_previous: Mapping[str, Any] | None = None,
     ) -> MemoryDocument:
         try:
             privacy = privacy_value(privacy)
@@ -125,7 +126,9 @@ class MemoryOperationsMixin:
         validate_epistemic_write(
             gate_values,
             actor=actor,
-            evidence_classes=gate_evidence_classes(self, gate_values),
+            # ``_evidence_previous``: the predecessor a supersede replaces, so
+            # the legacy rule sees the evidence it carries over (review M2).
+            evidence_classes=gate_evidence_classes(self, gate_values, _evidence_previous),
         )
         if memory_type == OPEN_QUESTION_TYPE and actor != "human":
             # Mechanisms (dream, the conversation worker) and agents stage an
@@ -665,6 +668,7 @@ class MemoryOperationsMixin:
             _stamp_privacy_default=False,
             # A hand-added ``sensitivity`` key carries over too (never looser).
             _sensitivity_key=old._sensitivity_key,
+            _evidence_previous=old.model_dump(),
             **inherited,
         )
         # One instant for both sides of the handoff. Taking a fresh ``_now()``

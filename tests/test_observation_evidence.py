@@ -506,12 +506,21 @@ def test_legacy_verified_memory_stays_writable(tmp_path: Path) -> None:
         repository.update(hypothesis.id, causal="verified")
     with pytest.raises(IntegrityError, match="epistemic=fact"):
         repository.update(hypothesis.id, epistemic="fact")
+    # Review M2: a human body rewrite supersedes the grandfathered memory, and
+    # the replacement keeps the predecessor's evidence classes ...
+    replacement = repository.supersede(fact.id, "old fact", "fact, rewritten")
+    assert replacement.epistemic == "fact"
+    # ... but a supersede that raises the level is reclassified.
+    with pytest.raises(IntegrityError, match="observation only"):
+        repository.supersede(
+            hypothesis.id, "now verified", "body", overrides={"causal": "verified"}
+        )
     review = sorted(
         issue["memory_id"]
         for issue in repository.fsck()
         if issue["kind"] == "evidence_observation_review"
     )
-    assert review == sorted([verified.id, fact.id])
+    assert review == sorted([verified.id, fact.id, replacement.id])
     assert attachment.id in {link.attachment_id for link in attachment_backlinks(repository)}
 
 
