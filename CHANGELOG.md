@@ -121,7 +121,6 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   are unchanged (byte-identical probe against `MEMFW_ARCH_BASE_REF`). memfw
   0.2.0 keeps `broader` but lints it as `unknown_relation`; see
   [docs/ontology.md](docs/ontology.md#compatibility).
-||||||| parent of 1fc513f (O1a: read-only Obsidian projection (memfw project obsidian))
 
 ### Added — `memory_used` usage signal (C5) and no vault writes mid-session (C6)
 
