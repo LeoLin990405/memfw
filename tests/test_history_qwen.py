@@ -168,7 +168,11 @@ def test_sessions_layout(tmp_path: Path) -> None:
     assert [(loc.key, loc.session_id, loc.extra["parent_id"]) for loc in locators] == [
         (f"{PROJECT}/chats/{ARCHIVED}.jsonl", ARCHIVED, ""),
         (f"{PROJECT}/chats/{SESSION}.jsonl", SESSION, ""),
-        (f"{PROJECT}/subagents/{SESSION}/agent-explore1.jsonl", "agent-explore1", SESSION),
+        (
+            f"{PROJECT}/subagents/{SESSION}/agent-explore1.jsonl",
+            f"{SESSION}:agent-explore1",
+            SESSION,
+        ),
     ]
 
 
@@ -372,3 +376,26 @@ def test_both_copies_present_reads_the_active_one(tmp_path: Path) -> None:
     counts = store.ingest(READER, [StoreRoot(root)])
     assert counts.sessions_seen == 1
     assert _texts(store) == ["new copy"]
+
+
+def test_subagent_ids_are_qualified_by_parent(tmp_path: Path) -> None:
+    from memfw.corroboration import parse_conv_ref
+    from memfw.history.conversations import ConversationStore
+    from memfw.history.sources.base import StoreRoot
+
+    root = tmp_path / ".qwen" / "projects"
+    for parent, text in ((SESSION, "first parent"), (ARCHIVED, "second parent")):
+        _write(root / PROJECT / "subagents" / parent / "agent-general.jsonl", [_user(0, text)])
+    ids = sorted(loc.session_id for loc in READER.sessions(root))
+    assert ids == [f"{ARCHIVED}:agent-general", f"{SESSION}:agent-general"]
+    store = ConversationStore(tmp_path / "store" / "conversations.sqlite")
+    counts = store.ingest(READER, [StoreRoot(root)])
+    assert counts.sessions_seen == 2 and counts.records_new == 2
+    assert [t["text"] for t in store.turns("qwen", f"{SESSION}:agent-general")] == ["first parent"]
+    assert [t["text"] for t in store.turns("qwen", f"{ARCHIVED}:agent-general")] == [
+        "second parent"
+    ]
+    assert parse_conv_ref(f"conv:qwen:{SESSION}:agent-general@0") == (
+        "qwen",
+        f"{SESSION}:agent-general",
+    )

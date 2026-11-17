@@ -34,7 +34,11 @@ reasoning, which is dropped), ``{"functionCall": {"name", "args"}}`` and
   session ``automated``.
 
 Files under ``subagents/`` are labelled ``subagent`` with the directory name
-as ``parent_session`` (their session id is the file stem, ``agent-<id>``).
+as ``parent_session``. Their session id is ``<parent>:agent-<id>``: the CLI
+names the file after the sub-agent id or, without one, the agent's name, so
+the stem alone repeats across parents (``agent-general`` ...). A ``:`` is
+used because conversation refs (``conv:APP:SESSION@OFFSET``) accept it and
+reject ``/``.
 Offsets are byte offsets of the record lines. The CLI appends, but its
 maintenance step may rewrite a file, so the session is re-read in full on
 every change (``append_only`` is false).
@@ -195,7 +199,7 @@ class QwenReader:
                         agent=self.agent,
                         path=path,
                         key=relative_key(root, path),
-                        session_id=path.stem,
+                        session_id=f"{parent.name}:{path.stem}",
                         extra={"parent_id": parent.name},
                     )
 
