@@ -16,6 +16,7 @@ Hashing and copying stream in 1 MiB chunks. Standard library only.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import stat
@@ -24,7 +25,7 @@ import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Final
+from typing import Any, BinaryIO, Final
 
 from memfw.core.errors import IntegrityError
 
@@ -61,6 +62,19 @@ SYNCED_MARKERS: Final[tuple[tuple[str, ...], ...]] = (
 
 class BlobLocationError(IntegrityError):
     """The blob directory is not a private local location."""
+
+
+class BlobOwnerError(IntegrityError):
+    """The blob directory belongs to another vault (a copy shares its ``vault_id``)."""
+
+
+#: Owner marker in a vault's blob directory: ``{"vault_id", "vault_tag"}``.
+OWNER_FILE: Final = ".owner"
+REOWN_HINT: Final = (
+    "if this vault is a copy (cp -r, a snapshot, an eval vault), run "
+    "`memfw attach reown --new-vault-id --yes` in it; only if it is the original "
+    "vault moved to a new path, run `memfw attach reown --yes`"
+)
 
 
 def vault_stage_tag(vault: Path) -> str:
@@ -232,9 +246,11 @@ class BlobStore:
     another tag belong to another vault under the same root.
     """
 
-    def __init__(self, directory: Path, stage_tag: str) -> None:
+    def __init__(self, directory: Path, stage_tag: str, vault_path: str | None = None) -> None:
         self.directory = directory
         self.stage_tag = stage_tag
+        #: The owning vault's resolved path, written into the owner marker.
+        self.vault_path = vault_path
 
     @property
     def staging(self) -> Path:
@@ -261,7 +277,7 @@ class BlobStore:
 
         resolved_root = checked_root(root, vault=vault, extra_synced=extra_synced)
         directory = resolved_root / vault_id
-        store = cls(directory, vault_stage_tag(vault))
+        store = cls(directory, vault_stage_tag(vault), str(vault.expanduser().resolve()))
         if create:
             store.ensure()
         elif directory.is_symlink():
@@ -269,10 +285,93 @@ class BlobStore:
         return store
 
     def ensure(self) -> None:
-        """Create the root and this vault's blob directory (0700); refuse symlinks."""
+        """Create the root and this vault's blob directory (0700); refuse symlinks.
+
+        The first write marks the directory as this vault's (``.owner``); a
+        directory another vault marked (a copy of a vault shares its
+        ``vault_id``) raises :class:`BlobOwnerError`.
+        """
 
         _private_dir(self.directory.parent)
         _private_dir(self.directory)
+        status = self.owner_status()
+        if status == "unmarked":
+            self.write_owner()
+        elif status == "foreign":
+            raise BlobOwnerError(f"the blob directory belongs to another vault; {REOWN_HINT}")
+
+    @property
+    def owner_path(self) -> Path:
+        return self.directory / OWNER_FILE
+
+    def owner_status(self) -> str:
+        """``own``, ``foreign`` (another vault's tag), ``unmarked`` or ``absent`` (no directory)."""
+
+        if not self.directory.is_dir() or self.directory.is_symlink():
+            return "absent"
+        try:
+            info = os.lstat(self.owner_path)
+        except FileNotFoundError:
+            return "unmarked"
+        if not stat.S_ISREG(info.st_mode):
+            return "foreign"
+        try:
+            marker = json.loads(self.owner_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return "foreign"
+        if (
+            isinstance(marker, dict)
+            and marker.get("vault_tag") == self.stage_tag
+            and marker.get("vault_id") == self.directory.name
+        ):
+            return "own"
+        return "foreign"
+
+    def write_owner(self) -> None:
+        """Mark the directory as this vault's (atomic, 0600)."""
+
+        marker: dict[str, str] = {"vault_id": self.directory.name, "vault_tag": self.stage_tag}
+        if self.vault_path is not None:
+            marker["vault_path"] = self.vault_path
+        data = json.dumps(marker, sort_keys=True).encode("utf-8")
+        handle, name = tempfile.mkstemp(prefix=".owner-", suffix=".tmp", dir=self.directory)
+        try:
+            os.fchmod(handle, 0o600)
+            with os.fdopen(handle, "wb") as target:
+                target.write(data)
+                target.flush()
+                os.fsync(target.fileno())
+            os.replace(name, self.owner_path)
+        except BaseException:
+            Path(name).unlink(missing_ok=True)
+            raise
+
+    def owner_marker(self) -> dict[str, Any] | None:
+        """The owner marker's contents, or ``None`` when absent or unreadable."""
+
+        try:
+            marker = json.loads(self.owner_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return marker if isinstance(marker, dict) else None
+
+    def require_owner(self) -> None:
+        """Raise :class:`BlobOwnerError` unless this vault marked the directory.
+
+        Every delete (purge, ``purge --orphans``, purge recovery) checks it
+        first, so a copy of a vault never removes the original's blobs.
+        """
+
+        status = self.owner_status()
+        if status == "absent":
+            return
+        if status != "own":
+            what = (
+                "is not marked as this vault's"
+                if status == "unmarked"
+                else ("belongs to another vault")
+            )
+            raise BlobOwnerError(f"the blob directory {what}; {REOWN_HINT}")
 
     def path_for(self, sha256: str) -> Path:
         sha = check_sha(sha256)
@@ -425,7 +524,9 @@ __all__ = [
     "STALE_STAGE_SECONDS",
     "SYNCED_MARKERS",
     "BlobCheck",
+    "OWNER_FILE",
     "BlobLocationError",
+    "BlobOwnerError",
     "BlobStore",
     "StagedBlob",
     "check_blob_location",

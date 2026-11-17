@@ -415,6 +415,69 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   symlink or a non-directory is still refused (`BlobLocationError`).
   Missing parents are made as before.
 
+### Added — referenced attachments, detach, relink, purge, scan (MM1b)
+
+- **Referenced originals:** `memfw attach add FILE --reference` (or
+  `ROOT:PATH`) records `storage: referenced` with `location:
+  <root>:<relative path>` and the original's sha256/size, copying nothing.
+  Roots are named per host in `vault.yaml` (`attachments_roots: {kh:
+  /mnt/notes}`). Audio and video inside a root default to a
+  reference; outside every root they need `--embed`. The embed limits do not
+  apply to references.
+- **Path safety:** POSIX relative locations only (no `..`, `.`, empty
+  component, backslash or control character); a filesystem path must lie
+  lexically inside a root (never resolved first; `..` refused); opening walks
+  from the root with `dir_fd` + `O_NOFOLLOW`, refusing any symlink component
+  and anything but a regular file; each component must match the on-disk name
+  exactly (case and Unicode normalization), so a location means one file on
+  macOS and on Linux. Every refusal writes nothing.
+- `memfw attach verify` re-hashes referenced originals: `referenced_missing`
+  (with `candidates`: same sha256 under the same root, never relinked
+  automatically), `referenced_modified`, `referenced_unsafe`,
+  `referenced_unavailable` (root not mounted/configured; a warning).
+  `--record-missing` appends `attach_missing`; `memfw attach relink ID PATH`
+  accepts only a file with the same sha256 and size (`attach_relink`).
+- `memfw attach detach ID` (soft, `detach` event; `list` hides it, `--all`
+  shows it).
+- `memfw attach purge ID --yes` (hard delete; without `--yes` only the plan:
+  citing/mentioning memories for human decision, shared-blob notice, copies
+  a purge cannot reach). Removes the record, the blob unless another record
+  shares it (the original is then kept and the quota passes to an heir), this
+  vault's stale stages, the memory index, and VACUUMs vault SQLite stores
+  still holding the record's text. A referenced original is never touched.
+  `memfw recover` finishes an interrupted purge or rolls back an interrupted
+  relink. `purge --orphans --yes` reclaims unreferenced blobs (blocked while
+  a committed record is unreadable).
+- **Copies of a vault:** the blob directory carries an owner marker
+  (`.owner`); purge, `purge --orphans`, purge recovery and adds refuse a
+  directory another vault marked (a copy shares `vault_id`), and verify/fsck
+  report `blob_store_foreign_owner`. `memfw attach reown --new-vault-id --yes`
+  splits a copy off (new `vault_id`, blobs copied); `memfw attach reown --yes`
+  re-owns after a move, and is refused while the vault path recorded in the
+  marker still holds a vault with the same `vault_id` (`--force-take-over`
+  overrides). The purge plan lists the attachment's MM2a proxies, which a
+  purge does not remove until the MM2b wiring; `scan` counts hard-linked
+  files; a blocked `purge --orphans --yes` reports `purged: false`, exit 1.
+- `fsck` only `lstat`s referenced originals (`fsck --hash-referenced`
+  re-hashes); directory listings are cached per pass. An empty root or one
+  whose every original is gone is `referenced_unavailable`, never missing;
+  `attach_missing` is re-checked under the lock and a new known kind
+  `attach_found` clears it. Roots may not be `/`, home, or contain the vault
+  or blob root; originals with several hard links are refused; purge
+  recovery scrubs SQLite stores like a purge; `scan` walks through
+  `O_NOFOLLOW` directory fds.
+- The embedded quota total is now the larger of the log total and the
+  stored blob files' sizes, so orphan reuse and detach/re-add cycles cannot
+  bypass `attachments_max_total_bytes`; log compaction keeps `heir` and
+  `projection`.
+- `memfw attach scan ROOT:[DIR]` is a dry-run inventory (counts, sizes, media
+  types, likely-private by path, already registered, refused symlinks/names;
+  `--hash` adds duplicate sha256 counts) that writes nothing.
+- The MM1b event writes (`detach`, `attach_missing`, `attach_relink`,
+  `attach_purge`, known since MM1a, and the new known kind `attach_found`) carry `details.projection: "none"`
+  (event-log forward-compat marker) and never a location or name.
+  See [`docs/attachments.md`](docs/attachments.md).
+
 ### Fixed — MM1a review follow-ups (attachment quota, staging, location guard)
 
 - `attach add` no longer parses every attachment record under the vault lock

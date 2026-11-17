@@ -1236,8 +1236,14 @@ class MemoryOperationsMixin:
         )
 
     @_serialized
-    def fsck(self: RepositoryHost, /) -> builtins.list[dict[str, str | None]]:
-        """Register valid external changes, quarantine invalid bytes, and report deletes."""
+    def fsck(
+        self: RepositoryHost, /, *, hash_referenced: bool = False
+    ) -> builtins.list[dict[str, str | None]]:
+        """Register valid external changes, quarantine invalid bytes, and report deletes.
+
+        Referenced attachment originals are only ``lstat``-ed unless
+        ``hash_referenced`` (they can be large and fsck holds the vault lock).
+        """
         expected = self.replay()
         issues: list[dict[str, str | None]] = []
         registered_deletions = False
@@ -1409,7 +1415,7 @@ class MemoryOperationsMixin:
             self.validate_knowledge_cards()
         # Attachments are checked on their own (read-only) and never projected
         # as memories, so they can never produce an external_delete (MM1a).
-        issues.extend(cast(Any, self).attachment_fsck_issues())
+        issues.extend(cast(Any, self).attachment_fsck_issues(hash_referenced=hash_referenced))
         # Marked events of kinds this version does not know (written by a newer
         # memfw): reported once per kind, never an error, never projected.
         for kind, count in foreign_event_kind_counts(self.events()).items():

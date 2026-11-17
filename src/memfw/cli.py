@@ -1733,13 +1733,20 @@ def index_search(
 def fsck(
     root: Annotated[Path, typer.Option("--root", "-r")] = Path("."),
     dry_run: Annotated[bool, typer.Option("--dry-run/--apply")] = False,
+    hash_referenced: Annotated[
+        bool,
+        typer.Option(
+            "--hash-referenced",
+            help="Re-hash referenced attachment originals (default: size check only)",
+        ),
+    ] = False,
 ) -> None:
     """Check committed state, quarantine invalid Markdown, and register external changes."""
     repository = _repo(root)
     if dry_run:
         typer.echo(json.dumps({"would_check": len(repository.list()), "writes": False}))
         return
-    issues = repository.fsck()
+    issues = repository.fsck(hash_referenced=hash_referenced)
     typer.echo(json.dumps(issues, ensure_ascii=False, indent=2))
 
 

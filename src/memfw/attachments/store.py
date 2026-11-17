@@ -1,16 +1,21 @@
-"""Repository mixin: register, read, verify and fsck attachments (MM1a).
+"""Repository mixin: register, read, verify and fsck attachments (MM1a, MM1b).
 
 Write order (design v2.1, H2): the original is hashed and copied into the blob
 store first (outside the vault lock, under a temporary name), then, holding
 the vault lock, the blob is linked to its content address, the record
 ``attachments/<id>.md`` is written and one ``attach`` event is appended. A
 crash after the blob and before the record leaves an orphan blob, which
-``attach verify`` and ``fsck`` report; nothing in MM1a deletes a blob
-(reclaiming orphans belongs with ``attach purge`` in MM1b).
+``attach verify`` and ``fsck`` report; only ``attach purge`` (and
+``purge --orphans``, in ``memfw.attachments.lifecycle``) deletes a blob.
 
 The reference count of a blob is derived from the records; it is never
 stored. Vault writes never read the blob store, so their cost does not grow
 with the blobs' total size.
+
+A referenced attachment (MM1b) has no blob: its record holds a location
+under a configured root (``memfw.attachments.locations``) and the original's
+sha256, which ``verify`` re-hashes in place. Detach, relink, purge and the
+missing state are in ``memfw.attachments.lifecycle``.
 """
 
 from __future__ import annotations
@@ -31,7 +36,27 @@ from memfw.ports.privacy import privacy_value
 from memfw.storage.evidence import attachment_backlinks
 from memfw.storage.transactions import _serialized
 
-from .blobs import DEFAULT_BLOB_ROOT, BlobLocationError, BlobStore, StagedBlob, stage_blob
+from .blobs import (
+    DEFAULT_BLOB_ROOT,
+    REOWN_HINT,
+    BlobLocationError,
+    BlobStore,
+    StagedBlob,
+    hash_stream,
+    stage_blob,
+)
+from .locations import (
+    ListingCache,
+    Location,
+    LocationError,
+    configured_roots,
+    location_for_path,
+    looks_like_location,
+    open_location,
+    stat_location,
+    validate_roots_config,
+    walk_root,
+)
 from .records import (
     ATTACHMENTS_DIR,
     DEFAULT_ATTACHMENT_PRIVACY,
@@ -44,6 +69,8 @@ from .records import (
     parse_record,
     render_record,
 )
+from .scan import scan_root
+from .scrub import scrub_stores
 
 if TYPE_CHECKING:
     from memfw.core.context import RepositoryHost
@@ -58,10 +85,20 @@ DEFAULT_MAX_BYTES: Final = 25 * 1024 * 1024
 DEFAULT_MAX_TOTAL_BYTES: Final = 2 * 1024 * 1024 * 1024
 #: Media families that default to a referenced attachment (design v2 "上限").
 REFERENCE_BY_DEFAULT: Final = ("audio/", "video/")
-_RECORD_KINDS: Final = frozenset({EventKind.ATTACH, EventKind.ATTACH_UPDATE})
+#: Events that commit a record's bytes (``after_hash``).
+_RECORD_KINDS: Final = frozenset(
+    {EventKind.ATTACH, EventKind.ATTACH_UPDATE, EventKind.ATTACH_RELINK}
+)
+#: How many directory entries ``verify`` walks per root looking for a moved original.
+CANDIDATE_SCAN_LIMIT: Final = 200_000
+#: At most this many relink suggestions per missing attachment.
+MAX_CANDIDATES: Final = 5
+ROOTS_HINT: Final = "attachments_roots in vault.yaml"
+#: A record's previous bytes while a relink rewrites it (``<id>.md.prev``).
+PREVIOUS_SUFFIX: Final = ".prev"
 
 
-def validate_attachment_config(raw: dict[str, Any]) -> None:
+def validate_attachment_config(raw: dict[str, Any], *, vault: Path | None = None) -> None:
     """Check the attachment keys of a ``vault.yaml`` mapping (absent keys are fine)."""
 
     vault_id = raw.get(VAULT_ID_KEY)
@@ -82,6 +119,7 @@ def validate_attachment_config(raw: dict[str, Any]) -> None:
         value = raw.get(key)
         if key in raw and (isinstance(value, bool) or not isinstance(value, int) or value < 1):
             raise IntegrityError(f"{key} must be a positive integer")
+    validate_roots_config(raw, vault=vault, blob_root=_blob_root(raw))
 
 
 def _config_int(config: dict[str, Any], key: str, default: int) -> int:
@@ -111,14 +149,63 @@ class AttachmentProblem:
     expected_hash: str | None = None
     actual_hash: str | None = None
     message: str = ""
+    #: ``referenced_missing`` only: locations under the same root with the same sha256.
+    candidates: tuple[str, ...] | None = None
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "id": self.attachment_id,
             "status": self.status,
             "sha256": self.sha256,
             "message": self.message,
         }
+        if self.candidates is not None:
+            payload["candidates"] = list(self.candidates)
+        return payload
+
+
+@dataclass
+class AttachmentState:
+    """What the event log says about one attachment id."""
+
+    #: The committed record hash; ``None`` once purged.
+    committed_hash: str | None = None
+    detached: bool = False
+    missing: bool = False
+    purged: bool = False
+
+    @property
+    def label(self) -> str:
+        if self.purged:
+            return "purged"
+        if self.detached:
+            return "detached"
+        return "missing" if self.missing else "active"
+
+
+def attachment_states(events: Iterable[Event]) -> dict[str, AttachmentState]:
+    """Attachment id → its state from the log, in order of first appearance."""
+
+    states: dict[str, AttachmentState] = {}
+    for event in events:
+        if event.kind not in ATTACHMENT_EVENT_KINDS:
+            continue
+        state = states.setdefault(event.memory_id, AttachmentState())
+        if event.kind in _RECORD_KINDS and event.after_hash is not None:
+            state.committed_hash = event.after_hash
+            state.purged = False
+            if event.kind == EventKind.ATTACH_RELINK:
+                state.missing = False
+        elif event.kind == EventKind.DETACH:
+            state.detached = True
+        elif event.kind == EventKind.ATTACH_MISSING:
+            state.missing = True
+        elif event.kind == EventKind.ATTACH_FOUND:
+            state.missing = False
+        elif event.kind == EventKind.ATTACH_PURGE:
+            state.committed_hash = None
+            state.purged = True
+    return states
 
 
 def _attachments_dir(host: RepositoryHost) -> Path:
@@ -130,53 +217,78 @@ def _record_path(host: RepositoryHost, attachment_id: str) -> Path:
 
 
 def committed_records(events: Iterable[Event]) -> dict[str, str]:
-    """Attachment id → committed record hash, from the event log."""
+    """Attachment id → committed record hash, from the event log (purged ids left out)."""
 
-    committed: dict[str, str] = {}
+    return {
+        identifier: state.committed_hash
+        for identifier, state in attachment_states(events).items()
+        if state.committed_hash is not None
+    }
+
+
+def blob_owners(events: Iterable[Event]) -> tuple[dict[str, int], set[str], bool]:
+    """(size per committed embedded attachment, the ids that own a blob, legacy).
+
+    The ``attach`` event that stored new bytes owns the blob; a purge that
+    keeps a shared blob hands it to ``details.heir``. ``legacy`` is true when
+    a committed ``attach`` event predates ``details.size``.
+    """
+
+    sizes: dict[str, int] = {}
+    owners: set[str] = set()
     for event in events:
-        if event.kind in _RECORD_KINDS and event.after_hash is not None:
-            committed[event.memory_id] = event.after_hash
-    return committed
+        details = event.details
+        if event.kind == EventKind.ATTACH:
+            if details.get("storage", "embedded") != "embedded":
+                continue
+            size = details.get("size")
+            blob = details.get("blob")
+            # Anything but a non-negative int size and a known blob value is
+            # read as an event without them (an old or hand-edited log).
+            if (
+                isinstance(size, bool)
+                or not isinstance(size, int)
+                or size < 0
+                or not isinstance(blob, str)
+                or blob not in {"new", "shared"}
+            ):
+                return sizes, owners, True
+            sizes[event.memory_id] = size
+            if blob == "new":
+                owners.add(event.memory_id)
+        elif event.kind == EventKind.ATTACH_PURGE:
+            sizes.pop(event.memory_id, None)
+            owned = event.memory_id in owners
+            owners.discard(event.memory_id)
+            heir = details.get("heir")
+            if owned and isinstance(heir, str) and heir in sizes:
+                owners.add(heir)
+    return sizes, owners, False
 
 
 def embedded_total(events: Iterable[Event], store: BlobStore) -> int:
     """Bytes the vault's embedded blobs take, for the ``attachments_max_total_bytes`` check.
 
     Each blob is counted once, by the ``attach`` event that stored it
-    (``details.blob == "new"``) while its attachment is committed. A log with
+    (``details.blob == "new"``) while its attachment is committed (see
+    :func:`blob_owners`; a purge that keeps a shared blob passes it on). A log with
     a committed ``attach`` event that predates ``details.size`` (or carries a
     malformed ``size`` / ``blob``) falls back to
-    the sizes (``lstat``) of the files in the blob directory. Neither way
-    parses a record, so the cost of an add does not grow with record parses.
+    the sizes (``lstat``) of the files in the blob directory; otherwise the
+    larger of the log total and those sizes is used (orphans count). Neither
+    way parses a record, so the cost of an add does not grow with record
+    parses (the ``lstat`` pass is one call per stored blob).
     """
 
-    sizes: dict[str, int] = {}
-    owners: set[str] = set()
-    legacy = False
-    for event in events:
-        if event.kind != EventKind.ATTACH:
-            continue
-        details = event.details
-        if details.get("storage", "embedded") != "embedded":
-            continue
-        size = details.get("size")
-        blob = details.get("blob")
-        # Anything but a non-negative int size and a known blob value is read
-        # as an event without them (an old or hand-edited log): fall back.
-        if (
-            isinstance(size, bool)
-            or not isinstance(size, int)
-            or size < 0
-            or blob not in {"new", "shared"}
-        ):
-            legacy = True
-            break
-        sizes[event.memory_id] = size
-        if blob == "new":
-            owners.add(event.memory_id)
+    stored = store.stored_bytes()
+    sizes, owners, legacy = blob_owners(events)
     if legacy:
-        return store.stored_bytes()
-    return sum(sizes[identifier] for identifier in owners)
+        return stored
+    # The log never counts bytes no committed ``attach`` stored as new (an
+    # orphan an interrupted add left, then re-added as "shared"; detach and
+    # re-add cycles over such blobs). The files on disk bound it from below,
+    # so the quota can never be bypassed that way.
+    return max(sum(sizes[identifier] for identifier in owners), stored)
 
 
 def _vault_id(host: RepositoryHost) -> str | None:
@@ -253,7 +365,7 @@ class AttachmentStoreMixin:
 
     def add_attachment(
         self: RepositoryHost,
-        source: Path,
+        source: Path | str,
         *,
         privacy: str | None = None,
         media_type: str | None = None,
@@ -264,54 +376,76 @@ class AttachmentStoreMixin:
         rights: str | None = None,
         tags: Iterable[str] = (),
         embed: bool = False,
+        reference: bool = False,
     ) -> AttachResult:
-        """Register ``source`` as an embedded attachment (a human write).
+        """Register ``source`` as an attachment (a human write).
 
-        Every check that needs no I/O runs before anything is written. Audio
-        and video default to a referenced attachment, which this version does
-        not support, so they need ``embed=True``.
+        Embedded (the default) copies the bytes into the blob store.
+        ``reference=True`` records only a location under a configured root
+        (``attachments_roots``); ``source`` is then a filesystem path inside a
+        root or a location ``<root>:<relative path>``. Audio and video default
+        to a reference: without ``embed`` they must lie inside a configured
+        root. Every check that needs no I/O runs before anything is written.
         """
 
+        if embed and reference:
+            raise ValueError("--embed and --reference exclude each other")
         level = privacy_value(privacy) or DEFAULT_ATTACHMENT_PRIVACY
-        source = Path(source)
-        name = clean_name(source.name) or None
+        config = self.read_config() if self.config_path.exists() else {}
+        roots = _checked_roots(self, config)
+        text = str(source)
+        location: Location | None = None
+        if reference:
+            location = (
+                Location.parse(text)
+                if looks_like_location(text, roots)
+                else location_for_path(Path(source), roots)
+            )
+        base_name = location.name if location is not None else Path(source).name
         kind = check_media_type(
             media_type
-            or (mimetypes.guess_type(source.name, strict=False)[0] or "application/octet-stream")
+            or (mimetypes.guess_type(base_name, strict=False)[0] or "application/octet-stream")
         )
-        if kind.startswith(REFERENCE_BY_DEFAULT) and not embed:
-            raise ValueError(
-                f"{kind} defaults to a referenced attachment (--reference), which this "
-                "version does not support yet; pass --embed to copy the bytes"
-            )
+        if location is None and kind.startswith(REFERENCE_BY_DEFAULT) and not embed:
+            try:
+                location = location_for_path(Path(source), roots)
+            except LocationError:
+                raise ValueError(
+                    f"{kind} defaults to a referenced attachment, but the file is not inside "
+                    f"any configured attachments root ({ROOTS_HINT}); pass --embed to copy "
+                    "the bytes"
+                ) from None
         retention = check_retention(retention)
-        tag_list = tuple(str(tag) for tag in tags)
-        config = self.read_config() if self.config_path.exists() else {}
+        draft = AttachmentRecord(
+            id=new_attachment_id(self._now(), b"\0" * 10),
+            sha256="0" * 64,
+            size=0,
+            media_type=kind,
+            recorded_at=self._now().isoformat(),
+            storage="embedded" if location is None else "referenced",
+            location=None if location is None else str(location),
+            privacy=level,
+            original_name=clean_name(base_name) or None,
+            origin=origin.strip() if origin and origin.strip() else None,
+            captured_at=captured_at,
+            retention=retention,
+            rights=rights.strip() if rights and rights.strip() else None,
+            tags=tuple(str(tag) for tag in tags),
+            note=note,
+        )
+        # A value that would not read back is refused before anything is written.
+        render_record(draft)
+        if location is not None:
+            return AttachmentStoreMixin._add_reference(self, draft, location, roots)
+        source = Path(source)
         max_bytes = _config_int(config, MAX_BYTES_KEY, DEFAULT_MAX_BYTES)
         handle, info = _open_source(source)
         try:
             if info.st_size > max_bytes:
                 raise ValueError(
                     f"attachment is {info.st_size} bytes, over {MAX_BYTES_KEY} ({max_bytes}); "
-                    "referenced attachments (--reference) are not supported yet"
+                    f"use --reference (a file under a configured attachments root)"
                 )
-            draft = AttachmentRecord(
-                id=new_attachment_id(self._now(), b"\0" * 10),
-                sha256="0" * 64,
-                size=0,
-                media_type=kind,
-                recorded_at=self._now().isoformat(),
-                privacy=level,
-                original_name=name,
-                origin=origin.strip() if origin and origin.strip() else None,
-                captured_at=captured_at,
-                retention=retention,
-                rights=rights.strip() if rights and rights.strip() else None,
-                tags=tag_list,
-                note=note,
-            )
-            # A value that would not read back is refused before anything is written.
-            render_record(draft)
             # Staged under the blob root, independent of the vault id; the
             # vault's blob directory is resolved under the lock below. Staging
             # checks the location first, so a refused root writes nothing.
@@ -327,6 +461,33 @@ class AttachmentStoreMixin:
             return result
         finally:
             staged.discard()
+
+    def _add_reference(
+        self: RepositoryHost,
+        draft: AttachmentRecord,
+        location: Location,
+        roots: dict[str, Path],
+    ) -> AttachResult:
+        """Hash the original in place (no copy) and commit a referenced record."""
+
+        try:
+            handle, info = open_location(location, roots)
+        except FileNotFoundError:
+            raise ValueError(f"no such file: {location}") from None
+        if info.st_nlink > 1:
+            os.close(handle)
+            # A hard link elsewhere (perhaps outside every root) can change the
+            # bytes behind the location without touching any path memfw checks.
+            raise LocationError(
+                f"{location}: refusing a file with {info.st_nlink} hard links; "
+                "reference a copy with a single link"
+            )
+        with os.fdopen(handle, "rb") as stream:
+            sha256, size = hash_stream(stream)
+        result: AttachResult = cast(Any, self).add_reference_record(
+            replace(draft, sha256=sha256, size=size)
+        )
+        return result
 
     @_serialized
     def add_attachment_record(
@@ -354,16 +515,9 @@ class AttachmentStoreMixin:
         if not deduplicated and embedded_total(events, store) + size > max_total:
             raise ValueError(
                 f"the vault's attachments would exceed {MAX_TOTAL_KEY} ({max_total} bytes); "
-                "referenced attachments (--reference) are not supported yet"
+                "use --reference (a file under a configured attachments root)"
             )
-        used = {event.memory_id for event in events}
-        for _ in range(16):
-            entropy = hashlib.sha256(self.id_factory().encode("utf-8")).digest()
-            attachment_id = new_attachment_id(self._now(), entropy)
-            if attachment_id not in used and not _record_path(self, attachment_id).exists():
-                break
-        else:  # pragma: no cover - 74 random bits
-            raise IntegrityError("could not allocate an unused attachment id")
+        attachment_id = _new_id(self, events)
         record = replace(draft, id=attachment_id, sha256=sha256, size=size)
         # Rendered (and read back) before anything is linked or written.
         raw = render_record(record)
@@ -385,6 +539,25 @@ class AttachmentStoreMixin:
         )
         return AttachResult(record, deduplicated)
 
+    @_serialized
+    def add_reference_record(self: RepositoryHost, draft: AttachmentRecord) -> AttachResult:
+        """Commit a referenced record plus one ``attach`` event (no blob, no ``vault_id``)."""
+
+        if draft.storage != "referenced":
+            raise IntegrityError("add_reference_record takes a referenced record")
+        events = self.events()
+        record = replace(draft, id=_new_id(self, events))
+        raw = render_record(record)
+        self._atomic_write(_record_path(self, record.id), raw)
+        self._append_event(
+            EventKind.ATTACH,
+            record.id,
+            actor="human",
+            after_hash=hashlib.sha256(raw).hexdigest(),
+            details={"storage": record.storage, "size": record.size},
+        )
+        return AttachResult(record, False)
+
     # -- reads --------------------------------------------------------------------
 
     def attachment_ids(self: RepositoryHost) -> list[str]:
@@ -401,6 +574,17 @@ class AttachmentStoreMixin:
             raise NotFoundError(f"Attachment not found: {identifier}")
         return _load_record(self, identifier, expected)
 
+    def get_attachment_with_state(
+        self: RepositoryHost, attachment_id: str
+    ) -> tuple[AttachmentRecord, AttachmentState]:
+        """:meth:`get_attachment` plus its log state, reading the log once."""
+
+        identifier = check_attachment_id(attachment_id)
+        state = attachment_states(self.events()).get(identifier)
+        if state is None or state.committed_hash is None:
+            raise NotFoundError(f"Attachment not found: {identifier}")
+        return _load_record(self, identifier, state.committed_hash), state
+
     def attachment_records(
         self: RepositoryHost,
     ) -> list[tuple[str, AttachmentRecord | MemfwError]]:
@@ -410,6 +594,31 @@ class AttachmentStoreMixin:
         """
 
         return _load_committed(self, committed_records(self.events()))
+
+    def attachment_state_map(self: RepositoryHost) -> dict[str, AttachmentState]:
+        """Attachment id → its state from the event log (``active``, ``detached``, …)."""
+
+        return attachment_states(self.events())
+
+    def scan_attachment_root(
+        self: RepositoryHost, target: str, *, hash_files: bool = False
+    ) -> dict[str, Any]:
+        """Dry-run inventory of ``target`` under a configured root (writes nothing)."""
+
+        config = self.read_config() if self.config_path.exists() else {}
+        roots = _checked_roots(self, config)
+        registered = {
+            str(record.location)
+            for _, record in _load_committed(self, committed_records(self.events()))
+            if isinstance(record, AttachmentRecord) and record.location is not None
+        }
+        return scan_root(
+            target,
+            roots,
+            registered=registered,
+            max_bytes=_config_int(config, MAX_BYTES_KEY, DEFAULT_MAX_BYTES),
+            hash_files=hash_files,
+        )
 
     def attachment_citations(self: RepositoryHost, attachment_id: str) -> list[str]:
         """Ids of memories whose ``evidence`` names the attachment (read-only).
@@ -429,16 +638,25 @@ class AttachmentStoreMixin:
         attachment_ids: Iterable[str] | None = None,
         *,
         events: list[Event] | None = None,
+        candidates: bool = True,
+        hash_referenced: bool = True,
     ) -> tuple[list[str], list[AttachmentProblem]]:
-        """Re-hash records and blobs. Returns (checked ids, problems). Read-only.
+        """Re-hash records, blobs and referenced originals. Returns (checked ids, problems).
 
-        With no ids every committed attachment is checked, untracked record
-        files are reported and so are orphan blobs (no record names them).
+        Read-only. With no ids every committed attachment is checked, untracked
+        record files are reported and so are orphan blobs (no record names
+        them). A referenced original that is gone is ``referenced_missing``;
+        with ``candidates`` the same root tree is searched for files with the
+        same sha256, which are suggested for ``attach relink`` (never relinked
+        here). A detached referenced attachment's original is not checked.
+        Without ``hash_referenced`` referenced originals are only ``lstat``-ed
+        (exists, regular, same size): what ``fsck`` does by default.
         ``events`` is the event log when the caller has already read it.
         """
 
         if events is None:
             events = self.events()
+        states = attachment_states(events)
         committed = committed_records(events)
         everything = attachment_ids is None
         if attachment_ids is None:
@@ -481,7 +699,23 @@ class AttachmentStoreMixin:
                 problems.append(AttachmentProblem(identifier, "record_invalid", message=str(exc)))
                 continue
             records.append(record)
-            referenced.add(record.sha256)
+            if record.storage == "embedded":
+                referenced.add(record.sha256)
+        problems.extend(
+            _check_references(
+                self,
+                [
+                    record
+                    for record in records
+                    if record.storage == "referenced" and not states[record.id].detached
+                ],
+                candidates=candidates,
+                hash_files=hash_referenced,
+                states=states,
+            )
+        )
+        if store is not None and store.owner_status() == "foreign":
+            problems.append(AttachmentProblem(None, "blob_store_foreign_owner", message=REOWN_HINT))
         for record in records:
             if record.storage != "embedded":
                 continue
@@ -537,9 +771,11 @@ class AttachmentStoreMixin:
                 for identifier in committed:
                     try:
                         raw_record = _record_path(self, identifier).read_bytes()
-                        referenced.add(parse_record(raw_record, identifier).sha256)
+                        parsed = parse_record(raw_record, identifier)
                     except (OSError, IntegrityError):
                         continue
+                    if parsed.storage == "embedded":
+                        referenced.add(parsed.sha256)
                 for sha in store.stored():
                     if sha not in referenced:
                         problems.append(AttachmentProblem(None, "blob_orphan", sha))
@@ -557,8 +793,13 @@ class AttachmentStoreMixin:
                     )
         return wanted, problems
 
-    def attachment_fsck_issues(self: RepositoryHost) -> list[dict[str, str | None]]:
+    def attachment_fsck_issues(
+        self: RepositoryHost, *, hash_referenced: bool = False
+    ) -> list[dict[str, str | None]]:
         """``fsck`` rows for attachments; empty (and no I/O past the log) without any.
+
+        Referenced originals are only ``lstat``-ed unless ``hash_referenced``
+        (``fsck`` holds the vault lock; ``attach verify`` always re-hashes).
 
         A vault "has attachments" once it has a record file, an ``attach``
         event or a ``vault_id`` (an add may have stopped before its record).
@@ -568,7 +809,9 @@ class AttachmentStoreMixin:
         events = self.events()
         if not has_records and not committed_records(events) and _vault_id(self) is None:
             return []
-        _, problems = AttachmentStoreMixin.verify_attachments(self, events=events)
+        _, problems = AttachmentStoreMixin.verify_attachments(
+            self, events=events, candidates=False, hash_referenced=hash_referenced
+        )
         return [
             {
                 "memory_id": problem.attachment_id,
@@ -582,21 +825,328 @@ class AttachmentStoreMixin:
         ]
 
     def _reconcile_attachment_records(self: RepositoryHost, events: list[Event]) -> list[str]:
-        """Recovery: drop record files no ``attach`` event committed, and temp files."""
+        """Recovery after an interrupted attachment write.
+
+        * ``*.md.prev`` (the record before a relink): restored when the record
+          on disk is not the committed one, else removed;
+        * a record whose ``attach_purge`` committed: the purge is finished (its
+          blob is removed when no other committed record names it);
+        * a record no event committed, and temp files: removed.
+        """
 
         directory = _attachments_dir(self)
         removed: list[str] = []
         if not directory.is_dir():
             return removed
+        states = attachment_states(events)
         committed = committed_records(events)
         for path in sorted(directory.glob("*.md.tmp")):
             path.unlink(missing_ok=True)
             removed.append(path.relative_to(self.root).as_posix())
+        for previous in sorted(directory.glob("*.md" + PREVIOUS_SUFFIX)):
+            identifier = previous.name.removesuffix(".md" + PREVIOUS_SUFFIX)
+            expected = committed.get(identifier)
+            record_file = directory / f"{identifier}.md"
+            current = record_file.read_bytes() if record_file.exists() else None
+            if expected is not None and (
+                current is None or hashlib.sha256(current).hexdigest() != expected
+            ):
+                if hashlib.sha256(previous.read_bytes()).hexdigest() == expected:
+                    self._atomic_write(record_file, previous.read_bytes())
+                    removed.append(identifier)
+            previous.unlink(missing_ok=True)
+            removed.append(previous.relative_to(self.root).as_posix())
+        purged = [
+            path
+            for path in sorted(directory.glob("*.md"))
+            if _is_attachment_name(path.stem) and path.stem in states and states[path.stem].purged
+        ]
+        if purged:
+            try:
+                store = blob_store(self)
+            except BlobLocationError:
+                store = None
+            # A copy of the vault shares its vault_id: never delete another's blobs.
+            if store is not None and store.owner_status() not in {"own", "absent"}:
+                store = None
+            shared = _committed_embedded_shas(self, committed)
+            for path in purged:
+                parsed: AttachmentRecord | None
+                try:
+                    parsed = parse_record(path.read_bytes(), path.stem)
+                except IntegrityError:
+                    parsed = None
+                if (
+                    parsed is not None
+                    and parsed.storage == "embedded"
+                    and store is not None
+                    and shared is not None
+                    and parsed.sha256 not in shared
+                ):
+                    _remove_blob(store, parsed.sha256)
+                # The same scrub a normal purge runs (index dropped, stores VACUUMed).
+                scrub_stores(self, parsed)
         for path in sorted(directory.glob("*.md")):
             if _is_attachment_name(path.stem) and path.stem not in committed:
                 path.unlink()
                 removed.append(path.stem)
         return removed
+
+
+def _committed_embedded_shas(host: RepositoryHost, committed: dict[str, str]) -> set[str] | None:
+    """sha256 of every committed embedded record; ``None`` if any committed record is unreadable.
+
+    Records are the only place a blob's sha256 is kept, so while one cannot be
+    read no blob may be treated as unreferenced.
+    """
+
+    shas: set[str] = set()
+    for _, record in _load_committed(host, committed):
+        if isinstance(record, MemfwError):
+            return None
+        if record.storage == "embedded":
+            shas.add(record.sha256)
+    return shas
+
+
+def _remove_blob(store: BlobStore, sha256: str) -> bool:
+    """Delete one blob file (and its shard directory once empty). ``False``: it was not there."""
+
+    path = store.path_for(sha256)
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return False
+    if stat.S_ISDIR(info.st_mode):
+        raise IntegrityError(f"blob address {sha256[:12]} is a directory; remove it by hand")
+    path.unlink()
+    try:
+        path.parent.rmdir()
+    except OSError:
+        pass  # other blobs share the shard
+    try:
+        handle = os.open(store.directory, os.O_RDONLY)
+    except OSError:
+        return True
+    try:
+        os.fsync(handle)
+    finally:
+        os.close(handle)
+    return True
+
+
+def _new_id(host: RepositoryHost, events: Iterable[Event]) -> str:
+    used = {event.memory_id for event in events}
+    for _ in range(16):
+        entropy = hashlib.sha256(host.id_factory().encode("utf-8")).digest()
+        attachment_id = new_attachment_id(host._now(), entropy)
+        if attachment_id not in used and not _record_path(host, attachment_id).exists():
+            return attachment_id
+    raise IntegrityError("could not allocate an unused attachment id")  # pragma: no cover
+
+
+def _checked_roots(host: RepositoryHost, config: dict[str, Any]) -> dict[str, Path]:
+    """The configured roots; one inside the vault is refused (``IntegrityError``)."""
+
+    validate_roots_config(config, vault=host.root, blob_root=_blob_root(config))
+    return configured_roots(config)
+
+
+def attachment_roots(host: RepositoryHost) -> dict[str, Path]:
+    """This vault's configured attachments roots (name → directory)."""
+
+    config = host.read_config() if host.config_path.exists() else {}
+    return _checked_roots(host, config)
+
+
+def _check_references(
+    host: RepositoryHost,
+    records: list[AttachmentRecord],
+    *,
+    candidates: bool,
+    hash_files: bool = True,
+    states: dict[str, AttachmentState] | None = None,
+) -> list[AttachmentProblem]:
+    """Check each referenced original in place; suggest candidates for missing ones.
+
+    ``hash_files`` re-hashes; otherwise only ``lstat`` (exists, regular file,
+    same size). A root whose every lookup fails (two or more originals) or
+    that is an empty directory is treated as not mounted: every original
+    under it is ``referenced_unavailable``, never ``referenced_missing``.
+    """
+
+    if not records:
+        return []
+    try:
+        roots = attachment_roots(host)
+    except IntegrityError as exc:
+        return [
+            AttachmentProblem(record.id, "referenced_unavailable", record.sha256, message=str(exc))
+            for record in records
+        ]
+    cache: ListingCache = {}
+    problems: list[AttachmentProblem] = []
+    missing: list[tuple[AttachmentRecord, Location]] = []
+    seen: dict[str, int] = {}
+    for record in records:
+        location = Location.parse(str(record.location))
+        seen[location.root] = seen.get(location.root, 0) + 1
+        try:
+            if hash_files:
+                handle, info = open_location(location, roots, cache=cache)
+            else:
+                info = stat_location(location, roots, cache=cache)
+                handle = None
+        except FileNotFoundError as exc:
+            if location.root in roots and roots[location.root].is_dir():
+                missing.append((record, location))
+            else:
+                problems.append(
+                    AttachmentProblem(
+                        record.id, "referenced_unavailable", record.sha256, message=str(exc)
+                    )
+                )
+            continue
+        except LocationError as exc:
+            status = "referenced_unavailable" if location.root not in roots else "referenced_unsafe"
+            problems.append(AttachmentProblem(record.id, status, record.sha256, message=str(exc)))
+            continue
+        actual: str | None = record.sha256
+        size = info.st_size
+        if handle is not None:
+            with os.fdopen(handle, "rb") as stream:
+                if info.st_size != record.size:
+                    actual = None
+                else:
+                    actual, size = hash_stream(stream)
+        elif info.st_size != record.size:
+            actual = None
+        if actual != record.sha256:
+            problems.append(
+                AttachmentProblem(
+                    record.id,
+                    "referenced_modified",
+                    record.sha256,
+                    expected_hash=record.sha256,
+                    actual_hash=actual,
+                    message=f"size {size} != {record.size}" if size != record.size else "",
+                )
+            )
+    unmounted = _unmounted_roots(missing, seen, roots)
+    real = [(record, location) for record, location in missing if location.root not in unmounted]
+    found = _find_candidates(real, roots) if candidates and real else {}
+    for record, location in missing:
+        if location.root in unmounted:
+            problems.append(
+                AttachmentProblem(
+                    record.id,
+                    "referenced_unavailable",
+                    record.sha256,
+                    message=f"{location.root}: {unmounted[location.root]}",
+                )
+            )
+            continue
+        problems.append(
+            AttachmentProblem(
+                record.id,
+                "referenced_missing",
+                record.sha256,
+                message=f"{location}: no such file",
+                candidates=tuple(found.get(record.id, ())) if candidates else None,
+            )
+        )
+    return problems
+
+
+def _unmounted_roots(
+    missing: list[tuple[AttachmentRecord, Location]],
+    seen: dict[str, int],
+    roots: dict[str, Path],
+) -> dict[str, str]:
+    """Roots that look unmounted: an empty directory, or every lookup (two or more) failed."""
+
+    gone: dict[str, int] = {}
+    for _, location in missing:
+        gone[location.root] = gone.get(location.root, 0) + 1
+    unmounted: dict[str, str] = {}
+    for root_name, count in gone.items():
+        try:
+            empty = not any(os.scandir(roots[root_name]))
+        except OSError:
+            empty = True
+        if empty:
+            unmounted[root_name] = "the root is an empty directory (not mounted?)"
+        elif count >= 2 and count == seen.get(root_name):
+            unmounted[root_name] = "every original under the root is gone (not mounted?)"
+    return unmounted
+
+
+def referenced_missing_now(host: RepositoryHost, record: AttachmentRecord) -> bool | None:
+    """Re-check one referenced original: ``True`` missing, ``False`` present, ``None`` unknown.
+
+    ``None`` when the root is not configured, not a directory or empty (not
+    mounted), or the location is refused; used under the vault lock before
+    the missing state changes.
+    """
+
+    try:
+        roots = attachment_roots(host)
+    except IntegrityError:
+        return None
+    location = Location.parse(str(record.location))
+    root = roots.get(location.root)
+    if root is None or not root.is_dir():
+        return None
+    try:
+        if not any(os.scandir(root)):
+            return None
+        stat_location(location, roots)
+    except FileNotFoundError:
+        return True
+    except (OSError, LocationError):
+        return None
+    return False
+
+
+def _find_candidates(
+    missing: list[tuple[AttachmentRecord, Location]], roots: dict[str, Path]
+) -> dict[str, list[str]]:
+    """Locations under each missing original's root whose size and sha256 match it.
+
+    One bounded walk per root (``CANDIDATE_SCAN_LIMIT`` entries, symlinks never
+    followed); only files of a wanted size are hashed, each at most once.
+    """
+
+    found: dict[str, list[str]] = {}
+    by_root: dict[str, list[AttachmentRecord]] = {}
+    for record, location in missing:
+        by_root.setdefault(location.root, []).append(record)
+    for root_name, wanted in by_root.items():
+        sizes = {record.size for record in wanted}
+        hashes: dict[str, str | None] = {}
+        for item in walk_root(root_name, roots, max_entries=CANDIDATE_SCAN_LIMIT):
+            if item.size not in sizes:
+                continue
+            key = str(item.location)
+            if key not in hashes:
+                try:
+                    handle, _ = open_location(item.location, roots)
+                except (OSError, LocationError):
+                    hashes[key] = None
+                    continue
+                with os.fdopen(handle, "rb") as stream:
+                    hashes[key] = hash_stream(stream)[0]
+            for record in wanted:
+                matches = found.setdefault(record.id, [])
+                if (
+                    hashes[key] == record.sha256
+                    and item.size == record.size
+                    and len(matches) < MAX_CANDIDATES
+                ):
+                    matches.append(key)
+    for matches in found.values():
+        matches.sort()
+    return found
 
 
 def _load_record(host: RepositoryHost, identifier: str, expected: str) -> AttachmentRecord:
@@ -642,6 +1192,11 @@ __all__ = [
     "AttachResult",
     "AttachmentProblem",
     "AttachmentStoreMixin",
+    "AttachmentState",
+    "attachment_roots",
+    "attachment_states",
+    "referenced_missing_now",
+    "blob_owners",
     "blob_store",
     "committed_records",
     "embedded_total",

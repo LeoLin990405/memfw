@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 import yaml
 from filelock import FileLock
 
+from ..attachments.lifecycle import AttachmentLifecycleMixin
 from ..attachments.proxies import ProxyStoreMixin, validate_proxy_config
 from ..attachments.store import AttachmentStoreMixin, validate_attachment_config
 from ..budget import BudgetProfile
@@ -101,6 +102,7 @@ class Repository(
     KnowledgeStoreMixin,
     AttachmentStoreMixin,
     ProxyStoreMixin,
+    AttachmentLifecycleMixin,
 ):
     """A local vault. Markdown and events are authoritative; SQLite is disposable."""
 
@@ -314,6 +316,9 @@ class Repository(
         if not isinstance(parsed, dict):
             raise IntegrityError("Vault configuration must be a YAML mapping")
         self._validate_config_mapping(parsed)
+        # The vault-relative checks (roots not containing the vault or the blob
+        # root) need the vault path, which the static validator does not have.
+        validate_attachment_config(parsed, vault=self.root)
         before = self.config_path.read_bytes() if self.config_path.exists() else b""
         if before == candidate:
             return
