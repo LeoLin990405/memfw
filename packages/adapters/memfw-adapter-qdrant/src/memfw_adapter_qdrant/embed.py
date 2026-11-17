@@ -25,8 +25,9 @@ import urllib.error
 import urllib.request
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
-from .http import open_url
+from .http import MAX_RESPONSE_BYTES, open_url
 
 
 class Embedder(Protocol):
@@ -71,6 +72,9 @@ class EnvEmbedder:
         timeout: float = 30.0,
         batch_size: int = 16,
     ) -> None:
+        scheme = urlsplit(endpoint).scheme if isinstance(endpoint, str) else ""
+        if scheme not in {"http", "https"}:
+            raise ValueError("MEMFW_EMBEDDING_URL must be an http(s) URL")
         self.endpoint = endpoint
         self.model = model
         self.dimension = dimension
@@ -95,7 +99,12 @@ class EnvEmbedder:
             )
             try:
                 with open_url(request, self.timeout) as response:
-                    payload = json.loads(response.read().decode("utf-8"))
+                    raw = response.read(MAX_RESPONSE_BYTES + 1)
+                if len(raw) > MAX_RESPONSE_BYTES:
+                    raise EmbedderError("embedding_response_too_large")
+                payload = json.loads(raw.decode("utf-8"))
+            except EmbedderError:
+                raise
             except (urllib.error.URLError, TimeoutError, OSError, ValueError):
                 raise EmbedderError("embedding_unreachable") from None
             rows = payload.get("data") if isinstance(payload, dict) else None

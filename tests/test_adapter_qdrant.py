@@ -369,6 +369,36 @@ def test_a_remote_collection_is_keyed_by_an_explicit_vault_id(tmp_path: Path) ->
     assert unset.settings.vault_id == "" and unset.vault_key != local.vault_key
 
 
+def test_a_remote_api_key_needs_https_and_the_embedder_is_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = _vault(tmp_path)
+    remote = {
+        "vault": str(repository.root),
+        "allow_remote": True,
+        "vault_id": "v1",
+        "api_key_env": "QDRANT_TEST_KEY",
+    }
+    with pytest.raises(ValueError, match="https only"):
+        factory({**remote, "url": "http://qdrant.example:6333"})
+    assert factory({**remote, "url": "https://qdrant.example:6333"}).settings.api_key_env
+    local = {"vault": str(repository.root), "api_key_env": "QDRANT_TEST_KEY"}
+    assert factory({**local, "url": "http://127.0.0.1:6333"}).settings.api_key_env  # loopback
+    for bad in ("file:///etc/passwd", "ftp://127.0.0.1/x", "127.0.0.1:9/v1"):
+        with pytest.raises(ValueError, match="http"):
+            EnvEmbedder(bad, model="m", dimension=4)
+    big = _serve(200, {"data": [{"index": 0, "embedding": [0.0] * 4, "pad": "x" * (9 << 20)}]})
+    try:
+        client = EnvEmbedder(
+            f"http://127.0.0.1:{big.server_address[1]}/v1/embeddings", model="m", dimension=4
+        )
+        with pytest.raises(Exception, match="too_large"):
+            client.embed(["q"])
+    finally:
+        big.shutdown()
+        big.server_close()
+
+
 def test_settings_are_checked(tmp_path: Path, fake: FakeQdrant) -> None:
     repository = _vault(tmp_path)
     root = str(repository.root)

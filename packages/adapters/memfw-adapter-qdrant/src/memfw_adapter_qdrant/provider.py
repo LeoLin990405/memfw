@@ -52,6 +52,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
+from urllib.parse import urlsplit
 
 from ._ports import (
     MEMORY_ID_RE,
@@ -65,7 +66,7 @@ from ._ports import (
     is_vault,
 )
 from .embed import EmbedderError, dimension_of, embedder_from_env, fingerprint_of
-from .http import QdrantClient, QdrantError, check_base_url, collection_path
+from .http import QdrantClient, QdrantError, check_base_url, collection_path, is_loopback_host
 from .vault import check_vault_id, configured_vault_id, points_key
 
 __version__ = "0.1.0"
@@ -138,6 +139,8 @@ class Settings:
             api_key_env and not _ENV_NAME.fullmatch(api_key_env)
         ):
             raise ValueError("api_key_env must name an environment variable")
+        if api_key_env and not url.startswith("https://") and not is_loopback_url(url):
+            raise ValueError("an API key is sent to a remote Qdrant over https only")
         raw = settings.get("clearance", DEFAULT_CLEARANCE)
         if not isinstance(raw, str):
             raise ValueError("clearance must be a comma separated string")
@@ -174,6 +177,10 @@ class Settings:
             name=check_name(name, what="provider"),
             vault_id=str(vault_id),
         )
+
+
+def is_loopback_url(url: str) -> bool:
+    return is_loopback_host(urlsplit(url).hostname)
 
 
 def tenant_filter(vault: str, embedder: str, tenant: str) -> dict[str, Any]:
