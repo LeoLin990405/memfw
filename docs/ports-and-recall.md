@@ -96,7 +96,9 @@ do not contain `memfw/__init__.py`, so this does not affect them.
 | `memfw-ports` | 0.2.0 | `ClaimStager` | 1 |
 | `memfw-ports` | 0.2.0 | `ContextSlotProvider` | 1 |
 | `memfw-ports` | 0.2.0 | `UsageSink` | 1 |
+| `memfw-ports` | 0.2.0 | `ModelBackend` | 1 |
 | `memfw-recall` | 0.2.0 | `RecallProvider` | 1 |
+| `memfw-adapter-deepseek` | 0.1.0 | `ModelBackend` | 1 |
 <!-- port-versions:end -->
 
 - **Wheels only.** `uv build --wheel --package memfw-ports` (and `memfw-recall`). An sdist is
@@ -294,7 +296,8 @@ run (`BackendUnavailable(code)`, `BackendBudgetExhausted(code)`) and the `conv-v
 (`render_tag_prompt`, `parse_tagged`, `normalize_tags`). The worker redacts before the call
 and validates plus redacts again after it; a backend only moves text. Backends outside memfw
 (`packages/adapters/memfw-adapter-deepseek`) import this module and nothing else of memfw.
-`check_model_backend(backend)` in `memfw.ports.testing` is the contract: every accepted task
+`MODELS_PORT_VERSION = 1` (in `PORT_VERSIONS`; it ships in the same `0.2.0` ports API as
+`UsageSink`). `check_model_backend(backend)` in `memfw.ports.testing` is the contract: every accepted task
 answers one JSON object (a `conv-v2` tag task matches the tag schema), token counts are
 non-negative integers, the input is not changed, and a task outside `tasks` raises. See
 `docs/conversations-share.md` for the DeepSeek adapter.

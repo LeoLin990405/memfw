@@ -15,6 +15,7 @@ from types import MappingProxyType
 from typing import Final
 
 from .claims import CLAIMS_PORT_VERSION
+from .models import MODELS_PORT_VERSION
 from .usage import USAGE_PORT_VERSION
 
 PORT_VERSIONS: Final[Mapping[str, int]] = MappingProxyType(
@@ -29,6 +30,7 @@ PORT_VERSIONS: Final[Mapping[str, int]] = MappingProxyType(
         "ClaimStager": CLAIMS_PORT_VERSION,
         "ContextSlotProvider": 1,
         "UsageSink": USAGE_PORT_VERSION,
+        "ModelBackend": MODELS_PORT_VERSION,
     }
 )
 

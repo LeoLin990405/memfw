@@ -613,6 +613,8 @@ def check_usage_sink(
     for row in rows:
         for leaf in _string_leaves(dict(row)):
             _require(leaf in allowed, f"stored rows keep text that is not a signal field: {leaf!r}")
+
+
 #: Inputs for :func:`check_model_backend`, one per task (redacted-looking text).
 MODEL_SAMPLES: dict[str, dict[str, object]] = {
     "chunk_summary": {
