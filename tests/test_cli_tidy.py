@@ -39,10 +39,23 @@ TERMINAL_ENV = {
 }
 runner = CliRunner(env=TERMINAL_ENV)
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
+PANEL = re.compile(r"[│╭╮╰╯─]")
 
 
 def _plain(text: str) -> str:
+    """Output without ANSI escapes (JSON on stdout stays parseable)."""
+
     return ANSI.sub("", text)
+
+
+def plain(text: str) -> str:
+    """Text for message checks: no ANSI, no panel borders, whitespace collapsed.
+
+    A rich error panel wraps a long message across bordered lines; this joins
+    it back so ``"existing vault" in plain(result.output)`` holds at any width.
+    """
+
+    return " ".join(PANEL.sub(" ", ANSI.sub("", text)).split())
 
 
 def _vault(tmp_path: Path) -> Repository:
@@ -55,7 +68,7 @@ def _run(*args: str) -> Any:
     result = runner.invoke(app, list(args))
     return SimpleNamespace(
         exit_code=result.exit_code,
-        output=_plain(result.output),
+        output=plain(result.output),
         stdout=_plain(result.stdout),
     )
 
