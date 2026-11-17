@@ -14,6 +14,16 @@ the behaviour before them):
     they always have. ``false`` is the session-safe setting: no search mode
     writes the vault (see ``docs/ports-and-recall.md`` section 4.5).
 
+U6 adds a third, ``runtime.context.current`` (no variable; ``build_runtime``
+``context_current`` overrides it), default ``false``: the ``current`` context
+slot (``memfw.context.current``) is accepted by ``memory_context``, listed in
+its ``slots`` enum and served as ``memfw://context/current``. Off,
+``tools/list``, ``resources/list`` and every pack are byte-identical and the
+slot is unknown. ``runtime.context.current_ttl_days`` (an integer, 0 to
+``MAX_CURRENT_TTL_DAYS``, default ``DEFAULT_CURRENT_TTL_DAYS``) is the lifetime
+of a ``current`` memory without ``valid_to``; any other value fails closed to 0
+(only memories with an explicit ``valid_to`` count).
+
 A set variable wins over ``vault.yaml`` (``1``/``true``/``yes``/``on`` or
 ``0``/``false``/``no``/``off``; any other value refuses to start). The
 section is read on first use and then kept for the Runtime's life (restart
@@ -29,6 +39,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from memfw.context import DEFAULT_CURRENT_TTL_DAYS, MAX_CURRENT_TTL_DAYS
 from memfw.core.errors import MemfwError
 from memfw.core.repository import Repository
 from memfw.ports.usage import APP_RULE, MAX_USAGE_IDS, MEMORY_ID_RULE, SESSION_REF_RULE, UsageSignal
@@ -56,6 +67,10 @@ class RuntimeOptions:
 
     usage_enabled: bool = False
     record_access: bool = True
+    #: U6: the ``current`` context slot exists (``runtime.context.current``).
+    context_current: bool = False
+    #: U6: lifetime in days of a ``current`` memory without ``valid_to``.
+    current_ttl_days: int = DEFAULT_CURRENT_TTL_DAYS
 
 
 def _switch(section: Any, group: str, key: str, default: bool, closed: bool) -> bool:
@@ -70,6 +85,17 @@ def _switch(section: Any, group: str, key: str, default: bool, closed: bool) -> 
     return value if isinstance(value, bool) else closed
 
 
+def _ttl_days(section: Any) -> int:
+    """``runtime.context.current_ttl_days``: the default when absent, 0 when invalid."""
+
+    if not isinstance(section, Mapping) or not isinstance(section.get("context"), Mapping):
+        return DEFAULT_CURRENT_TTL_DAYS
+    value = section["context"].get("current_ttl_days", DEFAULT_CURRENT_TTL_DAYS)
+    if type(value) is not int or not 0 <= value <= MAX_CURRENT_TTL_DAYS:
+        return 0
+    return value
+
+
 def options_from_config(config: Mapping[str, Any]) -> RuntimeOptions:
     """``RuntimeOptions`` from a ``vault.yaml`` mapping (no ``runtime:``: the defaults)."""
 
@@ -77,10 +103,12 @@ def options_from_config(config: Mapping[str, Any]) -> RuntimeOptions:
     return RuntimeOptions(
         usage_enabled=_switch(section, "usage", "enabled", False, False),
         record_access=_switch(section, "search", "record_access", True, False),
+        context_current=_switch(section, "context", "current", False, False),
+        current_ttl_days=_ttl_days(section),
     )
 
 
-#: What a missing vault or an unreadable ``vault.yaml`` gives: closed on both switches.
+#: What a missing vault or an unreadable ``vault.yaml`` gives: closed on every switch.
 CLOSED = RuntimeOptions(usage_enabled=False, record_access=False)
 
 

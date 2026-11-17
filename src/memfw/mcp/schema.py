@@ -388,6 +388,22 @@ _RESOURCE_TEXT = {
         "(memory_context v=2, slot topics; policy strict unless ?policy=compat_fts)."
     ),
 }
+#: U6: the optional ``current`` slot. Not in ``CONTEXT_SLOTS`` or ``RESOURCES``: it is
+#: listed, accepted and readable only while the vault enables it
+#: (``runtime.context.current``), so with it off ``tools/list`` and ``resources/list``
+#: are exactly ``TOOLS`` and ``RESOURCES``.
+CURRENT_CONTEXT_SLOT = "current"
+#: Same default as ``core``: ``memory_context``'s policy (``?policy=strict`` narrows).
+CURRENT_RESOURCE_POLICY = "compat_fts"
+CURRENT_RESOURCE: dict[str, Any] = {
+    "uri": CONTEXT_RESOURCE_PREFIX + CURRENT_CONTEXT_SLOT,
+    "name": f"context/{CURRENT_CONTEXT_SLOT}",
+    "description": (
+        "Short-lived context: memories tagged current that are valid now (valid_to, "
+        "else a TTL from updated_at), newest first (memory_context v=2, slot current)."
+    ),
+    "mimeType": "application/json",
+}
 #: ``resources/list``: one resource per slot. Reading one returns that slot's pack
 #: (``pack_version`` included) under ``RESOURCE_POLICIES`` (or ``?policy=``) and the
 #: default budget.
@@ -400,3 +416,30 @@ RESOURCES: list[dict[str, Any]] = [
     }
     for name in CONTEXT_SLOTS
 ]
+
+
+def memory_context_tool_with_current(tool: dict[str, Any]) -> dict[str, Any]:
+    """A copy of the ``memory_context`` tool whose ``slots`` enum also names ``current``."""
+
+    slots = tool["inputSchema"]["properties"]["slots"]
+    return {
+        **tool,
+        "inputSchema": {
+            **tool["inputSchema"],
+            "properties": {
+                **tool["inputSchema"]["properties"],
+                "slots": {
+                    **slots,
+                    "items": {
+                        **slots["items"],
+                        "enum": [*slots["items"]["enum"], CURRENT_CONTEXT_SLOT],
+                    },
+                    "description": slots["description"]
+                    + (
+                        " current (enabled in this vault): memories tagged current that are "
+                        "valid now, newest first."
+                    ),
+                },
+            },
+        },
+    }
