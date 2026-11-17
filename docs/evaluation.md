@@ -219,8 +219,8 @@ that is degraded (for example `handoff` without `--conversations`:
 **Read-only, by construction.** The snapshot is never opened in place. The
 command refuses a path without `vault.yaml`, a snapshot with an interrupted
 write (`.pending.json`, `.event-append.pending.json`: reading it would need
-`memfw recover`, which writes), an `--out` inside the snapshot and a store
-inside it. It copies the snapshot (without its search index and lock file) to
+`memfw recover`, which writes), a snapshot that contains a symlink (it could
+point outside the copy), an `--out` inside the snapshot and a store inside it. It copies the snapshot (without its search index and lock file) to
 a private temporary directory, runs everything there and deletes it.
 `--conversations` and `--usage` are never opened in place either: each is
 copied with its `-wal`, `-shm` and `-journal` files (when present) into the

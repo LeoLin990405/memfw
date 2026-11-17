@@ -44,7 +44,7 @@ only reports numbers for the defaults to be decided on.
 
 **Read-only.** The snapshot is never opened in place. The evaluation
 refuses a snapshot that would need ``memfw recover`` (a pending transaction
-or event append) and an output path inside it, copies it once into a private
+or event append), one that contains a symlink, and an output path inside it, copies it once into a private
 temporary directory (without its search index and lock file) and runs every
 provider and search there; the copy is deleted afterwards. The snapshot, the
 conversation store and the usage store (with their ``-wal``, ``-shm`` and
@@ -220,7 +220,8 @@ def check_snapshot(vault: Path, *, outputs: Sequence[Path] = ()) -> Path:
 
     Refused: a path that is not a vault (no ``vault.yaml``), a snapshot with
     an interrupted write (reading it would need ``memfw recover``, which
-    writes), and any output path inside the snapshot.
+    writes), a snapshot that contains a symlink (it could point outside the
+    snapshot, at the live vault say), and any output path inside the snapshot.
     """
 
     root = Path(vault).expanduser()
@@ -233,6 +234,10 @@ def check_snapshot(vault: Path, *, outputs: Sequence[Path] = ()) -> Path:
                 "the snapshot has an interrupted write; reading it would need `memfw recover`"
                 " (which writes): take a clean copy"
             )
+    for directory, dirs, files in os.walk(resolved, followlinks=False):
+        for name in [*dirs, *files]:
+            if os.path.islink(os.path.join(directory, name)):
+                raise SnapshotRefused("the snapshot contains a symlink; take a copy without links")
     for output in outputs:
         if _inside(Path(output).expanduser().resolve(), resolved):
             raise SnapshotRefused("an output path is inside the snapshot; write it elsewhere")
@@ -273,13 +278,18 @@ def fingerprint(paths: Iterable[Path | None]) -> str:
 
 
 def private_copy(snapshot: Path, workdir: Path) -> Path:
-    """Copy ``snapshot`` to ``workdir/vault`` (symlinks kept as links), without index or lock."""
+    """Copy ``snapshot`` to ``workdir/vault``, without index or lock.
+
+    ``check_snapshot`` has refused a snapshot with a symlink, so the copy
+    holds regular files only (``symlinks=False``); a link that appears since
+    changes the snapshot's fingerprint, so the run fails with no report.
+    """
 
     def ignore(_directory: str, names: list[str]) -> set[str]:
         return {name for name in names if name in _COPY_IGNORED}
 
     target = workdir / "vault"
-    shutil.copytree(snapshot, target, symlinks=True, ignore=ignore)
+    shutil.copytree(snapshot, target, symlinks=False, ignore=ignore)
     return target
 
 

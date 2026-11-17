@@ -221,9 +221,12 @@ def test_privacy_clearance_and_policy_apply_like_the_slots(tmp_path: Path) -> No
     assert beta["snapshot"] == {"visible": 1}
     # Nothing tells tenant beta that seven more memories exist.
     assert "- memories:" not in render_markdown(beta)
-    assert beta["snapshot"] == evaluate_snapshot(
-        known_vault(tmp_path / "bigger", current=True).vault, options=other
-    )["snapshot"]
+    assert (
+        beta["snapshot"]
+        == evaluate_snapshot(known_vault(tmp_path / "bigger", current=True).vault, options=other)[
+            "snapshot"
+        ]
+    )
     assert beta["sessions"]["hits"] == 0 and beta["sessions"]["hits_dropped"] == 6
 
 
@@ -320,6 +323,19 @@ def test_refuses_a_snapshot_that_needs_recovery(tmp_path: Path) -> None:
     fixture = known_vault(tmp_path)
     (fixture.vault / ".pending.json").write_text("{}", encoding="utf-8")
     with pytest.raises(SnapshotRefused, match="interrupted write"):
+        evaluate_snapshot(fixture.vault, options=CLEARED)
+
+
+@pytest.mark.parametrize("target", ["file", "dir", "dangling"])
+def test_refuses_a_snapshot_with_a_symlink(tmp_path: Path, target: str) -> None:
+    fixture = known_vault(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "x.md").write_text("x", encoding="utf-8")
+    link = fixture.vault / "memories" / "link"
+    pointee = {"file": outside / "x.md", "dir": outside, "dangling": outside / "gone"}[target]
+    link.symlink_to(pointee)
+    with pytest.raises(SnapshotRefused, match="symlink"):
         evaluate_snapshot(fixture.vault, options=CLEARED)
 
 
