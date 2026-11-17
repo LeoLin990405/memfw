@@ -522,16 +522,22 @@ def _memory_metadata(
         raise ServiceError(404, "memory not found")
     # Same answer for a memory the clearance withholds: its existence is not
     # revealed either.
-    if clearance is not None:
-        try:
-            # Bytes, not ``read_text``: universal newlines would hide CRLF.
-            raw = path.read_bytes().decode("utf-8")
-        except (OSError, UnicodeDecodeError):
-            raw = ""
-        level = _library.metadata_privacy(raw, metadata, _library.vault_legacy_privacy(root))
-        if not read_path.admits(clearance, level):
-            raise ServiceError(404, "memory not found")
+    if clearance is not None and not read_path.admits(
+        clearance, _memory_level(root, path, metadata)
+    ):
+        raise ServiceError(404, "memory not found")
     return path, metadata
+
+
+def _memory_level(root: Path, path: Path, metadata: dict[str, Any]) -> str:
+    """Effective privacy level of one memory file (``sensitivity`` included)."""
+
+    try:
+        # Bytes, not ``read_text``: universal newlines would hide CRLF.
+        raw = path.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        raw = ""
+    return str(_library.metadata_privacy(raw, metadata, _library.vault_legacy_privacy(root)))
 
 
 # Contract section 7 fixes this vocabulary; the projection's edge methods map
@@ -1238,6 +1244,20 @@ def _existing_forget_request(
         raise ServiceError(409, "request exists with different content")
 
 
+def _recorded_target_level(base: Path, relative: str) -> str:
+    """The ``target_privacy`` a forget request recorded, ``unknown`` if none.
+
+    A request staged before the field existed, or one whose value is not a
+    privacy level, counts as the most restrictive level (fail closed):
+    ``read_path.admits`` admits ``unknown`` only without a clearance.
+    """
+
+    level = _metadata(base / relative).get("target_privacy")
+    if isinstance(level, str) and level in read_path.PRIVACY_LEVELS:
+        return level
+    return "unknown"
+
+
 def _forget_tenant_prefix(tenant: str) -> str:
     tenant_key = hashlib.sha256(tenant.encode("utf-8")).hexdigest()[:16]
     return f"forget-{tenant_key}-"
@@ -1318,8 +1338,10 @@ def forget_request(
     other memory, source or reason is 409 once the named memory passes the
     visibility check. A hidden target is 404 even when a request for it was
     recorded; once the named memory is gone, only an exact replay of the
-    tenant's own request is ``duplicate: true`` and anything else is the
-    same 404, so a reused ``request_id`` is no existence oracle. The memory file, the event
+    tenant's own request, by a clearance admitting the ``target_privacy``
+    recorded with it (a request without one counts as ``unknown``), is
+    ``duplicate: true`` and anything else is the same 404, so neither a
+    reused ``request_id`` nor a lower clearance gets an existence oracle. The memory file, the event
     log and every projection are left alone; ``deleted`` is always false.
     """
 
@@ -1365,11 +1387,16 @@ def forget_request(
         # reusing a recorded ``request_id`` with a probe memory id must not
         # tell a missing memory from a hidden one.
         _existing_forget_request(base, relative, expected, mismatch_status=404)
+        # And only to a clearance that could have seen the memory: the level
+        # recorded with the request stands in for the deleted file, so a
+        # lower-clearance process replaying it learns nothing either.
+        if not read_path.admits(cleared, _recorded_target_level(base, relative)):
+            raise ServiceError(404, "memory not found")
         return response(True)
     # Visibility first: a memory this caller may not see answers the same 404
     # whether or not a request for it was recorded, so neither a replay nor
     # a 409 reveals that it exists.
-    memory_path, _memory = _memory_metadata(base, values["memory_id"], tenant, clearance=cleared)
+    memory_path, memory = _memory_metadata(base, values["memory_id"], tenant, clearance=cleared)
     if recorded:
         _existing_forget_request(base, relative, expected)
         return response(True)
@@ -1396,6 +1423,10 @@ def forget_request(
         "source": values["source"],
         "reason": values["reason"],
         "target_content_hash": target_hash,
+        # The memory's effective level (sensitivity included) at request
+        # time: once it is deleted, a replay is ``duplicate`` only to a
+        # clearance admitting this level.
+        "target_privacy": _memory_level(base, memory_path, memory),
         "created_at": created_at,
         "recorded_at": created_at,
         "deleted": False,

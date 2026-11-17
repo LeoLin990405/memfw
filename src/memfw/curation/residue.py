@@ -188,6 +188,7 @@ def _count_rows(path: Path, queries: dict[str, tuple[str, str, tuple[Any, ...]]]
     check = StoreCheck(store="", present=path.is_file())
     if not check.present:
         return check
+
     def read(connection: sqlite3.Connection) -> dict[str, int]:
         rows: dict[str, int] = {}
         tables = _tables(connection)
@@ -381,7 +382,9 @@ def list_forget_requests(root: Path | str) -> list[dict[str, Any]]:
     """Deletion requests staged by ``POST /forget``, oldest first. Never applies one.
 
     A file that is a symlink, resolves outside the vault, or has no readable
-    ``forget-request`` header is skipped. ``target_present`` says whether the
+    ``forget-request`` header is skipped. ``target_privacy`` is the memory's
+    privacy level recorded with the request (``None`` for a request staged
+    before it was recorded). ``target_present`` says whether the
     named memory file still exists; ``target_changed`` whether its bytes
     differ from the hash recorded with the request.
     """
@@ -423,6 +426,10 @@ def list_forget_requests(root: Path | str) -> list[dict[str, Any]]:
                 "reason": str(metadata.get("reason") or ""),
                 "status": str(metadata.get("status") or ""),
                 "recorded_at": str(metadata.get("recorded_at") or ""),
+                # ``None`` for a request staged before the field existed.
+                "target_privacy": (
+                    str(metadata["target_privacy"]) if metadata.get("target_privacy") else None
+                ),
                 "path": "/".join((*FORGET_DIRECTORY, path.name)),
                 "target_present": present,
                 "target_changed": changed,

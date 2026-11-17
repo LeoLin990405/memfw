@@ -317,6 +317,7 @@ def test_forget_requests_lists_http_requests(tmp_path: Path) -> None:
             "reason": "asked to",
             "status": "pending",
             "recorded_at": rows[0]["recorded_at"],
+            "target_privacy": "local-private",
             "path": "_candidates/forget/forget-e3b0c44298fc1c14-req-1.md",  # sha256("")[:16]
             "target_present": True,
             "target_changed": False,
