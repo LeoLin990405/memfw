@@ -102,7 +102,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except TreeError as exc:
         print(json.dumps({"error": exc.code}))
         return 1
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         print(json.dumps({"error": "unreadable"}))
         return 1
 

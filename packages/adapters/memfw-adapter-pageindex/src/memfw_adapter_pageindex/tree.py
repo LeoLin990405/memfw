@@ -660,7 +660,8 @@ def load_index(index_dir: Path) -> Index:
             trees.append(tree)
         except TreeError as exc:
             skipped[exc.code] = skipped.get(exc.code, 0) + 1
-        except (OSError, ValueError, UnicodeDecodeError):
+        except (OSError, ValueError, UnicodeDecodeError, RecursionError):
+            # RecursionError: JSON nested too deeply for the parser; skip that tree
             skipped["unreadable"] = skipped.get("unreadable", 0) + 1
     return Index(tuple(trees), skipped)
 

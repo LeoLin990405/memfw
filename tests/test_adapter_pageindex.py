@@ -388,6 +388,21 @@ def test_index_skips_tampered_files(tmp_path: Path) -> None:
     assert dict(loaded.skipped) == {"bad_schema": 1, "bad_node": 1}
 
 
+def test_deeply_nested_json_is_skipped_not_raised(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    index = _index(tmp_path)
+    deep = "[" * 100_000 + "]" * 100_000
+    (index / ("1" * 32 + ".json")).write_text(deep, encoding="utf-8")
+    loaded = load_index(index)
+    assert len(loaded.trees) == 2 and loaded.skipped == {"unreadable": 1}
+    tree_file = tmp_path / "deep.json"
+    tree_file.write_text('{"structure": ' + deep + "}", encoding="utf-8")
+    argv = ["import-tree", "--source", f"att:{ATT}", "--tree", str(tree_file), "--pages", "6"]
+    assert cli_main([*argv, "--sha256", SHA, "--index-dir", str(index)]) == 1
+    assert json.loads(capsys.readouterr().out) == {"error": "unreadable"}
+
+
 def test_refs_are_valid_path_refs_and_encode_unsafe_characters() -> None:
     assert encode_part('a b"#%<>') == "a%20b%22%23%25%3C%3E"
     assert encode_part("中文 标题") == "中文%20标题"
