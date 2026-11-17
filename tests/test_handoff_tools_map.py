@@ -39,6 +39,12 @@ def _call(name: str, args: object) -> dict[str, str]:
         ),
         ("gemini", _call("replace", {"file_path": "/work/demo/c.go"}), "/work/demo/c.go"),
         (
+            "qwen",
+            _call("notebook_edit", {"notebook_path": "/work/demo/q.ipynb", "cell_id": "c1"}),
+            "/work/demo/q.ipynb",
+        ),
+        ("qwen", _call("edit", {"file_path": "/work/demo/q.py"}), "/work/demo/q.py"),
+        (
             "kimi",
             _call("StrReplaceFile", {"path": "/work/demo/d.rs", "old": "z"}),
             "/work/demo/d.rs",
