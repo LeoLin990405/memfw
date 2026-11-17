@@ -1177,6 +1177,10 @@ def _parse_segment_summaries(
             event = Event.model_validate(event_data)
             if keys == _FOREIGN_SUMMARY_ROW_KEYS:
                 event = _foreign_summary_event(row, event, number)
+            elif event.is_foreign_kind:
+                raise IntegrityError(
+                    f"Summary of an unknown event kind lacks its event line at summary {number}"
+                )
             if keys != _LEGACY_SUMMARY_ROW_KEYS:
                 _verify_summary_row(row, event, number)
             object.__setattr__(event, "_compacted", True)
