@@ -218,3 +218,22 @@ def test_end_to_end_from_a_real_reader(tmp_path: Path, isolated_home: Path) -> N
     assert pack["system"]["goal"] == "Rename the config loader."
     assert pack["system"]["files_touched"] == ["/work/demo/src/config.py"]
     assert [turn["role"] for turn in pack["system"]["recent_turns"]] == ["user", "assistant"]
+
+
+def test_cloud_summarize_needs_vault_cloud_and_the_flag(db: Path, tmp_path: Path) -> None:
+    """``--allow-cloud`` can only narrow ``conversations.cloud``, never widen it."""
+
+    from tests.conversation_fixtures import set_config
+
+    spec = "tests.test_conversations_worker:cloud_factory"
+    base = ("claude", "s1", "--summarize", spec, "--format", "json", "--store", str(db))
+    refused = _invoke(*base, "--allow-cloud")  # no vault at all
+    assert refused.exit_code == EXIT_USAGE
+    assert "conversations.cloud: true" in refused.output
+    vault = make_vault(tmp_path / "vault")
+    assert _invoke(*base, "--allow-cloud", "--root", str(vault)).exit_code == EXIT_USAGE
+    set_config(vault, {"conversations": {"cloud": True}})
+    assert _invoke(*base, "--root", str(vault)).exit_code == EXIT_USAGE  # flag still needed
+    allowed = _invoke(*base, "--allow-cloud", "--root", str(vault))
+    assert allowed.exit_code == 0, allowed.output
+    assert json.loads(allowed.stdout)["model_summarized"]["reason"] == "schema"  # it ran

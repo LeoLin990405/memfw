@@ -14,7 +14,7 @@ from typing import Annotated, Any
 import typer
 
 from ..core.errors import MemfwError
-from .backends import BackendRefused, backend_status, cloud_enabled, load_backend
+from .backends import backend_status, gated_loader
 from .policy import OPERATOR
 from .schedule import DEFAULT_INTERVAL, default_log_dir, render
 from .service import open_share, open_worker, read_config
@@ -232,15 +232,7 @@ def worker(
         model = None
         if backend:
             config, _vault = read_config(root)
-            try:
-                model = load_backend(backend, allow_cloud=allow_cloud and cloud_enabled(config))
-            except BackendRefused as exc:
-                if exc.code != "cloud_not_allowed":
-                    raise
-                raise ConversationError(
-                    f"backend {backend} is not local; it needs conversations.cloud: true in"
-                    " vault.yaml and --allow-cloud"
-                ) from None
+            model = gated_loader(config)(backend, allow_cloud=allow_cloud)
         runner = open_worker(
             root,
             backend=model,

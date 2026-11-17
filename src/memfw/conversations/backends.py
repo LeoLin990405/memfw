@@ -90,6 +90,7 @@ __all__ = [
     "cloud_enabled",
     "configured_backend",
     "configured_backfill_days",
+    "gated_loader",
     "estimate_tokens",
     "load_backend",
     "parse_reply",
@@ -421,6 +422,31 @@ def cloud_enabled(config: Mapping[str, Any] | None) -> bool:
     if not isinstance(cloud, bool):
         raise ConversationError("conversations.cloud must be true or false")
     return cloud
+
+
+def gated_loader(config: Mapping[str, Any] | None) -> Callable[..., ModelBackend]:
+    """``load_backend`` for a command-line entry (``--backend``, ``--summarize``).
+
+    A non-local backend needs both the entry's ``--allow-cloud`` flag and
+    ``conversations.cloud: true`` in ``vault.yaml``: the flag can only narrow
+    the vault's switch, never widen it.
+    """
+
+    cloud = cloud_enabled(config)
+
+    def load(spec: str | None, *, allow_cloud: bool = False) -> ModelBackend:
+        try:
+            return load_backend(spec, allow_cloud=allow_cloud and cloud)
+        except BackendRefused as exc:
+            if exc.code != "cloud_not_allowed":
+                raise
+            raise BackendRefused(
+                f"backend {str(spec)[:80]} is not local; it needs conversations.cloud: true in"
+                " vault.yaml and --allow-cloud",
+                exc.code,
+            ) from None
+
+    return load
 
 
 def configured_backfill_days(config: Mapping[str, Any] | None) -> float | None:

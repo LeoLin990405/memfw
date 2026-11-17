@@ -40,7 +40,9 @@ backend_error`). The `[system]` part does not change either way.
 
 - The backend comes from `--summarize module:factory`, loaded the same way
   as the conversation worker's `--backend`. A backend that is not local also
-  needs `--allow-cloud`. The built-in `extractive` backend calls no model,
+  needs `--allow-cloud` and `conversations.cloud: true` in the `vault.yaml` of
+  `--root` (the flag can only narrow the vault's switch; without a vault it is
+  refused). The built-in `extractive` backend calls no model,
   so it is refused here.
 - The backend receives `run("handoff_summary", data, max_tokens=...)` with
   `data = {instructions, schema, goal, turns}`. Only redacted store text goes

@@ -136,7 +136,8 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 - The conversation worker may take its backend from `vault.yaml`
   (`conversations: {backend, cloud, options}`), gated on `cloud: true` and the
   adapter being available; otherwise the run is `degraded` (no fallback). A
-  non-local `--backend` also needs `conversations.cloud: true`. A new prompt
+  non-local `--backend` (and `memfw handoff --summarize`) also needs
+  `conversations.cloud: true`; `--allow-cloud` can only narrow it. A new prompt
   version re-plans only new, changed or last-30-days sessions (wider only with
   `conversations.backfill_days` / `--backfill-days`), newest first.
   `memfw conversations status` shows the configured backend's state.
