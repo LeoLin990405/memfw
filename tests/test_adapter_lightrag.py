@@ -12,6 +12,7 @@ import ast
 import io
 import json
 import pickle
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -46,7 +47,10 @@ from memfw_adapter_lightrag.deriver import (  # noqa: E402
     check_loopback_url,
     graph_rows,
     parse_sources,
+    source_name,
 )
+
+from memfw.ports.reference._vault import read_memory  # noqa: E402
 
 FIXTURE = ROOT / "tests" / "fixtures" / "lightrag_contract" / "exchanges.json"
 RECORDED: dict[str, Any] = json.loads(FIXTURE.read_text(encoding="utf-8"))
@@ -77,10 +81,23 @@ def vault(tmp_path: Path) -> Path:
     }
     for memory_id, text in files.items():
         (root / "memories" / f"{memory_id}.md").write_text(text, encoding="utf-8")
+    NAMES.clear()
+    for memory_id in ("m-backup", "m-release"):
+        NAMES[f"{memory_id}.v3.aaaaaaaaaaaa.md"] = name_of(root, memory_id)
     return root
 
 
 IDS = ("m-backup", "m-release", "m-private", "m-legacy", "m-none")
+#: The fixture names the current m-backup and m-release with the placeholder hash
+#: ``aaaaaaaaaaaa``; the ``vault`` fixture records the real names here, and the fake
+#: server answers with them.
+NAMES: dict[str, str] = {}
+
+
+def name_of(vault: Path, memory_id: str) -> str:
+    memory = read_memory(vault, memory_id)
+    assert memory is not None
+    return source_name(memory, Settings().max_chars)
 
 
 class FakeServer:
@@ -111,7 +128,10 @@ class FakeServer:
         answer = self.routes[f"{request.get_method()} {path}"]
         if isinstance(answer, int):
             raise urllib.error.HTTPError(request.full_url, answer, "error", {}, io.BytesIO(b"{}"))  # type: ignore[arg-type]
-        return io.BytesIO(json.dumps(answer).encode("utf-8"))
+        text = json.dumps(answer)
+        for placeholder, name in NAMES.items():
+            text = text.replace(placeholder, name)
+        return io.BytesIO(text.encode("utf-8"))
 
 
 def make(server: FakeServer | None = None, **settings: Any) -> tuple[LightRagDeriver, FakeServer]:
@@ -211,7 +231,7 @@ def test_answer_outside_the_request_or_without_context_is_refused(
 def test_answer_with_a_private_reference_is_refused(vault: Path) -> None:
     server = FakeServer()
     reply = json.loads(json.dumps(RECORDED["query_answer"]))
-    reply["references"].append({"reference_id": "3", "file_path": "m-private.v1.md"})
+    reply["references"].append({"reference_id": "3", "file_path": "m-private.v1.bbbbbbbbbbbb.md"})
     server.routes["POST /query"] = reply
     with pytest.raises(ValueError, match="outside the request"):
         make(server)[0].derive(vault, query("answer"))
@@ -253,7 +273,11 @@ def test_sync_sends_only_shareable_memories_named_by_id_and_version(vault: Path)
     assert result.inserted == ("m-backup", "m-release")
     assert result.skipped == ("m-private", "m-legacy", "m-none")
     bodies = [request["body"] for request in server.requests]
-    assert [body["file_source"] for body in bodies] == ["m-backup.v3.md", "m-release.v3.md"]
+    assert [body["file_source"] for body in bodies] == [
+        name_of(vault, "m-backup"),
+        name_of(vault, "m-release"),
+    ]
+    assert re.fullmatch(r"m-backup\.v3\.[0-9a-f]{12}\.md", bodies[0]["file_source"])
     assert bodies[0]["text"] == "# m-backup title\n\nThe nightly backup job copies the vault."
     assert PRIVATE_MARKER not in json.dumps(server.requests)
     assert {request["path"] for request in server.requests} == {"/documents/text"}
@@ -401,12 +425,15 @@ def test_registry_loads_it_only_when_enabled(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_source_parsing_is_strict() -> None:
-    assert parse_sources("m-a.v3.md<SEP>m_b.v10.md") == [("m-a", 3), ("m_b", 10)]
+    a, b = "m-a.v3.0123456789ab.md", "m_b.v10.0123456789ab.md"
+    assert parse_sources(f"{a}<SEP>{b}") == [("m-a", a), ("m_b", b)]
     for bad in (
         "",
         None,
         3,
         "m-a.md",
+        "m-a.v3.md",
+        "m-a.v3.0123456789AB.md",
         "../m-a.v3.md",
         "dir/m-a.v3.md",
         "m-a.v3.md<SEP>",
@@ -416,18 +443,18 @@ def test_source_parsing_is_strict() -> None:
 
 
 def test_graph_rows_survive_hostile_shapes() -> None:
-    current = {"m-a": 1}
+    current = {"m-a": "m-a.v1.0123456789ab.md"}
     data = {
         "entities": [
             "not a row",
-            {"entity_name": "", "file_path": "m-a.v1.md"},
+            {"entity_name": "", "file_path": "m-a.v1.0123456789ab.md"},
             {
                 "entity_name": "X" * 500,
                 "entity_type": 7,
                 "description": ["x"],
-                "file_path": "m-a.v1.md",
+                "file_path": "m-a.v1.0123456789ab.md",
             },
-            {"entity_name": "Y", "file_path": "m-a.v2.md"},
+            {"entity_name": "Y", "file_path": "m-a.v2.0123456789ab.md"},
         ],
         "relationships": {"not": "a list"},
     }

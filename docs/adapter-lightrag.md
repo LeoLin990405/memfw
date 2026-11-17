@@ -35,7 +35,9 @@ only for a server you have locked down some other way.
 ## What it sends and reads
 
 - `sync(vault, memory_ids)`: one `POST /documents/text` per memory, body
-  `{"text": "# <title>\n\n<body>", "file_source": "<id>.v<version>.md"}`. Only `public` or
+  `{"text": "# <title>\n\n<body>", "file_source": "<id>.v<version>.<hash>.md"}`, where
+  `<hash>` is the first 12 hex digits of the SHA-256 of that text: every change to a memory,
+  versioned or not, is a new name. Only `public` or
   `shared` memories are sent: the fail-closed reference reader must class a memory `none` and
   its MM0 level must be `public` or `shared`; `local-private`, `unknown`, a `sensitivity:*`
   tag or **no `privacy` field** (MM0 fallback `local-private`) never leaves. Bodies are cut to
@@ -57,7 +59,7 @@ an error or a log.
 ## The server's output is data
 
 LightRAG names a row's sources in `file_path`, several joined with `<SEP>`. A source counts
-only when it parses as `<id>.v<version>.md`, the id is in the request, the memory is still
+only when it parses as `<id>.v<version>.<hash>.md`, the id is in the request, the memory is still
 shareable, and its vault version is still the version that was sent. A **graph** row is kept
 only when every one of its sources counts; anything merged with another document, a private
 memory or a stale version is dropped. An **answer** is refused whole (`ValueError`) when any

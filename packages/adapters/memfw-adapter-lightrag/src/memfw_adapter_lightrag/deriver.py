@@ -6,7 +6,7 @@ adapter talks to it over loopback HTTP only:
 
 * :meth:`LightRagDeriver.sync` offers memories to the server
   (``POST /documents/text``, one per memory). Only ``public`` / ``shared``
-  memories are sent (:mod:`._select`); each is named ``<id>.v<version>.md`` so
+  memories are sent (:mod:`._select`); each is named ``<id>.v<version>.<hash>.md`` so
   every answer can be mapped back to a memory *and* the version that was sent.
 * :meth:`LightRagDeriver.derive` asks a question (``request.options["query"]``)
   and returns a read-only ``DerivedView``: kind ``graph`` from
@@ -30,6 +30,7 @@ in an error. A key value in the settings is refused.
 
 from __future__ import annotations
 
+import hashlib
 import http.client
 import ipaddress
 import json
@@ -70,8 +71,9 @@ USER_AGENT = f"memfw-adapter-lightrag/{__version__}"
 RESPONSE_BYTES = 4 << 20
 #: How LightRAG joins several sources in one ``file_path``.
 SOURCE_SEPARATOR = "<SEP>"
-#: The ``file_source`` this adapter gives a memory: ``<id>.v<version>.md``.
-SOURCE_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_-]{0,127})\.v([0-9]{1,9})\.md$")
+#: The ``file_source`` this adapter gives a memory: ``<id>.v<version>.<hash>.md``, where
+#: ``<hash>`` is the first 12 hex digits of the SHA-256 of the text sent.
+SOURCE_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_-]{0,127})\.v[0-9]{1,9}\.[0-9a-f]{12}\.md$")
 _ENV_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]{0,63}$")
 FORBIDDEN_OPTIONS = frozenset({"api_key", "key", "token", "authorization", "password"})
 
@@ -255,39 +257,53 @@ class LightRagClient:
 # -- sources --------------------------------------------------------------------------------
 
 
-def source_name(memory: MemoryFile) -> str:
-    """The ``file_source`` a memory is sent under (version ``0`` when it has none)."""
+def document_text(memory: MemoryFile, max_chars: int) -> str:
+    """The text ``sync`` sends for a memory: its title as a heading, then the cut body."""
 
-    return f"{memory.memory_id}.v{memory.version() or 0}.md"
+    title = " ".join(memory.text("title").split())
+    body = memory.body[:max_chars]
+    return f"# {title}\n\n{body}" if title else body
 
 
-def parse_sources(file_path: Any) -> list[tuple[str, int]] | None:
-    """``[(memory id, version), ...]`` from a ``file_path``; ``None`` if any part is foreign."""
+def source_name(memory: MemoryFile, max_chars: int) -> str:
+    """The ``file_source`` a memory is sent under: id, version (``0`` if none), text hash.
+
+    The hash makes every change a new name, so a memory without a version
+    still updates, and a view can tell the sent text is still the vault's.
+    """
+
+    digest = hashlib.sha256(document_text(memory, max_chars).encode("utf-8")).hexdigest()
+    return f"{memory.memory_id}.v{memory.version() or 0}.{digest[:12]}.md"
+
+
+def parse_sources(file_path: Any) -> list[tuple[str, str]] | None:
+    """``[(memory id, source name), ...]`` from a ``file_path``; ``None`` if any part is foreign."""
 
     if not isinstance(file_path, str) or not file_path:
         return None
-    out: list[tuple[str, int]] = []
+    out: list[tuple[str, str]] = []
     for part in file_path.split(SOURCE_SEPARATOR):
-        match = SOURCE_RE.fullmatch(part.strip())
+        name = part.strip()
+        match = SOURCE_RE.fullmatch(name)
         if match is None:
             return None
-        out.append((match.group(1), int(match.group(2))))
+        out.append((match.group(1), name))
     return out
 
 
-def _current(memories: Mapping[str, MemoryFile]) -> dict[str, int]:
-    return {memory_id: memory.version() or 0 for memory_id, memory in memories.items()}
+def _current(memories: Mapping[str, MemoryFile], max_chars: int) -> dict[str, str]:
+    return {memory_id: source_name(memory, max_chars) for memory_id, memory in memories.items()}
 
 
-def _sources_ok(file_path: Any, current: Mapping[str, int]) -> list[str] | None:
+def _sources_ok(file_path: Any, current: Mapping[str, str]) -> list[str] | None:
     """The memory ids behind ``file_path`` when every one is requested, visible and current."""
 
     parsed = parse_sources(file_path)
     if not parsed:
         return None
     ids: list[str] = []
-    for memory_id, version in parsed:
-        if current.get(memory_id) != version:
+    for memory_id, name in parsed:
+        if current.get(memory_id) != name:
             return None
         if memory_id not in ids:
             ids.append(memory_id)
@@ -306,7 +322,7 @@ def _short(value: Any, limit: int) -> str:
 
 
 def graph_rows(
-    data: Mapping[str, Any], current: Mapping[str, int], *, max_rows: int
+    data: Mapping[str, Any], current: Mapping[str, str], *, max_rows: int
 ) -> list[dict[str, Any]]:
     """Entity and relationship rows whose every source is requested, visible and current."""
 
@@ -478,16 +494,14 @@ class LightRagDeriver:
         inserted: list[str] = []
         present: list[str] = []
         for memory_id, memory in memories.items():
-            title = " ".join(memory.text("title").split())
-            body = memory.body[: self.settings.max_chars]
-            text = f"# {title}\n\n{body}" if title else body
+            text = document_text(memory, self.settings.max_chars)
             if not text.strip():
                 continue
-            payload = {"text": text, "file_source": source_name(memory)}
+            payload = {"text": text, "file_source": source_name(memory, self.settings.max_chars)}
             try:
                 reply = self.client.call("POST", "/documents/text", payload)
             except LightRagError as exc:
-                if exc.code == "http_409":  # that name (id and version) is already there
+                if exc.code == "http_409":  # that name (id, version, hash) is already there
                     present.append(memory_id)
                     continue
                 raise
@@ -520,7 +534,7 @@ class LightRagDeriver:
         self._ensure()
         query, mode = self._query(request)
         memories = self._memories(vault, request.memory_ids)
-        current = _current(memories)
+        current = _current(memories, self.settings.max_chars)
         payload = {"query": query, "mode": mode, "top_k": self.settings.top_k}
         if request.kind == "graph":
             reply = self.client.call("POST", "/query/data", payload)
@@ -619,6 +633,7 @@ __all__ = [
     "__version__",
     "candidates",
     "check_loopback_url",
+    "document_text",
     "factory",
     "graph_rows",
     "loopback_opener",

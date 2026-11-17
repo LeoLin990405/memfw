@@ -19,12 +19,12 @@
   "references": [
    {
     "content": null,
-    "file_path": "m-backup.v3.md",
+    "file_path": "m-backup.v3.aaaaaaaaaaaa.md",
     "reference_id": "1"
    },
    {
     "content": null,
-    "file_path": "m-release.v3.md",
+    "file_path": "m-release.v3.aaaaaaaaaaaa.md",
     "reference_id": "2"
    }
   ],
@@ -36,7 +36,7 @@
   "references": [
    {
     "content": null,
-    "file_path": "m-backup.v3.md",
+    "file_path": "m-backup.v3.aaaaaaaaaaaa.md",
     "reference_id": "1"
    },
    {
@@ -60,7 +60,7 @@
     {
      "chunk_id": "chunk-1",
      "content": "The nightly backup job copies the vault to the NAS.",
-     "file_path": "m-backup.v3.md",
+     "file_path": "m-backup.v3.aaaaaaaaaaaa.md",
      "reference_id": "1"
     }
    ],
@@ -70,7 +70,7 @@
      "description": "Nightly job that copies the vault to the NAS.",
      "entity_name": "Backup Job",
      "entity_type": "service",
-     "file_path": "m-backup.v3.md",
+     "file_path": "m-backup.v3.aaaaaaaaaaaa.md",
      "reference_id": "1",
      "source_id": "chunk-1"
     },
@@ -79,7 +79,7 @@
      "description": "Storage target of the backup job.",
      "entity_name": "NAS",
      "entity_type": "equipment",
-     "file_path": "m-backup.v3.md",
+     "file_path": "m-backup.v3.aaaaaaaaaaaa.md",
      "reference_id": "1",
      "source_id": "chunk-1"
     },
@@ -88,7 +88,7 @@
      "description": "Shipped in release 0.4.0; also mentioned by the backup notes.",
      "entity_name": "Adapter Registry",
      "entity_type": "concept",
-     "file_path": "m-release.v3.md<SEP>m-backup.v3.md",
+     "file_path": "m-release.v3.aaaaaaaaaaaa.md<SEP>m-backup.v3.aaaaaaaaaaaa.md",
      "reference_id": "2",
      "source_id": "chunk-2<SEP>chunk-1"
     },
@@ -97,7 +97,7 @@
      "description": "Merged with a private document.",
      "entity_name": "Backup Keys",
      "entity_type": "concept",
-     "file_path": "m-backup.v3.md<SEP>m-private.v1.md",
+     "file_path": "m-backup.v3.aaaaaaaaaaaa.md<SEP>m-private.v1.bbbbbbbbbbbb.md",
      "reference_id": "1",
      "source_id": "chunk-1<SEP>chunk-9"
     },
@@ -106,7 +106,7 @@
      "description": "From a version that is no longer current.",
      "entity_name": "Old Release",
      "entity_type": "event",
-     "file_path": "m-release.v2.md",
+     "file_path": "m-release.v2.cccccccccccc.md",
      "reference_id": "3",
      "source_id": "chunk-7"
     },
@@ -131,11 +131,11 @@
    ],
    "references": [
     {
-     "file_path": "m-backup.v3.md",
+     "file_path": "m-backup.v3.aaaaaaaaaaaa.md",
      "reference_id": "1"
     },
     {
-     "file_path": "m-release.v3.md",
+     "file_path": "m-release.v3.aaaaaaaaaaaa.md",
      "reference_id": "2"
     }
    ],
@@ -143,7 +143,7 @@
     {
      "created_at": "2026-11-17 12:00:00",
      "description": "The backup job writes to the NAS.",
-     "file_path": "m-backup.v3.md",
+     "file_path": "m-backup.v3.aaaaaaaaaaaa.md",
      "keywords": "backup, storage",
      "reference_id": "1",
      "source_id": "chunk-1",
@@ -154,7 +154,7 @@
     {
      "created_at": "2026-11-17 12:00:00",
      "description": "Merged with a private document.",
-     "file_path": "m-private.v1.md",
+     "file_path": "m-private.v1.bbbbbbbbbbbb.md",
      "keywords": "keys",
      "reference_id": "5",
      "source_id": "chunk-9",
