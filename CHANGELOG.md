@@ -11,7 +11,7 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
-### Added — read-only Obsidian projection (O1a)
+### Added — read-only Obsidian projection (O1a, #64)
 
 - New `memfw project obsidian --out <dir> [--root <vault>] [--clearance
   public,shared] [--tenant <t>]` writes an Obsidian board: `memories/<id>.md`,
