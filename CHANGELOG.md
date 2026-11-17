@@ -14,6 +14,34 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 
 ## [Unreleased]
 
+### Added — attachment proxies: import format, locators, storage (MM2a)
+
+- `memfw attach proxy import ATT-ID FILE` stores a text proxy (OCR,
+  transcript, keyframes, extract, caption) of an attachment, from a JSON file
+  in the new versioned import format `memfw.proxy` v1 (`memfw.ports.proxies`,
+  documented in `docs/attachment-proxies.md`). `coverage` and
+  `source_sha256` are required, and `source_sha256` must equal the
+  attachment's sha256; `supersedes` replaces an active proxy of the same
+  attachment (`proxy_supersede` event; the old file stays, inactive). Also
+  `attach proxy list`, `show` and `budget`.
+- Locators are stored in canonical units only: PDF points with a bottom-left
+  origin, image pixels with a top-left origin, seconds for audio and video.
+  Producers may write pixels at a DPI, top-left points, fractions or
+  milliseconds (`coordinates`) and memfw converts. Pages, boxes and times
+  outside the declared dimensions are refused and nothing is stored.
+- Proxies live in `attachments/proxies/<prx-id>.md`, default to
+  `local-private`, can never be less private than their attachment, and
+  have their own budget (`attachments_proxy_max_bytes`, 64 MiB): they are
+  excluded from the vault's physical size, so they never make a forgetting
+  policy pick a memory. `fsck` checks them; `memfw recover` removes an
+  uncommitted one. `proxy_add` / `proxy_supersede` events carry
+  `projection: "none"`.
+- Ports API (still the unreleased `0.3.0` that K3 started):
+  `memfw.ports.proxies` (format, `Locator`, conversions, bounds),
+  `memfw.ports.testing.check_proxy_import` for adapters, and the recall ref
+  kind `attachment_segment` (`<prx-id>:<n>`, extra key `locator`) for MM2b.
+- No output changes for a vault without proxies.
+
 ### Added — Qdrant recall adapter
 
 - `packages/adapters/memfw-adapter-qdrant` 0.1.0 (wheel `memfw_adapter_qdrant`):

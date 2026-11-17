@@ -1423,6 +1423,7 @@ class MemoryOperationsMixin:
                     "does not know, marked as never affecting memories; skipped",
                 }
             )
+        issues.extend(cast(Any, self).proxy_fsck_issues())
         return issues
 
 

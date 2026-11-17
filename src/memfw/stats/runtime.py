@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -89,6 +91,26 @@ def measure_logical_breakdown(repository: Repository) -> dict[str, int]:
     return _measure_breakdown(repository, allocated=False)
 
 
+def proxy_path_test(root: Path) -> Callable[[Path], bool]:
+    """A predicate: does a path under ``root`` belong to the separately budgeted proxies?
+
+    Attachment proxies (``attachments/proxies/``) and their search index
+    (``proxy_index.sqlite3``) have their own budget (``memfw attach proxy
+    budget``, design v2.1 "预算"), so they are never part of the vault's
+    physical size and can never make a forgetting policy pick a memory. A
+    string prefix test, so the size scans stay as cheap as before.
+    """
+
+    proxies = os.path.join(str(root), "attachments", "proxies") + os.sep
+    index = os.path.join(str(root), "proxy_index.sqlite3")
+
+    def test(path: Path) -> bool:
+        text = str(path)
+        return text.startswith(proxies) or text.startswith(index)
+
+    return test
+
+
 def _measure_breakdown(repository: Repository, *, allocated: bool) -> dict[str, int]:
     anchor_ids = {
         document.id
@@ -100,12 +122,15 @@ def _measure_breakdown(repository: Repository, *, allocated: bool) -> dict[str, 
         for name in ("events", "history", "memories", "anchors", "archives", "index", "other")
     }
     paths = repository.root.rglob("*") if repository.root.exists() else ()
+    is_proxy = proxy_path_test(repository.root)
     for path in paths:
         if (
             not path.is_file()
             or path.name in {".memfw.lock", ".pending.json"}
             or path.name.endswith(".tmp")
         ):
+            continue
+        if is_proxy(path):
             continue
         parts = path.relative_to(repository.root).parts
         if parts[0] in {"events.jsonl", "events.head", ".log"}:

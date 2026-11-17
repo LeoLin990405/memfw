@@ -14,6 +14,7 @@ from memfw.stats.runtime import (
     measure_logical_breakdown,
     measure_physical_breakdown,
     measure_vault,
+    proxy_path_test,
 )
 
 
@@ -190,16 +191,19 @@ def measure_physical_disk_bytes(root: Path) -> int:
     """Count allocated vault bytes without parsing Markdown, logs, or archives.
 
     This is the physical-budget metric's filesystem primitive. It intentionally
-    excludes transient lock, pending-transaction, and atomic-write temporary files.
+    excludes transient lock, pending-transaction, and atomic-write temporary files,
+    and attachment proxies, which have their own budget (``proxy_path_test``).
     """
 
     allocated = 0
+    is_proxy = proxy_path_test(root)
     if root.exists():
         for path in root.rglob("*"):
             if (
                 path.is_file()
                 and path.name not in {".memfw.lock", ".pending.json"}
                 and not path.name.endswith(".tmp")
+                and not is_proxy(path)
             ):
                 stat = path.stat()
                 allocated += stat.st_blocks * 512 if hasattr(stat, "st_blocks") else stat.st_size

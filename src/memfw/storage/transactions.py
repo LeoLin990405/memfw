@@ -255,6 +255,7 @@ class TransactionMixin:
             attachments_dir = self.root / "attachments"
             if attachments_dir.exists():
                 candidates.extend(attachments_dir.glob("*.md.tmp"))
+                candidates.extend((attachments_dir / "proxies").glob("*.md.tmp"))
             for candidate in candidates:
                 if candidate.exists():
                     candidate.unlink()
@@ -436,6 +437,8 @@ class TransactionMixin:
                 changed.append("events.jsonl")
             if manifest.get("operation") == "add_attachment_record":
                 changed.extend(cast(Any, self)._reconcile_attachment_records(event_list))
+            if manifest.get("operation") == "add_proxy_record":
+                changed.extend(cast(Any, self)._reconcile_proxy_records(event_list))
             if manifest.get("operation") in {"delete", "fsck"}:
                 self.validate_knowledge_cards()
             return changed

@@ -193,9 +193,18 @@ def test_candidate_extra_key_not_in_allowlist(key: str) -> None:
 
 
 def test_candidate_allowlisted_keys() -> None:
-    assert {"why", "score_raw", "rank_raw", "chunk", "page", "t", "lang", "kind"} == set(
-        ALLOWED_EXTRA_KEYS
-    )
+    # ``locator`` (ports 0.3.0, MM2a): an attachment segment's locator fragment.
+    assert {
+        "why",
+        "score_raw",
+        "rank_raw",
+        "chunk",
+        "page",
+        "t",
+        "lang",
+        "kind",
+        "locator",
+    } == set(ALLOWED_EXTRA_KEYS)
 
 
 def test_candidate_non_string_extra_key() -> None:

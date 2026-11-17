@@ -1,0 +1,43 @@
+{
+  "format": "memfw.proxy",
+  "version": 1,
+  "kind": "transcript",
+  "source_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "coverage": {
+    "status": "full",
+    "detail": "00:00-00:42/00:42"
+  },
+  "producer": {
+    "tool": "whisper.cpp",
+    "version": "1.7.2"
+  },
+  "speaker_labels": "unverified",
+  "source": {
+    "duration": 42.0
+  },
+  "coordinates": {
+    "time_unit": "ms"
+  },
+  "segments": [
+    {
+      "text": "We moved the backup to Sunday.",
+      "locator": {
+        "t": [
+          0,
+          4500
+        ]
+      },
+      "speaker": "S1"
+    },
+    {
+      "text": "Because the NAS was busy.",
+      "locator": {
+        "t": [
+          4500,
+          9000
+        ]
+      },
+      "speaker": "S2"
+    }
+  ]
+}

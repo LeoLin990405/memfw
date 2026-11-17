@@ -17,10 +17,14 @@ from memfw.core import invocation
 from memfw.core.errors import MemfwError
 from memfw.core.repository import Repository, open_vault
 
+from .proxy_cli import app as proxy_app
+
 app = typer.Typer(
     help="Attachments: originals kept as blobs outside the vault (add, list, show, verify)",
     no_args_is_help=True,
 )
+
+app.add_typer(proxy_app, name="proxy")
 
 Root = Annotated[Path, typer.Option("--root", "-r", help="Vault directory")]
 

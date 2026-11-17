@@ -1,0 +1,62 @@
+{
+  "format": "memfw.proxy",
+  "version": 1,
+  "kind": "ocr",
+  "source_sha256": "1768ea4775f8fbc5e8607ebb885dc5829c791bd2466391d0c1f79dfecc1f343d",
+  "coverage": {
+    "status": "partial",
+    "detail": "pages 1-2/3"
+  },
+  "producer": {
+    "tool": "paddleocr",
+    "version": "2.9.1"
+  },
+  "created_at": "2026-11-17T08:00:00+00:00",
+  "language": "zh",
+  "source": {
+    "pages": 3,
+    "page_size": [
+      612,
+      792
+    ]
+  },
+  "coordinates": {
+    "unit": "px",
+    "origin": "top-left",
+    "dpi": 144
+  },
+  "segments": [
+    {
+      "text": "Invoice 2026-031 for the backup NAS",
+      "locator": {
+        "page": 1,
+        "bbox": [
+          144,
+          144,
+          1080,
+          216
+        ]
+      },
+      "confidence": 0.97
+    },
+    {
+      "text": "备份 计划 每周一次",
+      "locator": {
+        "page": 2,
+        "bbox": [
+          144,
+          288,
+          720,
+          336
+        ]
+      },
+      "confidence": 0.91
+    },
+    {
+      "text": "Page two, whole page",
+      "locator": {
+        "page": 2
+      }
+    }
+  ]
+}

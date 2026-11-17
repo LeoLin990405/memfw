@@ -312,14 +312,14 @@ MM1a is the base the later steps build on:
   an orphan must not be reclaimed while any committed record is missing or
   unreadable, because records are the only place a blob's sha256 is kept),
   `attach_missing` / `attach_relink` written by `verify` and `relink`.
-* **MM2a/MM2b** (proxies): proxy files next to the record
-  (`attachments/<id>.proxy.<kind>.<n>.md`) with `proxy_add` /
-  `proxy_supersede` events; `verify_attachments` and `record_untracked`
-  currently treat every `*.md` in `attachments/` as a record, so MM2a must
-  teach them the proxy file name. Locator bounds need `pages`, `width`,
-  `height`, `duration` on the record (not written yet). `attachment_search` /
-  `attachment_get` go through `memfw.runtime` and must filter by
-  `AttachmentRecord.privacy_level` with the exit's clearance.
+* **MM2a/MM2b** (proxies): MM2a stores them in `attachments/proxies/`
+  with `proxy_add` / `proxy_supersede` events (see
+  [attachment-proxies.md](attachment-proxies.md)); the record checks only
+  read `attachments/*.md`, so a proxy is never taken for a record. Locator
+  bounds will also use `pages`, `width`, `height`, `duration` once the record
+  carries them. `attachment_search` / `attachment_get` go through
+  `memfw.runtime` and must filter by `AttachmentRecord.privacy_level` with the
+  exit's clearance.
 * **MM3** (`observation` evidence class) is in: see "What counts as evidence"
   in `docs/epistemic-and-experience.md`. Locators resolve at attachment level;
   once MM2 has proxy segments, a segment index can be passed to

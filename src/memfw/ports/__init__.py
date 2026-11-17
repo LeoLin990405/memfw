@@ -18,7 +18,9 @@ the K3 edge projection is stored behind, with the K4 bounded path patterns
 over it (``memfw.ports.patterns``).
 
 ``ContextPack`` (``memfw.ports.context``) is the data contract for the
-session-start context that ``memory_context`` v2 returns.
+session-start context that ``memory_context`` v2 returns, and
+``ProxyImport`` (``memfw.ports.proxies``) the file format an OCR or
+transcription adapter writes for ``memfw attach proxy import``.
 """
 
 from __future__ import annotations
@@ -63,6 +65,20 @@ from .projection_store import (
     edge_visible,
 )
 from .protocols import Deriver, Ingestor, Projector, RecallProvider
+from .proxies import (
+    PROXY_FORMAT,
+    PROXY_FORMAT_VERSION,
+    PROXY_KINDS,
+    CoordinateSpace,
+    Coverage,
+    Locator,
+    ProxyFormatError,
+    ProxyImport,
+    ProxySegment,
+    SourceDimensions,
+    load_proxy_import,
+    parse_proxy_import,
+)
 from .registry import (
     ADAPTER_KINDS,
     ENTRY_POINT_GROUP,
@@ -128,6 +144,9 @@ __all__ = [
     "PORT_VERSIONS",
     "PROJECTION_STORE_PORT_VERSION",
     "POLARITIES",
+    "PROXY_FORMAT",
+    "PROXY_FORMAT_VERSION",
+    "PROXY_KINDS",
     "ClaimEvidence",
     "ClaimStager",
     "ClaimVerifier",
@@ -155,6 +174,8 @@ __all__ = [
     "ContextPack",
     "ContextSlot",
     "ContextSlotProvider",
+    "CoordinateSpace",
+    "Coverage",
     "DeriveRequest",
     "DerivedView",
     "Deriver",
@@ -165,6 +186,7 @@ __all__ = [
     "IdGen",
     "IngestItem",
     "Ingestor",
+    "Locator",
     "Manifest",
     "ModelBackend",
     "ModelReply",
@@ -172,12 +194,16 @@ __all__ = [
     "ProjectionStore",
     "Projector",
     "ProviderUnavailable",
+    "ProxyFormatError",
+    "ProxyImport",
+    "ProxySegment",
     "RecallBudget",
     "RebuildResult",
     "RecallProvider",
     "RefKind",
     "SeededIdGen",
     "SlotRequest",
+    "SourceDimensions",
     "StageResult",
     "StagingError",
     "SystemClock",
@@ -193,8 +219,10 @@ __all__ = [
     "edge_set_version",
     "edge_visible",
     "item_content_hash",
+    "load_proxy_import",
     "missing_modules",
     "pack_version_payload",
+    "parse_proxy_import",
     "register",
     "stage_candidates",
     "validate_candidate",

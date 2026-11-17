@@ -15,12 +15,16 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal, get_args
 
+from .proxies import SEGMENT_REF_RE
+
 #: Mirrors ``memfw.core.epistemic``; ``memfw.ports`` imports nothing else from
 #: memfw so it can ship as a standalone distribution. A test keeps them equal.
 EPISTEMIC_VALUES: tuple[str, ...] = ("experience", "fact", "judgment", "inference")
 CAUSAL_VALUES: tuple[str, ...] = ("none", "association", "hypothesis", "verified")
 
-RefKind = Literal["memory_id", "path"]
+#: ``attachment_segment`` (ports 0.3.0): one segment of an attachment proxy,
+#: ``<prx-id>:<n>`` (``memfw.ports.proxies.SEGMENT_REF_RE``).
+RefKind = Literal["memory_id", "path", "attachment_segment"]
 REF_KINDS: tuple[str, ...] = get_args(RefKind)
 
 #: Scalar values allowed in ``Candidate.extra``.
@@ -31,7 +35,7 @@ ExtraValue = str | int | float | bool | None
 #: is the easiest place to smuggle some. The kernel reads the body from the
 #: vault after resolve and filter.
 ALLOWED_EXTRA_KEYS: frozenset[str] = frozenset(
-    {"why", "score_raw", "rank_raw", "chunk", "page", "t", "lang", "kind"}
+    {"why", "score_raw", "rank_raw", "chunk", "page", "t", "lang", "kind", "locator"}
 )
 
 #: Longest string value in ``Candidate.extra``.
@@ -104,8 +108,10 @@ class RecallBudget:
 class Candidate:
     """One recall hit: an external reference plus a score. Never body text.
 
-    ``ref`` is a memory id (``ref_kind="memory_id"``) or a path the provider
-    indexed (``ref_kind="path"``); a resolver turns it into a memory id.
+    ``ref`` is a memory id (``ref_kind="memory_id"``), a path the provider
+    indexed (``ref_kind="path"``) or a proxy segment (``ref_kind=
+    "attachment_segment"``, ``<prx-id>:<n>``); a resolver turns it into the id
+    the caller reads.
     ``rank`` is 1-based within the provider's own list.
     """
 
@@ -136,7 +142,11 @@ def validate_candidate(candidate: Candidate) -> Candidate:
         raise ValueError(f"ref_kind must be one of {REF_KINDS}")
     if type(ref) is not str or len(ref) > MAX_REF_CHARS:
         raise ValueError("ref must be a string of at most 512 characters")
-    pattern = MEMORY_ID_RE if candidate.ref_kind == "memory_id" else PATH_REF_RE
+    pattern = {
+        "memory_id": MEMORY_ID_RE,
+        "path": PATH_REF_RE,
+        "attachment_segment": SEGMENT_REF_RE,
+    }[candidate.ref_kind]
     if not pattern.fullmatch(ref):
         raise ValueError("ref does not match the id/path pattern")
     score = candidate.score
