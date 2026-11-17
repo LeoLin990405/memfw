@@ -3,7 +3,7 @@
 Run it with the interpreter of a venv that has the wheels and NOT memfw:
 
     python -I tests/standalone/wheel_smoke.py [--recall] [--deepseek] [--bm25s] [--qdrant]
-        [--qmd] [--ocr]
+        [--qmd] [--ocr] [--pageindex]
 
 It refuses to run when ``memfw`` is importable, imports the wheels, and runs
 the contract kit (``memfw_ports.testing``) against the reference
@@ -19,7 +19,9 @@ with ``--qmd``
 the ``memfw-adapter-qmd`` wheel's two recall providers pass
 ``check_recall_provider`` against its loopback fake; with ``--ocr`` the
 ``memfw-adapter-ocr`` wheel's deriver passes ``check_deriver`` with an
-in-process fake engine (no OCR tool). Prints one
+in-process fake engine (no OCR tool); with ``--pageindex`` the
+``memfw-adapter-pageindex`` wheel's provider passes ``check_recall_provider``
+over a tree it builds (titles mode, no model). Prints one
 ``ok`` line per check and exits non-zero on the first failure. Standard
 library only; not collected by pytest (``tests/test_standalone_ports_wheel.py``
 drives it).
@@ -438,6 +440,30 @@ def _ocr(root: Path) -> None:
     _ok("check_deriver OcrDeriver (fake engine)")
 
 
+def _pageindex(root: Path) -> None:
+    """The PageIndex adapter wheel over the memfw-ports wheel (titles mode, no model)."""
+
+    from memfw_adapter_pageindex import PageIndexProvider, Settings, build_markdown_tree, write_tree
+    from memfw_adapter_pageindex import _ports as seam
+    from memfw_ports.testing import check_recall_provider
+    from memfw_ports.types import Candidate
+
+    assert seam.Candidate is Candidate, seam.Candidate
+    _ok("import memfw_adapter_pageindex (ports from memfw_ports)")
+    kh = root / "pageindex-kh"
+    kh.mkdir()
+    (kh / "a.md").write_text("# Backups\n\n## Nightly backup check\n", encoding="utf-8")
+    index = root / "pageindex-index"
+    write_tree(index, build_markdown_tree(kh, "kh:a.md", privacy="shared"))
+    provider = PageIndexProvider(Settings(index_dir=str(index), mode="titles"))
+    seen = check_recall_provider(provider, queries=["nightly backup"], limit=3)
+    assert seen["nightly backup"][0].ref == "kh:a.md#Nightly%20backup%20check", seen
+    _ok("check_recall_provider PageIndexProvider (titles mode)")
+    (kh / "p.md").write_text("---\ntags:\n- privacy:local-private\n---\n# P\n", encoding="utf-8")
+    assert build_markdown_tree(kh, "kh:p.md", privacy="shared")["privacy"] == "local-private"
+    _ok("PageIndex note privacy via PyYAML + metadata_level")
+
+
 def main(argv: list[str]) -> int:
     if importlib.util.find_spec("memfw") is not None:
         print("memfw is importable here; run this in a venv without memfw", file=sys.stderr)
@@ -457,6 +483,8 @@ def main(argv: list[str]) -> int:
             _qmd(root)
         if "--ocr" in argv:
             _ocr(root)
+        if "--pageindex" in argv:
+            _pageindex(root)
     print("standalone wheel smoke passed")
     return 0
 

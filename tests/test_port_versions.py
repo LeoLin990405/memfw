@@ -30,6 +30,7 @@ CONSUMES = {
     "memfw-adapter-qdrant": {"RecallProvider"},
     "memfw-adapter-qmd": {"RecallProvider"},
     "memfw-adapter-ocr": {"Deriver"},
+    "memfw-adapter-pageindex": {"RecallProvider", "ModelBackend"},
 }
 
 

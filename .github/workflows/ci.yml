@@ -26,7 +26,8 @@ jobs:
     # section 1.1); the DeepSeek and QMD adapters run against their loopback
     # fakes only, the bm25s adapter on a throwaway vault with its pinned
     # dependencies, the Qdrant adapter against its loopback FakeQdrant, the OCR
-    # adapter's deriver with an in-process fake engine (no OCR tool)
+    # adapter's deriver with an in-process fake engine (no OCR tool), the
+    # PageIndex adapter's provider on a tree it builds (titles mode, no model)
     # (the versions uv.lock resolves for Python 3.11).
     runs-on: ubuntu-latest
     steps:
@@ -44,7 +45,8 @@ jobs:
       - run: uv build --wheel --package memfw-adapter-qdrant -o "$RUNNER_TEMP/dist"
       - run: uv build --wheel --package memfw-adapter-qmd -o "$RUNNER_TEMP/dist"
       - run: uv build --wheel --package memfw-adapter-ocr -o "$RUNNER_TEMP/dist"
+      - run: uv build --wheel --package memfw-adapter-pageindex -o "$RUNNER_TEMP/dist"
       - run: uv venv --python 3.11 "$RUNNER_TEMP/wheel-venv"
       - run: uv pip install --python "$RUNNER_TEMP/wheel-venv/bin/python" bm25s==0.3.16 jieba==0.42.1 PyYAML==6.0.3 numpy==2.4.6
       - run: uv pip install --python "$RUNNER_TEMP/wheel-venv/bin/python" --no-index "$RUNNER_TEMP"/dist/*.whl
-      - run: '"$RUNNER_TEMP/wheel-venv/bin/python" -I tests/standalone/wheel_smoke.py --recall --deepseek --bm25s --qdrant --qmd --ocr'
+      - run: '"$RUNNER_TEMP/wheel-venv/bin/python" -I tests/standalone/wheel_smoke.py --recall --deepseek --bm25s --qdrant --qmd --ocr --pageindex'
