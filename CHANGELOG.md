@@ -293,7 +293,9 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   and call budget; a backend must declare the `pageindex_tree_search` task.
 - `memfw-pageindex build-md | import-tree | list`: explicit offline tree
   building (Markdown headings) and import (PageIndex PDF output, `text`
-  dropped), stored as `0600` JSON outside the vault.
+  dropped), stored as `0600` JSON outside the vault. A note's privacy is read
+  from its frontmatter with `yaml.safe_load` (`PyYAML==6.0.3`) and
+  `memfw.ports.privacy.metadata_level`; anything unreadable is `local-private`.
 - Registered through the `memfw.adapters` entry point `pageindex`; disabled
   until listed. memfw does not import it; default output is unchanged.
 

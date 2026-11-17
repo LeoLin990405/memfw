@@ -366,10 +366,14 @@ version = "0.1.0"
 source = { editable = "packages/adapters/memfw-adapter-ocr" }
 dependencies = [
     { name = "memfw-ports" },
+    { name = "pyyaml" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "memfw-ports", editable = "packages/memfw-ports" }]
+requires-dist = [
+    { name = "memfw-ports", editable = "packages/memfw-ports" },
+    { name = "pyyaml", specifier = "==6.0.3" },
+]
 
 [[package]]
 name = "memfw-adapter-qdrant"

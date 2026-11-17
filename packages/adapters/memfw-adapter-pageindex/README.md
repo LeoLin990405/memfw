@@ -6,7 +6,8 @@ does: no vectors; a model reads each document's table-of-contents tree and
 names the sections or pages most likely to answer the query. It returns
 those nodes as references, never their text.
 
-Standard library only; depends on `memfw-ports` and nothing else of memfw.
+Depends on `memfw-ports` (nothing else of memfw) and `PyYAML==6.0.3` (MIT),
+which reads a note's frontmatter exactly as memfw does.
 memfw never imports it. Import it as `memfw_adapter_pageindex`.
 
 ## PageIndex: licence, version, what is used
@@ -69,8 +70,10 @@ memfw-pageindex list --index-dir DIR
   privacy level is the strictest of `--privacy` (default `local-private`) and
   the note's own frontmatter, read like the kernel's `metadata_level`:
   `privacy`, every `privacy:*` / `sensitivity:*` tag and a top-level
-  `sensitivity`. The adapter has no YAML parser; a privacy key in any form its
-  small reader does not understand makes the note `local-private`.
+  `sensitivity`. The frontmatter is parsed with `yaml.safe_load` and the level
+  is `memfw.ports.privacy.metadata_level` of it; a YAML error, an unclosed
+  block, frontmatter that is not a mapping, or a `tags` that is not a list
+  makes the note `local-private`.
 - `import-tree` validates PageIndex output (page ranges within `1..N`,
   unique node ids, at most 5000 nodes, depth 12), drops `text`, `doc_name` and
   `doc_description`, and keeps summaries (cut to 300 characters) only with

@@ -148,7 +148,7 @@ def _all_text(tree: Any) -> str:
 
 
 def test_adapter_imports_only_ports_and_stdlib() -> None:
-    allowed_roots = set(sys.stdlib_module_names) | {"memfw_adapter_pageindex"}
+    allowed_roots = set(sys.stdlib_module_names) | {"memfw_adapter_pageindex", "yaml"}
     for path in (ADAPTER_SRC / "memfw_adapter_pageindex").glob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
@@ -168,7 +168,7 @@ def test_memfw_never_imports_the_adapter_and_pins_the_entry_point() -> None:
     for path in (ROOT / "src").rglob("*.py"):
         assert "memfw_adapter_pageindex" not in path.read_text(encoding="utf-8"), path
     project = tomllib.loads((ADAPTER / "pyproject.toml").read_text(encoding="utf-8"))
-    assert project["project"]["dependencies"] == ["memfw-ports==0.3.0"]
+    assert project["project"]["dependencies"] == ["memfw-ports==0.3.0", "PyYAML==6.0.3"]
     points = project["project"]["entry-points"]["memfw.adapters"]
     assert points == {"pageindex": "memfw_adapter_pageindex:adapter_spec"}
     readme = (ADAPTER / "README.md").read_text(encoding="utf-8")
@@ -272,76 +272,142 @@ def test_markdown_tree_has_headings_only_and_strictest_privacy(tmp_path: Path) -
     assert build_markdown_tree(root, "kh:notes/field notes.md")["privacy"] == "local-private"
 
 
-FRONTMATTER_CASES = [
-    ("privacy: shared\n", "shared"),
-    ("tags: [privacy:local-private]\n", "local-private"),
-    ("tags:\n  - project:x\n  - privacy:local-private\n", "local-private"),
-    ("tags: ['sensitivity:private']\n", "local-private"),
-    ("sensitivity: private\n", "local-private"),
-    ("sensitivity: [private]\n", "local-private"),
-    ("sensitivity: confidential\n", "local-private"),  # unknown → fail closed
-    ("tags: [privacy:fleet]\n", "shared"),
-    ("tags: [privacy:none, note]\n", "shared"),
-    ("privacy: public\n", "shared"),  # the note cannot loosen the operator's level
-    ("privacy: Local-Private\n", "local-private"),
-    ("privacy: secret\n", "local-private"),
-    ("title: x\nprivacy:\n", "shared"),  # no value reads as absent, like the kernel
+#: Frontmatter forms a private note may take. Each must come out local-private,
+#: exactly as the kernel's yaml.safe_load + metadata_level reads it.
+PRIVATE_FORMS = [
+    "tags: [privacy:local-private]\n",
+    "tags:\n  - project:x\n  - privacy:local-private\n",
+    "tags:\n- privacy:local-private\n",  # unindented block list (yaml.safe_dump's style)
+    "tags: ['sensitivity:private']\n",
+    "sensitivity: private\n",
+    "sensitivity: [private]\n",
+    "sensitivity: confidential\n",  # unknown: fail closed
+    '"sensitivity": private\n',
+    '"tags": [privacy:local-private]\n',
+    "'privacy': local-private\n",
+    "{privacy: local-private}\n",  # a flow mapping as the whole frontmatter
+    "? privacy\n: local-private\n",  # a complex key
+    "base: &b {privacy: local-private}\n<<: *b\n",  # a merge key
+    "<<: {sensitivity: private}\n",
+    "privacy: Local-Private\n",
+    "privacy: secret\n",
+    "privacy: !!str local-private\n",
+    "privacy: |\n  local-private\n",
+    "privacy: shared\nprivacy: local-private\n",  # a repeated key: the last one wins
+]
+#: Variants of one key (after the bm25s adapter's legacy_privacy_default cases).
+VARIANT_FORMS = [
+    "privacy: public\n",
+    "privacy: 'shared'\n",
+    "privacy: public\n  local-private\n",  # a multi-line plain scalar
+    "privacy: public\nprivacy: local-private\n",
+    "x: [a,\nprivacy: public]\n",  # inside a flow sequence
+    "privacy: |\n  public\n",
+    "privacy: public # note\n",
+    "privacy: PUBLIC\n",
+    "privacy: [public]\n",
+    "privacy: !!str public\n",
+    "privacy: public\n---\nother: 1\n",  # a second document ends the frontmatter
+    "{privacy: public}\n",
+    "",
+]
+#: Not readable as a mapping with list tags: local-private, whatever the kernel would do.
+UNREADABLE_FORMS = [
+    "tags: {privacy: shared}\n",
+    "tags: privacy:shared\n",
+    "privacy: 'shared\n",
+    "privacy: [unclosed\n",
+    "- just\n- a list\n",
+    "just a string\n",
+    "1: x\n",
+    "a: *undefined\n",
 ]
 
 
-@pytest.mark.parametrize(("frontmatter", "expected"), FRONTMATTER_CASES)
-def test_note_privacy_matches_the_kernel_reader(
-    tmp_path: Path, frontmatter: str, expected: str
-) -> None:
+def _kernel_level(frontmatter: str, operator: str) -> str:
+    """What memfw itself makes of this frontmatter (yaml.safe_load + metadata_level)."""
+
     import yaml
 
     from memfw.ports.privacy import metadata_level, strictest
 
+    block = frontmatter.split("\n---\n", 1)[0]
+    meta = yaml.safe_load(block) if block.strip() else None
+    level = strictest([operator, metadata_level(meta or {}, legacy=operator)])
+    return level.replace("unknown", "local-private")
+
+
+def _note(tmp_path: Path, frontmatter: str, name: str = "n.md") -> Path:
+    root = tmp_path / "kh"
+    root.mkdir(exist_ok=True)
+    (root / name).write_text(f"---\n{frontmatter}---\n# Heading\n", encoding="utf-8")
+    return root
+
+
+@pytest.mark.parametrize("frontmatter", PRIVATE_FORMS)
+def test_private_forms_are_local_private_like_the_kernel(tmp_path: Path, frontmatter: str) -> None:
+    tree = build_markdown_tree(_note(tmp_path, frontmatter), "kh:n.md", privacy="public")
+    assert tree["privacy"] == "local-private"
+    assert _kernel_level(frontmatter, "public") == "local-private"
+
+
+@pytest.mark.parametrize("frontmatter", VARIANT_FORMS)
+def test_variants_match_the_kernel_reader(tmp_path: Path, frontmatter: str) -> None:
+    import yaml
+
     root = tmp_path / "kh"
     root.mkdir()
     (root / "n.md").write_text(f"---\n{frontmatter}---\n# Heading\n", encoding="utf-8")
+    try:
+        expected = _kernel_level(frontmatter, "shared")
+    except yaml.YAMLError:
+        expected = "local-private"
     tree = build_markdown_tree(root, "kh:n.md", privacy="shared")
     assert tree["privacy"] == expected
-    kernel = strictest(["shared", metadata_level(yaml.safe_load(frontmatter), legacy="shared")])
-    assert kernel.replace("unknown", "local-private") == expected
+    # the note can only tighten the operator's level, never loosen it
+    assert tree["privacy"] in ("shared", "local-private")
 
 
-@pytest.mark.parametrize(
-    "frontmatter",
-    [
-        "tags: {privacy: shared}\n",
-        "tags: privacy:shared\n",  # a scalar the kernel would ignore: fail closed
-        "tags: &a [x]\n",
-        "tags: [x, [y]]\n",
-        "privacy: shared\nprivacy: public\n",
-        "tags:\n  - x\n  other: y\n",
-        "privacy: >\n  shared\n",
-        "privacy: 'shared\n",
-    ],
-)
-def test_unreadable_privacy_keys_fail_closed(tmp_path: Path, frontmatter: str) -> None:
-    root = tmp_path / "kh"
-    root.mkdir()
-    (root / "n.md").write_text(f"---\n{frontmatter}---\n# Heading\n", encoding="utf-8")
-    tree = build_markdown_tree(root, "kh:n.md", privacy="public")
+@pytest.mark.parametrize("frontmatter", UNREADABLE_FORMS)
+def test_unreadable_frontmatter_fails_closed(tmp_path: Path, frontmatter: str) -> None:
+    tree = build_markdown_tree(_note(tmp_path, frontmatter), "kh:n.md", privacy="public")
     assert tree["privacy"] == "local-private"
     assert [n["title"] for n in tree["structure"]] == ["Heading"]
 
 
-def test_tagged_private_note_never_reaches_a_cloud_backend(tmp_path: Path) -> None:
+def test_unclosed_frontmatter_fails_closed(tmp_path: Path) -> None:
     root = tmp_path / "kh"
     root.mkdir()
-    (root / "t.md").write_text(
-        "---\ntags: [privacy:local-private]\n---\n# Drift secret plan\n", encoding="utf-8"
-    )
-    (root / "s.md").write_text("---\nsensitivity: private\n---\n# Drift other\n", encoding="utf-8")
+    (root / "n.md").write_text("---\ntitle: x\n# Heading\n", encoding="utf-8")
+    assert build_markdown_tree(root, "kh:n.md", privacy="public")["privacy"] == "local-private"
+
+
+def test_notes_without_frontmatter_take_the_operators_level(tmp_path: Path) -> None:
+    root = tmp_path / "kh"
+    root.mkdir()
+    (root / "n.md").write_text("# Heading\n", encoding="utf-8")
+    assert build_markdown_tree(root, "kh:n.md", privacy="shared")["privacy"] == "shared"
+
+
+def test_private_forms_never_reach_a_cloud_backend(tmp_path: Path) -> None:
     index = tmp_path / "index"
-    for ref in ("kh:t.md", "kh:s.md"):
-        write_tree(index, build_markdown_tree(root, ref, privacy="shared"))
+    root = tmp_path / "kh"
+    root.mkdir()
+    for number, frontmatter in enumerate(PRIVATE_FORMS + UNREADABLE_FORMS):
+        (root / f"p{number}.md").write_text(
+            f"---\n{frontmatter}---\n# Drift secret {number}\n", encoding="utf-8"
+        )
+        write_tree(index, build_markdown_tree(root, f"kh:p{number}.md", privacy="shared"))
     cloud = RecordedBackend('{"node_ids": []}', local=False)
     provider = _provider(index, cloud, cloud=True)
     assert provider.search("drift", limit=3, budget=RecallBudget(), tenant="", as_of=None) == []
     assert cloud.calls == []  # nothing sendable: no request at all
+    (root / "open.md").write_text("---\nprivacy: shared\n---\n# Drift open\n", encoding="utf-8")
+    write_tree(index, build_markdown_tree(root, "kh:open.md", privacy="shared"))
+    provider.search("drift", limit=3, budget=RecallBudget(), tenant="", as_of=None)
+    (call,) = cloud.calls
+    sent = json.dumps(call[1], ensure_ascii=False)
+    assert "Drift open" in sent and "secret" not in sent
 
 
 def test_markdown_paths_are_confined(tmp_path: Path) -> None:
