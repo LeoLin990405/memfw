@@ -677,6 +677,7 @@ def _multimodal_case(
     index: int, case: dict[str, Any], corpus: dict[str, Any], workdir: Path
 ) -> MultimodalCaseResult:
     import base64
+    import hashlib
     import urllib.parse
 
     from .core.errors import IntegrityError
@@ -693,23 +694,16 @@ def _multimodal_case(
     config["attachments_blob_root"] = str((base / "blobs").resolve())
     repository.configure(config)
     facts: dict[str, dict[str, str]] = {}
+    originals: dict[str, Path] = {}
     for key, spec in corpus["attachments"].items():
         data = str(spec["text"]).encode("utf-8")
         source = sources / str(spec["name"])
         source.write_bytes(data)
         copy = copies / str(spec["name"])
         copy.write_bytes(data)
-        record = repository.add_attachment(
-            source, media_type=str(spec["media_type"]), embed=True
-        ).record
-        store = repository.attachment_blob_store()
-        assert store is not None
-        blob = store.directory / record.sha256[:2] / record.sha256
-        sha = record.sha256
+        originals[key] = source
+        sha = hashlib.sha256(data).hexdigest()
         facts[key] = {
-            "att": f"att:{record.id}",
-            "id": record.id,
-            "ID": record.id.upper(),
             "sha": sha,
             "SHA": sha.upper(),
             "sha16": sha[:16],
@@ -722,21 +716,53 @@ def _multimodal_case(
             "rel": f"../copies/{spec['name']}",
             "file": str(copy.resolve()),
             "file_pct": urllib.parse.quote(str(copy.resolve()), safe=""),
-            "blob": str(blob),
         }
 
     def fill(text: str) -> str:
         return _PLACEHOLDER.sub(lambda match: facts[match.group(2)][match.group(1)], text)
 
-    attempt: dict[str, Any] = json.loads(json.dumps(corpus["claim"]))
-    attempt.update(case.get("set") or {})
-    attempt["evidence"] = [fill(str(item)) for item in case.get("evidence") or []]
+    def claim(spec: dict[str, Any]) -> dict[str, Any]:
+        values: dict[str, Any] = json.loads(json.dumps(corpus["claim"]))
+        values.update(spec.get("set") or {})
+        values["evidence"] = [fill(str(item)) for item in spec.get("evidence") or []]
+        return values
+
+    def register() -> None:
+        for key, spec in corpus["attachments"].items():
+            record = repository.add_attachment(
+                originals[key], media_type=str(spec["media_type"]), embed=True
+            ).record
+            store = repository.attachment_blob_store()
+            assert store is not None
+            facts[key].update(
+                att=f"att:{record.id}",
+                id=record.id,
+                ID=record.id.upper(),
+                blob=str(store.directory / record.sha256[:2] / record.sha256),
+            )
+
+    # ``prior`` (update cases): a memory written first, before the originals
+    # are registered when ``before_attachments`` (the legacy rule), then
+    # changed by ``update``.
+    prior = case.get("prior")
+    prior_id: str | None = None
+    if prior is not None and prior.get("before_attachments"):
+        prior_id = repository.add(**claim(prior), memory_type="claim").id
+    register()
+    if prior is not None and prior_id is None:
+        prior_id = repository.add(**claim(prior), memory_type="claim").id
     accepted = False
     epistemic: str | None = None
     causal: str | None = None
     error: str | None = None
     try:
-        document = repository.add(**attempt, memory_type="claim")
+        if prior_id is not None:
+            changes = dict(case.get("update") or {})
+            if "evidence" in changes:
+                changes["evidence"] = [fill(str(item)) for item in changes["evidence"]]
+            document = repository.update(prior_id, **changes)
+        else:
+            document = repository.add(**claim(case), memory_type="claim")
         accepted = True
         epistemic, causal = document.epistemic, document.causal
     except (IntegrityError, ValueError, TypeError) as exc:

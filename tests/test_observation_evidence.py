@@ -638,11 +638,13 @@ def test_multimodal_corpus_has_no_spurious_upgrade(tmp_path: Path) -> None:
     assert payload["fact_upgrades"] == 0
     assert payload["false_accepts"] == 0
     assert payload["false_rejects"] == 0
-    assert payload["bypass_attempts"] >= 15
+    assert payload["bypass_attempts"] >= 24
     assert payload["bypasses_blocked"] == payload["bypass_attempts"]
     groups = payload["groups"]
     assert groups["spurious"]["accepted"] == 0
     assert groups["control"]["accepted"] == groups["control"]["cases"]
+    # Legacy: the two body edits are kept; every raise or drop is refused.
+    assert groups["legacy"] == {"cases": 6, "accepted": 2}
 
 
 def test_multimodal_corpus_is_package_data() -> None:
@@ -654,6 +656,7 @@ def test_multimodal_corpus_is_package_data() -> None:
         "bypass",
         "hygiene",
         "control",
+        "legacy",
     }
 
 

@@ -175,10 +175,15 @@ claim through `Repository.add`. Groups:
   deploy, latency dropped" screenshot, "because we warmed the cache" in a recording, a
   chart on a PDF page, a video keyframe, several observations together);
 * `bypass` — the same original cited without `att:`: `sha256:` (full, uppercase, prefix,
-  with U+200B inside), `file:` (a copy, the blob, `FILE://localhost`, percent-encoded),
+  with U+200B, tabs, commas or a slash inside, base64, base64url), `data:sha256-<b64>`
+  (SRI), relative `data:`/`dataset:` paths, `[text](att:…)` link syntax, `file:` (a copy, the blob, `FILE://localhost`, percent-encoded),
   `ATT:`/`%61tt:`, the id or hash inside a `result:`/`experiment:` pointer, `kh:` to a PDF;
 * `hygiene` — a missing attachment, a locator that does not fit the media type, an
   inverted time range;
+* `legacy` — update cases: a memory written first (for the legacy rule, before its
+  originals are registered), then changed. A body edit of a grandfathered `verified`
+  or `fact` memory is accepted; raising a level, turning an observed `experience` into
+  a `fact`, or dropping the raw data a `fact` rested on is refused;
 * `control` — what must still be accepted: an `experience` or `hypothesis` from an
   observation, an agent hypothesis, an identified analysis with replayable data that
   also cites the screenshot, a `file:` pointer that names no attachment.
