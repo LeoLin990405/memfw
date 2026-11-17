@@ -70,10 +70,13 @@ def validate_attachment_config(raw: dict[str, Any]) -> None:
                 raise ValueError
         except ValueError:
             raise IntegrityError("vault_id must be a lowercase UUID string") from None
-    if BLOB_ROOT_KEY in raw and (
-        not isinstance(raw[BLOB_ROOT_KEY], str) or not raw[BLOB_ROOT_KEY].strip()
-    ):
-        raise IntegrityError(f"{BLOB_ROOT_KEY} must be a non-empty path string")
+    if BLOB_ROOT_KEY in raw:
+        root = raw[BLOB_ROOT_KEY]
+        if not isinstance(root, str) or not root.strip():
+            raise IntegrityError(f"{BLOB_ROOT_KEY} must be a non-empty path string")
+        # A relative root would resolve against the working directory of each command.
+        if not (root.startswith("~") or Path(root).is_absolute()):
+            raise IntegrityError(f"{BLOB_ROOT_KEY} must be an absolute or ~-prefixed path")
     for key in (MAX_BYTES_KEY, MAX_TOTAL_KEY):
         value = raw.get(key)
         if key in raw and (isinstance(value, bool) or not isinstance(value, int) or value < 1):

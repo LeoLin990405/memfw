@@ -437,6 +437,9 @@ def test_config_keys_are_validated(tmp_path: Path) -> None:
         ("attachments_max_bytes", 0),
         ("attachments_max_total_bytes", True),
         ("attachments_blob_root", ""),
+        ("attachments_blob_root", "blobs"),
+        ("attachments_blob_root", "./blobs"),
+        ("attachments_blob_root", "../outside/blobs"),
     ):
         config = repository.read_config()
         config[key] = value
@@ -824,3 +827,25 @@ def test_a_refused_blob_root_writes_nothing(tmp_path: Path) -> None:
         assert not refused.exists()
     assert not repository.pending_path.exists()
     assert not (repository.root / ATTACHMENTS_DIR).exists()
+
+
+def test_blob_root_must_be_absolute_or_home_relative(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, private_home: Path
+) -> None:
+    repository = _repo(tmp_path)
+    config = repository.read_config()
+    config["attachments_blob_root"] = "relative/blobs"
+    with pytest.raises(IntegrityError, match="absolute"):
+        repository.configure(config)
+    # A hand-edited relative root fails closed instead of following the CWD.
+    text = repository.config_path.read_text() + "attachments_blob_root: relative/blobs\n"
+    repository.config_path.write_text(text)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(IntegrityError, match="absolute"):
+        repository.add_attachment(_file(tmp_path, "a.txt", b"a"))
+    assert not (tmp_path / "relative").exists()
+    # ~-prefixed and absolute roots are accepted.
+    repository.config_path.write_text(text.replace("relative/blobs", "~/blob-root"))
+    record = repository.add_attachment(_file(tmp_path, "b.txt", b"b")).record
+    assert _blob_dir(repository).parent == (private_home / "blob-root").resolve()
+    assert repository.verify_attachments() == ([record.id], [])
