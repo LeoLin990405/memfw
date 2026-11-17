@@ -67,7 +67,8 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   optional `--acyclic`), filtered by tenant, clearance (default
   `public,shared`) and sources, with every memory re-checked against the live
   vault; a hidden node never shows and a hidden start answers like a missing
-  one. New L0 port `ProjectionStore` (`rebuild`/`version`/`query`, contract
+  one. New L0 port `ProjectionStore` (`rebuild`/`version`/`query` with a
+  keyset `after` cursor so a match pages past hidden edges, contract
   `check_projection_store`, SQLite and in-memory implementations) and
   `memfw.ports.patterns`; `PORTS_API_VERSION` and the `memfw-ports` /
   `memfw-recall` wheels move to 0.3.0. No MCP tool; existing outputs are

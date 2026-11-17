@@ -14,8 +14,10 @@ from collections.abc import Collection, Iterable
 from ..projection_store import (
     Direction,
     Edge,
+    EdgeKey,
     EdgeScope,
     RebuildResult,
+    check_after,
     check_query,
     checked_edges,
     edge_set_version,
@@ -57,11 +59,20 @@ class MemoryProjectionStore:
         direction: Direction = "out",
         relations: Collection[str] | None = None,
         limit: int = 100,
+        after: EdgeKey | None = None,
     ) -> tuple[Edge, ...]:
-        names = check_query(scope, node, direction, relations, limit)
+        names = check_query(scope, node, direction, relations, limit, after)
         with self._lock:
             rows = self._edges or ()
-        return select(rows, scope, node=node, direction=direction, relations=names, limit=limit)
+        return select(
+            rows,
+            scope,
+            node=node,
+            direction=direction,
+            relations=names,
+            limit=limit,
+            after=check_after(after),
+        )
 
 
 __all__ = ["MemoryProjectionStore"]

@@ -838,6 +838,49 @@ def _check_answers(store: ProjectionStore, edges: Sequence[Edge]) -> None:
                     )
 
 
+def _check_paging(store: ProjectionStore, edges: Sequence[Edge]) -> None:
+    """Paging with ``after`` (one edge per page) yields exactly the unpaged answer."""
+
+    directions: tuple[Direction, ...] = ("out", "in")
+    for scope in SAMPLE_SCOPES:
+        for node in _nodes(edges):
+            for direction in directions:
+                want = select(
+                    edges, scope, node=node, direction=direction, relations=None, limit=100
+                )
+                got: list[Edge] = []
+                cursor: tuple[str, str, str] | None = None
+                for _ in range(len(edges) + 1):
+                    page = store.query(scope, node=node, direction=direction, limit=1, after=cursor)
+                    if not page:
+                        break
+                    got.extend(page)
+                    cursor = page[-1].key
+                _require(
+                    tuple(got) == want,
+                    f"paging {node} {direction} with after= gave {[e.key for e in got]}, "
+                    f"not {[e.key for e in want]}",
+                )
+    # A cursor that is no stored key (or a hidden edge's key) still pages by key order.
+    scope = EdgeScope("", frozenset({"public"}))
+    for edge in edges:
+        want = tuple(
+            row
+            for row in select(
+                edges, scope, node=edge.source, direction="out", relations=None, limit=100
+            )
+            if row.key > edge.key
+        )
+        got_after = store.query(scope, node=edge.source, direction="out", after=edge.key)
+        _require(got_after == want, f"after={edge.key} did not skip to the next key")
+    for bad in ("x", ("a", "b"), ("a", "b", 3)):
+        try:
+            store.query(scope, node=edges[0].source, after=bad)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            continue
+        raise ContractError(f"query() accepted after={bad!r}")
+
+
 def check_projection_store(
     store: ProjectionStore,
     *,
@@ -857,6 +900,9 @@ def check_projection_store(
       :func:`memfw.ports.projection_store.select` returns: tenant and
       clearance filtered (a private or ``unknown`` endpoint hides the edge,
       another tenant never shows), sorted by key;
+    - paging one edge at a time with ``after`` (the last key of the previous
+      page) gives the same edges as one unpaged query, a cursor that is not a
+      stored key skips to the next key, and a malformed cursor is refused;
     - ``limit`` is respected and out-of-range limits, a non-``EdgeScope``
       scope and a bad direction are refused;
     - a duplicate key or a non-``Edge`` raises and keeps the old content;
@@ -878,6 +924,7 @@ def check_projection_store(
     again = store.rebuild(list(reversed(edges)))
     _require(again.version == expected, "the same edges in another order changed the version")
     _check_answers(store, edges)
+    _check_paging(store, edges)
 
     scope = EdgeScope("", frozenset({"public", "shared", "local-private"}))
     hub = max(_nodes(edges), key=lambda node: (sum(e.source == node for e in edges), node))

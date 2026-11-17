@@ -311,15 +311,19 @@ typed-edge projection: rows are `Edge` values (relation, both ends with their ki
 privacy level, the vault field, validity and the relation's `epistemic_max`). `rebuild(edges)`
 replaces the whole content (duplicate keys or non-`Edge` values raise and keep the old content),
 `version()` is `None` before the first rebuild and then `edge_set_version(edges)` (the same in
-every implementation), and `query(scope, *, node, direction, relations, limit)` returns the edges
-at `node` that `edge_visible` admits for an `EdgeScope(tenant, clearance)`, sorted by key. The
+every implementation), and `query(scope, *, node, direction, relations, limit, after=None)`
+returns the edges at `node` that `edge_visible` admits for an `EdgeScope(tenant, clearance)`,
+sorted by key, at most `limit` (1..`MAX_QUERY_LIMIT`). `after` is a keyset cursor (an
+`Edge.key`, normally the last of the previous page): only edges whose key sorts after it come
+back, so a caller pages through a node with more visible edges than one page holds. The
 clearance is required: a store can never be asked for everything, a private or `unknown`
 endpoint hides the edge, and another tenant's endpoint never shows.
 
 Implementations: `memfw.edges.SqliteProjectionStore` (`~/.local/share/memfw/edges/<key>.sqlite3`, outside the vault, mode 0600) and
 `MemoryProjectionStore` in `memfw.ports.reference`. `check_projection_store(store, *, vault=None,
 vault_exclude=(), edges=SAMPLE_EDGES)` is the contract (answers equal the reference `select` for
-every node, direction and `SAMPLE_SCOPES` scope; deletion on rebuild; refusals).
+every node, direction and `SAMPLE_SCOPES` scope; paging with `after` gives the unpaged answer;
+deletion on rebuild; refusals).
 `PROJECTION_STORE_PORT_VERSION = 1`; the ports API moves to `0.3.0`.
 
 `memfw.ports.patterns` (K4) parses a bounded path (`about>broader*1..2><about`) and matches it

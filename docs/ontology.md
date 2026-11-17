@@ -220,8 +220,12 @@ canonical spelling). Examples: `about><about` (memories that share a concept),
   bounds add up to at most **4 hops**.
 - `--fanout` (default 50, at most 200) neighbours per node and step, sorted
   by edge key; at most 2000 store queries and 10 000 collected paths per
-  match; `--limit` (default 20, at most 100) paths returned. Hitting any cap
-  sets `truncated`.
+  match; `--limit` (default 20, at most 100) paths returned. A node's
+  neighbours are read page by page (the port's `after` cursor) until
+  fan-out + 1 visible ones are found, so hidden edges never crowd out visible
+  ones. `truncated` means a visible result was cut (more than `--fanout`
+  visible neighbours, more than `--limit` paths) or a query/collection cap
+  ran out; hidden edges never set it.
 - Paths are sorted by length, then node ids, then edge keys: the same edges
   and path give the same answer from every store.
 - `--from` is a memory id (`memory:`/`mem:` prefix allowed), a concept oid or

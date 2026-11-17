@@ -29,7 +29,12 @@ relation walked the other way (``<superseded_by``, ``<broader``).
   unbounded ``*`` and no predicate;
 - each node expands at most ``fanout`` neighbours per step (sorted by edge
   key), at most ``max_expansions`` store queries run, and at most ``limit``
-  paths are returned. Hitting any cap sets ``truncated``;
+  paths are returned. A node's neighbours are read page by page (the
+  port's ``after`` cursor) until ``fanout`` + 1 visible ones are found or the
+  store has no more, so hidden edges never crowd out visible ones.
+  ``truncated`` is set only when a visible result was cut: more than
+  ``fanout`` visible neighbours, more than ``limit`` paths, or a cap on
+  queries or collected paths ran out. Hidden edges never set it;
 - results are sorted by length, then node ids, then edge keys, so the same
   edges and pattern give the same answer.
 
@@ -49,6 +54,7 @@ from .projection_store import (
     MAX_QUERY_LIMIT,
     Direction,
     Edge,
+    EdgeKey,
     EdgeScope,
     ProjectionStore,
 )
@@ -240,6 +246,46 @@ def match(
     steps = pattern.steps
     found: list[MatchedPath] = []
     state = {"expansions": 0, "truncated": False}
+    page_size = min(MAX_QUERY_LIMIT, max(fanout + 1, 100))
+
+    def neighbours_of(
+        node: str, step: Step, used: set[tuple[str, str, str]], visited: set[str]
+    ) -> list[tuple[Edge, str, str]]:
+        """Up to ``fanout`` visible neighbours, paging past hidden edges."""
+
+        out: list[tuple[Edge, str, str]] = []
+        cursor: EdgeKey | None = None
+        while True:
+            rows = store.query(
+                scope,
+                node=node,
+                direction=step.direction,
+                relations=(step.relation,),
+                limit=page_size,
+                after=cursor,
+            )
+            for edge in rows:
+                if edge.key in used:
+                    continue
+                if step.direction == "out":
+                    nxt, kind = edge.target, edge.target_kind
+                else:
+                    nxt, kind = edge.source, edge.source_kind
+                if acyclic and nxt in visited:
+                    continue
+                if node_ok is not None and not node_ok(nxt, kind):
+                    continue
+                out.append((edge, nxt, kind))
+                if len(out) > fanout:
+                    state["truncated"] = True  # a visible neighbour is cut
+                    return out[:fanout]
+            if len(rows) < page_size:
+                return out  # the store has no more
+            if state["expansions"] >= max_expansions:
+                state["truncated"] = True  # the query cap ran out mid-node
+                return out
+            state["expansions"] += 1
+            cursor = rows[-1].key
 
     def walk(
         index: int,
@@ -253,33 +299,9 @@ def match(
             return
         state["expansions"] += 1
         step = steps[index]
-        rows = store.query(
-            scope,
-            node=node,
-            direction=step.direction,
-            relations=(step.relation,),
-            limit=MAX_QUERY_LIMIT,
-        )
-        if len(rows) >= MAX_QUERY_LIMIT:
-            state["truncated"] = True
         used = {edge.key for edge in edges}
         visited = {item for item, _kind in nodes}
-        neighbours: list[tuple[Edge, str, str]] = []
-        for edge in rows:
-            if edge.key in used:
-                continue
-            if step.direction == "out":
-                nxt, kind = edge.target, edge.target_kind
-            else:
-                nxt, kind = edge.source, edge.source_kind
-            if acyclic and nxt in visited:
-                continue
-            if node_ok is not None and not node_ok(nxt, kind):
-                continue
-            neighbours.append((edge, nxt, kind))
-        if len(neighbours) > fanout:
-            state["truncated"] = True
-            neighbours = neighbours[:fanout]
+        neighbours = neighbours_of(node, step, used, visited)
         for edge, nxt, kind in neighbours:
             hops = taken + 1
             path_nodes = (*nodes, (nxt, kind))

@@ -610,6 +610,105 @@ def test_hidden_neighbours_do_not_use_up_the_fanout(tmp_path: Path) -> None:
     assert _ids(payload) == [["concept:hub", "m-z"]] and payload["truncated"] is False
 
 
+def _hub_edges(hidden: int, visible: int) -> list[Edge]:
+    """``hidden`` memories (sorting first) and ``visible`` ones, all ``about`` one hub."""
+
+    def about(memory_id: str) -> Edge:
+        return Edge(
+            "about",
+            memory_id,
+            "concept:hub",
+            "memory",
+            "concept",
+            "about",
+            source_tenant="",
+            source_privacy="public",
+        )
+
+    return [about(f"m-a{i:05d}") for i in range(hidden)] + [
+        about(f"m-z{i:02d}") for i in range(visible)
+    ]
+
+
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
+def test_live_hidden_rows_beyond_one_page_never_hide_visible_neighbours(
+    tmp_path: Path, kind: str
+) -> None:
+    """1500 store-visible but live-hidden neighbours sort before 3 visible ones."""
+
+    store: ProjectionStore = (
+        MemoryProjectionStore()
+        if kind == "memory"
+        else SqliteProjectionStore(tmp_path / "out" / "edges.sqlite3")
+    )
+    store.rebuild(_hub_edges(1500, 3))
+    scope = EdgeScope("", EVERY)
+
+    def live(node: str, node_kind: str) -> bool:
+        return not node.startswith("m-a")  # deleted or made private since the rebuild
+
+    result = match(
+        store,
+        scope,
+        "concept:hub",
+        parse_path("<about"),
+        start_kind="concept",
+        node_ok=live,
+    )
+    assert [path.nodes[1][0] for path in result.paths] == ["m-z00", "m-z01", "m-z02"]
+    assert result.truncated is False  # hidden rows never set it
+    cut = match(
+        store,
+        scope,
+        "concept:hub",
+        parse_path("<about"),
+        start_kind="concept",
+        node_ok=live,
+        fanout=2,
+    )
+    assert [path.nodes[1][0] for path in cut.paths] == ["m-z00", "m-z01"]
+    assert cut.truncated is True  # a visible neighbour was cut
+    starved = match(
+        store,
+        scope,
+        "concept:hub",
+        parse_path("<about"),
+        start_kind="concept",
+        node_ok=live,
+        max_expansions=2,
+    )
+    assert starved.paths == () and starved.truncated is True  # the query cap ran out
+
+
+def test_store_hidden_rows_beyond_one_page_never_set_truncated(tmp_path: Path) -> None:
+    """More than MAX_QUERY_LIMIT private edges before the visible ones."""
+
+    edges = [
+        Edge(
+            "about",
+            f"m-a{i:05d}",
+            "concept:hub",
+            "memory",
+            "concept",
+            "about",
+            source_tenant="",
+            source_privacy="local-private",
+        )
+        for i in range(1200)
+    ] + _hub_edges(0, 2)
+    for store in (MemoryProjectionStore(), SqliteProjectionStore(tmp_path / "s" / "e.sqlite3")):
+        store.rebuild(edges)
+        result = match(
+            store,
+            EdgeScope("", frozenset({"public"})),
+            "concept:hub",
+            parse_path("<about"),
+            start_kind="concept",
+        )
+        assert [path.nodes[1][0] for path in result.paths] == ["m-z00", "m-z01"]
+        assert result.truncated is False
+
+
 def test_leak_sweep_over_every_start_and_pattern(tmp_path: Path) -> None:
     repository = _vault(tmp_path)
     root = repository.root

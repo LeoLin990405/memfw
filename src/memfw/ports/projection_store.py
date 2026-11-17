@@ -16,10 +16,14 @@ The contract (``memfw.ports.testing.check_projection_store``):
 - ``version()`` is ``None`` before the first rebuild, then
   :func:`edge_set_version` of the stored edges: the same edges give the same
   version in every implementation, whatever order they were passed in.
-- ``query(scope, node=..., direction=..., relations=..., limit=...)`` returns
-  the edges leaving (``out``) or entering (``in``) ``node`` that
+- ``query(scope, node=..., direction=..., relations=..., limit=..., after=...)``
+  returns the edges leaving (``out``) or entering (``in``) ``node`` that
   :func:`edge_visible` admits for ``scope``, sorted by :attr:`Edge.key`, at
-  most ``limit`` (1..``MAX_QUERY_LIMIT``) of them.
+  most ``limit`` (1..``MAX_QUERY_LIMIT``) of them. ``after`` is a keyset
+  cursor: when set (an :attr:`Edge.key`, normally the last edge of the
+  previous page), only edges whose key sorts after it are returned, so a
+  caller pages through a node with more than ``MAX_QUERY_LIMIT`` visible
+  edges by passing the last key it got. Hidden edges never use up a page.
 
 **Visibility (fail closed).** Every edge carries the tenant and privacy level
 of both endpoints. A memory endpoint has a tenant and a level; a concept
@@ -226,8 +230,31 @@ def edge_set_version(edges: Iterable[Edge]) -> str:
     return _VERSION_PREFIX + digest.hexdigest()
 
 
+#: A keyset cursor: the :attr:`Edge.key` the next page starts after.
+EdgeKey = tuple[str, str, str]
+
+
+def check_after(after: object) -> EdgeKey | None:
+    """Validate a ``query`` cursor: ``None`` or a ``(relation, source, target)`` of str."""
+
+    if after is None:
+        return None
+    if (
+        not isinstance(after, tuple)
+        or len(after) != 3
+        or not all(isinstance(part, str) for part in after)
+    ):
+        raise TypeError("after must be None or an Edge.key (three str)")
+    return (after[0], after[1], after[2])
+
+
 def check_query(
-    scope: object, node: object, direction: object, relations: object, limit: object
+    scope: object,
+    node: object,
+    direction: object,
+    relations: object,
+    limit: object,
+    after: object = None,
 ) -> frozenset[str] | None:
     """Validate ``query`` arguments; return ``relations`` as a frozenset (or ``None``)."""
 
@@ -241,6 +268,7 @@ def check_query(
         raise TypeError("limit must be an int")
     if not 1 <= limit <= MAX_QUERY_LIMIT:
         raise ValueError(f"limit must be 1..{MAX_QUERY_LIMIT}")
+    check_after(after)
     if relations is None:
         return None
     if isinstance(relations, str) or not isinstance(relations, Collection):
@@ -259,12 +287,15 @@ def select(
     direction: Direction,
     relations: frozenset[str] | None,
     limit: int,
+    after: EdgeKey | None = None,
 ) -> tuple[Edge, ...]:
     """The reference answer to ``query`` over ``edges`` (sorted by key)."""
 
     end = "source" if direction == "out" else "target"
     out: list[Edge] = []
     for edge in sorted(edges, key=lambda item: item.key):
+        if after is not None and edge.key <= after:
+            continue
         if getattr(edge, end) != node:
             continue
         if relations is not None and edge.relation not in relations:
@@ -297,6 +328,7 @@ class ProjectionStore(Protocol):
         direction: Direction = "out",
         relations: Collection[str] | None = None,
         limit: int = 100,
+        after: EdgeKey | None = None,
     ) -> tuple[Edge, ...]: ...
 
 
@@ -311,9 +343,11 @@ __all__ = [
     "RELATION_RULE",
     "Direction",
     "Edge",
+    "EdgeKey",
     "EdgeScope",
     "ProjectionStore",
     "RebuildResult",
+    "check_after",
     "check_query",
     "checked_edges",
     "edge_set_version",

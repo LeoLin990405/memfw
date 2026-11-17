@@ -96,8 +96,10 @@ from .ports.privacy import (
 from .ports.projection_store import (
     Direction,
     Edge,
+    EdgeKey,
     EdgeScope,
     RebuildResult,
+    check_after,
     check_query,
     checked_edges,
     edge_set_version,
@@ -491,7 +493,11 @@ class SqliteProjectionStore:
         return str(row[0]) if row else None
 
     def _rows(
-        self, node: str, direction: Direction, relations: frozenset[str] | None
+        self,
+        node: str,
+        direction: Direction,
+        relations: frozenset[str] | None,
+        after: EdgeKey | None,
     ) -> Iterator[Edge]:
         if not self.path.is_file():
             return
@@ -504,6 +510,9 @@ class SqliteProjectionStore:
             names = sorted(relations)
             sql += f" AND relation IN ({', '.join('?' for _ in names)})"
             args.extend(names)
+        if after is not None:
+            sql += " AND (relation, source, target) > (?, ?, ?)"
+            args.extend(after)
         sql += " ORDER BY relation, source, target"
         connection = self._connect()
         try:
@@ -526,10 +535,11 @@ class SqliteProjectionStore:
         direction: Direction = "out",
         relations: Collection[str] | None = None,
         limit: int = 100,
+        after: EdgeKey | None = None,
     ) -> tuple[Edge, ...]:
-        names = check_query(scope, node, direction, relations, limit)
+        names = check_query(scope, node, direction, relations, limit, after)
         out: list[Edge] = []
-        for edge in self._rows(node, direction, names):
+        for edge in self._rows(node, direction, names, check_after(after)):
             if edge_visible(edge, scope):
                 out.append(edge)
                 if len(out) >= limit:
