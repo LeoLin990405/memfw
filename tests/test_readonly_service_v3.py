@@ -850,6 +850,124 @@ def test_forget_reused_request_id_is_no_existence_oracle(
     assert status == 200 and payload["duplicate"] is True
 
 
+def _clearance_documents() -> list[MemoryDocument]:
+    return [
+        *SEED_DOCUMENTS,
+        _memory("mem-private", "Private note", "private corpus keyword", tenant="tenant-a"),
+        MemoryDocument(
+            id="mem-shared",
+            title="Shared note",
+            body="shared corpus keyword",
+            tenant="tenant-a",
+            privacy="shared",
+            created_at=BASE,
+            updated_at=BASE,
+        ),
+    ]
+
+
+def _forget_probe(base_url: str, body: dict) -> tuple[int, bytes]:
+    status, raw, _headers = _request(
+        base_url, "POST", "/forget", body, token=WRITE_TOKEN, headers=H3
+    )
+    return status, raw
+
+
+def test_forget_deleted_target_replay_needs_the_recorded_clearance(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review #78 round 3: a high-clearance process records R on private M, M
+    is deleted; a low-clearance exact replay of R answers the same bytes as a
+    never-recorded missing id, a same-clearance replay is still duplicate."""
+
+    root = seed_vault(tmp_path / "vault", _clearance_documents())
+    _use_vault(monkeypatch, root)
+    body = {"request_id": "private-r", "memory_id": "mem-private", "tenant": "tenant-a"}
+    monkeypatch.setenv(service.CLEARANCE_ENV, "public,shared,local-private")
+    status, first = _v3(httpd, "/forget", body, WRITE_TOKEN)
+    assert status == 200 and first["duplicate"] is False
+    recorded = root / first["path"]
+    assert 'target_privacy: "local-private"' in recorded.read_text(encoding="utf-8")
+    (root / "memories" / "mem-private.md").unlink()
+    written = _tree(root)
+
+    monkeypatch.setenv(service.CLEARANCE_ENV, "public,shared")
+    baseline = _forget_probe(
+        httpd, {"request_id": "never-recorded", "memory_id": "mem-missing", "tenant": "tenant-a"}
+    )
+    assert baseline[0] == 404 and json.loads(baseline[1]) == NOT_FOUND_V3
+    assert _forget_probe(httpd, body) == baseline
+    assert _tree(root) == written
+
+    monkeypatch.setenv(service.CLEARANCE_ENV, "public,shared,local-private")
+    status, again = _v3(httpd, "/forget", body, WRITE_TOKEN)
+    assert status == 200 and again == {**first, "duplicate": True}
+    # No clearance configured admits every level, as before.
+    monkeypatch.delenv(service.CLEARANCE_ENV)
+    status, again = _v3(httpd, "/forget", body, WRITE_TOKEN)
+    assert status == 200 and again["duplicate"] is True
+    assert _tree(root) == written
+
+
+def test_forget_records_the_sensitivity_level(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``target_privacy`` is the effective level: ``sensitivity: private`` raises it."""
+
+    root = seed_vault(tmp_path / "vault", _clearance_documents())
+    path = root / "memories" / "mem-shared.md"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("---\n", "---\nsensitivity: private\n", 1),
+        encoding="utf-8",
+    )
+    _use_vault(monkeypatch, root)
+    body = {"request_id": "sensitive-r", "memory_id": "mem-shared", "tenant": "tenant-a"}
+    status, first = _v3(httpd, "/forget", body, WRITE_TOKEN)
+    assert status == 200
+    assert 'target_privacy: "local-private"' in (root / first["path"]).read_text(encoding="utf-8")
+    path.unlink()
+    monkeypatch.setenv(service.CLEARANCE_ENV, "public,shared")
+    baseline = _forget_probe(
+        httpd, {"request_id": "never-recorded", "memory_id": "mem-missing", "tenant": "tenant-a"}
+    )
+    assert baseline[0] == 404
+    assert _forget_probe(httpd, body) == baseline
+
+
+def test_forget_legacy_request_without_level_fails_closed(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A request staged before ``target_privacy`` counts as ``unknown``."""
+
+    root = seed_vault(tmp_path / "vault", _clearance_documents())
+    _use_vault(monkeypatch, root)
+    body = {"request_id": "legacy-r", "memory_id": "mem-shared", "tenant": "tenant-a"}
+    monkeypatch.setenv(service.CLEARANCE_ENV, "public,shared")
+    status, first = _v3(httpd, "/forget", body, WRITE_TOKEN)
+    assert status == 200 and first["duplicate"] is False
+    recorded = root / first["path"]
+    text = recorded.read_text(encoding="utf-8")
+    assert 'target_privacy: "shared"\n' in text
+    recorded.write_text(text.replace('target_privacy: "shared"\n', ""), encoding="utf-8")
+    (root / "memories" / "mem-shared.md").unlink()
+    baseline = _forget_probe(
+        httpd, {"request_id": "never-recorded", "memory_id": "mem-missing", "tenant": "tenant-a"}
+    )
+    assert baseline[0] == 404
+    # Low clearance, and even one admitting every level: only no clearance
+    # admits ``unknown``.
+    for clearance in ("public,shared", "public,shared,local-private"):
+        monkeypatch.setenv(service.CLEARANCE_ENV, clearance)
+        assert _forget_probe(httpd, body) == baseline, clearance
+    monkeypatch.delenv(service.CLEARANCE_ENV)
+    status, again = _v3(httpd, "/forget", body, WRITE_TOKEN)
+    assert status == 200 and again["duplicate"] is True
+    # The listing shows the missing field as ``None``.
+    from memfw.curation.residue import list_forget_requests
+
+    assert [row["target_privacy"] for row in list_forget_requests(root)] == [None]
+
+
 def test_forget_tenant_is_bound_server_side(
     httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -14,6 +14,19 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 
 ## [Unreleased]
 
+### Fixed — `/forget` replay after deletion respects clearance
+
+- `POST /forget` (memfw-http/3) records the target memory's effective
+  privacy level (`sensitivity` included) as `target_privacy` in the request
+  header. Once the memory is deleted, an exact replay is `duplicate: true`
+  only when the caller's clearance admits that level; a lower-clearance
+  same-tenant process gets the same 404 `memory not found` as a
+  never-recorded missing id, so it no longer learns that a hidden memory
+  existed and was forget-requested. A request staged before this fix (no
+  `target_privacy`) counts as `unknown` (fail closed). `memfw forget
+  requests` rows gain `target_privacy` (`null` for such older requests);
+  nothing else in its output changes.
+
 ### Added — two-stage conversation search and tag filters (M3c)
 
 - `memfw conversations search` and MCP `conversations_search` gain tag

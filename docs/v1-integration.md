@@ -474,17 +474,23 @@ only be deleted locally (`memfw delete`), after a human review as always.
   memory passes the visibility check: a caller that may not see it (another
   tenant, a lower clearance) gets the same 404 `memory not found` whether
   or not a request for it was recorded. When the named memory is gone, only
-  an exact replay of the tenant's own request is `duplicate: true`; anything
-  else (another tenant, or a recorded `request_id` reused with another
-  memory id) is the same 404, never 409, so a reused `request_id` cannot
-  tell a missing memory from a hidden one. Publication is
+  an exact replay of the tenant's own request, by a process whose clearance
+  admits the `target_privacy` recorded with it, is `duplicate: true`;
+  anything else (another tenant, a lower clearance, or a recorded
+  `request_id` reused with another memory id) is the same 404, never 409,
+  so neither a reused `request_id` nor a lower clearance can tell a missing
+  memory from a hidden one. A request staged before `target_privacy` was
+  recorded counts as `unknown`: after its memory is gone it is `duplicate`
+  only to a service with no clearance configured. Publication is
   atomic (temporary file + hard link), so concurrent requests converge on one
   file.
 - **The candidate.** `<vault>/_candidates/forget/forget-<tenant_key>-<request_id>.md`, a
   directory of its own so `memfw candidates` / `candidate-apply` never see a
   deletion request. Frontmatter: `type: forget-request`, `status: pending`,
   `request_id`, `memory_id`, `tenant`, `source`, `reason`,
-  `target_content_hash` (the memory's bytes at request time), `created_at`,
+  `target_content_hash` (the memory's bytes at request time),
+  `target_privacy` (the memory's effective privacy level at request time,
+  `sensitivity` included), `created_at`,
   `recorded_at`, `deleted: false`, `authority: false`. The body names the
   memory id only; no memory text is copied. Symlinked directory components
   are refused with 500, as for `/stage`.
@@ -497,7 +503,8 @@ only be deleted locally (`memfw delete`), after a human review as always.
   requests and the visibility 404 are answered as usual. Concurrent requests
   can pass the count together, so the bound is approximate.
 - **Review.** `memfw forget requests --root <vault>` lists the requests (read
-  only) with `target_present` and `target_changed`. Deleting stays a human
+  only) with `target_privacy` (`null` for a request staged before the field
+  existed), `target_present` and `target_changed`. Deleting stays a human
   action (`memfw delete`, unchanged; the tombstone redesign of roadmap §6.3
   waits for its own approval).
 
