@@ -67,7 +67,10 @@ memfw-pageindex list --index-dir DIR
 - `build-md` reads one note under the root (no symlinks, no `..`), builds the
   tree from its ATX headings (not inside fenced code) and stores no text. The
   privacy level is the strictest of `--privacy` (default `local-private`) and
-  the note's frontmatter `privacy:`.
+  the note's own frontmatter, read like the kernel's `metadata_level`:
+  `privacy`, every `privacy:*` / `sensitivity:*` tag and a top-level
+  `sensitivity`. The adapter has no YAML parser; a privacy key in any form its
+  small reader does not understand makes the note `local-private`.
 - `import-tree` validates PageIndex output (page ranges within `1..N`,
   unique node ids, at most 5000 nodes, depth 12), drops `text`, `doc_name` and
   `doc_description`, and keeps summaries (cut to 300 characters) only with

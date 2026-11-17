@@ -42,7 +42,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from ._ports import PRIVACY_LEVELS, field_level, strictest
+from ._ports import PRIVACY_LEVELS, field_level, metadata_level, strictest
 
 TREE_SCHEMA = "memfw-pageindex-tree/1"
 #: Caps on one tree (a larger one is refused, not cut).
@@ -222,27 +222,121 @@ def _open_inside(root: Path, rel: str) -> bytes:
         os.close(fd)
 
 
-def _frontmatter_privacy(lines: list[str]) -> tuple[str | None, int]:
-    """``(declared privacy or None, first body line index)`` from a ``---`` block."""
+#: The frontmatter keys that decide a note's privacy (``memfw.ports.privacy.metadata_level``).
+PRIVACY_KEYS = ("privacy", "tags", "sensitivity")
+_TOP_KEY = re.compile(
+    r"^([A-Za-z_][A-Za-z0-9_-]*)\s*:(?:\s+(.*?))?\s*$|^([A-Za-z_][A-Za-z0-9_-]*):$"
+)
+_ITEM = re.compile(r"^\s+-\s+(.*?)\s*$|^\s+-$")
+
+
+class _Unparsed(Exception):
+    """A privacy key in a form this small reader does not understand: fail closed."""
+
+
+def _scalar(text: str) -> str | None:
+    """A plain or quoted YAML scalar; ``None`` for no value or ``null``/``~``."""
+
+    value = text.strip()
+    if not value or value in ("null", "Null", "NULL", "~"):
+        return None
+    if value[0] in "'\"":
+        quote = value[0]
+        if len(value) < 2 or value[-1] != quote or quote in value[1:-1]:
+            raise _Unparsed
+        return value[1:-1]
+    if value[0] in "[]{}&*!|>%@`" or " #" in value or value.startswith("#"):
+        raise _Unparsed
+    return value
+
+
+def _flow_list(text: str) -> list[str | None]:
+    inner = text.strip()[1:-1]
+    if any(char in inner for char in "[]{}\"'"):
+        raise _Unparsed
+    return [_scalar(item) for item in inner.split(",")] if inner.strip() else []
+
+
+def _frontmatter(lines: list[str]) -> tuple[dict[str, Any] | None, int]:
+    """``(the privacy keys, first body line index)`` from a ``---`` block.
+
+    A small, fail-closed reader of the three keys :data:`PRIVACY_KEYS` (the
+    adapter has no YAML parser): plain or quoted scalars, ``[a, b]`` flow
+    lists and ``- item`` block lists. Any other form of one of those keys, or
+    a key given twice, raises :class:`_Unparsed`. ``None`` when there is no
+    closed frontmatter block.
+    """
 
     if not lines or lines[0].strip() != "---":
         return None, 0
-    declared: str | None = None
-    for index in range(1, len(lines)):
+    end = next((i for i in range(1, len(lines)) if lines[i].strip() in ("---", "...")), None)
+    if end is None:
+        return None, 0  # not closed: not frontmatter
+    meta: dict[str, Any] = {}
+    index = 1
+    while index < end:
         line = lines[index]
-        if line.strip() in ("---", "..."):
-            return declared, index + 1
-        match = re.match(r"^privacy:\s*(.*?)\s*$", line)
-        if match:
-            declared = match.group(1).strip("'\"") or "unknown"
-    return None, 0  # not closed: not frontmatter
+        match = _TOP_KEY.match(line)
+        index += 1
+        if not match:
+            continue  # a continuation line or another key's value
+        key = match.group(1) or match.group(3)
+        if key not in PRIVACY_KEYS:
+            continue
+        if key in meta:
+            raise _Unparsed
+        inline = (match.group(2) or "").strip()
+        block: list[str | None] = []
+        while index < end and (lines[index][:1] in (" ", "\t") or not lines[index].strip()):
+            if lines[index].strip():
+                item = _ITEM.match(lines[index])
+                if item is None:
+                    raise _Unparsed
+                block.append(_scalar(item.group(1) or ""))
+            index += 1
+        if block and inline:
+            raise _Unparsed
+        if block:
+            meta[key] = block
+        elif inline.startswith("["):
+            if not inline.endswith("]"):
+                raise _Unparsed
+            meta[key] = _flow_list(inline)
+        else:
+            meta[key] = _scalar(inline)
+    return meta, end + 1
+
+
+def note_level(text: str, operator: str) -> str:
+    """The note's level: the operator's ``privacy`` and the note's own keys, strictest wins.
+
+    The note is read like ``memfw.ports.privacy.metadata_level`` (``privacy``,
+    every ``privacy:*`` / ``sensitivity:*`` tag, a top-level ``sensitivity``),
+    with the operator's level standing in for a missing ``privacy`` field.
+    Anything unreadable or unrecognised is ``local-private``.
+    """
+
+    try:
+        meta, _ = _frontmatter(text.splitlines())
+    except _Unparsed:
+        return "local-private"
+    level = operator
+    if meta:
+        tags = meta.get("tags")
+        if tags is not None and not isinstance(tags, list):
+            return "local-private"  # a scalar ``tags`` the kernel would not read as tags
+        level = strictest([operator, metadata_level(meta, legacy=operator)])
+    return level if level in PRIVACY_LEVELS else "local-private"
 
 
 def markdown_structure(text: str) -> list[dict[str, Any]]:
     """PageIndex-shaped nodes from ATX headings (outside fenced code), no text."""
 
     lines = text.splitlines()
-    _, start = _frontmatter_privacy(lines)
+    try:
+        _, start = _frontmatter(lines)
+    except _Unparsed:
+        start = next((i + 1 for i in range(1, len(lines)) if lines[i].strip() in ("---", "...")), 0)
     roots: list[dict[str, Any]] = []
     stack: list[tuple[int, dict[str, Any]]] = []
     fence: str | None = None
@@ -289,9 +383,9 @@ def build_markdown_tree(
 ) -> dict[str, Any]:
     """The tree of one ``kh:<path>.md`` note under ``root`` (the Knowledge-Hub root).
 
-    ``privacy`` is the level the operator gives; a stricter ``privacy:`` in
-    the note's frontmatter wins (strictest wins; an unrecognised one is
-    ``unknown`` and is stored as ``local-private``).
+    ``privacy`` is the level the operator gives; the note's frontmatter can
+    only make it stricter (:func:`note_level`: ``privacy``, ``privacy:*`` and
+    ``sensitivity:*`` tags, ``sensitivity``; unreadable → ``local-private``).
     """
 
     source = parse_source(source_ref)
@@ -302,10 +396,7 @@ def build_markdown_tree(
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
         raise TreeError("not_utf8") from None
-    declared, _ = _frontmatter_privacy(text.splitlines())
-    level = strictest([_privacy(privacy), field_level(declared) if declared else "public"])
-    if level not in PRIVACY_LEVELS:
-        level = "local-private"
+    level = note_level(text, _privacy(privacy))
     structure = markdown_structure(text)
     if not structure:
         raise TreeError("no_headings")

@@ -15,7 +15,7 @@ try:
         ModelReply,
         render_tag_data,
     )
-    from memfw.ports.privacy import PRIVACY_LEVELS, field_level, strictest
+    from memfw.ports.privacy import PRIVACY_LEVELS, field_level, metadata_level, strictest
     from memfw.ports.registry import AdapterSpec
     from memfw.ports.types import (
         Availability,
@@ -34,6 +34,7 @@ except ModuleNotFoundError:  # the standalone memfw-ports wheel
     from memfw_ports.privacy import (  # type: ignore[no-redef,assignment,unused-ignore]
         PRIVACY_LEVELS,
         field_level,
+        metadata_level,
         strictest,
     )
     from memfw_ports.registry import AdapterSpec  # type: ignore[no-redef,assignment,unused-ignore]
@@ -56,6 +57,7 @@ __all__ = [
     "ProviderUnavailable",
     "RecallBudget",
     "field_level",
+    "metadata_level",
     "render_tag_data",
     "strictest",
     "validate_candidate",

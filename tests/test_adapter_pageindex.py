@@ -255,6 +255,78 @@ def test_markdown_tree_has_headings_only_and_strictest_privacy(tmp_path: Path) -
     assert build_markdown_tree(root, "kh:notes/field notes.md")["privacy"] == "local-private"
 
 
+FRONTMATTER_CASES = [
+    ("privacy: shared\n", "shared"),
+    ("tags: [privacy:local-private]\n", "local-private"),
+    ("tags:\n  - project:x\n  - privacy:local-private\n", "local-private"),
+    ("tags: ['sensitivity:private']\n", "local-private"),
+    ("sensitivity: private\n", "local-private"),
+    ("sensitivity: [private]\n", "local-private"),
+    ("sensitivity: confidential\n", "local-private"),  # unknown → fail closed
+    ("tags: [privacy:fleet]\n", "shared"),
+    ("tags: [privacy:none, note]\n", "shared"),
+    ("privacy: public\n", "shared"),  # the note cannot loosen the operator's level
+    ("privacy: Local-Private\n", "local-private"),
+    ("privacy: secret\n", "local-private"),
+    ("title: x\nprivacy:\n", "shared"),  # no value reads as absent, like the kernel
+]
+
+
+@pytest.mark.parametrize(("frontmatter", "expected"), FRONTMATTER_CASES)
+def test_note_privacy_matches_the_kernel_reader(
+    tmp_path: Path, frontmatter: str, expected: str
+) -> None:
+    import yaml
+
+    from memfw.ports.privacy import metadata_level, strictest
+
+    root = tmp_path / "kh"
+    root.mkdir()
+    (root / "n.md").write_text(f"---\n{frontmatter}---\n# Heading\n", encoding="utf-8")
+    tree = build_markdown_tree(root, "kh:n.md", privacy="shared")
+    assert tree["privacy"] == expected
+    kernel = strictest(["shared", metadata_level(yaml.safe_load(frontmatter), legacy="shared")])
+    assert kernel.replace("unknown", "local-private") == expected
+
+
+@pytest.mark.parametrize(
+    "frontmatter",
+    [
+        "tags: {privacy: shared}\n",
+        "tags: privacy:shared\n",  # a scalar the kernel would ignore: fail closed
+        "tags: &a [x]\n",
+        "tags: [x, [y]]\n",
+        "privacy: shared\nprivacy: public\n",
+        "tags:\n  - x\n  other: y\n",
+        "privacy: >\n  shared\n",
+        "privacy: 'shared\n",
+    ],
+)
+def test_unreadable_privacy_keys_fail_closed(tmp_path: Path, frontmatter: str) -> None:
+    root = tmp_path / "kh"
+    root.mkdir()
+    (root / "n.md").write_text(f"---\n{frontmatter}---\n# Heading\n", encoding="utf-8")
+    tree = build_markdown_tree(root, "kh:n.md", privacy="public")
+    assert tree["privacy"] == "local-private"
+    assert [n["title"] for n in tree["structure"]] == ["Heading"]
+
+
+def test_tagged_private_note_never_reaches_a_cloud_backend(tmp_path: Path) -> None:
+    root = tmp_path / "kh"
+    root.mkdir()
+    (root / "t.md").write_text(
+        "---\ntags: [privacy:local-private]\n---\n# Drift secret plan\n", encoding="utf-8"
+    )
+    (root / "s.md").write_text("---\nsensitivity: private\n---\n# Drift other\n", encoding="utf-8")
+    index = tmp_path / "index"
+    for ref in ("kh:t.md", "kh:s.md"):
+        write_tree(index, build_markdown_tree(root, ref, privacy="shared"))
+    cloud = RecordedBackend('{"node_ids": []}', local=False)
+    provider = _provider(index, cloud, cloud=True)
+    assert provider.search("drift", limit=3, budget=RecallBudget(), tenant="", as_of=None) == []
+    assert cloud.calls == []  # nothing sendable: no request at all
+
+
 def test_markdown_paths_are_confined(tmp_path: Path) -> None:
     root = _kh(tmp_path)
     outside = tmp_path / "outside.md"
