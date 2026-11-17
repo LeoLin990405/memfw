@@ -771,6 +771,83 @@ def test_forget_hidden_targets_are_indistinguishable(
     assert status == 200 and payload["requested"] is True
 
 
+def test_forget_reused_request_id_is_no_existence_oracle(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A recorded ``request_id`` reused with a probe memory id: missing, another
+    tenant's and clearance-withheld all answer byte-identical 404s (never 409)."""
+
+    documents = [
+        *SEED_DOCUMENTS,
+        _memory("mem-private", "Private note", "private corpus keyword", tenant="tenant-a"),
+        MemoryDocument(
+            id="mem-shared",
+            title="Shared note",
+            body="shared corpus keyword",
+            tenant="tenant-a",
+            privacy="shared",
+            created_at=BASE,
+            updated_at=BASE,
+        ),
+    ]
+    root = seed_vault(tmp_path / "vault", documents)
+    _use_vault(monkeypatch, root)
+
+    def probe(request_id: str, memory_id: str) -> tuple[int, bytes]:
+        body = {"request_id": request_id, "memory_id": memory_id, "tenant": "tenant-a"}
+        status, raw, _headers = _request(
+            httpd, "POST", "/forget", body, token=WRITE_TOKEN, headers=H3
+        )
+        return status, raw
+
+    # A never-recorded id on a missing memory: the baseline 404.
+    monkeypatch.setenv(service.CLEARANCE_ENV, "public,shared")
+    baseline = probe("never-recorded", "mem-missing")
+    assert baseline[0] == 404
+    assert json.loads(baseline[1]) == NOT_FOUND_V3
+
+    # Same process: record on a visible memory, then reuse the id.
+    status, first = _v3(
+        httpd,
+        "/forget",
+        {"request_id": "probe-1", "memory_id": "mem-shared", "tenant": "tenant-a"},
+        WRITE_TOKEN,
+    )
+    assert status == 200 and first["duplicate"] is False
+    written = _tree(root)
+    for memory_id in ("mem-missing", "mem-gamma", "mem-private"):
+        assert probe("probe-1", memory_id) == baseline, memory_id
+    assert _tree(root) == written
+
+    # A lower-clearance process reusing an id recorded under a higher one:
+    # the recorded memory itself is now withheld too.
+    monkeypatch.setenv(service.CLEARANCE_ENV, "public,shared,local-private")
+    status, second = _v3(
+        httpd,
+        "/forget",
+        {"request_id": "probe-2", "memory_id": "mem-private", "tenant": "tenant-a"},
+        WRITE_TOKEN,
+    )
+    assert status == 200 and second["duplicate"] is False
+    written = _tree(root)
+    monkeypatch.setenv(service.CLEARANCE_ENV, "public,shared")
+    for memory_id in ("mem-missing", "mem-gamma", "mem-private", "mem-beta"):
+        assert probe("probe-2", memory_id) == baseline, memory_id
+    assert _tree(root) == written
+    # A visible memory under the tenant's own id is still the 409 that names nothing.
+    status, _raw = probe("probe-2", "mem-shared")
+    assert status == 409
+    # An exact replay after the recorded memory is gone is still duplicate.
+    (root / "memories" / "mem-shared.md").unlink()
+    status, payload = _v3(
+        httpd,
+        "/forget",
+        {"request_id": "probe-1", "memory_id": "mem-shared", "tenant": "tenant-a"},
+        WRITE_TOKEN,
+    )
+    assert status == 200 and payload["duplicate"] is True
+
+
 def test_forget_tenant_is_bound_server_side(
     httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

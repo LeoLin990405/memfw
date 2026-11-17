@@ -465,12 +465,14 @@ only be deleted locally (`memfw delete`), after a human review as always.
   The same request again (same `request_id`, memory, tenant, source and
   reason) is 200 with `duplicate: true` and no rewrite; the same
   `request_id` with another memory, source or reason is 409 `conflict`
-  (`request exists with different content`). While the memory exists, the
-  visibility check runs first: a caller that may not see it (another
+  (`request exists with different content`), answered only once the named
+  memory passes the visibility check: a caller that may not see it (another
   tenant, a lower clearance) gets the same 404 `memory not found` whether
-  or not a request for it was recorded. After the memory is gone, a replay
-  of the tenant's own request is still `duplicate: true`; any other tenant
-  gets 404. Publication is
+  or not a request for it was recorded. When the named memory is gone, only
+  an exact replay of the tenant's own request is `duplicate: true`; anything
+  else (another tenant, or a recorded `request_id` reused with another
+  memory id) is the same 404, never 409, so a reused `request_id` cannot
+  tell a missing memory from a hidden one. Publication is
   atomic (temporary file + hard link), so concurrent requests converge on one
   file.
 - **The candidate.** `<vault>/_candidates/forget/forget-<tenant_key>-<request_id>.md`, a

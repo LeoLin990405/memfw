@@ -1220,13 +1220,21 @@ def _forget_key(metadata: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def _existing_forget_request(base: Path, relative: str, expected: dict[str, str]) -> None:
-    """Return when the recorded request is this same request, else 409."""
+def _existing_forget_request(
+    base: Path, relative: str, expected: dict[str, str], *, mismatch_status: int = 409
+) -> None:
+    """Return when the recorded request is this same request, else raise.
+
+    A mismatch is 409, or ``mismatch_status`` (404 ``memory not found``) when
+    the caller has not passed the visibility check for the named memory.
+    """
 
     path = base / relative
     if path.is_symlink() or not path.is_file():
         raise _internal()
     if _forget_key(_metadata(path)) != expected:
+        if mismatch_status == 404:
+            raise ServiceError(404, "memory not found")
         raise ServiceError(409, "request exists with different content")
 
 
@@ -1300,10 +1308,11 @@ def forget_request(
     ``request_id`` makes the call idempotent within a tenant (the file name is
     ``forget_candidate_id(tenant, request_id)``): the same request again is
     ``duplicate: true`` without a rewrite, the same ``request_id`` with any
-    other memory, source or reason is 409. While the memory exists, the
-    visibility check runs before either answer, so a hidden target is 404
-    even when a request for it was recorded; once it is gone, a replay of
-    the tenant's own request is still ``duplicate: true``. The memory file, the event
+    other memory, source or reason is 409 once the named memory passes the
+    visibility check. A hidden target is 404 even when a request for it was
+    recorded; once the named memory is gone, only an exact replay of the
+    tenant's own request is ``duplicate: true`` and anything else is the
+    same 404, so a reused ``request_id`` is no existence oracle. The memory file, the event
     log and every projection are left alone; ``deleted`` is always false.
     """
 
@@ -1343,10 +1352,12 @@ def forget_request(
     recorded = (base / relative).exists() or (base / relative).is_symlink()
     target_exists = (base / "memories" / f"{values['memory_id']}.md").is_file()
     if recorded and not target_exists:
-        # The memory is gone (deleted after the request, as intended): only a
-        # request this tenant recorded answers ``duplicate`` or 409, and the
-        # file name is tenant-scoped, so another tenant's never matches.
-        _existing_forget_request(base, relative, expected)
+        # The memory is gone (deleted after the request, as intended): only
+        # the exact request this tenant recorded answers ``duplicate``. Any
+        # other content is the same 404 a hidden memory gets (never 409):
+        # reusing a recorded ``request_id`` with a probe memory id must not
+        # tell a missing memory from a hidden one.
+        _existing_forget_request(base, relative, expected, mismatch_status=404)
         return response(True)
     # Visibility first: a memory this caller may not see answers the same 404
     # whether or not a request for it was recorded, so neither a replay nor
