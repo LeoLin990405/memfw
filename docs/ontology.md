@@ -226,6 +226,9 @@ canonical spelling). Examples: `about><about` (memories that share a concept),
   ones. `truncated` means a visible result was cut (more than `--fanout`
   visible neighbours, more than `--limit` paths) or a query/collection cap
   ran out; hidden edges never set it.
+- A path is its sequence of edges: when two ways of splitting the hops
+  between steps walk the same edges (`related*1..2>related*1..2>` over
+  a→b→c→d), it is returned once.
 - Paths are sorted by length, then node ids, then edge keys: the same edges
   and path give the same answer from every store.
 - `--from` is a memory id (`memory:`/`mem:` prefix allowed), a concept oid or

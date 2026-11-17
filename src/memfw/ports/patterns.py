@@ -35,6 +35,8 @@ relation walked the other way (``<superseded_by``, ``<broader``).
   ``truncated`` is set only when a visible result was cut: more than
   ``fanout`` visible neighbours, more than ``limit`` paths, or a cap on
   queries or collected paths ran out. Hidden edges never set it;
+- a path is its sequence of edges: when two ways of splitting the hops
+  between steps walk the same edges, the path is returned once;
 - results are sorted by length, then node ids, then edge keys, so the same
   edges and pattern give the same answer.
 
@@ -253,6 +255,9 @@ def match(
         return MatchResult((), False)
     steps = pattern.steps
     found: list[MatchedPath] = []
+    # Two step splits can walk the same edges (``related*1..2>related*1..2>``
+    # over a→b→c→d): a path is its edge sequence, kept once.
+    seen: set[tuple[tuple[str, str, str], ...]] = set()
     state = {"expansions": 0, "truncated": False}
     first_page = min(MAX_QUERY_LIMIT, max(fanout + 1, 100))
     # Per-node cache within this match: the store rows read so far for
@@ -331,10 +336,13 @@ def match(
             path_edges = (*edges, edge)
             if hops >= step.min_hops:
                 if index + 1 == len(steps):
-                    if len(found) >= MAX_COLLECTED:
-                        state["truncated"] = True
-                        return
-                    found.append(MatchedPath(path_nodes, path_edges))
+                    keys = tuple(item.key for item in path_edges)
+                    if keys not in seen:
+                        if len(found) >= MAX_COLLECTED:
+                            state["truncated"] = True
+                            return
+                        seen.add(keys)
+                        found.append(MatchedPath(path_nodes, path_edges))
                 else:
                     walk(index + 1, 0, nxt, path_nodes, path_edges)
             if hops < step.max_hops:

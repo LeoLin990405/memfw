@@ -851,6 +851,28 @@ def test_sqlite_cursor_matches_the_reference_for_any_after_key(tmp_path: Path) -
                         assert got == want, (direction, node, after, relations, limit)
 
 
+def test_the_same_edges_split_two_ways_are_one_path() -> None:
+    store = MemoryProjectionStore()
+    store.rebuild(
+        [
+            Edge("related", source, target, "concept", "concept", "related")
+            for source, target in (("a", "b"), ("b", "c"), ("c", "d"))
+        ]
+    )
+    result = match(
+        store,
+        EdgeScope("", EVERY),
+        "a",
+        parse_path("related*1..2>related*1..2>"),
+        start_kind="concept",
+        limit=100,
+    )
+    ids = [[node for node, _kind in path.nodes] for path in result.paths]
+    assert ids == [["a", "b", "c"], ["a", "b", "c", "d"]]  # a,b,c,d once, not twice
+    assert len({tuple(e.key for e in p.edges) for p in result.paths}) == len(result.paths)
+    assert result.truncated is False
+
+
 def test_leak_sweep_over_every_start_and_pattern(tmp_path: Path) -> None:
     repository = _vault(tmp_path)
     root = repository.root
