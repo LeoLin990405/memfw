@@ -8,6 +8,11 @@ operations here.
 Archive state (settled ingest) is opt-in: ``with_archive_state`` adds
 ``archived: bool`` to each session / result, ``archived_only`` keeps archived
 sessions only. Both default off, and the output is then unchanged.
+
+Tag filters (``task_type``, ``outcome``, ``project``, ``component``,
+``intent_like``) keep sessions whose worker tags (``conv-v2``) match; a session
+without tags never matches one. ``mode="two_stage"`` is the two-stage search of
+:mod:`.two_stage`. With none of these the output is unchanged.
 """
 
 from __future__ import annotations
@@ -31,6 +36,14 @@ from .store import (
     check_id,
     goal_text,
     safe_text,
+)
+from .two_stage import (
+    MODES,
+    LabelLookup,
+    parse_tags,
+    tag_filters,
+    tags_match,
+    two_stage_search,
 )
 
 MAX_LIMIT = 50
@@ -138,11 +151,20 @@ class ConversationShare:
         caller: str,
         *,
         summaries: SummaryLookup | None = None,
+        labels: LabelLookup | None = None,
+        embedder: Any = None,
+        embed_cloud: bool = False,
     ) -> None:
         self.source = source
         self.policy = policy
         self.caller = check_app(caller)
         self.summaries = summaries
+        #: Worker summaries and tags (tag filters, two_stage); ``None``: none.
+        self.labels = labels
+        #: The runtime's embedding provider (two_stage semantic list); ``None``: none.
+        self.embedder = embedder
+        #: ``conversations.cloud``: a non-loopback embedder may receive summaries.
+        self.embed_cloud = embed_cloud
 
     # -- helpers ----------------------------------------------------------------
 
@@ -247,9 +269,48 @@ class ConversationShare:
         offset: int = 0,
         with_archive_state: bool = False,
         archived_only: bool = False,
+        mode: str | None = None,
+        task_type: str | None = None,
+        outcome: str | None = None,
+        project: str | None = None,
+        component: str | None = None,
+        intent_like: str | None = None,
+        windows: int | None = None,
+        window_turns: int | None = None,
+        max_bytes: int | None = None,
     ) -> dict[str, Any]:
         self._ready()
         query = str(query or "").strip()[:500]
+        mode = mode or "default"
+        if mode not in MODES:
+            raise ConversationError(f"mode must be one of: {', '.join(MODES)}")
+        filters = tag_filters(
+            task_type=task_type,
+            outcome=outcome,
+            project=project,
+            component=component,
+            intent_like=intent_like,
+        )
+        if mode == "two_stage":
+            return two_stage_search(
+                self,
+                query,
+                app=app,
+                agent=agent,
+                since=since,
+                filters=filters,
+                archived_only=archived_only,
+                limit=limit,
+                offset=offset,
+                windows=2 if windows is None else windows,
+                window_turns=1 if window_turns is None else window_turns,
+                max_bytes=DEFAULT_BYTES if max_bytes is None else max_bytes,
+                min_bytes=MIN_BYTES,
+                max_cap=MAX_BYTES,
+                max_limit=MAX_LIMIT,
+            )
+        if windows is not None or window_turns is not None or max_bytes is not None:
+            raise ConversationError("windows, window_turns and max_bytes need mode=two_stage")
         if not query:
             raise ConversationError("query is required")
         limit = _clamp(limit, 1, MAX_LIMIT)
@@ -269,9 +330,28 @@ class ConversationShare:
                 )
             return hits
 
+        tagged: dict[tuple[str, str], bool] = {}
+
+        def session_matches(key: tuple[str, str]) -> bool:
+            if key not in tagged:
+                rows = (
+                    self.labels.session_labels(
+                        keys=[key], apps=include, exclude=exclude, filters=filters, limit=1
+                    )
+                    if self.labels is not None
+                    else None
+                )
+                # Re-checked on the parsed, canonical tags (as two_stage does).
+                tagged[key] = bool(rows) and tags_match(
+                    parse_tags((rows or [{}])[0].get("tags")), filters
+                )
+            return tagged[key]
+
         def keep(hit: Turn) -> bool:
             # A turn that would be withheld is not a hit: no probing for its content.
             if not self.policy.allowed(self.caller, hit.app) or safe_text(hit.text)[1]:
+                return False
+            if filters and not session_matches((hit.app, hit.session_id)):
                 return False
             return not archived_only or states.get((hit.app, hit.session_id), False)
 

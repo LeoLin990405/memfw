@@ -14,6 +14,27 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 
 ## [Unreleased]
 
+### Added — two-stage conversation search and tag filters (M3c)
+
+- `memfw conversations search` and MCP `conversations_search` gain tag
+  filters over the worker's `conv-v2` tags: `--task-type`, `--outcome`,
+  `--project`, `--component`, `--intent-like` (MCP `task_type`, `outcome`,
+  `project`, `component`, `intent_like`). A session without tags (its newest
+  session summary untagged) never matches one.
+- **Changed:** MCP `conversations_search` now honours `archived_only` and
+  `with_archive_state` (before, it ignored them and answered as without).
+- `--mode two_stage` (MCP `mode`): ranked sessions from the union of the
+  keyword search, a semantic match over "summary + tags" (the runtime's
+  existing embedder; `degraded: ["no_embedder"]` without one; only a
+  loopback embedder or `conversations.cloud: true`, else `semantic_off`;
+  8 s budget, no retries, bounded packed cache) and the tag
+  filters, fused by reciprocal rank, each list cut to the caller's visible
+  apps before ranking or counting. Per session: summary and tags labelled
+  `untrusted_model_output: true`, archive state and redacted turn windows
+  around hits (`windows`, `window_turns`), all within `max_bytes`.
+- `WorkState.session_labels` (read-only). Without the new options the output
+  of every command and tool is byte-identical to before.
+
 ### Added — `current` context slot (U6, off by default)
 
 - `memory_context(v=2, slots=["current"])` and `memfw://context/current`: short-lived

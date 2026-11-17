@@ -9,7 +9,7 @@ asynchronous worker that summarises sessions.
 
 | MCP tool | CLI | What it returns |
 |---|---|---|
-| `conversations_search(query, app?, agent?, since?, limit, offset)` | `memfw conversations search QUERY` | redacted snippets with refs `app:session@offset` |
+| `conversations_search(query, app?, agent?, since?, limit, offset, mode?, task_type?, outcome?, project?, component?, intent_like?, archived_only?, ...)` | `memfw conversations search QUERY` | redacted snippets with refs `app:session@offset`; `mode=two_stage`: ranked sessions (see [Two-stage conversation search](#two-stage-conversation-search)) |
 | `conversations_list(app?, since?, limit, offset)` | `memfw conversations list` | sessions, newest first |
 | `conversations_get(session_id, app?, start, end, max_bytes)` | `memfw conversations get SESSION` | a range of turns; follow `next_start` |
 | `conversations_handoff(session_id, app?, for_agent?, max_bytes)` | `memfw conversations handoff SESSION --for APP` | continuation pack: goal, decisions, open questions, files touched, recent turns, worker summary (labelled) |
@@ -302,6 +302,88 @@ memfw conversations worker --root VAULT --settled-minutes 30   # or both in one 
   when the store is opened; cursors are kept, so nothing is re-read. Sessions
   stored before are not archived until the next settled ingest sees them quiet.
   Without `--settled-minutes`, `history ingest` behaves and reports as before.
+
+## Two-stage conversation search
+
+The worker's `conv-v2` tags (see [DeepSeek tagging adapter](#deepseek-tagging-adapter))
+make sessions searchable by what kind of work they were. The calling agent is a
+model itself, so there is no intent classifier: it translates the user's intent
+into filters.
+
+**Tag filters** (CLI `--task-type`, `--outcome`, `--project`, `--component`,
+`--intent-like`; MCP `task_type`, `outcome`, `project`, `component`,
+`intent_like`) match the session's tags. The session's newest summary
+decides: when it is untagged, an older tagged row does not count. Values are
+lower-cased like the tags; `task_type` and `outcome` must be in the tag
+vocabulary (`dev|review|debug|plan|ops|research|chat|other`,
+`done|blocked|abandoned|ongoing|unknown`), `project` and `component` match one
+list item exactly, `intent_like` is a substring of `intent`; matches are
+re-checked on the parsed tags. A session without tags (never processed, or a
+`conv-v1` newest summary) never matches a tag
+filter. They work in the default mode too (they narrow the turn hits) and
+combine with `--app`, `--since` and `--archived-only`.
+
+**`--mode two_stage`** (MCP `mode: "two_stage"`) returns sessions, not turns.
+
+1. *Candidates* are the union of three lists, each cut to the caller's visible
+   apps (share policy and the requested app) before anything is ranked or
+   counted:
+   - `fts`: sessions with turns holding every query term (the default search,
+     up to 200 visible hits);
+   - `semantic`: sessions whose "summary + tags" text is close to the query,
+     embedded by the embedder the runtime already has (`MEMFW_EMBEDDING_URL`,
+     `_MODEL`, `_DIMENSION`, the one `memory_search` hybrid uses; the CLI reads
+     the same variables). The newest 200 summaries that pass the filters are
+     candidates; only uncached ones are sent, at most 64 per call (the rest are
+     scored on a later call), and vectors are memoised per process as packed
+     float32, at most 32 MiB. The embedder gets 8 seconds in total per call
+     with no retries. Without an embedder this list is empty and the response
+     says `degraded: ["no_embedder"]`; a timeout or error gives
+     `embedder_error`.
+     **Gate:** summaries are sent only to an embedder that is local (its
+     endpoint host is `localhost`, `127.0.0.0/8`, `::1` or `::ffff:127.x`,
+     or the provider says `local = True`; the strict, canonical rule; such a
+     request never goes through an environment proxy) or when `vault.yaml` has `conversations: {cloud: true}`,
+     the same switch a non-local worker backend needs. Otherwise the list is
+     skipped with `degraded: ["semantic_off"]` and the endpoint is never
+     contacted (a malformed `cloud` value counts as off);
+   - `tags`: sessions whose tags match the tag filters (up to 500, newest
+     summaries first).
+
+   Every filter applies to every list. The lists are fused by reciprocal rank
+   (k = 60); `matched_by` says which lists a session came from.
+2. *Per session* the response holds the session info, `archived`, `rank`,
+   `score`, `model_output` (`summary`, `tags`, `prompt_version`, labelled
+   `untrusted_model_output: true` and `[model_summarized: not verified]`, or
+   `null` when the worker has nothing) and up to `windows` (default 2, max 5)
+   redacted turn windows: `window_turns` (default 1, max 3) turns on each side
+   of a hit, each turn cut to 1200 characters. Hits are the store's matches;
+   for a session found only by meaning, its first 1000 turns are scanned for
+   any query term (5000 turns at most across all sessions of a call); a tag-only call has no windows (read the session with
+   `conversations_get`). The whole response stays within `max_bytes` (default
+   16 KiB, 4–64 KiB): sessions first, then windows by rank; `truncated` says
+   something was left out and `next_offset` pages on. A first session too big
+   on its own is shrunk (model summary cut, then tags and model output
+   dropped, then `cwd` and `project` emptied); if it still does not fit it is
+   skipped and `next_offset` moves past it, so paging always advances.
+   `archived` is `null` when the store cannot tell.
+
+The query may be empty when a tag filter is given:
+
+```sh
+memfw conversations search "" --mode two_stage --task-type debug --project memfw
+memfw conversations search "retry backoff" --mode two_stage --outcome done --since 2026-11-01
+```
+
+```json
+{"query": "", "mode": "two_stage", "task_type": "debug", "project": "memfw"}
+```
+
+Summaries and tags are model output: the response's `notice` and
+`untrusted_model_output: true` say so, and they are redacted again on the way
+out like every turn. A hidden or opted-out app's sessions are never candidates,
+never counted in `candidates`, and their summaries never reach the embedder.
+Nothing is written. Without `--mode` and the filters the output is unchanged.
 
 ## Scheduling
 

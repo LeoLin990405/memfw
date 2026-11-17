@@ -13,6 +13,7 @@ import pytest
 
 from memfw.mcp import protocol, schema, server, tools_dream, tools_search
 from memfw.runtime import search as runtime_search
+from tests.harness.m3c_allowance import expect_m3c_search
 
 #: Constants re-exported by ``memfw.mcp.server`` and the module that defines them.
 CONSTANTS = {
@@ -90,7 +91,9 @@ def with_expected_c2_changes(old: str) -> str:
     2. ``tools/list``: ``memory_context`` gains the optional ``slots`` property
        (C2) and the optional ``if_version`` property (C3), the current
        schema's; ``memory_remember`` gains the optional ``privacy``
-       property (MM0). Nothing else may differ.
+       property (MM0); ``conversations_search`` gains the M3c filter and
+       ``mode`` properties and their description (the current schema's).
+       Nothing else may differ.
 
     Idempotent: a base ref that already has C2 (or C3) is left as it is.
     """
@@ -102,6 +105,7 @@ def with_expected_c2_changes(old: str) -> str:
     if_version_property = slots["inputSchema"]["properties"]["if_version"]
     remember_tool = next(tool for tool in schema.TOOLS if tool["name"] == "memory_remember")
     privacy_property = remember_tool["inputSchema"]["properties"]["privacy"]
+    search_tool = next(tool for tool in schema.TOOLS if tool["name"] == "conversations_search")
     changed = copy.deepcopy(messages)
     seen = {"initialize": 0, "tools/list": 0}
     for item in changed:
@@ -118,6 +122,12 @@ def with_expected_c2_changes(old: str) -> str:
             # MM0: ``memory_remember`` gains the optional ``privacy`` property.
             remember = next(tool for tool in result["tools"] if tool["name"] == "memory_remember")
             remember["inputSchema"]["properties"]["privacy"] = privacy_property
+            # M3c: ``conversations_search`` gains exactly the M3c properties, a longer
+            # description and a ``query`` description; nothing else may change.
+            search = next(
+                tool for tool in result["tools"] if tool["name"] == "conversations_search"
+            )
+            expect_m3c_search(search, search_tool)
             seen["tools/list"] += 1
     assert seen == {"initialize": 1, "tools/list": 1}, seen
     return _render(changed)

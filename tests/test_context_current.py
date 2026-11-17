@@ -28,6 +28,7 @@ from memfw.ports.testing import check_context_pack, check_context_slot_provider,
 from memfw.runtime import build_runtime
 from memfw.runtime.usage import RuntimeOptions, options_from_config
 from tests.conversation_fixtures import isolated_home  # noqa: F401  (fixture)
+from tests.harness.m3c_allowance import with_m3c_tools_list
 
 pytestmark = pytest.mark.usefixtures("isolated_home")
 
@@ -416,5 +417,10 @@ def test_default_context_is_byte_identical_to_base_ref() -> None:
         old_ref=os.environ["MEMFW_ARCH_BASE_REF"],
     )
     for result in results:
-        assert result.identical, f"{result.payload}:\n{result.diff[:4000]}"
+        # M3c changes only the conversations_search entry of tools/list (checked
+        # narrowly by with_m3c_tools_list); every other reply must be identical.
+        expected = byte_identical.Comparison(
+            payload=result.payload, old=with_m3c_tools_list(result.old), new=result.new
+        )
+        assert expected.identical, f"{result.payload}:\n{expected.diff[:4000]}"
     assert '"memfw://context/topics"' in results[0].new

@@ -67,11 +67,47 @@ def search(
     offset: Annotated[int, typer.Option("--offset")] = 0,
     with_archive_state: ArchiveStateOption = False,
     archived_only: ArchivedOnlyOption = False,
+    mode: Annotated[
+        str | None,
+        typer.Option(
+            "--mode",
+            help="'default' (turn snippets) or 'two_stage' (ranked sessions: summary, tags,"
+            " turn windows)",
+        ),
+    ] = None,
+    task_type: Annotated[
+        str | None, typer.Option("--task-type", help="Tag filter: dev, review, debug, plan ...")
+    ] = None,
+    outcome: Annotated[
+        str | None, typer.Option("--outcome", help="Tag filter: done, blocked, ongoing ...")
+    ] = None,
+    project: Annotated[str | None, typer.Option("--project", help="Tag filter")] = None,
+    component: Annotated[str | None, typer.Option("--component", help="Tag filter")] = None,
+    intent_like: Annotated[
+        str | None, typer.Option("--intent-like", help="Tag filter: text inside the intent")
+    ] = None,
+    windows: Annotated[
+        int | None, typer.Option("--windows", help="two_stage: turn windows per session")
+    ] = None,
+    window_turns: Annotated[
+        int | None, typer.Option("--window-turns", help="two_stage: turns each side of a hit")
+    ] = None,
+    max_bytes: Annotated[
+        int | None, typer.Option("--max-bytes", help="two_stage: output size cap")
+    ] = None,
 ) -> None:
-    """Redacted snippets of turns matching every query term."""
+    """Redacted snippets of turns matching every query term (QUERY may be '' with
+    --mode two_stage and a tag filter)."""
 
     try:
-        share = open_share(root, as_app, store=store)
+        embedder = None
+        if mode == "two_stage":
+            import os
+
+            from memfw.runtime.settings import embedder_from_env
+
+            embedder = embedder_from_env(os.environ)
+        share = open_share(root, as_app, store=store, embedder=embedder)
         typer.echo(
             _dump(
                 share.search(
@@ -82,6 +118,15 @@ def search(
                     offset=offset,
                     with_archive_state=with_archive_state,
                     archived_only=archived_only,
+                    mode=mode,
+                    task_type=task_type,
+                    outcome=outcome,
+                    project=project,
+                    component=component,
+                    intent_like=intent_like,
+                    windows=windows,
+                    window_turns=window_turns,
+                    max_bytes=max_bytes,
                 )
             )
         )

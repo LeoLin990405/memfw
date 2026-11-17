@@ -42,7 +42,7 @@ import yaml  # noqa: F401
 from memfw.mcp.protocol import ProtocolMixin, _flag, _rpc_error, client_endpoint_fields
 from memfw.mcp.schema import INSTRUCTIONS, PROTOCOL, SEARCH_POLICIES, SERVER_INFO, TOOLS
 from memfw.mcp.tools_context import ContextTools
-from memfw.mcp.tools_conversations import ConversationTools
+from memfw.mcp.tools_conversations import ConversationTools, conversation_search_options
 from memfw.mcp.tools_dream import (
     DREAM_LIST_MAX,
     DREAM_MAX_CANDIDATES,
@@ -120,6 +120,7 @@ class Gateway(
                 since=str(args["since"]) if args.get("since") else None,
                 limit=int(args.get("limit") or 10),
                 offset=int(args.get("offset") or 0),
+                **conversation_search_options(args),
             ),
             "conversations_list": lambda args: self._conversations().list_sessions(
                 app=str(args["app"]) if args.get("app") else None,

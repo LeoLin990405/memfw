@@ -309,6 +309,79 @@ class WorkState:
                 return None
         return str(row["summary"]) if row else None
 
+    def session_labels(
+        self,
+        *,
+        keys: Sequence[tuple[str, str]] | None = None,
+        apps: Sequence[str] | None = None,
+        exclude: Sequence[str] = (),
+        filters: Mapping[str, str] | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]] | None:
+        """Each session's label: its newest session summary (the one ``session_summary`` reads).
+
+        Rows ``{"app", "session_id", "summary", "tags", "prompt_version"}``,
+        ``tags`` the raw JSON text or ``None`` (a ``conv-v1`` row), newest first,
+        at most ``limit``. ``keys`` restricts to those sessions; ``apps`` /
+        ``exclude`` to the app scope. ``filters`` (``task_type``, ``outcome``,
+        ``project``, ``component``, ``intent_like``; values already normalised)
+        keep only sessions whose newest summary is tagged and matches all of
+        them (an older tagged row behind a newer untagged one does not count).
+        ``None`` when there is no state file (nothing was ever processed); an
+        unreadable one gives ``[]``.
+        """
+
+        clauses = ["chunk_start = -1"]
+        params: list[Any] = []
+        if apps is not None:
+            if not apps:
+                return []
+            clauses.append(f"app IN ({','.join('?' * len(apps))})")
+            params.extend(apps)
+        if exclude:
+            clauses.append(f"app NOT IN ({','.join('?' * len(exclude))})")
+            params.extend(exclude)
+        if keys is not None:
+            if not keys:
+                return []
+            clauses.append("(" + " OR ".join("(app = ? AND session_id = ?)" for _ in keys) + ")")
+            params.extend(value for key in keys for value in key)
+        outer = ["n = 1"]
+        outer_params: list[Any] = []
+        wanted = dict(filters or {})
+        if wanted:
+            outer.append("tags IS NOT NULL AND json_valid(tags)")
+        for name, path in (("task_type", "$.task_type"), ("outcome", "$.outcome")):
+            if name in wanted:
+                outer.append(f"json_extract(tags, '{path}') = ?")
+                outer_params.append(wanted[name])
+        for name, path in (("project", "$.project"), ("component", "$.components")):
+            if name in wanted:
+                outer.append(f"EXISTS (SELECT 1 FROM json_each(tags, '{path}') WHERE value = ?)")
+                outer_params.append(wanted[name])
+        if "intent_like" in wanted:
+            outer.append("instr(lower(COALESCE(json_extract(tags, '$.intent'), '')), ?) > 0")
+            outer_params.append(wanted["intent_like"])
+        sql = (
+            "WITH best AS (SELECT app, session_id, summary, tags, prompt_version, created_at,"
+            " ROW_NUMBER() OVER (PARTITION BY app, session_id ORDER BY"
+            " chunk_end DESC, created_at DESC) AS n FROM summaries"
+            f" WHERE {' AND '.join(clauses)})"
+            " SELECT app, session_id, summary, tags, prompt_version FROM best"
+            f" WHERE {' AND '.join(outer)}"
+            " ORDER BY created_at DESC, app, session_id LIMIT ?"
+        )
+        with self.open_readonly() as connection:
+            if connection is None:
+                return None
+            try:
+                rows = connection.execute(
+                    sql, [*params, *outer_params, max(0, int(limit))]
+                ).fetchall()
+            except sqlite3.Error:
+                return []  # an old or damaged state file matches nothing
+        return [dict(row) for row in rows]
+
     def status(self) -> dict[str, Any]:
         with self.open_readonly() as connection:
             if connection is None:
