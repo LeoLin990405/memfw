@@ -108,12 +108,16 @@ class Settings:
     max_rows: int = 50
     max_query_chars: int = 1_000
     max_answer_chars: int = 4_000
+    #: Allow a server whose LLM or embedding host is not a literal loopback address.
+    cloud: bool = False
 
     def __post_init__(self) -> None:
         check_loopback_url(self.base_url)
         if not isinstance(self.api_key_env, str) or not _ENV_NAME_RE.fullmatch(self.api_key_env):
             raise ValueError("bad_option")
-        if not isinstance(self.require_api_key, bool) or self.mode not in MODES:
+        if not isinstance(self.require_api_key, bool) or not isinstance(self.cloud, bool):
+            raise ValueError("bad_option")
+        if self.mode not in MODES:
             raise ValueError("bad_option")
         timeout = self.timeout
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
@@ -252,6 +256,60 @@ class LightRagClient:
             return json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, ValueError):
             raise LightRagError("bad_response") from None
+
+
+# -- the server's own model hosts -----------------------------------------------------------
+
+#: Keys in ``/health`` ``configuration`` naming where the server sends text.
+HOST_KEYS: tuple[str, ...] = ("llm_binding_host", "embedding_binding_host")
+_HOSTISH = re.compile(r"(?:host|base_url|endpoint|url)$", re.IGNORECASE)
+
+
+def _host_is_loopback(value: Any) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return False
+    parts = urlsplit(value.strip())
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return False
+    return _loopback(parts.hostname)
+
+
+def _nested_hosts(value: Any, key: str = "") -> list[Any]:
+    """Every value under a host-like key (``*host``, ``*base_url``, ``*endpoint``, ``*url``)."""
+
+    if isinstance(value, Mapping):
+        return [found for k, v in value.items() for found in _nested_hosts(v, str(k))]
+    if isinstance(value, list):
+        return [found for item in value for found in _nested_hosts(item, key)]
+    return [value] if _HOSTISH.search(key) and value not in (None, "") else []
+
+
+def server_gate(health: Any, *, cloud: bool) -> str:
+    """``""`` when this ``/health`` answer may receive memories and queries, else a code.
+
+    The server must be the pinned release (``core_version``), must show its
+    configuration (that needs the API key), and must send text only to literal
+    loopback hosts: ``llm_binding_host`` and ``embedding_binding_host`` (both
+    required), a rerank host when one is set, and any host-like value in its
+    per-role LLM settings. ``cloud`` lifts only the loopback rule.
+    """
+
+    if not isinstance(health, Mapping):
+        return "bad_response"
+    if health.get("core_version") != EXTERNAL_VERSION:
+        return "version_mismatch"
+    config = health.get("configuration")
+    if not isinstance(config, Mapping):
+        return "health_unauthenticated"
+    hosts = [config.get(key) for key in HOST_KEYS]
+    if any(not isinstance(host, str) or not host.strip() for host in hosts):
+        return "health_incomplete"
+    if config.get("rerank_binding_host") not in (None, ""):
+        hosts.append(config.get("rerank_binding_host"))
+    hosts += _nested_hosts(config.get("role_llm_config"))
+    if not cloud and not all(_host_is_loopback(host) for host in hosts):
+        return "cloud_not_allowed"
+    return ""
 
 
 # -- sources --------------------------------------------------------------------------------
@@ -486,10 +544,18 @@ class LightRagDeriver:
             key: value[key] for key in ("status", "core_version", "api_version") if key in value
         }
 
+    def check_server(self) -> None:
+        """Refuse a server that is another release or sends text off this machine."""
+
+        self._ensure()
+        refused = server_gate(self.client.call("GET", "/health"), cloud=self.settings.cloud)
+        if refused:
+            raise LightRagError(refused)
+
     def sync(self, vault: Path, memory_ids: Sequence[str]) -> SyncResult:
         """Offer the shareable requested memories to the server, one document each."""
 
-        self._ensure()
+        self.check_server()
         memories = self._memories(vault, memory_ids)
         inserted: list[str] = []
         present: list[str] = []
@@ -534,6 +600,7 @@ class LightRagDeriver:
         self._ensure()
         query, mode = self._query(request)
         memories = self._memories(vault, request.memory_ids)
+        self.check_server()
         current = _current(memories, self.settings.max_chars)
         payload = {"query": query, "mode": mode, "top_k": self.settings.top_k}
         if request.kind == "graph":
@@ -636,6 +703,7 @@ __all__ = [
     "document_text",
     "factory",
     "graph_rows",
+    "server_gate",
     "loopback_opener",
     "parse_sources",
     "source_name",

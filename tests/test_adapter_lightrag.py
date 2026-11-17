@@ -110,21 +110,25 @@ class FakeServer:
             "POST /query/data": RECORDED["query_data"],
             "POST /query": RECORDED["query_answer"],
         }
-        self.requests: list[dict[str, Any]] = []
+        self.requests: list[dict[str, Any]] = []  # everything but the /health gate
+        self.health_calls = 0
 
     def __call__(self, request: urllib.request.Request, timeout: float) -> Any:
         path = request.full_url.split("9621", 1)[1]
         body = json.loads(request.data) if request.data else None
-        self.requests.append(
-            {
-                "method": request.get_method(),
-                "url": request.full_url,
-                "path": path,
-                "headers": dict(request.header_items()),
-                "body": body,
-                "timeout": timeout,
-            }
-        )
+        if path == "/health":
+            self.health_calls += 1
+        else:
+            self.requests.append(
+                {
+                    "method": request.get_method(),
+                    "url": request.full_url,
+                    "path": path,
+                    "headers": dict(request.header_items()),
+                    "body": body,
+                    "timeout": timeout,
+                }
+            )
         answer = self.routes[f"{request.get_method()} {path}"]
         if isinstance(answer, int):
             raise urllib.error.HTTPError(request.full_url, answer, "error", {}, io.BytesIO(b"{}"))  # type: ignore[arg-type]
@@ -403,10 +407,57 @@ def test_transport_failures_are_short_codes(vault: Path, failure: Any, code: str
     assert raised.value.code == code
 
 
+HEALTH = RECORDED["health"]
+
+
+def _health(**config: Any) -> dict[str, Any]:
+    return {**HEALTH, "configuration": {**HEALTH["configuration"], **config}}
+
+
+@pytest.mark.parametrize(
+    ("health", "code"),
+    [
+        (HEALTH, ""),
+        ({**HEALTH, "core_version": "1.5.8"}, "version_mismatch"),
+        ({k: v for k, v in HEALTH.items() if k != "configuration"}, "health_unauthenticated"),
+        (_health(llm_binding_host=None), "health_incomplete"),
+        (_health(embedding_binding_host=""), "health_incomplete"),
+        (_health(llm_binding_host="https://api.openai.com/v1"), "cloud_not_allowed"),
+        (_health(embedding_binding_host="http://localhost:11434"), "cloud_not_allowed"),
+        (_health(rerank_binding_host="https://rerank.example.com"), "cloud_not_allowed"),
+        (_health(role_llm_config={"query": {"host": "https://x.example"}}), "cloud_not_allowed"),
+        (_health(role_llm_config={"extract": [{"base_url": "192.0.2.4"}]}), "cloud_not_allowed"),
+        ("nope", "bad_response"),
+    ],
+)
+def test_server_gate(health: Any, code: str) -> None:
+    from memfw_adapter_lightrag.deriver import server_gate
+
+    assert server_gate(health, cloud=False) == code
+    if code == "cloud_not_allowed":
+        assert server_gate(health, cloud=True) == ""
+
+
+@pytest.mark.parametrize("kind", ["sync", "graph", "answer"])
+def test_a_server_using_a_cloud_model_gets_nothing(vault: Path, kind: str) -> None:
+    server = FakeServer()
+    server.routes["GET /health"] = _health(llm_binding_host="https://api.openai.com/v1")
+    deriver, _ = make(server)
+    with pytest.raises(LightRagError, match="cloud_not_allowed"):
+        if kind == "sync":
+            deriver.sync(vault, IDS)
+        else:
+            deriver.derive(vault, query(kind, mode="naive"))
+    assert server.requests == []  # neither memories nor the query left
+    allowed, _ = make(server, cloud=True)
+    allowed.sync(vault, ("m-backup",))
+    assert server.requests
+
+
 def test_health_reports_status_fields_only() -> None:
     deriver, server = make()
     assert deriver.health() == {"status": "healthy", "core_version": "1.5.7", "api_version": "0261"}
-    assert server.requests[0]["method"] == "GET"
+    assert server.health_calls == 1
 
 
 def test_registry_loads_it_only_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:

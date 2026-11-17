@@ -4,6 +4,19 @@
  "health": {
   "api_version": "0261",
   "auth_mode": "enabled",
+  "configuration": {
+   "embedding_binding": "ollama",
+   "embedding_binding_host": "http://127.0.0.1:11434",
+   "embedding_model": "nomic-embed-text",
+   "enable_rerank": false,
+   "llm_binding": "ollama",
+   "llm_binding_host": "http://127.0.0.1:11434",
+   "llm_model": "qwen2.5:7b-instruct",
+   "rerank_binding": "null",
+   "rerank_binding_host": null,
+   "rerank_model": null,
+   "role_llm_config": {}
+  },
   "core_version": "1.5.7",
   "pipeline_busy": false,
   "status": "healthy"

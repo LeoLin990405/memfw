@@ -32,6 +32,20 @@ elsewhere) (`bad_base_url`), so no setting can send memories to another host. By
 refuses to run when that variable is empty (`missing_key`); `require_api_key: false` exists
 only for a server you have locked down some other way.
 
+## The server's own model hosts
+
+Before `sync` and every query the adapter reads `GET /health` (with the key, so the server
+shows its configuration) and refuses to go on unless:
+
+- `core_version` is `1.5.7` (`version_mismatch`);
+- the configuration is shown (`health_unauthenticated`) and names both `llm_binding_host` and
+  `embedding_binding_host` (`health_incomplete`);
+- those, a rerank host if one is set, and every host-like value in the per-role LLM settings
+  are `http`/`https` to a literal loopback address (`cloud_not_allowed`). Start the server
+  with, for example, `LLM_BINDING_HOST=http://127.0.0.1:11434` and
+  `EMBEDDING_BINDING_HOST=http://127.0.0.1:11434` (its Ollama default names `localhost`,
+  which is refused). `cloud: true` in the adapter settings lifts only this last rule.
+
 ## What it sends and reads
 
 - `sync(vault, memory_ids)`: one `POST /documents/text` per memory, body
@@ -49,7 +63,7 @@ only for a server you have locked down some other way.
 - `derive(vault, DeriveRequest("answer", ids, {"query": ...}))`: `POST /query` with
   `include_references: true`, `stream: false`. The view holds the answer (labelled
   `untrusted_model_output`) and its source ids.
-- `health()`: `GET /health`, status fields only.
+- `health()`: `GET /health`, status fields only (the gate above uses the full answer).
 
 Every request carries `X-API-Key`. Proxy variables are ignored for the loopback host and
 redirects are refused. Errors are short codes (`http_401`, `unreachable`, `bad_response`,
@@ -93,6 +107,7 @@ adapters:
     # max_rows: 50
     # max_query_chars: 1000
     # max_answer_chars: 4000
+    # cloud: false                  # allow non-loopback LLM/embedding hosts on the server
 ```
 
 ## Tests and fixtures
