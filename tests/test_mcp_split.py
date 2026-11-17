@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from memfw.mcp import protocol, schema, server, tools_dream, tools_search
+from memfw.runtime import search as runtime_search
 
 #: Constants re-exported by ``memfw.mcp.server`` and the module that defines them.
 CONSTANTS = {
@@ -24,8 +25,9 @@ CONSTANTS = {
     "SEARCH_POLICIES": schema,
     "SERVER_INFO": schema,
     "TOOLS": schema,
-    "_FRESHNESS_READ_ATTEMPTS": tools_search,
-    "_RAW_HASH_CACHE": tools_search,
+    # Moved below the interface in A3b; ``tools_search`` keeps aliases too.
+    "_FRESHNESS_READ_ATTEMPTS": runtime_search,
+    "_RAW_HASH_CACHE": runtime_search,
 }
 #: Defined in ``server.py`` itself.
 OWN = {"Gateway", "main", "serve"}
@@ -41,8 +43,10 @@ def test_server_reexports_are_the_defining_modules_objects() -> None:
     }
     for name, module in CONSTANTS.items():
         assert getattr(server, name) is getattr(module, name), name
-    assert server._RawHashCache is tools_search._RawHashCache
-    assert server._frontmatter_version is tools_search._frontmatter_version
+    assert server._RawHashCache is runtime_search._RawHashCache
+    assert server._frontmatter_version is runtime_search._frontmatter_version
+    for name in ("_FRESHNESS_READ_ATTEMPTS", "_RAW_HASH_CACHE", "_RawHashCache"):
+        assert getattr(tools_search, name) is getattr(runtime_search, name), name
     assert server.client_endpoint_fields is protocol.client_endpoint_fields
     for name in OWN:
         assert getattr(server, name).__module__ == "memfw.mcp.server", name

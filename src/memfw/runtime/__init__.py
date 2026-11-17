@@ -13,6 +13,13 @@ composes the other slots (``Runtime.context_slot_provider``): ``handoff``
 reads the conversation share as the calling app, ``topics`` the concept
 catalogue (``context_sources``), so ``memfw.context`` imports neither.
 
+A3b moves the rest of the MCP server's wiring here: ``resolve_settings``
+(explicit values, else ``MEMFW_*``, the embedder included),
+``Runtime.open_repository`` (per call, never creating a vault), every
+``memory_search`` mode with its row building (``Runtime.search``), and the
+remember, related, status, conversation share, history and dream facades.
+The capability modules behind them are imported on first use.
+
 There is no ``runtime:`` section in ``vault.yaml`` yet; the default assembly
 is exactly what the MCP server built before (byte-identical output except
 timing fields).
@@ -34,6 +41,7 @@ from .runtime import (
     Runtime,
     build_runtime,
 )
+from .settings import RuntimeSettings, history_refresh_seconds, resolve_settings
 
 __all__ = [
     "CONTEXT_SLOT_TIMEOUTS",
@@ -43,6 +51,9 @@ __all__ = [
     "Observed",
     "RecallOutcome",
     "Runtime",
+    "RuntimeSettings",
     "build_runtime",
     "ensure_search_index",
+    "history_refresh_seconds",
+    "resolve_settings",
 ]

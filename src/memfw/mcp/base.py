@@ -2,66 +2,47 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
-from memfw.core.errors import MemfwError, NotFoundError
-from memfw.core.models import Layer, MemoryDocument, Tier
-from memfw.core.repository import Repository
-from memfw.notes import HttpEmbeddingProvider
-from memfw.runtime import build_runtime
+from memfw.runtime import build_runtime, history_refresh_seconds, resolve_settings
 
-# Re-exported for the tool groups, so each import line stays in one module.
-__all__ = [
-    "GatewayBase",
-    "HttpEmbeddingProvider",
-    "Layer",
-    "MemfwError",
-    "MemoryDocument",
-    "NotFoundError",
-    "Repository",
-    "Tier",
-]
+__all__ = ["GatewayBase"]
 
 
 class GatewayBase:
-    """The bound vault and caller; ``memfw.mcp.server.Gateway`` composes the tool groups."""
+    """The bound vault and caller; ``memfw.mcp.server.Gateway`` composes the tool groups.
+
+    Settings (explicit arguments, else ``MEMFW_*``) are resolved by the
+    runtime (``memfw.runtime.resolve_settings``); every capability, the vault
+    opener included, comes from ``self.runtime``.
+    """
 
     def __init__(
         self,
         root: Path | str,
         *,
-        embedder: HttpEmbeddingProvider | None = None,
+        embedder: Any = None,
         tenant: str | None = None,
         entity_enabled: bool | None = None,
         allowed_sources: tuple[str, ...] | None = None,
         app: str | None = None,
     ) -> None:
         self.root = Path(root).expanduser()
-        self.app = (app if app is not None else os.environ.get("MEMFW_APP", "")).strip()
-        self.tenant = tenant if tenant is not None else os.environ.get("MEMFW_TENANT", "")
-        self.entity_enabled = (
-            entity_enabled
-            if entity_enabled is not None
-            else os.environ.get("MEMFW_ENTITY_ENABLED", "").lower() in {"1", "true", "yes"}
+        settings = resolve_settings(
+            embedder=embedder,
+            tenant=tenant,
+            entity_enabled=entity_enabled,
+            allowed_sources=allowed_sources,
+            app=app,
         )
-        configured_sources = os.environ.get("MEMFW_ALLOWED_SOURCES", "")
-        self.allowed_sources = (
-            allowed_sources
-            if allowed_sources is not None
-            else tuple(item.strip() for item in configured_sources.split(",") if item.strip())
-        )
-        if embedder is None:
-            endpoint = os.environ.get("MEMFW_EMBEDDING_URL")
-            if endpoint:
-                embedder = HttpEmbeddingProvider(
-                    endpoint,
-                    model=os.environ.get("MEMFW_EMBEDDING_MODEL", "embedding-model"),
-                    dimension=int(os.environ.get("MEMFW_EMBEDDING_DIMENSION", "1024")),
-                )
-        self.embedder = embedder
+        self.app = settings.app
+        self.tenant = settings.tenant
+        self.entity_enabled = settings.entity_enabled
+        self.allowed_sources = settings.allowed_sources
+        self.embedder = settings.embedder
         # The composition root owns the recall wiring and the index check: one
         # Runtime per Gateway, one InflightRegistry per Runtime. Every
         # ``mode=two_stage`` call shares it, so a hung provider holds at most
@@ -75,20 +56,17 @@ class GatewayBase:
         )
         self.dream_clock: Callable[[], datetime] = lambda: datetime.now(UTC)
         self._last_staged: float | None = None
-        self.history_refresh_seconds = float(
-            os.environ.get("MEMFW_HISTORY_REFRESH_SECONDS", "30") or 0
-        )
+        self.history_refresh_seconds = history_refresh_seconds()
 
-    def _repo(self) -> Repository:
-        """Open an existing vault. A missing root is an error; never init one."""
-        root = self.root
-        if not root.is_dir() or not (root / "vault.yaml").is_file():
-            raise ValueError("vault root does not exist")
-        return Repository(root)
+    def _repo(self) -> Any:
+        """Open an existing vault (``Runtime.open_repository``): never init one.
 
-    def _visible(self, document: MemoryDocument) -> bool:
+        Opened per call from the configured root, so a symlinked or relative
+        root is followed per call.
+        """
+        return self.runtime.open_repository()
+
+    def _visible(self, document: Any) -> bool:
         """In the bound tenant and, when ``MEMFW_ALLOWED_SOURCES`` is set, an allowed source."""
 
-        if document.tenant != self.tenant:
-            return False
-        return not self.allowed_sources or document.source in self.allowed_sources
+        return self.runtime.visible(document)

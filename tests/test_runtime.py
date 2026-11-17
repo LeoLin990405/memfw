@@ -1,4 +1,4 @@
-"""``memfw.runtime`` (A3a): the composition root owns the two_stage recall wiring."""
+"""``memfw.runtime`` (A3a, A3b): the composition root owns the recall wiring and the opener."""
 
 from __future__ import annotations
 
@@ -391,3 +391,51 @@ def test_mcp_checks_the_index_through_the_runtime_before_recall(tmp_path: Path) 
         )
         gateway.search("homelab backup", mode="two_stage")
     assert order == ["index", "recall"]
+
+
+# --- A3b: settings and the vault opener come from the Runtime ----------------
+
+
+def test_resolve_settings_reads_the_environment_unless_given() -> None:
+    from memfw.notes import HttpEmbeddingProvider
+    from memfw.runtime import resolve_settings
+
+    env = {
+        "MEMFW_APP": " kimi ",
+        "MEMFW_TENANT": "alpha",
+        "MEMFW_ENTITY_ENABLED": "Yes",
+        "MEMFW_ALLOWED_SOURCES": "nas, ,manual",
+        "MEMFW_EMBEDDING_URL": "http://127.0.0.1:9/v1/embeddings",
+        "MEMFW_EMBEDDING_DIMENSION": "8",
+    }
+    settings = resolve_settings(environ=env)
+    assert (settings.app, settings.tenant, settings.entity_enabled) == ("kimi", "alpha", True)
+    assert settings.allowed_sources == ("nas", "manual")
+    assert isinstance(settings.embedder, HttpEmbeddingProvider)
+    explicit = resolve_settings(
+        tenant="", entity_enabled=False, allowed_sources=(), app="", environ=env, embedder="e"
+    )
+    assert (explicit.app, explicit.tenant, explicit.entity_enabled) == ("", "", False)
+    assert (explicit.allowed_sources, explicit.embedder) == ((), "e")
+    assert resolve_settings(environ={}).embedder is None
+
+
+def test_open_repository_refuses_a_missing_vault_and_never_creates_one(tmp_path: Path) -> None:
+    runtime = build_runtime(tmp_path / "missing")
+    with pytest.raises(ValueError, match="^vault root does not exist$"):
+        runtime.open_repository()
+    assert not (tmp_path / "missing").exists()
+    (tmp_path / "empty").mkdir()
+    with pytest.raises(ValueError, match="^vault root does not exist$"):
+        build_runtime(tmp_path / "empty").open_repository()
+    assert list((tmp_path / "empty").iterdir()) == []
+
+
+def test_open_repository_follows_a_moved_symlink_per_call(tmp_path: Path) -> None:
+    link, target_b = _two_vaults(tmp_path)
+    runtime = build_runtime(link)
+    assert runtime.open_repository().root == (tmp_path / "a").resolve()
+    link.unlink()
+    link.symlink_to(target_b, target_is_directory=True)
+    assert runtime.open_repository().root == target_b.resolve()
+    assert runtime.root == link

@@ -2,19 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from typing import Any
 
-from memfw.history import HistoryLimits, TranscriptIndex, default_db, sources_from_config
-from memfw.history.index import split_ref
 from memfw.mcp.base import GatewayBase
-from memfw.mcp.tools_conversations import OPERATOR, SharePolicy
 
 
 class HistoryTools(GatewayBase):
     """Transcript history tools, scoped by the conversation share rules."""
 
-    def _history(self) -> TranscriptIndex:
+    def _history(self) -> Any:
         """Transcript index from ``history_sources`` in vault.yaml.
 
         Refreshed incrementally, at most once per ``MEMFW_HISTORY_REFRESH_SECONDS``
@@ -22,47 +18,19 @@ class HistoryTools(GatewayBase):
         """
         return self._history_scoped()[0]
 
-    def _history_scoped(self) -> tuple[TranscriptIndex, frozenset[str] | None]:
+    def _history_scoped(self) -> tuple[Any, frozenset[str] | None]:
         """The index and the source names this caller may read (``None``: all).
 
-        The same visibility as the conversation tools: a source named after an app
-        in ``conversation_optout.agents`` or with ``readable: false`` is never
-        returned, and the caller's own rule applies (opted out or ``can_read:
-        false`` is refused; a ``can_read`` list narrows the sources). The index
-        keeps every configured source, so hidden ones are filtered per query.
+        The same visibility as the conversation tools (``Runtime.history_scoped``):
+        a source named after an app in ``conversation_optout.agents`` or with
+        ``readable: false`` is never returned, and the caller's own rule applies
+        (opted out or ``can_read: false`` is refused; a ``can_read`` list narrows
+        the sources). The index keeps every configured source, so hidden ones are
+        filtered per query.
         """
-        repository = self._repo()
-        config = repository.read_config()
-        sources = sources_from_config(config)
-        if not sources:
-            raise ValueError("no history_sources configured in vault.yaml")
-        allowed = self._history_allowed(SharePolicy.from_config(config), sources)
-        index = TranscriptIndex(
-            default_db(repository.root), sources, limits=HistoryLimits.from_config(config)
+        return self.runtime.history_scoped(
+            self._repo(), self.app, refresh_seconds=self.history_refresh_seconds
         )
-        # Never wait on another refresh: serve the existing index instead.
-        index.refresh(min_interval=self.history_refresh_seconds, blocking=False)
-        return index, allowed
-
-    def _history_allowed(
-        self, policy: SharePolicy, sources: Sequence[Any]
-    ) -> frozenset[str] | None:
-        caller = (self.app or "").strip().lower()
-        if caller and caller in policy.optout:
-            raise ValueError(f"app {caller} has opted out of conversation sharing")
-        can_read = True if caller == OPERATOR else policy.rule(caller).can_read
-        if can_read is False:
-            raise ValueError(f"app {caller or '(unnamed)'} may not read shared conversations")
-        hidden = set(policy.hidden())
-        include = None if can_read is True else set(can_read)
-        names = [str(source.name) for source in sources]
-        allowed = frozenset(
-            name
-            for name in names
-            if name.strip().lower() not in hidden
-            and (include is None or name.strip().lower() in include)
-        )
-        return None if len(allowed) == len(names) else allowed
 
     @staticmethod
     def _history_source(source: str, allowed: frozenset[str] | None) -> None:
@@ -82,7 +50,7 @@ class HistoryTools(GatewayBase):
         index, allowed = self._history_scoped()
         self._history_source(source, allowed)
         if source or allowed is None:
-            listed = index.list(
+            listed: dict[str, Any] = index.list(
                 source=source or None,
                 session=session or None,
                 since=since or None,
@@ -137,7 +105,7 @@ class HistoryTools(GatewayBase):
         index, allowed = self._history_scoped()
         self._history_source(source, allowed)
         if source or allowed is None:
-            return index.search(
+            found: dict[str, Any] = index.search(
                 query,
                 source=source or None,
                 session=session or None,
@@ -145,6 +113,7 @@ class HistoryTools(GatewayBase):
                 until=until or None,
                 limit=limit,
             )
+            return found
         parts = [
             index.search(
                 query,
@@ -170,5 +139,6 @@ class HistoryTools(GatewayBase):
     ) -> dict[str, Any]:
         index, allowed = self._history_scoped()
         if allowed is not None:
-            self._history_source(split_ref(ref)[0], allowed)
-        return index.read(ref, before=before, after=after, max_bytes=max_bytes)
+            self._history_source(self.runtime.history_ref_source(ref), allowed)
+        window: dict[str, Any] = index.read(ref, before=before, after=after, max_bytes=max_bytes)
+        return window

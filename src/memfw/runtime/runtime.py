@@ -1,4 +1,4 @@
-"""``Runtime`` and ``build_runtime``: recall (A3a) and context (C1, C2) wiring for interfaces."""
+"""``Runtime`` and ``build_runtime``: recall (A3a), context (C1, C2) and tool (A3b) wiring."""
 
 from __future__ import annotations
 
@@ -34,6 +34,8 @@ from .context_sources import concept_catalogue, share_feed
 from .index import ensure_search_index
 
 if TYPE_CHECKING:
+    from memfw.conversations import ConversationShare
+    from memfw.history import TranscriptIndex
     from memfw.recall import RecallResult
 
 #: Default per-provider wait in ``mode=two_stage`` (the coordinator's total
@@ -152,11 +154,202 @@ class Runtime:
         """
 
         if repository is None:
-            root = self.root
-            if not root.is_dir() or not (root / "vault.yaml").is_file():
-                raise ValueError("vault root does not exist")
-            repository = Repository(root)
+            repository = self.open_repository()
         ensure_search_index(repository)
+
+    def open_repository(self) -> Repository:
+        """Open the existing vault at ``root``; never create one.
+
+        A missing root (or one without ``vault.yaml``) raises
+        ``ValueError("vault root does not exist")``. Opened per call from the
+        configured (unresolved) root, so a symlinked or relative root follows
+        its current target on every call; the Runtime never keeps one open.
+        """
+
+        root = self.root
+        if not root.is_dir() or not (root / "vault.yaml").is_file():
+            raise ValueError("vault root does not exist")
+        return Repository(root)
+
+    def visible(self, document: MemoryDocument) -> bool:
+        """In the bound tenant and, when allowed sources are set, an allowed source."""
+
+        return self._visible(document)
+
+    # --- memory_search (A3b) ----------------------------------------------------
+
+    def search(
+        self,
+        repository: Repository,
+        query: str,
+        limit: int,
+        *,
+        mode: str,
+        source: str,
+        include_history: bool,
+        as_of: str | None,
+        rounds: int | None,
+        scope: str,
+        policy: str,
+        labels: bool,
+        client_message: Callable[[str, Path], str],
+    ) -> dict[str, Any]:
+        """``memory_search`` on the caller's open vault, every mode.
+
+        fts (the shared read-only reader), hybrid and vector
+        (``MemoryHybridRetriever``), multihop, two_stage (``recall``), plus
+        ontology alias expansion and the U2 labels; rows are built here.
+        The interface has checked the arguments already. ``client_message``
+        cleans error texts that may name vault paths.
+        """
+
+        from .search import memory_search
+
+        return memory_search(
+            self,
+            repository,
+            query,
+            limit,
+            mode=mode,
+            source=source,
+            include_history=include_history,
+            as_of=as_of,
+            rounds=rounds,
+            scope=scope,
+            policy=policy,
+            labels=labels,
+            client_message=client_message,
+        )
+
+    # --- memory_remember, memory_related, memory_status (A3b) -------------------
+
+    def remember(
+        self,
+        content: str,
+        title: str,
+        *,
+        tags: list[str] | None,
+        related: list[str] | None,
+    ) -> dict[str, Any]:
+        """Stage ``content`` as a candidate under ``_candidates/remember/`` (no authority)."""
+
+        from .memories import REMEMBER_MAX_BYTES, stage_remember
+
+        if len(content.encode("utf-8")) > REMEMBER_MAX_BYTES:
+            raise ValueError("content exceeds 64 KiB")
+        text = content.strip()
+        if not text:
+            raise ValueError("content required")
+        repository = self.open_repository()
+        return stage_remember(
+            self.root,
+            repository,
+            text,
+            title,
+            tenant=self.tenant,
+            embedder=self.embedder,
+            tags=tags,
+            related=related,
+        )
+
+    def related(self, repository: Repository, memory_id: str, limit: int) -> dict[str, Any]:
+        """``memory_related`` for a memory visible to this Runtime's caller."""
+
+        from .memories import related_memories
+
+        return related_memories(
+            self.root, repository, memory_id, limit, tenant=self.tenant, visible=self._visible
+        )
+
+    def status(self, repository: Repository) -> dict[str, Any]:
+        """``memory_status``: visible memories per layer and tier, and the log head."""
+
+        from .memories import vault_status
+
+        return vault_status(repository, visible=self._visible)
+
+    # --- conversations and history (A3b) ----------------------------------------
+
+    def conversation_share(self, app: str) -> ConversationShare:
+        """The shared conversation store as ``app`` sees it.
+
+        ``app`` is required and may not be the reserved operator name; the
+        vault must exist.
+        """
+
+        from .sharing import check_conversation_app, open_share
+
+        check_conversation_app(app)
+        self.open_repository()
+        return open_share(self.root, app)
+
+    def history_scoped(
+        self, repository: Repository, app: str, *, refresh_seconds: float
+    ) -> tuple[TranscriptIndex, frozenset[str] | None]:
+        """The transcript index and the source names ``app`` may read (``None``: all).
+
+        The same visibility as the conversation share: a source named after
+        an opted-out app or with ``readable: false`` is never returned, and
+        the caller's own rule applies (opted out or ``can_read: false`` is
+        refused; a ``can_read`` list narrows the sources).
+        """
+
+        from .sharing import history_scoped
+
+        return history_scoped(repository, app, refresh_seconds=refresh_seconds)
+
+    @staticmethod
+    def history_ref_source(ref: str) -> str:
+        """The source name of a history ``ref`` (``SOURCE:FILE@OFFSET``)."""
+
+        from .sharing import ref_source
+
+        return ref_source(ref)
+
+    # --- dreams (A3b) -------------------------------------------------------------
+
+    def dream_run(
+        self,
+        repository: Repository,
+        *,
+        now: datetime,
+        dry_run: bool,
+        focus: str,
+        all_memories: bool,
+        limit: int,
+        max_sessions: int,
+        source: str,
+        since: str,
+        until: str,
+        stale_days: int,
+        min_events: int,
+    ) -> dict[str, Any]:
+        """One dream for this tenant, without a judge or a transcript index refresh."""
+
+        from .dreams import run_interface_dream
+
+        return run_interface_dream(
+            repository,
+            now=now,
+            dry_run=dry_run,
+            tenant=self.tenant,
+            focus=focus,
+            all_memories=all_memories,
+            limit=limit,
+            max_sessions=max_sessions,
+            source=source,
+            since=since,
+            until=until,
+            stale_days=stale_days,
+            min_events=min_events,
+        )
+
+    def staged_dreams(self, repository: Repository) -> tuple[list[dict[str, Any]], list[str]]:
+        """This tenant's staged dreams, newest first, and the entries skipped."""
+
+        from .dreams import staged_dreams
+
+        return staged_dreams(repository, tenant=self.tenant)
 
     def _two_stage_providers(
         self,
@@ -528,8 +721,8 @@ def build_runtime(
     """The default assembly: today's behaviour, no ``runtime:`` config yet.
 
     ``root`` is kept as configured (``expanduser`` only; see ``Runtime``).
-    Other values are taken as given; resolving them from the
-    environment stays with the interface for now (A3 follow-up).
+    Other values are taken as given: ``resolve_settings`` turns explicit
+    values or ``MEMFW_*`` into them (the MCP server passes its result).
     """
 
     return Runtime(

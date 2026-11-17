@@ -2,15 +2,9 @@
 
 from __future__ import annotations
 
-import json
-import os
-import stat
 import time
-from pathlib import Path
 from typing import Any
 
-from memfw.dream.run import DreamOptions, run_dream
-from memfw.dream.stage import DREAM_DIR
 from memfw.mcp.base import GatewayBase
 
 DREAM_MAX_LIMIT = 1000
@@ -23,30 +17,6 @@ DREAM_MAX_STAGED = 50
 """Staged dreams one tenant may have waiting for review before dream_run refuses to stage."""
 DREAM_STAGE_INTERVAL_SECONDS = 60.0
 """Least time between two staged dream_run calls of one server and tenant."""
-
-
-_REPORT_MAX_BYTES = 1024 * 1024
-
-
-def _read_dream_report(path: Path) -> dict[str, Any] | None:
-    """A staged dream's report.json, or None (symlink, not a file, too big, not JSON)."""
-
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        descriptor = os.open(path, flags)
-    except OSError:
-        return None
-    with os.fdopen(descriptor, "rb") as handle:
-        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
-            return None
-        raw = handle.read(_REPORT_MAX_BYTES + 1)
-    if len(raw) > _REPORT_MAX_BYTES:
-        return None
-    try:
-        data = json.loads(raw)
-    except ValueError:
-        return None
-    return data if isinstance(data, dict) else None
 
 
 class DreamTools(GatewayBase):
@@ -77,29 +47,20 @@ class DreamTools(GatewayBase):
         repository = self._repo()
         if not dry_run:
             self._check_stage_allowed()
-        options = DreamOptions(
-            tenant=self.tenant,
+        result = self.runtime.dream_run(
+            repository,
+            now=self.dream_clock(),
+            dry_run=dry_run,
             focus=focus,
             all_memories=all_memories,
             limit=limit,
             max_sessions=max_sessions,
-            source=source or None,
-            since=since or None,
-            until=until or None,
+            source=source,
+            since=since,
+            until=until,
             stale_days=stale_days,
             min_events=min_events,
-            # The judge is code that reads transcripts: only the operator's CLI picks
-            # one. vault.yaml's dream_judge is never honoured here either.
-            judge=None,
-            allow_config_judge=False,
-            # Never build or refresh the transcript index from MCP: staging writes
-            # only the dream's candidates (the index is the operator's CLI job).
-            refresh=False,
-            read_only_history=True,
         )
-        result = run_dream(
-            repository.root, now=self.dream_clock(), dry_run=dry_run, options=options
-        ).as_dict()
         if not dry_run:
             self._last_staged = time.monotonic()
         candidates = result["candidates"]
@@ -124,39 +85,7 @@ class DreamTools(GatewayBase):
     def _staged_dreams(self) -> tuple[list[dict[str, Any]], list[str]]:
         """This tenant's staged dreams (newest first) and the entries skipped."""
 
-        base = self._repo().root
-        for part in DREAM_DIR.parts:
-            base = base / part
-            if base.is_symlink() or (base.exists() and not base.is_dir()):
-                return [], [str(DREAM_DIR)]
-        if not base.is_dir():
-            return [], []
-        dreams: list[dict[str, Any]] = []
-        skipped: list[str] = []
-        for entry in sorted(os.scandir(base), key=lambda item: item.name):
-            if entry.name.startswith("."):
-                continue  # a dream being written (temporary directory)
-            if entry.is_symlink() or not entry.is_dir(follow_symlinks=False):
-                skipped.append(entry.name)
-                continue
-            report = _read_dream_report(Path(entry.path) / "report.json")
-            if report is None:
-                skipped.append(entry.name)
-                continue
-            if str(report.get("tenant") or "") != self.tenant:
-                continue
-            counts = report.get("candidates")
-            dreams.append(
-                {
-                    "dream_id": str(report.get("dream_id") or entry.name),
-                    "created_at": str(report.get("created_at") or ""),
-                    "recorded_at": str(report.get("recorded_at") or ""),
-                    "candidates": counts if isinstance(counts, dict) else {},
-                    "path": (DREAM_DIR / entry.name).as_posix(),
-                }
-            )
-        dreams.sort(key=lambda item: (item["created_at"], item["dream_id"]), reverse=True)
-        return dreams, skipped
+        return self.runtime.staged_dreams(self._repo())
 
     def dream_list(self, limit: int = 20) -> dict[str, Any]:
         """Staged dreams of this tenant, newest first. Symlinks are skipped, never followed."""
