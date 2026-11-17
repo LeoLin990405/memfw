@@ -1,0 +1,45 @@
+# memfw-adapter-bm25s: an in-process BM25 RecallProvider over a vault's
+# memories, built on bm25s (MIT) with jieba (MIT) for Chinese tokenization.
+# It depends on memfw-ports for the RecallProvider contract and the
+# stdlib-only vault reader; memfw itself never imports it. The operator
+# names it in vault.yaml (runtime.recall.adapters) and it is off otherwise.
+#
+# Build a wheel:  uv build --wheel --package memfw-adapter-bm25s
+[build-system]
+requires = ["hatchling==1.33.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "memfw-adapter-bm25s"
+version = "0.1.0"
+description = "bm25s (BM25) recall provider for the memfw recall coordinator"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+# Symlinks to memfw's own LICENSE and NOTICE (one copy of the text).
+license-files = ["LICENSE", "NOTICE"]
+dependencies = [
+    "memfw-ports==0.3.0",
+    # The ranker (MIT). Pinned: the on-disk index format is bm25s's own.
+    "bm25s==0.3.16",
+    # bm25s's only runtime dependency; pinned to the versions uv.lock resolves.
+    "numpy==2.4.6; python_version < '3.12'",
+    "numpy==2.5.5; python_version >= '3.12'",
+    # Chinese segmentation, the same dependency memfw's own FTS uses (MIT).
+    "jieba==0.42.1",
+    # vault.yaml is read with yaml.safe_load, exactly as memfw reads it (MIT).
+    "PyYAML==6.0.3",
+]
+
+[project.scripts]
+memfw-adapter-bm25s = "memfw_adapter_bm25s.cli:main"
+
+# Discovery only (AdapterRegistry.discover imports nothing); still off until enabled.
+[project.entry-points."memfw.adapters"]
+bm25s = "memfw_adapter_bm25s:SPEC"
+
+[tool.uv.sources]
+memfw-ports = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/memfw_adapter_bm25s"]

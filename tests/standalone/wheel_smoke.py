@@ -2,14 +2,16 @@
 
 Run it with the interpreter of a venv that has the wheels and NOT memfw:
 
-    python -I tests/standalone/wheel_smoke.py [--recall] [--deepseek]
+    python -I tests/standalone/wheel_smoke.py [--recall] [--deepseek] [--bm25s]
 
 It refuses to run when ``memfw`` is importable, imports the wheels, and runs
 the contract kit (``memfw_ports.testing``) against the reference
 implementations on a throwaway vault. With ``--recall`` it also runs
 ``memfw_recall.Coordinator`` over the reference recall provider; with
 ``--deepseek`` the ``memfw-adapter-deepseek`` wheel's backend passes
-``check_model_backend`` against its loopback fake (no network). Prints one
+``check_model_backend`` against its loopback fake (no network); with ``--bm25s``
+the ``memfw-adapter-bm25s`` wheel's provider passes ``check_recall_provider``
+on a throwaway vault (index outside it, under the temporary root). Prints one
 ``ok`` line per check and exits non-zero on the first failure. Standard
 library only; not collected by pytest (``tests/test_standalone_ports_wheel.py``
 drives it).
@@ -237,6 +239,38 @@ def _deepseek() -> None:
     _ok("check_model_backend DeepSeekBackend (fake server)")
 
 
+def _bm25s(root: Path) -> None:
+    """The bm25s adapter wheel over the memfw-ports wheel, on a throwaway vault."""
+
+    import memfw_ports.types
+    from memfw_adapter_bm25s import _ports as seam
+    from memfw_adapter_bm25s import factory
+    from memfw_ports.testing import check_recall_provider, tree_digest
+
+    leaked = sorted(m for m in sys.modules if m == "memfw" or m.startswith("memfw."))
+    assert not leaked, leaked
+    assert seam.Candidate is memfw_ports.types.Candidate, seam.Candidate
+    _ok("import memfw_adapter_bm25s (ports from memfw_ports)")
+    vault = _write_vault(root / "bm25s")
+    with (vault / "vault.yaml").open("a", encoding="utf-8") as handle:
+        handle.write("legacy_privacy_default: public\n")
+    before = tree_digest(vault)
+    provider = factory({"vault": str(vault), "data_dir": str(root / "bm25s-data")})
+    seen = check_recall_provider(
+        provider,
+        queries=["homelab backup", "HAL9000", "迁移 备份", ""],
+        vault=vault,
+        tenant_of=lambda candidate: TENANTS.get(candidate.ref, ""),
+    )
+    assert seen["HAL9000"][0].ref == "m-hal", seen["HAL9000"]
+    assert [c.ref for c in seen["迁移 备份"]] == ["m-zh"], seen["迁移 备份"]
+    assert "m-priv" not in [c.ref for hits in seen.values() for c in hits]
+    alpha = check_recall_provider(provider, queries=["homelab backup"], tenant="alpha")
+    assert [c.ref for c in alpha["homelab backup"]] == ["m-alpha"], alpha
+    assert tree_digest(vault) == before
+    _ok("check_recall_provider Bm25sProvider")
+
+
 def main(argv: list[str]) -> int:
     if importlib.util.find_spec("memfw") is not None:
         print("memfw is importable here; run this in a venv without memfw", file=sys.stderr)
@@ -248,6 +282,8 @@ def main(argv: list[str]) -> int:
             _recall(root)
         if "--deepseek" in argv:
             _deepseek()
+        if "--bm25s" in argv:
+            _bm25s(root)
     print("standalone wheel smoke passed")
     return 0
 

@@ -206,4 +206,5 @@ DYNAMIC_IMPORT_ALLOWED: Final[dict[str, tuple[str, int]]] = {
     "memfw.dream.run": ("operator-configured judge `module:function`", 1),
     "memfw.dream.skills.draft": ("operator-configured drafter `module:function`", 1),
     "memfw.index.readonly": ("standalone script loads sibling read_path.py", 1),
+    "memfw.runtime.recall_adapters": ("operator-configured recall provider `module:factory`", 1),
 }

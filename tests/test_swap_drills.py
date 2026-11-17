@@ -10,7 +10,9 @@ tenant/privacy isolation still hold.
 from __future__ import annotations
 
 import functools
+import importlib.util
 import json
+import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -127,6 +129,34 @@ RECALL: dict[str, Factory] = {
     "hybrid": lambda root: HybridProvider(root, embedder=HashEmbeddingProvider(8)),
     "inmemory": lambda root: InMemoryRecallProvider.from_vault(root),
 }
+
+
+def _bm25s_drill() -> Factory | None:
+    """The bm25s adapter package, when its dependencies are installed (not by default).
+
+    An operator-configured ``module:factory``: its index lives outside the
+    vault, next to it here; every level is indexed so the drill sees the same
+    memories as the others. The kernel drills above run on a default install.
+    """
+
+    if importlib.util.find_spec("bm25s") is None or importlib.util.find_spec("jieba") is None:
+        return None
+    source = Path(__file__).resolve().parents[1] / "packages/adapters/memfw-adapter-bm25s/src"
+    if str(source) not in sys.path:  # a workspace member, not installed by memfw[dev]
+        sys.path.insert(0, str(source))
+    from memfw_adapter_bm25s import factory
+
+    return lambda root: factory(
+        {
+            "vault": str(root),
+            "clearance": "public,shared,local-private",
+            "data_dir": str(root.parent / "bm25s-data"),
+        }
+    )
+
+
+if (_bm25s := _bm25s_drill()) is not None:
+    RECALL["bm25s"] = _bm25s
 #: Index files a provider may build in the vault on first use, left out of
 #: the kit's byte-identical vault check: the hybrid retriever's disposable
 #: vector index and manifest (an index projection). Everything else, the

@@ -82,7 +82,35 @@ def test_wheel_versions_follow_the_ports_api_version() -> None:
 
 
 #: Workspace members: the two wheels built from memfw's tree, then the adapters.
-MEMBERS = ("memfw-ports", "memfw-recall", "adapters/memfw-adapter-deepseek")
+MEMBERS = (
+    "memfw-ports",
+    "memfw-recall",
+    "adapters/memfw-adapter-deepseek",
+    "adapters/memfw-adapter-bm25s",
+)
+#: Third-party wheels an adapter needs, by exact pin (the versions uv.lock
+#: resolves and the adapter's pyproject pins), installed before the local
+#: wheels (which are then installed with ``--no-index``).
+ADAPTER_DEPENDENCIES = (
+    "bm25s==0.3.16",
+    "jieba==0.42.1",
+    "PyYAML==6.0.3",
+    "numpy==2.4.6" if sys.version_info < (3, 12) else "numpy==2.5.5",
+)
+
+
+def _install_pinned(uv: str, python: Path) -> None:
+    """The pinned dependencies from uv's cache when it has them, else from the index."""
+
+    base = (uv, "pip", "install", "--quiet", "--python", python)
+    offline = subprocess.run(
+        [str(a) for a in (*base, "--offline", *ADAPTER_DEPENDENCIES)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if offline.returncode != 0:
+        _run(*base, *ADAPTER_DEPENDENCIES)
 
 
 def test_members_pin_their_build_backend_and_ship_license_and_notice() -> None:
@@ -209,12 +237,13 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
     uv = shutil.which("uv")
     assert uv is not None
     dist = tmp_path / "dist"
-    for package in ("memfw-ports", "memfw-recall", "memfw-adapter-deepseek"):
+    for package in ("memfw-ports", "memfw-recall", "memfw-adapter-deepseek", "memfw-adapter-bm25s"):
         _run(uv, "build", "--wheel", "--package", package, "-o", dist)
     wheels = sorted(p.name for p in dist.glob("*.whl"))
     from memfw.ports import PORTS_API_VERSION as v
 
     assert wheels == [
+        "memfw_adapter_bm25s-0.1.0-py3-none-any.whl",
         "memfw_adapter_deepseek-0.1.1-py3-none-any.whl",
         f"memfw_ports-{v}-py3-none-any.whl",
         f"memfw_recall-{v}-py3-none-any.whl",
@@ -222,11 +251,36 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
     venv = tmp_path / "venv"
     python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     _run(uv, "venv", "--quiet", "--python", f"{sys.version_info[0]}.{sys.version_info[1]}", venv)
+    _install_pinned(uv, python)
     _run(uv, "pip", "install", "--quiet", "--python", python, "--no-index", *dist.glob("*.whl"))
     # -I: no PYTHONPATH, no cwd or script directory on sys.path, so this tree's
     # src/ cannot leak in; the smoke refuses to run if memfw is importable.
-    out = _run(python, "-I", SMOKE, "--recall", "--deepseek", cwd=tmp_path)
+    out = _run(python, "-I", SMOKE, "--recall", "--deepseek", "--bm25s", cwd=tmp_path)
     assert "standalone wheel smoke passed" in out
     assert "ok check_model_backend DeepSeekBackend (fake server)" in out
     assert "ok check_recall_provider InMemoryRecallProvider" in out
     assert "ok Coordinator.search" in out
+    assert "ok check_recall_provider Bm25sProvider" in out
+
+
+def test_adapter_dependency_pins_match_the_lockfile_and_pyproject() -> None:
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    locked = {(pkg["name"], pkg["version"]) for pkg in lock["package"]}
+    for pin in ADAPTER_DEPENDENCIES:
+        name, version = pin.split("==")
+        assert (name.lower(), version) in locked, pin
+    project = tomllib.loads(
+        (PACKAGES / "adapters" / "memfw-adapter-bm25s" / "pyproject.toml").read_text("utf-8")
+    )
+    deps = project["project"]["dependencies"]
+    assert all("==" in dep for dep in deps), deps  # every dependency pinned exactly
+    for pin in ADAPTER_DEPENDENCIES:
+        assert any(dep.split(";")[0].strip() == pin for dep in deps), pin
+
+
+def test_ci_wheel_job_builds_and_smokes_every_adapter_with_the_pins() -> None:
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    for package in ("memfw-adapter-deepseek", "memfw-adapter-bm25s"):
+        assert f"uv build --wheel --package {package} " in ci, package
+    assert "bm25s==0.3.16 jieba==0.42.1 PyYAML==6.0.3 numpy==2.4.6" in ci  # CI runs Python 3.11
+    assert "wheel_smoke.py --recall --deepseek --bm25s" in ci

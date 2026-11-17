@@ -41,6 +41,7 @@ members = [
     "packages/memfw-ports",
     "packages/memfw-recall",
     "packages/adapters/memfw-adapter-deepseek",
+    "packages/adapters/memfw-adapter-bm25s",
 ]
 
 [tool.pytest.ini_options]

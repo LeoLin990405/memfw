@@ -659,8 +659,10 @@ def _search_two_stage(
 ) -> dict[str, Any]:
     """``mode=two_stage``: recall through the coordinator, then build rows.
 
-    Providers: FTS always, plus hybrid when an embedder is configured.
-    The coordinator resolves every candidate against the vault and filters
+    Providers: FTS always, plus hybrid when an embedder is configured, plus
+    the operator's ``runtime.recall.adapters`` (``Runtime.recall_adapters``;
+    none by default). An adapter hit has no index row, so its row is built
+    from the vault document. The coordinator resolves every candidate against the vault and filters
     it with ``policy`` before fusing, so a row is built only for a memory
     that passed the filter. Rows are then built by the same code as the
     other modes, from the provider's own index row when it returned one,

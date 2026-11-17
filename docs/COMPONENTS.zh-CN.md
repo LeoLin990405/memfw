@@ -94,6 +94,10 @@ CI 的 `standalone-wheels` 任务会构建两者，装进一个没有 memfw 的�
 `packages/adapters/memfw-adapter-deepseek`（wheel 名 `memfw_adapter_deepseek`，版本 0.1.1）只用标准库实现了 `ModelBackend` 端口。它给会话 worker 提供 `conv-v2` 格式的输出：每个分块和每个会话一段摘要，外加标签（项目、任务类型、组件、意图、结果）；它不抽取事实或论断。它**默认关闭**：只有 `vault.yaml` 里设置了 `conversations: {backend: "memfw_adapter_deepseek:factory", cloud: true}`，并且提供了 `DEEPSEEK_API_KEY`，worker 才会用它；每一轮都有 token 和费用上限。密钥只会发往服务商的 API 地址。memfw 本身从不导入这个适配器；它单独构建成 wheel（`uv build --wheel --package memfw-adapter-deepseek`），没有发布到 PyPI。见 [`conversations-share.md`](conversations-share.md#deepseek-tagging-adapter)。
 
 
+## bm25s 召回适配器
+
+`packages/adapters/memfw-adapter-bm25s`（wheel 名 `memfw_adapter_bm25s`，版本 0.1.0）是一个进程内的 `RecallProvider`：用 bm25s 0.3.16（MIT）给记忆排序，中文用 jieba 切词。它**默认关闭**：只有 `vault.yaml` 的 `runtime.recall.adapters` 里写了 `memfw_adapter_bm25s:factory`，MCP `memory_search` 的 `mode=two_stage` 才会用它。它只索引隐私级别在 `clearance` 里的记忆（默认 `public,shared`），索引放在 vault 之外的私有目录（`~/.local/share/memfw/adapters/bm25s/`）。memfw 本身从不导入它。见 [`adapter-bm25s.md`](adapter-bm25s.md)。
+
 ## 佐证投影
 
 `memfw corroboration rebuild` 在 vault 之外生成佐证投影（`~/.local/share/memfw/corroboration/<key>.sqlite3`，文件里记着它属于哪个 vault）：每条记忆被哪些相互独立的（应用、会话）提到过，来源是记忆自己的 `conv:` 证据、会话 worker 暂存的论断，以及已接受的经验点。每个应用的每个会话只算一次；本身就引用了这条记忆 id 的来源、模型或 agent 生成的来源，以及被隐藏或已退出共享的应用都不算。只存 id、名称、计数和时间；文件权限 `0600`，每次重建逐字节一致，对 vault 只读不写。
