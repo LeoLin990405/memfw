@@ -48,6 +48,21 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   `resources/list` and every pack are byte-identical and the slot is unknown. See
   `docs/ports-and-recall.md` §4.3a.
 
+### Added
+
+- **C4 context pack evaluation** (`memfw eval context SNAPSHOT`): coverage,
+  waste, P50/P95 latency and token cost of the `memory_context` slots
+  (`core`, `handoff`, `topics`, and `current` when the snapshot enables it or
+  `--current` simulates it) and of the whole pack, swept over per-slot caps and simulated resident-prefix caps
+  (default 1000/2000/4000/6000). Runs the real slot providers on a private
+  copy of a read-only snapshot (refuses one that needs `memfw recover` or an
+  output inside it; fails if the snapshot or a store changes during the run);
+  later searches come from `memory_access` events, C5 `memory_used` signals or
+  a seeded synthetic query set; the JSON/markdown report holds counts, ratios
+  and timings only and is deterministic apart from timings. No default changes.
+  `share_feed` takes an optional `source` (default unchanged).
+  See docs/evaluation.md, "C4 context pack evaluation".
+
 ### Added — attachments: blob store, records, `memfw attach` (MM1a)
 
 - Originals are stored once per sha256 as blobs **outside the vault**

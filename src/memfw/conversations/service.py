@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from memfw.core.repository import Repository
 from memfw.ports.claims import ClaimStager, ClaimVerifier
@@ -40,22 +40,33 @@ def open_share(
     source: ConversationSource | None = None,
     store: Path | None = None,
     embedder: Any = None,
+    state: Path | Literal[False] | None = None,
 ) -> ConversationShare:
-    """The share as ``caller`` sees it. ``embedder`` (an embedding provider, the
-    runtime's one) serves only the ``two_stage`` search's semantic list."""
+    """The share as ``caller`` sees it.
+
+    ``embedder`` (an embedding provider, the runtime's one) serves only the
+    ``two_stage`` search's semantic list. ``state`` is the worker state that
+    supplies model summaries and session tags: ``None`` (default) the one
+    ``vault.yaml`` names, a path that file as given, and ``False`` none (no
+    file outside ``root`` and ``source`` is read).
+    """
 
     config, vault = read_config(root)
     policy = SharePolicy.from_config(config)
     if source is None:
         db = checked_location(store, config, vault=vault) if store else None
         source = SqliteStoreSource(db or store_path(config, vault=vault))
-    state = WorkState(state_path(config, vault=vault))
+    work = (
+        None
+        if state is False
+        else WorkState(state if state is not None else state_path(config, vault=vault))
+    )
     return ConversationShare(
         source,
         policy,
         caller,
-        summaries=state.session_summary,
-        labels=state,
+        summaries=work.session_summary if work is not None else None,
+        labels=work,
         embedder=embedder,
         embed_cloud=_cloud(config) if embedder is not None else False,
     )
