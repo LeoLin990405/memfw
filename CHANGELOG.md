@@ -11,6 +11,44 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
+### Fixed — a top-level `sensitivity:` key is read the same at every exit
+
+- A hand-added top-level `sensitivity:` front matter key was treated as
+  private by the O1a projections (the reference reader) but ignored by HTTP
+  `/search` / `/related`, OKF export and the memfw MCP server. Now
+  `memfw.ports.privacy` and its stdlib copy in `memfw/index/read_path.py`
+  read it like the reference reader: no value, `null`, `""` or an empty list
+  adds nothing, `private` (any case) is `local-private`, anything else
+  (including non-strings and list items other than `private`) is `unknown`;
+  strictest wins. Parsed `MemoryDocument`s keep the value
+  (`top_level_sensitivity`, not a field: render is unchanged), and dream
+  open questions treat such a memory as private. A parity test checks the
+  two copies, the parsed-document path and the reference reader on an
+  exhaustive matrix. Without a clearance nothing changes. Deploy note:
+  `read_path.py` changed, so ship the HTTP service's three files together
+  (`docs/READONLY-SERVICE-UPGRADE.md`).
+- Write side: a rewrite no longer drops the key. `render` writes the parsed
+  value back (files without it keep their bytes), and `update`, `supersede`,
+  cold archive/restore and `rollback` carry it. `update(sensitivity=...)`
+  sets it (`None` removes it). Like the `privacy` field, only a human or an
+  approved proposal may remove or loosen it, and a non-human rollback that
+  would drop it is refused. It is no longer listed in `ignored_keys`. A
+  reviewed merge now refuses a duplicate that is more private than its
+  representative (field, tags or key) only when it copies text (`retain`
+  or `merged_body`); a delete-only merge is allowed. Consolidation review
+  passes the vault's `legacy_privacy_default` to the judge, which then makes
+  the most private member of a pair the representative (deterministic,
+  live and local-MLX pairs; ties keep the judge's order). A judge without
+  that level keeps its order as before. Agent proposals
+  may carry `sensitivity`; approving one applies it, removal included.
+- Recall's strict policy (`two_stage`, context v2 `strict`, open-question
+  labels) reads the key too. OKF export writes `memfw.privacy:
+  local-private` for a memory whose key restricts it, so a round trip stays
+  private. The HTTP privacy check refuses front matter with a duplicate key
+  (`unknown` under a clearance). The reference reader treats `Null`/`NULL`
+  as null like YAML. `read_path.py` gains `READ_PATH_VERSION = 2`;
+  `readonly.py` and the HTTP script refuse an older copy at startup.
+
 ### Added — CLI tidy-up: open questions, `--json`, grouped help
 
 - `memfw add --type open-question --question TEXT [--conflicts ID ...]

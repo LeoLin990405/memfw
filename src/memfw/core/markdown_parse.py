@@ -117,9 +117,14 @@ def parse_memory_markdown(markdown: str, *, expected_id: str | None = None) -> M
         known = {key: value for key, value in metadata.items() if str(key) not in unknown}
         try:
             document = MemoryDocument.model_validate({**known, "body": body})
-            document._ignored_keys = tuple(sorted(unknown | set(pre_ignored)))
+            # A hand-added ``sensitivity`` key is not a field, but the exits
+            # read it (``memfw.ports.privacy.sensitivity_key_levels``) and a
+            # rewrite keeps it, so it is not reported as ignored.
+            document._ignored_keys = tuple(sorted((unknown - {"sensitivity"}) | set(pre_ignored)))
             document._stray_open_question = stray
             document._observed_default_fields = observed
+            if "sensitivity" in metadata:
+                document._sensitivity_key = (metadata["sensitivity"],)
             return document
         except Exception as retry:
             raise IntegrityError(f"Invalid memory document: {retry}") from retry

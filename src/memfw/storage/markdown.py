@@ -328,6 +328,12 @@ class MarkdownStorageMixin:
         # their bytes, and a missing field is read as ``legacy_privacy_default``.
         if metadata.get("privacy") is not None:
             ordered["privacy"] = metadata["privacy"]
+        # A hand-added top-level ``sensitivity`` key is written back as parsed
+        # (it can only restrict, see ``memfw.ports.privacy``); files without
+        # one keep their bytes.
+        sensitivity_key = getattr(document, "_sensitivity_key", ())
+        if sensitivity_key:
+            ordered["sensitivity"] = sensitivity_key[0]
         # Files written before ``type``, ``tenant``, ``related`` and the temporal
         # fields existed keep their bytes too: the default carries no
         # information, so it stays off the file exactly like ``recorded_at`` and

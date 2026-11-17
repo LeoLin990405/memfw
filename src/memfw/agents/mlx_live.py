@@ -14,7 +14,14 @@ from typing import Literal, Protocol, cast
 from pydantic import TypeAdapter
 
 from ..core.models import Layer, MemoryDocument
-from . import DeterministicJudge, JsonObject, _digest, _log_dropped_pairs, _memory_payload
+from . import (
+    DeterministicJudge,
+    JsonObject,
+    _digest,
+    _log_dropped_pairs,
+    _memory_payload,
+    _privacy_oriented,
+)
 from .models import JsonValue, MergeProposal, Proposal
 
 
@@ -614,8 +621,12 @@ class LocalMLXJudge(DeterministicJudge):
                 or not 0 <= confidence <= 1
             ):
                 raise ValueError("local MLX merge pair has invalid targets or fields")
-            representative_id = representative
-            duplicate_ids = cast(list[str], duplicates)
+            representative_id, duplicate_ids = _privacy_oriented(
+                representative,
+                cast(list[str], duplicates),
+                known,
+                getattr(self, "legacy_privacy", None),
+            )
             match_basis = basis
             merge_disposition = cast(Literal["retain", "delete"], disposition)
             merge_confidence = cast(float, confidence)

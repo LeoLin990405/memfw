@@ -12,6 +12,7 @@ from typing import Literal, Protocol, cast
 from pydantic import TypeAdapter
 
 from ..core.models import Layer, MemoryDocument
+from ..ports.privacy import effective_level, is_looser
 from .models import (
     JsonValue,
     MergeProposal,
@@ -98,6 +99,11 @@ class DeterministicJudge:
         #: Provider merge pairs dropped by the last ``find_near_duplicates``
         #: call because their targets spanned tenants (live and local MLX).
         self.dropped_cross_tenant_pairs = 0
+        #: The vault's ``legacy_privacy_default``, set by a caller that has the
+        #: vault (curation's consolidation review). When set, merge pairs make
+        #: the most private member the representative, read with the same
+        #: level review checks; ``None`` (the default) keeps the order as is.
+        self.legacy_privacy: str | None = None
 
     def _input_hash(self, input_value: object) -> str:
         return _digest(
@@ -243,6 +249,7 @@ class DeterministicJudge:
             if not isinstance(pairs, list):
                 raise ValueError("live find_near_duplicates response requires merge_pairs list")
             known_ids = {memory.id for memory in memories}
+            by_id = {memory.id: memory for memory in memories}
             tenants = {memory.id: memory.tenant for memory in memories}
             proposals: list[MergeProposal] = []
             for raw_pair in pairs:
@@ -270,7 +277,12 @@ class DeterministicJudge:
                     or not 0.0 <= confidence <= 1.0
                 ):
                     raise ValueError("live merge_pairs entry has invalid targets or fields")
-                duplicate_ids = cast(list[str], raw_duplicate_ids)
+                representative_id, duplicate_ids = _privacy_oriented(
+                    representative_id,
+                    cast(list[str], raw_duplicate_ids),
+                    by_id,
+                    getattr(self, "legacy_privacy", None),
+                )
                 disposition = cast(Literal["delete", "retain"], raw_disposition)
                 targets: tuple[str, ...] = (representative_id, *duplicate_ids)
                 if not _same_tenant(targets, tenants):
@@ -328,6 +340,16 @@ class DeterministicJudge:
                     if left_memory.id < right_memory.id
                     else (right_memory, left_memory)
                 )
+                legacy = getattr(self, "legacy_privacy", None)
+                if legacy is not None and is_looser(
+                    _privacy_level(representative_memory, legacy),
+                    _privacy_level(duplicate_memory, legacy),
+                ):
+                    # The more private memory is the one kept (MM0).
+                    representative_memory, duplicate_memory = (
+                        duplicate_memory,
+                        representative_memory,
+                    )
                 pair_output: JsonObject = {
                     "representative_id": representative_memory.id,
                     "duplicate_ids": [duplicate_memory.id],
@@ -408,6 +430,41 @@ def _log_dropped_pairs(provider: str, count: int) -> None:
 
     if count:
         _LOGGER.debug("dropped %d cross-tenant merge pair(s) from provider %s", count, provider)
+
+
+def _privacy_level(memory: MemoryDocument, legacy: str) -> str:
+    """The memory's level under the vault's ``legacy_privacy_default``."""
+
+    return effective_level(
+        memory.privacy, memory.tags, legacy=legacy, sensitivity=memory.top_level_sensitivity
+    )
+
+
+def _privacy_oriented(
+    representative_id: str,
+    duplicate_ids: list[str],
+    known: Mapping[str, MemoryDocument],
+    legacy: str | None,
+) -> tuple[str, list[str]]:
+    """Make the most private target the representative (MM0).
+
+    A merge keeps the representative and copies or drops the duplicates; the
+    representative must be at least as private as each of them, so a
+    privacy-mismatched pair is re-oriented. Ties keep the given order. Without
+    the vault's legacy level (``None``) nothing is re-oriented: a guess could
+    disagree with review and turn a mergeable pair into a refused one.
+    """
+
+    if legacy is None:
+        return representative_id, duplicate_ids
+    targets = [representative_id, *duplicate_ids]
+    best = representative_id
+    for target in targets:
+        if is_looser(_privacy_level(known[best], legacy), _privacy_level(known[target], legacy)):
+            best = target
+    if best == representative_id:
+        return representative_id, duplicate_ids
+    return best, [target for target in targets if target != best]
 
 
 def _same_tenant(targets: tuple[str, ...], tenants: dict[str, str]) -> bool:

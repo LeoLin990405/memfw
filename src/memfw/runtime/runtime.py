@@ -256,7 +256,12 @@ class Runtime:
 
         if self.clearance is None:
             return True
-        level = effective_level(document.privacy, document.tags, legacy=self.legacy_privacy())
+        level = effective_level(
+            document.privacy,
+            document.tags,
+            legacy=self.legacy_privacy(),
+            sensitivity=document.top_level_sensitivity,
+        )
         return admits(self.clearance, level)
 
     # --- runtime options and memory_used (C5, C6) ------------------------------

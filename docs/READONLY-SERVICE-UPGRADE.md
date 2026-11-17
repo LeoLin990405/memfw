@@ -64,6 +64,18 @@ no field is written, as before MM0). Tags still apply on top of both:
 `sensitivity:private` or `privacy:local-private` makes a memory
 `local-private`, so such memories stop being served under `public,shared`.
 
+A hand-added top-level `sensitivity:` key counts too (v0.3.0): `private` (any
+case) makes the memory `local-private`; any other non-empty value makes it
+`unknown`, which no clearance admits. The rule lives in `read_path.py`
+(`sensitivity_key_levels`), so this is another reason to deploy the three
+files together. To fail closed, `read_path.py` carries `READ_PATH_VERSION`
+(now `2`) and both `readonly.py` and the script refuse an older copy (the
+script checks it too, so an older `readonly.py` cannot hide it): the service exits
+at startup with an error naming the version instead of serving under the old
+rules. A file whose front matter repeats a key (two `privacy:` or
+`sensitivity:` lines) is `unknown` under a clearance, as core refuses it.
+Without a clearance nothing changes.
+
 ## Check a URL
 
 `check_readonly_contract(url)` performs one `GET /health`. Pass either the

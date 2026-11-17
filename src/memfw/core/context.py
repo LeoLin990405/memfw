@@ -192,6 +192,7 @@ class RepositoryHost(Protocol):
         open_question: OpenQuestion | builtins.dict[str, Any] | None = None,
         privacy: str | None = None,
         _stamp_privacy_default: bool = True,
+        _sensitivity_key: tuple[Any, ...] = (),
     ) -> MemoryDocument: ...
 
     def legacy_privacy_default(self) -> str: ...

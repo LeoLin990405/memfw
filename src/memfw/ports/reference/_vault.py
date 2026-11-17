@@ -168,7 +168,8 @@ def _scalar(raw: str) -> str:
     match = _COMMENT_RE.search(value)
     if match:
         value = value[: match.start()].rstrip()
-    return "" if value in {"null", "~"} else value
+    # The plain scalars YAML (``SafeLoader``) resolves to null.
+    return "" if value in {"null", "Null", "NULL", "~"} else value
 
 
 _ESCAPES = {

@@ -296,6 +296,8 @@ def _record_consolidation_review(
     from memfw.agents.models import canonical_payload_hash, mock_signature
 
     judge = DeterministicJudge(clock=lambda: now)
+    # Orient privacy-mismatched pairs with the level review checks (MM0).
+    judge.legacy_privacy = repository.legacy_privacy_default()
     proposals: list[Any] = []
     existing = {
         proposal.proposal_id: proposal for proposal in repository.list_proposals(status=None)

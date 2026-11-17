@@ -22,6 +22,7 @@ from typer.testing import CliRunner
 import scripts.memfw_readonly_service as service
 from memfw.cli import app
 from memfw.core.errors import IntegrityError, NotFoundError
+from memfw.core.markdown_parse import parse_memory_markdown
 from memfw.core.models import EventKind, MemoryDocument
 from memfw.core.repository import Repository
 from memfw.index import MemoryIndex, read_path
@@ -32,6 +33,7 @@ from memfw.notes.index import NotesIndex
 from memfw.notes.mcp import NotesGateway
 from memfw.okf import export_okf
 from memfw.ports import privacy
+from memfw.ports.reference import _vault as reference
 from memfw.related import RelatedIndex
 from memfw.storage.markdown import MarkdownStorageMixin
 from scripts.memfw_readonly_service import ServiceError, related_vault
@@ -1110,3 +1112,547 @@ def test_review_queue_honours_field_and_clearance(tmp_path: Path) -> None:
         public.runtime.open_question_queue(repository, app=None, allow_operator=True)["questions"]
         == []
     )
+
+
+# ---------------------------------------------------------------------------
+# Top-level ``sensitivity`` key: one rule for every exit (v0.3.0 §11 item 1)
+# ---------------------------------------------------------------------------
+
+_REF_RANK = {"none": 0, "local-private": 1, "unknown": 2}
+#: ``privacy`` lines as a hand edit writes them (absent first).
+KEY_FIELDS = [
+    "",
+    "privacy: public\n",
+    "privacy: PUBLIC\n",
+    'privacy: " shared "\n',
+    "privacy: local-private\n",
+    "privacy: Local-Private\n",
+    "privacy: x\n",
+]
+KEY_PRIVACY_TAGS = [
+    None,
+    "privacy:public",
+    "privacy:fleet",
+    "privacy:none",
+    "privacy:local-private",
+    "privacy:weird",
+]
+KEY_SENSITIVITY_TAGS = [None, "sensitivity:private", "SENSITIVITY:Private", "sensitivity:secret"]
+#: Top-level ``sensitivity`` forms -> the level the key alone imposes
+#: (``None``: nothing). Case, quoting, null spellings, lists and non-strings.
+KEY_FORMS: list[tuple[str, str | None]] = [
+    ("", None),
+    ("sensitivity:\n", None),
+    ("sensitivity: null\n", None),
+    ("sensitivity: ~\n", None),
+    ('sensitivity: ""\n', None),
+    ("sensitivity: []\n", None),
+    ("sensitivity: {}\n", None),
+    ("Sensitivity: private\n", None),  # another key: neither reader acts on it
+    ("sensitivity: private\n", "local-private"),
+    ("sensitivity: Private\n", "local-private"),
+    ("sensitivity: PRIVATE\n", "local-private"),
+    ('sensitivity: " private "\n', "local-private"),
+    ("sensitivity: 'private'\n", "local-private"),
+    ("sensitivity: private # hand edit\n", "local-private"),
+    ('sensitivity: "  "\n', "unknown"),
+    ("sensitivity: secret\n", "unknown"),
+    ("sensitivity: local-private\n", "unknown"),
+    ("sensitivity: public\n", "unknown"),
+    ("sensitivity: none\n", "unknown"),
+    ("sensitivity: true\n", "unknown"),
+    ("sensitivity: 1\n", "unknown"),
+    ("sensitivity: 0.5\n", "unknown"),
+    ("sensitivity: 2026-01-01\n", "unknown"),
+    ("sensitivity:\n- private\n", "local-private"),
+    ("sensitivity:\n- Private\n- PRIVATE\n", "local-private"),
+    ("sensitivity:\n- private\n- secret\n", "unknown"),
+    ("sensitivity:\n- null\n", "unknown"),
+    ("sensitivity:\n- 1\n", "unknown"),
+    # YAML's other null spellings (the reference reader follows SafeLoader).
+    ("sensitivity: Null\n", None),
+    ("sensitivity: NULL\n", None),
+    ("sensitivity:\n- Null\n", "unknown"),
+    ("sensitivity:\n- NULL\n- private\n", "unknown"),
+]
+
+
+def _key_file(field: str, ptag: str | None, stag: str | None, form: str) -> str:
+    tags = [tag for tag in (ptag, stag) if tag]
+    block = "tags:\n" + "".join(f"- {tag}\n" for tag in tags) if tags else ""
+    return (
+        "---\nid: m-key\ntitle: key\n"
+        "created_at: 2026-11-06T00:00:00Z\nupdated_at: 2026-11-06T00:00:00Z\n"
+        f"{field}{block}{form}---\nbody\n"
+    )
+
+
+def _as_reference_class(level: str) -> str:
+    return {"public": "none", "shared": "none"}.get(level, level)
+
+
+def test_sensitivity_key_alone_reads_the_same_in_all_three_readers() -> None:
+    for form, expected in KEY_FORMS:
+        text = _key_file("privacy: public\n", None, None, form)
+        metadata = yaml.safe_load(text.split("---\n")[1])
+        key_value = metadata.get(privacy.SENSITIVITY_KEY)
+        assert privacy.sensitivity_key_levels(key_value) == read_path.sensitivity_key_levels(
+            key_value
+        )
+        level = privacy.metadata_level(metadata)
+        assert level == (expected or "public"), form
+        memory = reference.parse_memory("m-key", text.encode("utf-8"))
+        assert memory is not None, form
+        assert memory.privacy_class() == _as_reference_class(level), form
+
+
+def test_sensitivity_key_parity_on_the_exhaustive_matrix() -> None:
+    """ports, its stdlib copy, the parsed-document path and the reference reader agree."""
+
+    checked = 0
+    for field, ptag, stag, (form, _key) in itertools.product(
+        KEY_FIELDS, KEY_PRIVACY_TAGS, KEY_SENSITIVITY_TAGS, KEY_FORMS
+    ):
+        text = _key_file(field, ptag, stag, form)
+        metadata = yaml.safe_load(text.split("---\n")[1])
+        document = parse_memory_markdown(text, expected_id="m-key")
+        memory = reference.parse_memory("m-key", text.encode("utf-8"))
+        assert memory is not None, text
+        file_class = memory.privacy_class()
+        for legacy in LEGACIES:
+            level = privacy.metadata_level(metadata, legacy)  # type: ignore[arg-type]
+            assert read_path.metadata_level(metadata, legacy) == level, (text, legacy)
+            assert (
+                privacy.effective_level(
+                    document.privacy,
+                    document.tags,
+                    legacy=legacy,  # type: ignore[arg-type]
+                    sensitivity=document.top_level_sensitivity,
+                )
+                == level
+            ), (text, legacy)
+            # The reference reader has no legacy default: a missing field adds
+            # the vault's level on top of what the file itself says.
+            legacy_class = (
+                _as_reference_class(privacy.legacy_default(legacy)) if not field else "none"
+            )
+            expected = max(file_class, legacy_class, key=_REF_RANK.__getitem__)
+            assert _as_reference_class(level) == expected, (text, legacy)
+            for clearance in (REMOTE, "public", None):
+                parsed = privacy.parse_clearance(clearance)
+                assert read_path.admits(parsed, level) == privacy.admits(parsed, level)
+            checked += 1
+    assert checked == len(KEY_FIELDS) * 6 * 4 * len(KEY_FORMS) * len(LEGACIES)
+
+
+SENSITIVE_MARKER = "okapinox"
+SENSITIVE_ID = "m-sens-key"
+
+
+def _sensitive_vault(root: Path) -> Path:
+    """The MM0 corpus plus one ``privacy: public`` memory with ``sensitivity: private``."""
+
+    _vault(root)
+    text = (
+        f"---\nid: {SENSITIVE_ID}\ntitle: corpus {SENSITIVE_ID}\nprivacy: public\n"
+        "sensitivity: private\n"
+        "created_at: 2026-11-06T00:00:00Z\nupdated_at: 2026-11-06T00:00:00Z\n"
+        f"---\ncorpus keyword {SENSITIVE_MARKER}\n"
+    )
+    (root / "memories" / f"{SENSITIVE_ID}.md").write_text(text, encoding="utf-8")
+    repository = Repository(root)
+    MemoryIndex(repository.index_path).rebuild(repository)
+    assert repository.get(SENSITIVE_ID).top_level_sensitivity == "private"
+    return root
+
+
+def test_http_search_withholds_a_sensitivity_key_memory(tmp_path: Path) -> None:
+    root = _sensitive_vault(tmp_path / "vault")
+    for search in (search_vault, service.search_vault):
+        result = search(root, "corpus keyword", limit=50, clearance=REMOTE)
+        assert {item["id"] for item in result["results"]} == ADMITTED
+        assert SENSITIVE_MARKER not in json.dumps(result)
+        # Default (no clearance): served as before.
+        open_result = search(root, "corpus keyword", limit=50)
+        assert SENSITIVE_ID in {item["id"] for item in open_result["results"]}
+
+
+def test_okf_export_withholds_a_sensitivity_key_memory(tmp_path: Path) -> None:
+    root = _sensitive_vault(tmp_path / "vault")
+    result = export_okf(root, tmp_path / "bundle", clearance=REMOTE)
+    assert result.concepts == len(ADMITTED)
+    text = _bundle_text(tmp_path / "bundle")
+    assert SENSITIVE_MARKER not in text and SENSITIVE_ID not in text
+    open_result = export_okf(root, tmp_path / "open")
+    assert open_result.concepts == len(CASES) + 1
+    assert SENSITIVE_MARKER in _bundle_text(tmp_path / "open")
+
+
+@pytest.mark.parametrize("mode", ["fts", "hybrid", "multihop", "two_stage"])
+def test_memfw_mcp_withholds_a_sensitivity_key_memory(tmp_path: Path, mode: str) -> None:
+    root = _sensitive_vault(tmp_path / "vault")
+    gateway = Gateway(root, entity_enabled=False, clearance=REMOTE)
+    found = gateway.search("corpus keyword", limit=50, mode=mode)
+    assert found["results"]
+    assert SENSITIVE_ID not in {row["id"] for row in found["results"]}
+    assert SENSITIVE_MARKER not in json.dumps(found)
+    with pytest.raises(NotFoundError):
+        gateway.get(SENSITIVE_ID)
+    assert SENSITIVE_MARKER not in json.dumps(gateway.context(4000))
+    open_gateway = Gateway(root, entity_enabled=False)
+    assert open_gateway.get(SENSITIVE_ID)["id"] == SENSITIVE_ID
+
+
+def test_dream_reads_the_sensitivity_key_as_private() -> None:
+    from memfw.dream.questions import is_private, pair_privacy
+
+    text = _key_file("privacy: public\n", None, None, "sensitivity: private\n")
+    keyed = parse_memory_markdown(text, expected_id="m-key")
+    plain = parse_memory_markdown(
+        _key_file("privacy: public\n", None, None, ""), expected_id="m-key"
+    )
+    assert is_private(keyed) and not is_private(plain)
+    assert pair_privacy(keyed, plain) == "local-private"
+    assert pair_privacy(plain, plain) == "public"
+
+
+# ---------------------------------------------------------------------------
+# Write side: a rewrite keeps a hand-added ``sensitivity`` key (tighten-only)
+# ---------------------------------------------------------------------------
+
+
+def _hand_add_key(
+    repository: Repository, memory_id: str, line: str = "sensitivity: Private"
+) -> None:
+    path = repository.memories_dir / f"{memory_id}.md"
+    text = path.read_text(encoding="utf-8")
+    path.write_text(text.replace("\n---\n", f"\n{line}\n---\n", 1), encoding="utf-8")
+
+
+def _file(repository: Repository, memory_id: str) -> str:
+    return (repository.memories_dir / f"{memory_id}.md").read_text(encoding="utf-8")
+
+
+def test_rewrite_without_the_key_keeps_its_bytes(tmp_path: Path) -> None:
+    for document, _admitted in CASES:
+        rendered = MarkdownStorageMixin.render(document)
+        reparsed = parse_memory_markdown(rendered, expected_id=document.id)
+        assert not reparsed.has_top_level_sensitivity
+        assert MarkdownStorageMixin.render(reparsed) == rendered
+    repository = _private_vault(tmp_path)
+    repository.add("x", "body", memory_id="x", privacy="public")
+    repository.update("x", body="new body")
+    assert "sensitivity" not in _file(repository, "x")
+
+
+def test_update_keeps_the_key_and_it_is_not_reported_as_ignored(tmp_path: Path) -> None:
+    repository = _private_vault(tmp_path)
+    repository.add("x", "body", memory_id="x", privacy="public")
+    _hand_add_key(repository, "x")
+    assert repository.get("x").ignored_keys == ()
+    repository.update("x", actor="mechanism", body="agent edit")
+    repository.update("x", actor="human", tags=["other"])
+    document = repository.get("x")
+    assert document.top_level_sensitivity == "Private"
+    assert "sensitivity: Private" in _file(repository, "x")
+    assert (
+        privacy.effective_level(
+            document.privacy, document.tags, sensitivity=document.top_level_sensitivity
+        )
+        == "local-private"
+    )
+
+
+@pytest.mark.parametrize("change", [None, ""])
+def test_non_human_writes_cannot_remove_or_loosen_the_key(tmp_path: Path, change) -> None:
+    repository = _private_vault(tmp_path)
+    # The field already says local-private: the key itself is still protected.
+    repository.add("x", "body", memory_id="x", privacy="local-private")
+    _hand_add_key(repository, "x")
+    with pytest.raises(IntegrityError, match="loosen"):
+        repository.update("x", actor="mechanism", sensitivity=change)
+    assert repository.get("x").top_level_sensitivity == "Private"
+    repository.update("x", actor="human", sensitivity=change)
+    assert repository.get("x").has_top_level_sensitivity == (change is not None)
+
+
+def test_non_human_writes_may_add_or_tighten_the_key(tmp_path: Path) -> None:
+    repository = _private_vault(tmp_path)
+    repository.add("x", "body", memory_id="x", privacy="public")
+    repository.update("x", actor="mechanism", sensitivity="private")
+    assert "sensitivity: private" in _file(repository, "x")
+    repository.update("x", actor="mechanism", sensitivity="secret")
+    assert repository.get("x").top_level_sensitivity == "secret"
+    with pytest.raises(IntegrityError, match="loosen"):
+        repository.update("x", actor="mechanism", sensitivity="private")
+
+
+def test_supersede_keeps_the_key(tmp_path: Path) -> None:
+    repository = _private_vault(tmp_path)
+    repository.add("old", "body", memory_id="old", privacy="public")
+    _hand_add_key(repository, "old")
+    new = repository.supersede("old", "new", "new body", memory_id_new="new")
+    assert new.top_level_sensitivity == "Private"
+    assert "sensitivity: Private" in _file(repository, "new")
+    assert repository.get("old").top_level_sensitivity == "Private"
+    assert repository.get("old").superseded_by == "new"
+
+
+def test_rollback_restores_the_key_and_only_a_human_may_drop_it(tmp_path: Path) -> None:
+    repository = _private_vault(tmp_path)
+    config = repository.read_config()
+    config["history_keep"] = 10
+    repository.configure(config)
+    repository.add("x", "body", memory_id="x", privacy="public")
+    repository.update("x", body="second")
+    first = [event for event in repository.events() if event.kind == EventKind.UPDATE][-1]
+    _hand_add_key(repository, "x")
+    repository.update("x", body="third")  # a recorded version with the key
+    # Restoring the version without the key would loosen it.
+    with pytest.raises(IntegrityError, match="loosen"):
+        repository.rollback(first.event_id, actor="mechanism")
+    assert repository.get("x").top_level_sensitivity == "Private"
+    repository.update("x", actor="human", sensitivity=None)
+    removal = [event for event in repository.events() if event.kind == EventKind.UPDATE][-1]
+    # Rolling the removal back restores the key, by any actor (it tightens).
+    repository.rollback(removal.event_id, actor="mechanism")
+    assert repository.get("x").top_level_sensitivity == "Private"
+    assert "sensitivity: Private" in _file(repository, "x")
+    repository.rollback(first.event_id, actor="human")
+    assert not repository.get("x").has_top_level_sensitivity
+
+
+def _merge_proposal(output: dict) -> object:
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        proposal_id="p-merge",
+        output=output,
+        target_ids=(output["representative_id"], *output["duplicate_ids"]),
+    )
+
+
+def test_merge_keeps_the_key_and_refuses_a_stricter_duplicate(tmp_path: Path) -> None:
+    from memfw.curation.review import _apply_merge, _validate_merge
+
+    repository = _private_vault(tmp_path)
+    repository.add("rep", "rep body", memory_id="rep", privacy="public")
+    repository.add("dup", "dup body", memory_id="dup", privacy="public")
+    retain = {"representative_id": "rep", "duplicate_ids": ["dup"], "disposition": "retain"}
+    _hand_add_key(repository, "dup")
+    with pytest.raises(IntegrityError, match="more private"):
+        _validate_merge(repository, _merge_proposal(retain))  # type: ignore[arg-type]
+    _hand_add_key(repository, "rep")
+    merged = _apply_merge(repository, _merge_proposal(retain))  # type: ignore[arg-type]
+    assert merged.top_level_sensitivity == "Private"
+    assert "dup body" in merged.body
+    assert "sensitivity: Private" in _file(repository, "rep")
+
+
+# ---------------------------------------------------------------------------
+# Review fixes (PR #69): recall, OKF round trip, duplicate keys, merges, proposals
+# ---------------------------------------------------------------------------
+
+_TO_RECALL = {"public": "none", "shared": "none", "local-private": "local-private"}
+
+
+def _levels_seen(text: str) -> tuple[str, str, str]:
+    """(ports, read_path, reference) for one file, with legacy ``public``."""
+
+    metadata = yaml.safe_load(text.split("---\n")[1])
+    memory = reference.parse_memory("m-key", text.encode("utf-8"))
+    assert memory is not None, text
+    return (
+        _as_reference_class(privacy.metadata_level(metadata, "public")),
+        _as_reference_class(read_path.metadata_level(metadata, "public")),
+        memory.privacy_class(),
+    )
+
+
+def test_a_rewrite_never_loosens_what_any_reader_sees() -> None:
+    for form, _expected in KEY_FORMS:
+        text = _key_file("privacy: public\n", None, None, form)
+        document = parse_memory_markdown(text, expected_id="m-key")
+        rewritten = MarkdownStorageMixin.render(document)
+        before, after = _levels_seen(text), _levels_seen(rewritten)
+        assert before == after, (form, rewritten)
+        again = parse_memory_markdown(rewritten, expected_id="m-key")
+        assert MarkdownStorageMixin.render(again) == rewritten
+
+
+def test_recall_strict_reads_the_sensitivity_key(tmp_path: Path) -> None:
+    from memfw.recall.builtin import meta_from_document
+
+    for form, _expected in KEY_FORMS:
+        text = _key_file("privacy: public\n", None, None, form)
+        document = parse_memory_markdown(text, expected_id="m-key")
+        recall_class, _mismatch = meta_from_document(document).privacy_class()
+        level = privacy.effective_level(
+            document.privacy,
+            document.tags,
+            legacy="public",
+            sensitivity=document.top_level_sensitivity,
+        )
+        assert recall_class == _TO_RECALL.get(level, "unknown"), form
+    root = _sensitive_vault(tmp_path / "vault")
+    gateway = Gateway(root, entity_enabled=False)
+    found = gateway.search("corpus keyword", limit=50, mode="two_stage", policy="strict")
+    assert found["results"]
+    assert SENSITIVE_ID not in {row["id"] for row in found["results"]}
+    assert SENSITIVE_MARKER not in json.dumps(gateway.context(4000, v=2, policy="strict"))
+
+
+@pytest.mark.parametrize("clearance", [None, "public,shared,local-private"])
+def test_okf_round_trip_keeps_the_key_private(tmp_path: Path, clearance: str | None) -> None:
+    from memfw.okf.importer import import_okf
+
+    source = _private_vault(tmp_path / "s")
+    source.add("keyed", "okapinox round trip", memory_id="k", privacy="public")
+    _hand_add_key(source, "k")
+    source.add("open", "public round trip", memory_id="p", privacy="public")
+    export_okf(source.root, tmp_path / "bundle", clearance=clearance)
+    front = yaml.safe_load(
+        (tmp_path / "bundle" / "k.md").read_text(encoding="utf-8").split("---\n")[1]
+    )
+    assert front["memfw"]["privacy"] == "local-private"
+    target = tmp_path / "target"
+    Repository(target).init()
+    import_okf(tmp_path / "bundle", target, dry_run=False)
+    applied = {}
+    for candidate in sorted((target / "_candidates" / "remember").glob("*.md")):
+        document = Repository(target).get(_apply(target, candidate))
+        applied[document.body.strip()] = document.privacy
+    assert applied == {"okapinox round trip": "local-private", "public round trip": "public"}
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "privacy: local-private\nprivacy: public\n",
+        "privacy: public\nsensitivity: private\nsensitivity: ''\n",
+        "privacy: public\ntags:\n- sensitivity:private\ntags: []\n",
+    ],
+)
+def test_http_duplicate_keys_are_unknown(header: str) -> None:
+    from memfw.index import readonly
+
+    raw = f"---\nid: d\ntitle: d\n{header}---\nbody\n"
+    for library in (readonly, service._library):
+        assert not library.header_is_mapping(raw)
+        assert library.metadata_privacy(raw, library._metadata_from_text(raw), "public") == (
+            "unknown"
+        )
+    # Without duplicates the same reader still reads the file.
+    single = "---\nid: d\ntitle: d\nprivacy: public\n---\nbody\n"
+    assert readonly.metadata_privacy(single, readonly._metadata_from_text(single), "public") == (
+        "public"
+    )
+
+
+def test_merge_refuses_only_text_copies_from_a_stricter_duplicate(tmp_path: Path) -> None:
+    from memfw.curation.review import _validate_merge
+
+    repository = _private_vault(tmp_path)
+    repository.add("rep", "rep body", memory_id="rep", privacy="public")
+    repository.add("dup", "dup body", memory_id="dup", privacy="public")
+    _hand_add_key(repository, "dup")
+    base = {"representative_id": "rep", "duplicate_ids": ["dup"]}
+    _validate_merge(repository, _merge_proposal({**base, "disposition": "delete"}))  # type: ignore[arg-type]
+    for output in (
+        {**base, "disposition": "retain"},
+        {**base, "disposition": "delete", "merged_body": "dup body"},
+    ):
+        with pytest.raises(IntegrityError, match="more private"):
+            _validate_merge(repository, _merge_proposal(output))  # type: ignore[arg-type]
+
+
+def test_merge_candidates_keep_the_most_private_member() -> None:
+    from memfw.agents import DeterministicJudge, _privacy_oriented
+
+    public = _doc("a-public", "the same near duplicate body text", privacy_value="public")
+    keyed = public.model_copy(update={"id": "b-keyed"})
+    keyed._sensitivity_key = ("private",)
+    judge = DeterministicJudge()
+    # Without the vault's legacy level the judge keeps its order (as on main).
+    (pair,) = judge.find_near_duplicates([public, keyed])
+    assert pair.representative_id == "a-public"
+    judge.legacy_privacy = "shared"
+    (pair,) = judge.find_near_duplicates([public, keyed])
+    assert pair.representative_id == "b-keyed" and pair.duplicate_ids == ("a-public",)
+    assert pair.proposal.target_ids == ("b-keyed", "a-public")
+    plain = _doc("c-public", "other", privacy_value="public")
+    known = {doc.id: doc for doc in (public, keyed, plain)}
+    assert _privacy_oriented("a-public", ["c-public", "b-keyed"], known, "public") == (
+        "b-keyed",
+        ["a-public", "c-public"],
+    )
+    assert _privacy_oriented("a-public", ["c-public"], known, "public") == (
+        "a-public",
+        ["c-public"],
+    )
+    assert _privacy_oriented("a-public", ["b-keyed"], known, None) == ("a-public", ["b-keyed"])
+
+
+@pytest.mark.parametrize(
+    ("legacy", "a_privacy", "b_privacy", "representative"),
+    [
+        ("public", None, "shared", "b"),  # unset reads public: b is stricter
+        ("public", "shared", None, "a"),  # a is stricter: kept as is
+        ("shared", None, "local-private", "b"),
+        ("shared", "shared", None, "a"),  # tie (unset reads shared): judge's order
+        ("local-private", None, None, "a"),  # same level: an ordinary merge
+    ],
+)
+def test_consolidation_orients_with_the_vaults_legacy_level(
+    tmp_path: Path, legacy: str, a_privacy: str | None, b_privacy: str | None, representative: str
+) -> None:
+    from memfw.agents import DeterministicJudge
+    from memfw.curation.review import _validate_merge
+
+    repository = _private_vault(tmp_path, legacy=legacy)
+    body = "the same near duplicate body text for a consolidation pair"
+    repository.add("dup", body, memory_id="a", privacy=a_privacy)
+    repository.add("dup", body, memory_id="b", privacy=b_privacy)
+    judge = DeterministicJudge()
+    judge.legacy_privacy = repository.legacy_privacy_default()
+    (pair,) = judge.find_near_duplicates(repository.list())
+    assert pair.representative_id == representative
+    # Review reads the same levels, so the oriented pair passes, text copy included.
+    output = dict(pair.proposal.output)
+    _validate_merge(repository, _merge_proposal(output))  # type: ignore[arg-type]
+
+
+def test_consolidation_review_passes_the_legacy_level_to_the_judge(tmp_path: Path) -> None:
+    from memfw.curation.engine import _record_consolidation_review
+
+    repository = _private_vault(tmp_path, legacy="public")
+    body = "the same near duplicate body text for a consolidation pair"
+    repository.add("dup", body, memory_id="a")
+    repository.add("dup", body, memory_id="b", privacy="shared")
+    (proposal_id,) = _record_consolidation_review(repository, repository.list(), BASE)
+    (proposal,) = [
+        item for item in repository.list_proposals(status=None) if item.proposal_id == proposal_id
+    ]
+    assert proposal.output["representative_id"] == "b"
+    assert proposal.target_ids == ("b", "a")
+
+
+def test_an_approved_proposal_may_remove_the_key(tmp_path: Path) -> None:
+    repository = _private_vault(tmp_path)
+    repository.add("x", "body", memory_id="x", privacy="public")
+    _hand_add_key(repository, "x")
+    changes = {"sensitivity": None}
+    proposal = repository.record_proposal(
+        memory_id="x",
+        operation="update",
+        changes=changes,
+        rationale="the key was a mistake",
+        agent_id="planner",
+        signature="mock:planner",
+    )
+    result = repository.decide_proposal(
+        proposal.event_id,
+        payload={"memory_id": "x", "operation": "update", "changes": changes},
+    )
+    assert result is not None and not result.has_top_level_sensitivity
+    assert "sensitivity" not in _file(repository, "x")

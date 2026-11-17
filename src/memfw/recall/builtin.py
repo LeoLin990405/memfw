@@ -41,6 +41,7 @@ from memfw.core.epistemic import OPEN_QUESTION_TYPE
 from memfw.core.errors import MemfwError
 from memfw.core.models import MemoryDocument
 from memfw.core.repository import Repository
+from memfw.ports.privacy import sensitivity_key_levels
 from memfw.ports.types import (
     Availability,
     Candidate,
@@ -101,7 +102,9 @@ def meta_from_document(document: MemoryDocument) -> MemoryMeta:
     tags are classed exactly like the projection does
     (:func:`memfw.projection.tag_privacy_class`): any case, only
     ``sensitivity:private`` is ``local-private``, and any other
-    ``sensitivity:`` value is ``unknown`` (fail closed).
+    ``sensitivity:`` value is ``unknown`` (fail closed). A hand-added
+    top-level ``sensitivity`` key counts like those tags
+    (:func:`memfw.ports.privacy.sensitivity_key_levels`), strictest wins.
     """
 
     privacy_values: list[str] = []
@@ -120,6 +123,11 @@ def meta_from_document(document: MemoryDocument) -> MemoryMeta:
     declared = _strictest_privacy(privacy_values)
     lifecycle = _strongest_lifecycle(lifecycle_values)
     tag_class = tag_privacy_class(document.tags)
+    key_levels = sensitivity_key_levels(document.top_level_sensitivity)
+    if "unknown" in key_levels:
+        tag_class = "unknown"
+    elif key_levels and tag_class == "none":
+        tag_class = "local-private"
     return MemoryMeta(
         memory_id=document.id,
         tenant=document.tenant,

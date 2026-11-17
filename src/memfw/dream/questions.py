@@ -71,6 +71,7 @@ from memfw.ports.privacy import (
     LEGACY_PRIVACY_FALLBACK,
     effective_level,
     field_level,
+    sensitivity_key_levels,
     strictest,
 )
 from memfw.projection import (
@@ -171,6 +172,9 @@ def is_private(document: MemoryDocument, lifecycle: Lifecycle | None = None) -> 
     # The ``privacy`` field (MM0): local-private or an unrecognised value is
     # private; public and shared are not (tags below can still make it so).
     if document.privacy is not None and field_level(document.privacy) not in ("public", "shared"):
+        return True
+    # A hand-added top-level ``sensitivity`` key only ever restricts.
+    if sensitivity_key_levels(document.top_level_sensitivity):
         return True
     tag_class = tag_privacy_class(document.tags)
     if tag_class != "none":
@@ -405,7 +409,12 @@ def pair_privacy(
     if left.privacy is None and right.privacy is None:
         return None
     return strictest(
-        effective_level(document.privacy, document.tags, legacy=legacy)
+        effective_level(
+            document.privacy,
+            document.tags,
+            legacy=legacy,
+            sensitivity=document.top_level_sensitivity,
+        )
         for document in (left, right)
     )
 
