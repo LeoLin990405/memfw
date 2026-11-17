@@ -27,6 +27,7 @@ from typer.testing import CliRunner
 from memfw import corroboration, edges
 from memfw.cli import app as cli_app
 from memfw.conversations.policy import SharePolicy
+from memfw.core import local_data
 from memfw.core.local_data import OTHER_VAULT, VaultIdentity, vault_identity
 from memfw.core.repository import Repository
 from memfw.corroboration import (
@@ -571,3 +572,27 @@ def test_show_notes_a_missing_projection(tmp_path: Path) -> None:
     assert shown.exit_code == 0
     assert json.loads(shown.stdout)["corroboration"]["count"] == 0
     assert "projection missing: run `memfw corroboration rebuild`" in shown.stderr
+
+
+def test_an_old_catalog_is_read_once_per_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """L5: a catalog whose first segment lacks ``first_hash`` does not re-read the log."""
+
+    repository = _vault(tmp_path / "vault")
+    for number in range(4):
+        repository.add(f"m-{number}", "body", memory_id=f"m-{number}", privacy="public")
+    genesis = vault_identity(repository).genesis
+    repository.compact_log(keep_recent=1)
+    # A schema 1 catalog names no first event: the first segment lacks ``first_hash``.
+    monkeypatch.setattr(local_data, "_catalog_first_hash", lambda _path: None)
+    reads = {"events": 0}
+    real = Repository.events
+
+    def counting(self: Repository) -> Any:
+        reads["events"] += 1
+        return real(self)
+
+    monkeypatch.setattr(Repository, "events", counting)
+    assert [vault_identity(repository).genesis for _ in range(5)] == [genesis] * 5
+    assert reads["events"] == 1

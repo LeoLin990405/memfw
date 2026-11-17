@@ -259,6 +259,36 @@ def read_vault(
     )
 
 
+#: ``(catalog path, device, inode, size, mtime_ns) -> first event hash``, for
+#: catalogs whose first segment does not name its first event (schema 1).
+#: Archived events never change, so one full read per catalog version suffices.
+_GENESIS_CACHE: dict[tuple[str, int, int, int, int], str] = {}
+_GENESIS_CACHE_MAX: Final = 64
+
+
+def _genesis_from_log(host: VaultHost) -> str:
+    """The first event's hash from the verified log, cached per catalog version."""
+
+    try:
+        info = host.log_catalog_path.stat()
+    except OSError:
+        info = None
+    key = (
+        (str(host.log_catalog_path), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+        if info is not None
+        else None
+    )
+    if key is not None and key in _GENESIS_CACHE:
+        return _GENESIS_CACHE[key]
+    events = host.events()
+    genesis = str(events[0].event_hash) if events else ""
+    if key is not None and genesis:
+        if len(_GENESIS_CACHE) >= _GENESIS_CACHE_MAX:
+            _GENESIS_CACHE.clear()
+        _GENESIS_CACHE[key] = genesis
+    return genesis
+
+
 def vault_identity(host: VaultHost) -> VaultIdentity:
     """The identity of the vault ``host`` opens (see the module docstring).
 
@@ -276,8 +306,7 @@ def vault_identity(host: VaultHost) -> VaultIdentity:
     else:
         genesis = _first_line_hash(host.events_path)
     if genesis is None:
-        events = host.events()
-        genesis = str(events[0].event_hash) if events else ""
+        genesis = _genesis_from_log(host)
     return VaultIdentity(str(Path(host.root).resolve()), vault_id, genesis)
 
 
