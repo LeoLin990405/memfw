@@ -69,6 +69,10 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   review queue (`memfw corroboration queue`) reads the field through the
   strict policy, and under a clearance lists only admitted questions and
   conflict ids. Corroboration is computed on rows that passed the clearance.
+- The O1a Obsidian projection classifies with the same rule: memories without
+  a privacy field follow `legacy_privacy_default` (unset → `local-private`,
+  so they are not exported under the default `public,shared` until the vault
+  sets it); a `privacy:public` tag alone no longer makes a memory public.
 - `docs/READONLY-SERVICE-UPGRADE.md`: deploy the three service files together
   and pair `MEMFW_READONLY_CLEARANCE` with the vault's privacy defaults.
 
