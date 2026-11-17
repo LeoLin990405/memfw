@@ -13,6 +13,7 @@ from typing import Annotated, Any, NoReturn
 import typer
 
 from . import __version__
+from .attachments.cli import app as attach_app
 from .budget import BYTE_BUDGETS, BudgetLimits, BudgetProfile
 from .capture.cli import app as capture_app
 from .capture.confirm import confirm_command
@@ -127,6 +128,7 @@ app.add_typer(eval_app, name="eval")
 app.add_typer(projection_app, name="projection")
 app.add_typer(conversations_app, name="conversations")
 app.add_typer(project_app, name="project")
+app.add_typer(attach_app, name="attach")
 app.command("handoff")(handoff_command)
 capture_app.command(name="confirm")(confirm_command)
 
@@ -2673,6 +2675,7 @@ HELP_PANELS: dict[str, str] = {
     "memory-related": PANEL_DAILY,
     "handoff": PANEL_DAILY,
     "notes": PANEL_DAILY,
+    "attach": PANEL_DAILY,
     "code": PANEL_DAILY,
     # Human decisions: proposals, staged candidates, dream questions.
     "record-proposal": PANEL_APPROVAL,

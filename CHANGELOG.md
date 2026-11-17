@@ -48,6 +48,38 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   `resources/list` and every pack are byte-identical and the slot is unknown. See
   `docs/ports-and-recall.md` §4.3a.
 
+### Added — attachments: blob store, records, `memfw attach` (MM1a)
+
+- Originals are stored once per sha256 as blobs **outside the vault**
+  (`<attachments_blob_root>/<vault_id>/<sha[:2]>/<sha>`, default root
+  `~/.local/share/memfw/blobs`; directories 0700, files 0600; a git work
+  tree, the vault, synced folders and symlinked roots are refused). The vault
+  keeps one small record per registration, `attachments/<att-id>.md`
+  (`att-<uuid7>`; never under `memories/`), with `privacy` (default
+  `local-private`; a missing field reads `local-private`; tags and
+  `sensitivity` only tighten).
+- `memfw attach add FILE` (`--embed`, `--privacy`, `--media-type`,
+  `--origin`, `--note`, `--captured-at`, `--retention`, `--rights`, `--tag`),
+  `attach list [--json]`, `attach show ID` (with `cited_by`: memories whose
+  evidence is `att:ID`) and `attach verify [ID]...` (re-hashes records and
+  blobs, writes nothing, exit 1 on a missing or changed one). Limits
+  `attachments_max_bytes` (25 MiB) and `attachments_max_total_bytes` (2 GiB)
+  in `vault.yaml`; audio and video need `--embed`. No exit serves
+  attachments yet.
+- Event kinds `attach` (written) and `attach_update`, `detach`,
+  `attach_purge`, `attach_missing`, `attach_relink`, `proxy_add`,
+  `proxy_supersede` (reserved). One event manifest,
+  `core.models.MEMORY_EVENT_KINDS` / `NON_MEMORY_EVENT_KINDS`, replaces the
+  two skip lists in `replay()` and the segment snapshot; a test makes every
+  new kind pick one. `fsck` reports attachment problems
+  (`attachment_<status>`) and never registers an `external_delete` for them;
+  orphan blobs are reported, never deleted. The first attach adds `vault_id`
+  to `vault.yaml` (one `config_change`).
+- Without attachments every command's output is byte-identical
+  (`tests/test_attachments_compat.py`). **memfw 0.3.0 fails closed on a vault
+  with an `attach` event** (every command that reads the event log); upgrade
+  every host first. See [`docs/attachments.md`](docs/attachments.md).
+
 ## [0.3.0] — 2026-11-17
 
 The second numbered release: a layered core behind swappable ports, recall and

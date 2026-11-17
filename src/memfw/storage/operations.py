@@ -1376,6 +1376,9 @@ class MemoryOperationsMixin:
         issues.extend(_open_question_issues(current_documents, successors=successors))
         if registered_deletions:
             self.validate_knowledge_cards()
+        # Attachments are checked on their own (read-only) and never projected
+        # as memories, so they can never produce an external_delete (MM1a).
+        issues.extend(cast(Any, self).attachment_fsck_issues())
         return issues
 
 

@@ -79,6 +79,9 @@ UNITS: Final[dict[str, str]] = {
     # vault facade cannot exist without it (kernel, not L3). The K iteration
     # may lift it to L3 behind a protocol.
     "memfw.knowledge": "L2-kernel-parts",
+    # Attachments (MM1a): AttachmentStoreMixin is a mixin of Repository (records
+    # in the vault, blobs outside it), so it sits with the knowledge cards.
+    "memfw.attachments": "L2-kernel-parts",
     # Proposal schemas the vault signs and verifies (agents.models); the
     # package __init__ (deterministic mock judges) loads with it.
     "memfw.agents": "L2-kernel-parts",
@@ -142,6 +145,7 @@ UNITS: Final[dict[str, str]] = {
     "memfw.experience.cli": "L5-interface",
     "memfw.handoff.cli": "L5-interface",
     "memfw.history.cli": "L5-interface",
+    "memfw.attachments.cli": "L5-interface",
     "memfw.ontology.cli": "L5-interface",
     "memfw.notes.mcp": "L5-interface",
 }
@@ -155,6 +159,7 @@ SAME_LAYER_ALLOWED: Final[dict[tuple[str, str], str]] = {
     ("memfw.policies", "memfw.budget"): "selectors over the budget model",
     ("memfw.core.policies", "memfw.permissions"): "core policy reads PermissionPolicy",
     ("memfw.knowledge", "memfw.storage"): "knowledge cards share the vault write lock",
+    ("memfw.attachments", "memfw.storage"): "attachment records share the vault write lock",
     # Projections built on the FTS index and the stats algorithms.
     ("memfw.index", "memfw.stats"): "BM25/keyness scoring",
     ("memfw.history", "memfw.index"): "transcript index reuses FTS term building",
@@ -167,6 +172,7 @@ SAME_LAYER_ALLOWED: Final[dict[tuple[str, str], str]] = {
     ("memfw.recall.builtin", "memfw.recall"): "builtin providers implement recall's ports",
     # The root Typer app mounts the sub-apps and serves the notes MCP server.
     ("memfw.cli", "memfw.capture.cli"): "mounts sub-app",
+    ("memfw.cli", "memfw.attachments.cli"): "mounts sub-app",
     ("memfw.cli", "memfw.conversations.cli"): "mounts sub-app",
     ("memfw.cli", "memfw.curation.review_cli"): "mounts sub-app",
     ("memfw.cli", "memfw.dream.cli"): "mounts sub-app",

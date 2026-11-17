@@ -64,6 +64,81 @@ class EventKind(StrEnum):
     KNOWLEDGE_CARD_CREATE = "knowledge_card_create"
     KNOWLEDGE_SOURCE_MISSING = "knowledge_source_missing"
     KNOWLEDGE_SOURCE_REPOINT = "knowledge_source_repoint"
+    # Attachments (MM1). Their records live in ``attachments/``, never in
+    # ``memories/``; only ``ATTACH`` is written in MM1a, the rest are reserved
+    # for MM1b (detach, purge, missing, relink) and MM2 (proxies).
+    ATTACH = "attach"
+    ATTACH_UPDATE = "attach_update"
+    DETACH = "detach"
+    ATTACH_PURGE = "attach_purge"
+    ATTACH_MISSING = "attach_missing"
+    ATTACH_RELINK = "attach_relink"
+    PROXY_ADD = "proxy_add"
+    PROXY_SUPERSEDE = "proxy_supersede"
+
+
+#: Event kinds that change a memory's committed Markdown (the ``replay`` projection).
+MEMORY_EVENT_KINDS: frozenset[EventKind] = frozenset(
+    {
+        EventKind.CREATE,
+        EventKind.UPDATE,
+        EventKind.DELETE,
+        EventKind.SUPERSEDE,
+        EventKind.LAYER_CHANGE,
+        EventKind.TIER_CHANGE,
+        EventKind.ANCHOR_SET,
+        EventKind.EXTERNAL_EDIT,
+        EventKind.EXTERNAL_DELETE,
+        EventKind.MEMORY_RESTORE,
+    }
+)
+
+#: Event kinds that ``replay`` and the log-segment snapshot skip: they are not
+#: about a memory file (config, proposals, capture, access, knowledge cards,
+#: attachments and proxies). Every :class:`EventKind` is in exactly one of
+#: this set and :data:`MEMORY_EVENT_KINDS` (``tests/test_attachments.py``), so
+#: a new kind must be classified on purpose. A memory-projected attachment
+#: event would make ``fsck`` register an ``external_delete`` for it.
+NON_MEMORY_EVENT_KINDS: frozenset[EventKind] = frozenset(
+    {
+        EventKind.CONFIG_CHANGE,
+        EventKind.AGENT_PROPOSAL,
+        EventKind.HUMAN_DECISION,
+        EventKind.SIMULATED_DECISION,
+        EventKind.CAPTURE_WAKE,
+        EventKind.CAPTURE_SLEEP,
+        EventKind.CAPTURE_STATE_CHANGE,
+        EventKind.CAPTURE_RECORD,
+        EventKind.FORGET,
+        EventKind.MEMORY_ACCESS,
+        EventKind.CONSOLIDATION_PROPOSAL,
+        EventKind.BUDGET_UNSATISFIABLE,
+        EventKind.PROPOSAL_ERASE,
+        EventKind.KNOWLEDGE_CARD_CREATE,
+        EventKind.KNOWLEDGE_SOURCE_MISSING,
+        EventKind.KNOWLEDGE_SOURCE_REPOINT,
+        EventKind.ATTACH,
+        EventKind.ATTACH_UPDATE,
+        EventKind.DETACH,
+        EventKind.ATTACH_PURGE,
+        EventKind.ATTACH_MISSING,
+        EventKind.ATTACH_RELINK,
+        EventKind.PROXY_ADD,
+        EventKind.PROXY_SUPERSEDE,
+    }
+)
+
+#: Event kinds about one attachment record (``memory_id`` is the attachment id).
+ATTACHMENT_EVENT_KINDS: frozenset[EventKind] = frozenset(
+    {
+        EventKind.ATTACH,
+        EventKind.ATTACH_UPDATE,
+        EventKind.DETACH,
+        EventKind.ATTACH_PURGE,
+        EventKind.ATTACH_MISSING,
+        EventKind.ATTACH_RELINK,
+    }
+)
 
 
 def utc_now() -> datetime:

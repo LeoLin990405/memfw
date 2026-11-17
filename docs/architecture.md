@@ -11,14 +11,14 @@ described in [`ports-and-recall.md`](ports-and-recall.md).
 The layer map is [`tests/architecture/layers.py`](../tests/architecture/layers.py). Every
 `memfw` subpackage and top-level module is a key there (a *unit*). A few modules get their
 own key because they sit in another layer than their package: `memfw.core.repository` (the
-vault facade, assembled from `storage`, `log` and `knowledge` mixins), `memfw.core.policies`,
+vault facade, assembled from `storage`, `log`, `knowledge` and `attachments` mixins), `memfw.core.policies`,
 `memfw.recall.builtin`, every `cli.py` and `notes/mcp.py`.
 
 | Rank | Layer | Units (summary) |
 |---|---|---|
 | 0 | `L0-ports` | `memfw.ports`; the `memfw` root `__init__` (it runs before every submodule) |
 | 1 | `L2-kernel-model` | `memfw.core` (models, errors, epistemic, context), `budget`, `policies` |
-| 2 | `L2-kernel-parts` | `storage`, `log`, `knowledge`, `permissions`, `core.policies`, `agents`, `layers`, `ontology`, `tiers` |
+| 2 | `L2-kernel-parts` | `storage`, `log`, `knowledge`, `attachments`, `permissions`, `core.policies`, `agents`, `layers`, `ontology`, `tiers` |
 | 3 | `L2-vault` | `memfw.core.repository` |
 | 4 | `L1-projection` | `index`, `stats`, `entities`, `related`, `related_annotation`, `projection`, `projections`, `notes`, `history` |
 | 5 | `L1-read` | `retrieval`, `memory_hybrid` |
@@ -29,7 +29,8 @@ vault facade, assembled from `storage`, `log` and `knowledge` mixins), `memfw.co
 The spec's L-number is kept in each name. Projections (L1) rank above the kernel (L2)
 because every projection is rebuilt from the vault and imports `memfw.core` (spec v1.1).
 `memfw.knowledge` is in the kernel because `KnowledgeStoreMixin` is a mixin of `Repository`:
-the vault facade cannot exist without it.
+the vault facade cannot exist without it. `memfw.attachments` (MM1a) is there for the same
+reason (`AttachmentStoreMixin`); its blob store lives outside the vault.
 
 ## Rules (`tests/test_architecture_layers.py`)
 

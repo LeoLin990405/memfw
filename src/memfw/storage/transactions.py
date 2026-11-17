@@ -245,6 +245,9 @@ class TransactionMixin:
                 candidates.extend(self.log_segments_dir.glob("*.tar.zst.tmp"))
             if self.proposals_dir.exists():
                 candidates.extend(self.proposals_dir.glob("*.md.tmp"))
+            attachments_dir = self.root / "attachments"
+            if attachments_dir.exists():
+                candidates.extend(attachments_dir.glob("*.md.tmp"))
             for candidate in candidates:
                 if candidate.exists():
                     candidate.unlink()
@@ -424,6 +427,8 @@ class TransactionMixin:
             self.pending_path.unlink(missing_ok=True)
             if self.recover_log_compaction():
                 changed.append("events.jsonl")
+            if manifest.get("operation") == "add_attachment_record":
+                changed.extend(cast(Any, self)._reconcile_attachment_records(event_list))
             if manifest.get("operation") in {"delete", "fsck"}:
                 self.validate_knowledge_cards()
             return changed
