@@ -280,7 +280,9 @@ def test_every_written_relation_becomes_a_typed_edge(tmp_path: Path) -> None:
     _add(repository, "m-c", evidence=["m-a", "kh:notes/b", "https://x.test"])
     # MM3 refuses a new att: pointer to an unregistered attachment; the edge
     # projection reads the file as it is, so the pointer is written by hand.
-    _rewrite(repository, "m-c", evidence=["m-a", "att:photo.png#p1", "kh:notes/b", "https://x.test"])
+    _rewrite(
+        repository, "m-c", evidence=["m-a", "att:photo.png#p1", "kh:notes/b", "https://x.test"]
+    )
     _add(repository, "m-d")
     _rewrite(repository, "m-d", superseded_by="m-c")
     _add(
