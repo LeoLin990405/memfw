@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import shutil
@@ -120,7 +121,7 @@ def test_attachment_id_shape_matches_the_records_module() -> None:
         f"  att:{SAMPLE_ID}  ",
         f"%61tt:{SAMPLE_ID}",
         f"%2561tt%3A{SAMPLE_ID}",
-        f"​att:{SAMPLE_ID}",
+        f"\u200batt:{SAMPLE_ID}",
         f"ａｔｔ:{SAMPLE_ID}",
     ],
 )
@@ -200,7 +201,15 @@ def test_pointer_helpers() -> None:
     assert path_pointer("file:%2Ftmp%2Fa.png") == "/tmp/a.png"
     assert path_pointer("data:/tmp/a.png") == "/tmp/a.png"
     assert path_pointer("data:dataset-1") is None
-    assert canonical_reference("sha256:ab​cd") == "sha256:abcd"
+    assert canonical_reference("sha256:ab\u200bcd") == "sha256:abcd"
+    digest = hashlib.sha256(b"x").digest()
+    assert sha256_pointer_hex("sha256:" + base64.b64encode(digest).decode()) == digest.hex()
+    assert sha256_pointer_hex("sha256:" + digest.hex()[:8] + "\t" + digest.hex()[8:]) == (
+        digest.hex()
+    )
+    assert path_pointer("data:copies/s.png") == "copies/s.png"
+    assert path_pointer("dataset:./s.png") == "./s.png"
+    assert path_pointer("result:synthetic-batch-42") is None
 
 
 # --- the pure gate ------------------------------------------------------------------
@@ -354,7 +363,7 @@ def _bypass_pointers(repository: Repository, tmp_path: Path) -> tuple[Any, list[
         f"sha256:{sha}",
         f"SHA256:{sha.upper()}",
         f"Sha256:{sha[:12]}",
-        f"sha256:{sha[:20]}​{sha[20:]}",
+        f"sha256:{sha[:20]}\u200b{sha[20:]}",
         f"sha256%3A{sha}",
         f"file:{copy}",
         f"file://{copy}",
@@ -366,6 +375,17 @@ def _bypass_pointers(repository: Repository, tmp_path: Path) -> tuple[Any, list[
         f"result:{shot.id}",
         f"experiment:run-{sha}",
         f"https://example.invalid/{shot.id}.png",
+        # Review M1: other separators, base64 digests, SRI, relative paths, link syntax.
+        "sha256:" + "\t".join(sha[i : i + 16] for i in range(0, 64, 16)),
+        "sha256:" + ",".join(sha[i : i + 8] for i in range(0, 64, 8)),
+        f"sha256:{sha[:32]}/{sha[32:]}",
+        "sha256:" + base64.b64encode(bytes.fromhex(sha)).decode(),
+        "sha256:" + base64.urlsafe_b64encode(bytes.fromhex(sha)).decode().rstrip("="),
+        "data:sha256-" + base64.b64encode(bytes.fromhex(sha)).decode(),
+        "data:../elsewhere/copy.png",
+        "dataset:./../elsewhere/copy.png",
+        f"[the screenshot](att:{shot.id}#bbox=0,0,1,1)",
+        f"see <ATT:{shot.id.upper()}>",
     ]
     return shot, pointers
 
@@ -380,6 +400,17 @@ def test_bypass_spellings_are_observation(tmp_path: Path) -> None:
             repository.add("claim", "body", epistemic="fact", evidence=[pointer])
         classes = gate_evidence_classes(repository, {"evidence": [pointer]})
         assert classes == {pointer: "observation"}, pointer
+
+
+def test_att_inside_link_syntax_is_checked(tmp_path: Path) -> None:
+    repository = _repo(tmp_path)
+    with pytest.raises(IntegrityError, match="missing attachment"):
+        repository.add("x", "y", epistemic="experience", evidence=[f"[x](att:{SAMPLE_ID})"])
+    shot = _attach(repository, _original(tmp_path, "s.png", b"png"), "image/png")
+    with pytest.raises(IntegrityError, match="invalid locator"):
+        repository.add("x", "y", epistemic="experience", evidence=[f"[x](att:{shot.id}#page=2)"])
+    cited = repository.add("x", "y", epistemic="experience", evidence=[f"[x](att:{shot.id})"])
+    assert repository.attachment_citations(shot.id) == [cited.id]
 
 
 def test_kh_pointer_to_a_pdf_cannot_carry_verified(tmp_path: Path) -> None:

@@ -99,9 +99,11 @@ already-classified evidence, so the gate stays pure:
   locator must fit its media type (and its bounds, when the record has them); a locator
   resolves at attachment level until proxy segments exist;
 * `att:` is the one way to cite an original. A `sha256:` pointer to a registered
-  original's hash (or an 8+ hex prefix of it), a `file:` pointer to its blob, a copy of
-  it or its recorded location, and any raw or link pointer carrying its id or full hash
-  are classified as observation. Spelling is folded first (case, percent-encoding,
+  original's hash (or an 8+ hex prefix of it, with any separators between hex
+  groups, or the digest in base64/base64url), a `file:` pointer to its blob, a copy of
+  it or its recorded location, any raw pointer whose value is such a path (absolute,
+  `~` or relative to the vault: `data:copies/s.png`), and any raw or link pointer
+  carrying its id, full hash or `sha256-<base64>` (SRI) are classified as observation. Spelling is folded first (case, percent-encoding,
   Unicode compatibility forms, invisible format characters such as U+200B). Without
   any attachment-like pointer the gate gets no classes and reads nothing, so other
   memories behave exactly as before;
@@ -112,6 +114,14 @@ already-classified evidence, so the gate stays pure:
   evidence, so a pointer added at `hypothesis` cannot be carried into `verified`.
   `memfw fsck` lists such memories as `evidence_observation_review`, and `att:`
   evidence that no longer resolves as `evidence_attachment_invalid`.
+
+The cap is only as strong as raw pointers are honest: the gate cannot check what a
+`file:` or `dataset:` pointer that names no registered attachment really is, so a
+pointer to a file that does not exist (`file:/nonexistent`) still counts as raw and
+lifts the cap, as it already lifted the `verified` evidence rule before MM3. An
+`att:` pointer inside link syntax (`[shot](att:<id>)`) is checked and classified like
+a bare one. A `fact` with no evidence at all stays allowed (the gate never required
+evidence for `fact`); a `fact` whose only evidence is an observation is refused (H3).
 
 Backlinks (attachment → memories that cite it) are computed from `evidence` on read
 (`memfw attach show` → `cited_by`); nothing is written.

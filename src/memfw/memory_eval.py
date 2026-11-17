@@ -562,7 +562,10 @@ MULTIMODAL_FIXTURE: Traversable = (
     resources.files("memfw") / "eval_data" / "causal_eval_multimodal" / "corpus.json"
 )
 
-_PLACEHOLDER = re.compile(r"\{(att|id|ID|sha|SHA|sha16|sha_zw|file|file_pct|blob):([a-z_]+)\}")
+_PLACEHOLDER = re.compile(
+    r"\{(att|id|ID|sha|SHA|sha16|sha_zw|sha_tab|sha_comma|sha_slash|b64|b64url|"
+    r"file|file_pct|rel|blob):([a-z_]+)\}"
+)
 
 
 @dataclass(frozen=True)
@@ -673,6 +676,7 @@ def load_multimodal_corpus(path: Traversable | Path | str | None = None) -> dict
 def _multimodal_case(
     index: int, case: dict[str, Any], corpus: dict[str, Any], workdir: Path
 ) -> MultimodalCaseResult:
+    import base64
     import urllib.parse
 
     from .core.errors import IntegrityError
@@ -710,6 +714,12 @@ def _multimodal_case(
             "SHA": sha.upper(),
             "sha16": sha[:16],
             "sha_zw": sha[:32] + "\u200b" + sha[32:],
+            "sha_tab": "\t".join(sha[i : i + 16] for i in range(0, 64, 16)),
+            "sha_comma": ",".join(sha[i : i + 8] for i in range(0, 64, 8)),
+            "sha_slash": sha[:32] + "/" + sha[32:],
+            "b64": base64.b64encode(bytes.fromhex(sha)).decode("ascii"),
+            "b64url": base64.urlsafe_b64encode(bytes.fromhex(sha)).decode("ascii").rstrip("="),
+            "rel": f"../copies/{spec['name']}",
             "file": str(copy.resolve()),
             "file_pct": urllib.parse.quote(str(copy.resolve()), safe=""),
             "blob": str(blob),

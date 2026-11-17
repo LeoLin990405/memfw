@@ -20,6 +20,8 @@ Nothing here reads the vault or the blob store.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import math
 import re
 import unicodedata
@@ -42,7 +44,15 @@ _ATTACHMENT_ID_RE: Final = re.compile(
 )
 _HEX64_RE: Final = re.compile(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
 _SCHEME_RE: Final = re.compile(r"^([a-z][a-z0-9+.-]{0,31}):(.*)$", re.DOTALL | re.IGNORECASE)
-_SHA_SEPARATORS: Final = frozenset(" :-_.")
+#: ``sha256-<base64>`` (Subresource Integrity), anywhere in a pointer.
+_SRI_RE: Final = re.compile(r"sha256-([A-Za-z0-9+/_-]{43}={0,1})")
+#: An ``att:`` pointer inside other text (``[shot](att:<id>#bbox=…)``).
+_EMBEDDED_ATT_RE: Final = re.compile(
+    r"att:(att-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})"
+    r"(?:#([a-z0-9=&,.:+_-]*))?"
+)
+#: A value that looks like a relative path: a directory part or a file extension.
+_RELATIVE_PATH_RE: Final = re.compile(r"(^\.{1,2}/|/|\.[A-Za-z0-9]{1,8}$)")
 _DECODE_ROUNDS: Final = 4
 
 #: Locator keys and the media families that accept them.
@@ -265,10 +275,48 @@ def _folded(reference: str) -> str:
     return canonical_reference(reference).lower()
 
 
-def embedded_hashes(reference: str) -> frozenset[str]:
-    """Every 64-hex run in the canonical form (lowercase)."""
+def _digest_from_base64(text: str) -> str | None:
+    """The hex of ``text`` read as base64 or base64url, when it decodes to 32 bytes."""
 
-    return frozenset(_HEX64_RE.findall(_folded(reference)))
+    value = text.strip()
+    if not value or len(value) > 64:
+        return None
+    # base64url → base64, then a strict decode (no character is skipped).
+    standard = value.replace("-", "+").replace("_", "/")
+    padded = standard + "=" * (-len(standard) % 4)
+    try:
+        raw = base64.b64decode(padded.encode("ascii"), validate=True)
+    except (binascii.Error, ValueError, UnicodeEncodeError):
+        return None
+    return raw.hex() if len(raw) == 32 else None
+
+
+def embedded_hashes(reference: str) -> frozenset[str]:
+    """Every sha256 the canonical form carries (lowercase hex).
+
+    64-hex runs, and ``sha256-<base64>`` tokens (Subresource Integrity, as in
+    ``data:sha256-…``) that decode to 32 bytes.
+    """
+
+    canonical = canonical_reference(reference)
+    found = set(_HEX64_RE.findall(canonical.lower()))
+    for token in _SRI_RE.findall(canonical):
+        digest = _digest_from_base64(token)
+        if digest is not None:
+            found.add(digest)
+    return frozenset(found)
+
+
+def embedded_attachment_references(reference: str) -> tuple[AttachmentReference, ...]:
+    """``att:`` pointers inside a pointer that is not itself ``att:`` (link syntax etc.)."""
+
+    scheme = split_scheme(reference)
+    if scheme is not None and scheme[0] == "att":
+        return ()
+    return tuple(
+        AttachmentReference(identifier, locator or None)
+        for identifier, locator in _EMBEDDED_ATT_RE.findall(_folded(reference))
+    )
 
 
 def embedded_attachment_ids(reference: str) -> frozenset[str]:
@@ -287,19 +335,24 @@ def sha256_pointer_hex(reference: str) -> str | None:
     scheme = split_scheme(reference)
     if scheme is None or scheme[0] != "sha256":
         return None
-    digits = "".join(char for char in scheme[1].lower() if char not in _SHA_SEPARATORS)
-    if len(digits) < MIN_SHA_PREFIX or any(char not in "0123456789abcdef" for char in digits):
-        return None
-    return digits
+    value = scheme[1].split("#", 1)[0]
+    # Any separator between hex groups (space, tab, comma, slash, colon …).
+    digits = "".join(char for char in value.lower() if char.isalnum())
+    if len(digits) >= MIN_SHA_PREFIX and all(char in "0123456789abcdef" for char in digits):
+        return digits
+    # ``sha256:<base64>`` / ``<base64url>`` of the 32-byte digest.
+    return _digest_from_base64("".join(value.split()))
 
 
 def path_pointer(reference: str) -> str | None:
     """The local path a pointer names, if it looks like one; ``None`` otherwise.
 
     ``file:/p``, ``file:///p``, ``file://localhost/p`` and ``file:~/p`` give
-    the path; any other scheme gives one only when its value is an absolute
-    or ``~`` path (``data:/tmp/x.png``). A ``file:`` value that is relative is
-    returned as is; the caller decides what it is relative to.
+    the path; any other scheme gives one when its value is an absolute or
+    ``~`` path (``data:/tmp/x.png``) or looks like a relative one (a directory
+    part or a file extension: ``data:copies/s.png``, ``dataset:./s.png``).
+    A relative value is returned as is; the caller decides what it is
+    relative to.
     """
 
     scheme = split_scheme(reference)
@@ -316,7 +369,7 @@ def path_pointer(reference: str) -> str | None:
         return None
     if name == "file":
         return rest
-    if rest.startswith(("/", "~")):
+    if rest.startswith(("/", "~")) or _RELATIVE_PATH_RE.search(rest):
         return rest
     return None
 
@@ -330,6 +383,7 @@ __all__ = [
     "canonical_reference",
     "check_locator",
     "embedded_attachment_ids",
+    "embedded_attachment_references",
     "embedded_hashes",
     "is_attachment_reference",
     "parse_attachment_reference",

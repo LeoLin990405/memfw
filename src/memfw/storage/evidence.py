@@ -56,6 +56,7 @@ from ..core.evidence_refs import (
     canonical_reference,
     check_locator,
     embedded_attachment_ids,
+    embedded_attachment_references,
     embedded_hashes,
     parse_attachment_reference,
     parse_locator,
@@ -220,6 +221,8 @@ def _candidate_paths(raw: str, vault: Path | None) -> list[Path]:
 def _could_name_attachment(reference: str) -> bool:
     """Whether ``reference`` may name an attachment: decided without any I/O."""
 
+    if embedded_attachment_references(reference):
+        return True
     scheme = split_scheme(reference)
     if scheme is None:
         return False
@@ -328,6 +331,18 @@ def resolve_attachment_reference(
     )
 
 
+def _att_pointers(reference: str) -> list[str]:
+    """The ``att:`` pointers ``reference`` is or carries (``[shot](att:<id>)``)."""
+
+    scheme = split_scheme(reference)
+    if scheme is not None and scheme[0] == "att":
+        return [reference]
+    return [
+        f"att:{item.attachment_id}" + (f"#{item.locator}" if item.locator else "")
+        for item in embedded_attachment_references(reference)
+    ]
+
+
 def _strings(value: Any) -> list[str]:
     if value is None:
         return []
@@ -348,7 +363,11 @@ def _observation_overrides(
         if evidence_source_class(reference) == "observation":
             continue
         scheme = split_scheme(reference)
-        if (scheme is not None and scheme[0] == "att") or _citations(reference, index):
+        if (
+            (scheme is not None and scheme[0] == "att")
+            or embedded_attachment_references(reference)
+            or _citations(reference, index)
+        ):
             overrides[reference] = "observation"
     return overrides
 
@@ -414,9 +433,8 @@ def gate_evidence_classes(
     added = [item for item in references if item not in old]
     index = _load_index(host)
     for reference in added:
-        scheme = split_scheme(reference)
-        if scheme is not None and scheme[0] == "att":
-            resolve_attachment_reference(host, reference, _index=index)
+        for pointer in _att_pointers(reference):
+            resolve_attachment_reference(host, pointer, _index=index)
     overrides = _observation_overrides(references, index)
     carried = [item for item in references if item in old]
     if (
@@ -470,6 +488,17 @@ def attachment_backlinks(
                         )
                     )
                 continue
+            for embedded in embedded_attachment_references(reference):
+                if wanted in (None, embedded.attachment_id):
+                    links.append(
+                        AttachmentBacklink(
+                            str(document.id),
+                            embedded.attachment_id,
+                            reference,
+                            "att",
+                            embedded.locator,
+                        )
+                    )
             if index is None:
                 index = _load_index(host)
                 index.max_bytes = -1  # never hash files for a read query
@@ -505,12 +534,11 @@ def evidence_fsck_issues(host: Any, documents: Iterable[Any]) -> list[dict[str, 
     index = _load_index(host)
     issues: list[dict[str, str | None]] = []
     for document in candidates:
-        for reference in _strings(document.evidence):
-            scheme = split_scheme(reference)
-            if scheme is None or scheme[0] != "att":
-                continue
+        for pointer in (
+            item for reference in _strings(document.evidence) for item in _att_pointers(reference)
+        ):
             try:
-                resolve_attachment_reference(host, reference, _index=index)
+                resolve_attachment_reference(host, pointer, _index=index)
             except IntegrityError as exc:
                 issues.append(
                     {
