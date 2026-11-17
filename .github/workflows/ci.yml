@@ -23,9 +23,9 @@ jobs:
   standalone-wheels:
     # memfw-ports, memfw-recall and the adapters build as wheels and pass the
     # contract kit in a fresh venv without memfw (docs/ports-and-recall.md
-    # section 1.1); the DeepSeek adapter runs against its loopback fake only,
-    # the bm25s adapter on a throwaway vault with its pinned dependencies, the
-    # Qdrant adapter against its loopback FakeQdrant
+    # section 1.1); the DeepSeek and QMD adapters run against their loopback
+    # fakes only, the bm25s adapter on a throwaway vault with its pinned
+    # dependencies, the Qdrant adapter against its loopback FakeQdrant
     # (the versions uv.lock resolves for Python 3.11).
     runs-on: ubuntu-latest
     steps:
@@ -41,7 +41,8 @@ jobs:
       - run: uv build --wheel --package memfw-adapter-deepseek -o "$RUNNER_TEMP/dist"
       - run: uv build --wheel --package memfw-adapter-bm25s -o "$RUNNER_TEMP/dist"
       - run: uv build --wheel --package memfw-adapter-qdrant -o "$RUNNER_TEMP/dist"
+      - run: uv build --wheel --package memfw-adapter-qmd -o "$RUNNER_TEMP/dist"
       - run: uv venv --python 3.11 "$RUNNER_TEMP/wheel-venv"
       - run: uv pip install --python "$RUNNER_TEMP/wheel-venv/bin/python" bm25s==0.3.16 jieba==0.42.1 PyYAML==6.0.3 numpy==2.4.6
       - run: uv pip install --python "$RUNNER_TEMP/wheel-venv/bin/python" --no-index "$RUNNER_TEMP"/dist/*.whl
-      - run: '"$RUNNER_TEMP/wheel-venv/bin/python" -I tests/standalone/wheel_smoke.py --recall --deepseek --bm25s --qdrant'
+      - run: '"$RUNNER_TEMP/wheel-venv/bin/python" -I tests/standalone/wheel_smoke.py --recall --deepseek --bm25s --qdrant --qmd'

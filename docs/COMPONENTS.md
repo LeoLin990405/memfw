@@ -147,6 +147,21 @@ and asks for memory ids only. It is **off by default**; `memfw-adapter-qdrant sy
 [`adapter-qdrant.md`](adapter-qdrant.md).
 
 
+## QMD recall adapter
+
+`packages/adapters/memfw-adapter-qmd` (wheel `memfw_adapter_qmd`, version 0.1.0) implements
+the `RecallProvider` port twice, with the standard library and PyYAML, over a running
+[QMD](https://github.com/tobi/qmd) (MIT, pinned 2.5.3) MCP server: `qmd` searches a collection
+built from a `memfw projection export` and returns memory ids mapped through the projection
+manifest; `qmd-notes` searches a Knowledge-Hub collection and returns `kh:<path>#<heading>`
+references. Both return references, QMD's scores and a source label only, drop anything they
+cannot map to a visible document (`local-private` and `unknown` are never returned), and are
+**off by default** (`AdaptersConfig` `enabled`). The endpoint must be loopback unless
+`allow_remote` is set, and loopback requests bypass any proxy. When QMD is down or slow the
+coordinator marks the provider degraded and FTS answers. memfw never imports the adapter. See
+[`qmd-projection.md`](qmd-projection.md#qmd-recall-adapter) and the package README.
+
+
 ## Corroboration projection
 
 `memfw corroboration rebuild` writes the corroboration projection outside the vault

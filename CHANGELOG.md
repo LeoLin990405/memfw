@@ -211,6 +211,28 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   as an opaque string). Memories without `att:`/`file:`/`sha256:` evidence (or without
   registered attachments) are gated exactly as before.
 
+### Added — QMD recall adapter (R6 PR-2a, off by default)
+
+- New workspace package `packages/adapters/memfw-adapter-qmd` (0.1.0,
+  wheel `memfw_adapter_qmd`, stdlib plus pinned PyYAML 6.0.3, nothing else
+  of memfw than `memfw-ports`):
+  two `RecallProvider`s over a running QMD 2.5.3 (MIT) MCP server, `qmd`
+  (memory projections → memory ids through the projection manifest) and
+  `qmd-notes` (Knowledge-Hub notes → `kh:<path>#<heading>` refs). They return
+  references, scores and a source label only; hits that do not map to a
+  visible document are dropped, and `local-private`/`unknown` are never
+  returned. Loopback endpoint by default, proxy bypass for loopback, no
+  redirects. When QMD is unavailable or times out the coordinator reports it
+  degraded and FTS answers. memfw does not import it; with no adapter config
+  nothing changes. QMD's MIT notice ships in the wheel
+  (`memfw_adapter_qmd/THIRD_PARTY.md`).
+- Contract tests replaying fixtures recorded from a live QMD 2.5.3 over a
+  throwaway synthetic index (`tests/fixtures/qmd_contract/`, lexical only:
+  no embeddings; CI uses a loopback fake, no real QMD), the
+  standalone-wheel smoke (`--qmd`) and the T6 consistency report
+  `scripts/qmd_notes_consistency.py` (builtin notes index vs the adapter;
+  overlap only, not a gate).
+
 ### Added — two-stage conversation search and tag filters (M3c)
 
 - `memfw conversations search` and MCP `conversations_search` gain tag

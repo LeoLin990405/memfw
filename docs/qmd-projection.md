@@ -35,12 +35,11 @@ backend that uses it.
 > `skip_privacy`), which leaves those documents out of the projection
 > entirely (`counts.skipped.privacy`).
 
-**Future, not in this PR (PR-2a):** two-stage orchestration inside memfw:
-a `memfw.recall` port with a `RecallProvider` protocol, a first
-`QmdRecallProvider` that talks to QMD only through QMD's own MCP JSON-RPC,
-and `mode=two_stage` on MCP `memory_search` / HTTP `/search` (recall →
-`resolve` → `join_meta` → filter → labels). PR-1 provides the pieces it will
-call: `export_projection`, `resolve`, `join_meta`, `filter_resolved`.
+**Two-stage recall (PR-2a).** The coordinator side lives in `memfw.recall`
+(`docs/ports-and-recall.md`); the QMD side is the separate adapter package
+`packages/adapters/memfw-adapter-qmd` ([below](#qmd-recall-adapter)), which
+talks to QMD only through QMD's own MCP JSON-RPC. memfw still contains no QMD
+code and never imports the adapter.
 
 ## Commands
 
@@ -394,3 +393,55 @@ Decisions the implementation took where the spec left a choice open:
   one item.
 - A missing `--previous` manifest is not an error (full export, `delta`
   marks everything `added`); an unreadable one is.
+
+## QMD recall adapter
+
+`memfw-adapter-qmd` (0.1.0, QMD 2.5.3, default off) implements two
+`RecallProvider`s over a running `qmd mcp --http` server:
+
+- **`qmd`** searches the collection that indexes `<generation>/files` of a
+  projection export and maps each hit back to a memory id **through the
+  manifest** (`documents[].path`). QMD stores *handelized* paths (every run of
+  characters other than letters, digits and `$` becomes `-`), so the adapter
+  handelizes the manifest's `memories/<id>.md` paths and looks hits up in that
+  table; a hit not in the table, or one two paths share, is dropped. A
+  document whose manifest `meta.privacy_class` is not `none`, whose
+  `meta.tenant` is not the call's tenant, or that is not current (`lifecycle`
+  set and not `active`, `superseded_by` or `valid_to` set, `valid_until` past
+  or unparsable) is dropped too, so `local-private`, `unknown`, expired and
+  superseded memories never leave the adapter. The coordinator then resolves the id
+  against the vault and filters it again. The manifest is re-read when the file
+  behind the configured path changes (a flipped `current` symlink), and the
+  provider is unavailable while it is missing, malformed, older than
+  `max_manifest_age_seconds` or not `lifecycle_source_status: ok`.
+- **`qmd-notes`** searches a Knowledge-Hub collection whose tree is readable on
+  this host (`notes_root`) and returns `kh:<path>#<heading>` refs (the heading
+  of the hit's best line, as memfw's notes index names sections; characters a
+  recall ref cannot hold are percent-encoded; `parse_kh_ref` decodes them, so
+  `NotesSegmentResolver` resolves these refs when it is registered). A note is
+  returned only when its privacy level, read like memfw's notes reader
+  (`yaml.safe_load` + `metadata_level`; anything unreadable is `unknown`), is
+  `public`/`shared` and in the configured clearance; `legacy_privacy` (default
+  `local-private`) is the level of notes without a `privacy` field.
+
+Both send one `tools/call` `query` per search (`searches` lex + vec,
+`rerank: false`, one collection, `candidateLimit: max(20, 4N)`), read only
+`file`, `score` and `line` from the answer, and return the reference, QMD's
+score and `extra={"kind": "qmd-memory"|"qmd-note"}`. Titles, snippets and
+bodies from QMD are never returned. When QMD is unreachable, slow or answers
+off-protocol, `search` raises and the coordinator reports the provider in
+`labels.degraded` while FTS answers (compat framework T7).
+
+The vault resolver reads privacy and lifecycle from the vault file only, so
+the meta-index-only fields (`privacy`, `lifecycle`, `valid_until`) are checked
+by the adapter from the manifest; QMD hits therefore never include history.
+
+The contract fixtures (`tests/fixtures/qmd_contract/`) were recorded from a
+live QMD 2.5.3 `qmd mcp --http` on loopback, over a throwaway index of two
+synthetic collections (the projection of `tests/projection_fixtures.py` and the
+fixture notes tree). No embeddings were built, so the recorded answers are
+lexical only; text fields are redacted. `handelize_cases` are outputs of QMD's
+own function. Re-record with
+`python -m memfw_adapter_qmd.record` before upgrading QMD.
+`scripts/qmd_notes_consistency.py` is the T6 report: overlap between memfw's
+notes index and the QMD notes adapter (not a gate).
