@@ -19,6 +19,13 @@ class VaultRetriever:
 
     Latency metrics stay in memory. They never enter event details or Markdown,
     so measuring a run cannot change the durable vault bytes.
+
+    ``record_access`` (default true) appends one ``memory_access`` event per
+    returned id; ``autowarm`` (default true) restores a cold or stub hit to
+    hot. A caller that filters the ids afterwards passes false for both and
+    does that itself for what it keeps. ``admit``, when given, is asked about
+    each hit's document first: a hit it rejects (another tenant, say) is still
+    returned, for the caller to drop, but is neither warmed nor logged.
     """
 
     def __init__(
@@ -28,8 +35,14 @@ class VaultRetriever:
         *,
         ranking: str = "bm25",
         timer: Callable[[], float] = perf_counter,
+        record_access: bool = True,
+        autowarm: bool = True,
+        admit: Callable[[Any], bool] | None = None,
     ) -> None:
         self.repository = repository
+        self.record_access = record_access
+        self.autowarm = autowarm
+        self.admit = admit
         self.index = index or MemoryIndex(repository.index_path)
         if ranking not in {"bm25", "count"}:
             raise ValueError("ranking must be 'bm25' or 'count'")
@@ -57,15 +70,18 @@ class VaultRetriever:
             restore_times: dict[str, float] = {}
             for memory_id in identifiers:
                 document = self.repository.get(memory_id)
-                if document.is_stub or document.tier == Tier.COLD:
+                if self.admit is not None and not self.admit(document):
+                    continue
+                if self.autowarm and (document.is_stub or document.tier == Tier.COLD):
                     restore_started = self.timer()
                     self.repository.autowarm(memory_id, actor="mechanism")
                     restore_times[memory_id] = max(0.0, self.timer() - restore_started)
-                self.repository.capture_event(
-                    EventKind.MEMORY_ACCESS,
-                    actor="mechanism",
-                    details={"memory_id": memory_id, "operation": "retrieve"},
-                )
+                if self.record_access:
+                    self.repository.capture_event(
+                        EventKind.MEMORY_ACCESS,
+                        actor="mechanism",
+                        details={"memory_id": memory_id, "operation": "retrieve"},
+                    )
             elapsed = max(0.0, self.timer() - started)
         self.last_metrics = {
             "elapsed_seconds": elapsed,

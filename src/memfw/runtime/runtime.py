@@ -24,7 +24,8 @@ from memfw.context import (
     core_context_v1,
     slots_request,
 )
-from memfw.core.models import MemoryDocument
+from memfw.core.errors import MemfwError
+from memfw.core.models import EventKind, MemoryDocument, Tier
 from memfw.core.repository import Repository
 from memfw.ports.context import ContextPack, ContextSlotProvider, SlotRequest
 from memfw.recall.coordinator import InflightRegistry
@@ -65,6 +66,40 @@ class RecallOutcome:
 
     result: RecallResult
     observed: dict[str, Observed] = field(default_factory=dict)
+    #: Fixed codes for post-filter side effects that failed (``ACCESS_ERROR``);
+    #: the hits are unaffected.
+    errors: tuple[str, ...] = ()
+
+
+#: The ``RecallOutcome.errors`` code when warming or logging a returned hit
+#: failed (read-only log, unreadable archive): the hits are still returned.
+ACCESS_ERROR = "access_not_recorded"
+
+
+def _touch_returned(repository: Repository, memory_ids: Sequence[str]) -> tuple[str, ...]:
+    """Warm and access-log the hits ``recall`` returns, best effort.
+
+    Per returned id, in hit order, as the direct hybrid path does per hit: a
+    cold or stub memory is warmed (``autowarm``), then one ``memory_access``
+    event (``operation: two_stage_retrieve``) is appended. A failure (for
+    example a read-only ``events.jsonl``) never drops a hit; it is reported
+    as ``ACCESS_ERROR`` once.
+    """
+
+    failed = False
+    for memory_id in dict.fromkeys(memory_ids):
+        try:
+            document = repository.get(memory_id)
+            if document.is_stub or document.tier == Tier.COLD:
+                repository.autowarm(memory_id, actor="mechanism")
+            repository.capture_event(
+                EventKind.MEMORY_ACCESS,
+                actor="mechanism",
+                details={"memory_id": memory_id, "operation": "two_stage_retrieve"},
+            )
+        except (MemfwError, OSError, ValueError):
+            failed = True
+    return (ACCESS_ERROR,) if failed else ()
 
 
 class Runtime:
@@ -192,6 +227,27 @@ class Runtime:
         ``ValueError`` (fail closed) before a provider runs. Providers: FTS
         always, plus hybrid when an embedder is configured. Call
         ``ensure_index`` first: the coordinator's deadline starts here.
+
+        Providers are read-only: none appends an event or warms a memory.
+        After the filter and fusion, each returned hit that is cold or a stub
+        is warmed and gets one ``memory_access`` event (``operation:
+        two_stage_retrieve``, the same shape the direct hybrid path writes),
+        so a hit the policy dropped (privacy, tenant, source, validity) is
+        never warmed or access-logged. This is best effort: a failure is
+        reported in ``RecallOutcome.errors`` and never drops a hit.
+
+        Warming happens here, before the caller builds rows, but the rows
+        are built from what the providers saw: for a hit this call warmed,
+        the provider's index row describes the pre-warm version, so its row
+        is marked ``stale`` on this call (the vault file changed: tier and
+        version). The next call's index refresh makes it fresh. Direct
+        ``mode=hybrid`` marks a warmed hit ``stale`` the same way (and until
+        its vector index is rebuilt).
+
+        Known race: the caller builds rows after this returns and re-checks
+        each hit against the vault; a hit removed or changed in between is
+        logged here but not shown. Logging follows the coordinator's output,
+        not the final rows.
         """
 
         if policy_name not in RECALL_POLICIES:
@@ -238,9 +294,10 @@ class Runtime:
         )
         result = coordinator.search(query, limit=limit, policy=filter_policy)
         result = _with_open_question_labels(repository, result, filter_policy, now=moment)
+        errors = _touch_returned(repository, [hit.memory_id for hit in result.hits])
         answered = set(result.labels.providers)
         seen = {name: captured[name] for name in list(captured) if name in answered}
-        return RecallOutcome(result=result, observed=seen)
+        return RecallOutcome(result=result, observed=seen, errors=errors)
 
     def _filter_policy(
         self,

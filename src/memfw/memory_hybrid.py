@@ -35,6 +35,19 @@ class MemoryHybridRetriever:
 
     A single retriever is bound to one repository, so tenant/source isolation is
     the vault boundary; an optional source filter narrows results further.
+
+    ``record_access`` (default true) appends one ``memory_access`` event per
+    returned hit, as the direct ``hybrid``/``vector``/``fts`` paths always
+    have. A caller that filters the hits afterwards (the ``two_stage`` recall
+    provider) passes false and records access itself for what it returns, so
+    a hit it later drops is never logged. Building or refreshing the
+    disposable ``.memory-hybrid.sqlite`` index on first search is an index
+    projection, not an event: it writes no event either way.
+
+    ``autowarm`` (default true) restores a cold or stub hit to hot, and only
+    after the hit passed the tenant, source and visibility checks: a memory
+    the retriever does not return is never warmed. The ``two_stage`` provider
+    passes false; the Runtime warms only the hits it returns.
     """
 
     def __init__(
@@ -50,9 +63,13 @@ class MemoryHybridRetriever:
         entity_dictionary: Path | str | None = None,
         tenant: str = "",
         allowed_sources: tuple[str, ...] = (),
+        record_access: bool = True,
+        autowarm: bool = True,
     ) -> None:
         self.repository = repository
         self.embedder = embedder
+        self.record_access = record_access
+        self.autowarm = autowarm
         self.notes_index = NotesIndex(
             index_path or (repository.root / ".memory-hybrid.sqlite"),
             embedder=embedder,
@@ -213,14 +230,15 @@ class MemoryHybridRetriever:
                     continue
                 if not self._source_allowed(document.source, source):
                     continue
-                if document.is_stub or document.tier == Tier.COLD:
+                if self.autowarm and (document.is_stub or document.tier == Tier.COLD):
                     self.repository.autowarm(document.id, actor="mechanism")
                     document = self.repository.get(document.id)
-                self.repository.capture_event(
-                    EventKind.MEMORY_ACCESS,
-                    actor="mechanism",
-                    details={"memory_id": document.id, "operation": "fts_retrieve"},
-                )
+                if self.record_access:
+                    self.repository.capture_event(
+                        EventKind.MEMORY_ACCESS,
+                        actor="mechanism",
+                        details={"memory_id": document.id, "operation": "fts_retrieve"},
+                    )
                 index_version, projection_hash = self._projection_stamp(document.id)
                 results.append(
                     {
@@ -235,7 +253,21 @@ class MemoryHybridRetriever:
                     }
                 )
             return results, errors
-        legacy = VaultRetriever(self.repository).retrieve(query, limit=max(0, limit))
+
+        def admit(document: MemoryDocument) -> bool:
+            # Warm and log only what this call can return (the loop below).
+            return (
+                document.tenant == tenant
+                and self._visible(document, include_history=include_history, as_of=as_of)
+                and self._source_allowed(document.source, source)
+            )
+
+        legacy = VaultRetriever(
+            self.repository,
+            record_access=self.record_access,
+            autowarm=self.autowarm,
+            admit=admit,
+        ).retrieve(query, limit=max(0, limit))
         results = []
         for memory_id in legacy:
             document = self.repository.get(memory_id)
@@ -306,20 +338,23 @@ class MemoryHybridRetriever:
                         document = self.repository.get(memory_id)
                     except Exception:
                         continue
-                    if document.is_stub or document.tier == Tier.COLD:
-                        self.repository.autowarm(memory_id, actor="mechanism")
-                        document = self.repository.get(memory_id)
+                    # Checks first, on the stub's retained metadata: a memory
+                    # this call does not return is never warmed.
                     if document.tenant != tenant_value:
                         continue
                     if not self._source_allowed(document.source, source):
                         continue
                     if not self._visible(document, include_history=include_history, as_of=as_of_dt):
                         continue
-                    self.repository.capture_event(
-                        EventKind.MEMORY_ACCESS,
-                        actor="mechanism",
-                        details={"memory_id": memory_id, "operation": "hybrid_retrieve"},
-                    )
+                    if self.autowarm and (document.is_stub or document.tier == Tier.COLD):
+                        self.repository.autowarm(memory_id, actor="mechanism")
+                        document = self.repository.get(memory_id)
+                    if self.record_access:
+                        self.repository.capture_event(
+                            EventKind.MEMORY_ACCESS,
+                            actor="mechanism",
+                            details={"memory_id": memory_id, "operation": "hybrid_retrieve"},
+                        )
                     index_version, projection_hash = self._projection_stamp(document.id)
                     results.append(
                         {

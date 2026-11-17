@@ -11,6 +11,45 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
+### Fixed — `two_stage` access events follow the filter
+
+- `memory_search` `mode=two_stage` with an embedder logged one `memory_access`
+  event per hybrid-provider hit before the coordinator's `FilterPolicy` ran, so
+  hits the policy later dropped (privacy under `strict`, another tenant) were
+  still access-logged and fed strength/tier signals. Recall providers are now
+  read-only: `HybridProvider` builds `MemoryHybridRetriever` with the new
+  `record_access=False` (also covering its internal FTS fallback and
+  `VaultRetriever`'s new `record_access` knob), and `Runtime.recall` appends
+  one `memory_access` event (`operation: two_stage_retrieve`) per hit it
+  returns, after filtering.
+- Warming followed the same pattern: the hybrid loop warmed a cold or stub hit
+  (`tier_change`, and for a stub `memory_restore` plus the un-archived body)
+  before its tenant, source and visibility checks, and `VaultRetriever` warmed
+  every id before any check, so a `two_stage` search could warm or un-archive
+  another tenant's or a private memory it never returned. Both retrievers take
+  a new `autowarm` knob (default on); `HybridProvider` passes false, and
+  `Runtime.recall` warms only the hits it returns (then logs them). The hybrid
+  loop now warms only after the checks, and the retriever's legacy FTS fallback
+  passes `VaultRetriever` an `admit` check, so it warms and logs only what it
+  can return.
+- Security change on the direct paths: `mode=hybrid`/`vector` (and the legacy
+  FTS fallback) no longer warm a cold or stub memory of another tenant, or one
+  the source/visibility checks drop. For the hits they return, events
+  (`memory_access`, `tier_change`, `memory_restore`) are identical to before.
+- Warming and access logging after the filter are best effort: a failure (for
+  example a read-only `events.jsonl`) keeps the hits, sets `degraded` and adds
+  the error code `access_not_recorded`; before this, such a log made
+  `two_stage` raise.
+- `two_stage` now logs access for its returned hits whether or not an
+  embedder is configured (before, only the hybrid provider's hits were logged,
+  unfiltered). `mode=fts` still logs no access; aligning it is a follow-up.
+- A cold or stub hit that `two_stage` warms is marked `stale` on that call (its
+  row comes from the pre-warm index row) and fresh from the next call on, as
+  direct `mode=hybrid` already marks a warmed hit.
+- Swap drills: the hybrid recall provider no longer skips the kit's
+  byte-identical vault check; only its disposable index files are excluded, so
+  `events.jsonl` and `events.state.json` are covered.
+
 ### Internal — swap drills: every port has two implementations (A5a)
 
 - New `memfw.ports.reference` (stdlib only, imports only `memfw.ports`): `InMemoryRecallProvider`
