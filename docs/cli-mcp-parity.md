@@ -105,6 +105,14 @@ existing vault) and writes nothing.
 | Show / set `new_privacy_default` | `privacy new-default [LEVEL]` | — | — | by design |
 | Clearance on exits | `okf export --clearance`, `project obsidian --clearance`, `notes serve --clearance` | `MEMFW_MCP_CLEARANCE` (server-wide) | `--clearance` / `MEMFW_READONLY_CLEARANCE` | none |
 
+## Attachments (MM1a)
+
+| Capability | CLI | MCP | HTTP | Gap |
+|---|---|---|---|---|
+| Register an original | `attach add FILE [--embed] [--privacy …]` | — | — | by design for now: a human write; agents get proxy search in MM2b |
+| List / show records | `attach list [--json]`, `attach show ID` | — | — | MCP `attachment_search` / `attachment_get` arrive in MM2b; HTTP never returns originals (design H5) |
+| Verify records and blobs | `attach verify [ID]…`, `fsck` | — | — | by design (operations) |
+
 ## Conversations and history
 
 | Capability | CLI | MCP | HTTP | Gap |
@@ -176,7 +184,8 @@ Write commands that confirm with a line (`init`, `add`, `update`, `delete`,
 (`memfw.cli.HELP_PANELS`; a test fails when a new top-level command has none):
 
 * **Daily**: init, add, list, show, update, delete, rollback, supersede,
-  layer-set, layer, stats, concepts, memory-related, handoff, notes, code.
+  layer-set, layer, stats, concepts, memory-related, handoff, notes, code,
+  attach.
 * **Approval**: record-proposal, approve-proposal, review, candidates,
   candidate-apply, candidates-expire, capture, consolidate, dream, experience,
   corroboration.

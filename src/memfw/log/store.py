@@ -14,7 +14,7 @@ from typing import Any, cast
 
 from ..core.context import RepositoryHost
 from ..core.errors import IntegrityError
-from ..core.models import Event, EventKind
+from ..core.models import NON_MEMORY_EVENT_KINDS, Event, EventKind
 
 
 class EventLogMixin:
@@ -771,24 +771,7 @@ class EventLogMixin:
         """Project terminal committed hashes; validate only retained terminal Markdown objects."""
         state: dict[str, str | None] = {}
         for event in self.events():
-            if event.kind in {
-                EventKind.CONFIG_CHANGE,
-                EventKind.AGENT_PROPOSAL,
-                EventKind.HUMAN_DECISION,
-                EventKind.SIMULATED_DECISION,
-                EventKind.CAPTURE_WAKE,
-                EventKind.CAPTURE_SLEEP,
-                EventKind.CAPTURE_STATE_CHANGE,
-                EventKind.CAPTURE_RECORD,
-                EventKind.FORGET,
-                EventKind.MEMORY_ACCESS,
-                EventKind.CONSOLIDATION_PROPOSAL,
-                EventKind.BUDGET_UNSATISFIABLE,
-                EventKind.PROPOSAL_ERASE,
-                EventKind.KNOWLEDGE_CARD_CREATE,
-                EventKind.KNOWLEDGE_SOURCE_MISSING,
-                EventKind.KNOWLEDGE_SOURCE_REPOINT,
-            }:
+            if event.kind in NON_MEMORY_EVENT_KINDS:
                 continue
             if event.kind in {EventKind.DELETE, EventKind.EXTERNAL_DELETE} or (
                 event.kind == EventKind.EXTERNAL_EDIT and event.details.get("quarantined") is True
@@ -996,24 +979,7 @@ def _read_event_before_offset(path: Path, offset: int) -> Event:
 def _project_events(events: list[Event]) -> dict[str, str | None]:
     state: dict[str, str | None] = {}
     for event in events:
-        if event.kind in {
-            EventKind.CONFIG_CHANGE,
-            EventKind.AGENT_PROPOSAL,
-            EventKind.HUMAN_DECISION,
-            EventKind.SIMULATED_DECISION,
-            EventKind.CAPTURE_WAKE,
-            EventKind.CAPTURE_SLEEP,
-            EventKind.CAPTURE_STATE_CHANGE,
-            EventKind.CAPTURE_RECORD,
-            EventKind.FORGET,
-            EventKind.MEMORY_ACCESS,
-            EventKind.CONSOLIDATION_PROPOSAL,
-            EventKind.BUDGET_UNSATISFIABLE,
-            EventKind.PROPOSAL_ERASE,
-            EventKind.KNOWLEDGE_CARD_CREATE,
-            EventKind.KNOWLEDGE_SOURCE_MISSING,
-            EventKind.KNOWLEDGE_SOURCE_REPOINT,
-        }:
+        if event.kind in NON_MEMORY_EVENT_KINDS:
             continue
         if event.kind in {EventKind.DELETE, EventKind.EXTERNAL_DELETE} or (
             event.kind == EventKind.EXTERNAL_EDIT and event.details.get("quarantined") is True

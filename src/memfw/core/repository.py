@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 import yaml
 from filelock import FileLock
 
+from ..attachments.store import AttachmentStoreMixin, validate_attachment_config
 from ..budget import BudgetProfile
 from ..knowledge import KnowledgeStoreMixin
 from ..log.store import EventLogMixin
@@ -96,6 +97,7 @@ class Repository(
     EventLogMixin,
     MemoryOperationsMixin,
     KnowledgeStoreMixin,
+    AttachmentStoreMixin,
 ):
     """A local vault. Markdown and events are authoritative; SQLite is disposable."""
 
@@ -292,6 +294,7 @@ class Repository(
         reference_path = raw.get("keyness_reference_path")
         if reference_path is not None and not isinstance(reference_path, str):
             raise IntegrityError("keyness_reference_path must be a string or null")
+        validate_attachment_config(raw)
         return raw
 
     @_serialized
