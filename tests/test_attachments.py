@@ -705,3 +705,46 @@ def test_show_lists_citing_memories(tmp_path: Path) -> None:
     assert repository.attachment_citations(record.id) == ["m-cites"]
     shown = json.loads(_cli("attach", "show", record.id, "--root", str(repository.root)).output)
     assert shown["cited_by"] == ["m-cites"]
+
+
+# --- review fixes ---------------------------------------------------------------------
+
+
+def test_dashes_in_values_never_corrupt_a_record(tmp_path: Path) -> None:
+    repository = _repo(tmp_path)
+    record = repository.add_attachment(
+        _file(tmp_path, "a---b.txt", b"dashes"),
+        origin="scan\n---\nline",
+        rights="---",
+        tags=["x---", "---", "a\n---"],
+        note="body\n---\nmore",
+    ).record
+    read = repository.get_attachment(record.id)
+    assert read.original_name == "a---b.txt"
+    assert read.origin == "scan\n---\nline"
+    assert read.rights == "---"
+    assert read.tags == ("x---", "---", "a\n---")
+    assert read.note == "body\n---\nmore"
+    assert read.recorded_at == record.recorded_at
+    assert repository.verify_attachments() == ([record.id], [])
+    # Frontmatter is split on whole lines only.
+    raw = render_record(read)
+    assert parse_record(raw, read.id) == read
+    with pytest.raises(IntegrityError, match="frontmatter"):
+        parse_record(b"--- \nid: x\n---\n", read.id)
+    with pytest.raises(IntegrityError, match="unterminated"):
+        parse_record(b"---\nid: x\nrights: x---\n", read.id)
+
+
+def test_a_record_that_does_not_read_back_is_refused(tmp_path: Path) -> None:
+    record = AttachmentRecord(
+        id=new_attachment_id(NOW, b"r" * 10),
+        sha256="a" * 64,
+        size=3,
+        media_type="text/plain",
+        recorded_at=NOW.isoformat(),
+        # A tuple is written as a YAML list and reads back as a list.
+        sensitivity=("private",),
+    )
+    with pytest.raises(ValueError, match="read back"):
+        render_record(record)

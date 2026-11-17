@@ -211,9 +211,38 @@ class AttachmentRecord:
 
 
 def render_record(record: AttachmentRecord) -> bytes:
+    """The record file's bytes. Refuses (``ValueError``) a rendering that does not read back.
+
+    The rendered bytes are parsed again and must give back the same
+    frontmatter and note, so no field value (``---`` in a name, origin,
+    rights or tag, for example) can ever corrupt a committed record.
+    """
+
     front = yaml.safe_dump(record.frontmatter(), allow_unicode=True, sort_keys=False).rstrip()
     note = record.note.strip()
-    return f"---\n{front}\n---\n\n{note + chr(10) if note else ''}".encode()
+    raw = f"---\n{front}\n---\n\n{note + chr(10) if note else ''}".encode()
+    try:
+        parsed = parse_record(raw, record.id)
+    except IntegrityError as exc:
+        raise ValueError(f"attachment record does not read back: {exc}") from None
+    if parsed.frontmatter() != record.frontmatter() or parsed.note != note:
+        raise ValueError("attachment record does not read back identically")
+    return raw
+
+
+def _split_frontmatter(text: str) -> tuple[str, str]:
+    """(frontmatter, body): the first line is exactly ``---``, so is the closing one.
+
+    Lines are compared whole, so ``---`` inside a value never ends the block.
+    """
+
+    lines = text.split("\n")
+    if lines[0].rstrip("\r") != "---":
+        raise ValueError("missing YAML frontmatter")
+    for index in range(1, len(lines)):
+        if lines[index].rstrip("\r") == "---":
+            return "\n".join(lines[1:index]), "\n".join(lines[index + 1 :])
+    raise ValueError("unterminated YAML frontmatter")
 
 
 def parse_record(raw: bytes, expected_id: str) -> AttachmentRecord:
@@ -221,9 +250,7 @@ def parse_record(raw: bytes, expected_id: str) -> AttachmentRecord:
 
     try:
         text = raw.decode("utf-8")
-        if not text.startswith("---\n"):
-            raise ValueError("missing YAML frontmatter")
-        _, front, body = text.split("---\n", 2)
+        front, body = _split_frontmatter(text)
         meta = yaml.safe_load(front)
         if not isinstance(meta, dict):
             raise ValueError("frontmatter must be a mapping")

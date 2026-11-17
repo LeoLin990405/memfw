@@ -254,6 +254,8 @@ class AttachmentStoreMixin:
                 tags=tag_list,
                 note=note,
             )
+            # A value that would not read back is refused before anything is written.
+            render_record(draft)
             AttachmentStoreMixin.ensure_vault_id(self)
             store = blob_store(self, create=True)
             assert store is not None
@@ -302,8 +304,9 @@ class AttachmentStoreMixin:
         else:  # pragma: no cover - 74 random bits
             raise IntegrityError("could not allocate an unused attachment id")
         record = replace(draft, id=attachment_id, sha256=sha256, size=size)
-        deduplicated = not store.link(staged)
+        # Rendered (and read back) before anything is linked or written.
         raw = render_record(record)
+        deduplicated = not store.link(staged)
         self._atomic_write(_record_path(self, attachment_id), raw)
         self._append_event(
             EventKind.ATTACH,
