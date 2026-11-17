@@ -13,8 +13,10 @@ Each candidate carries only the reference, QMD's score and a fixed source label
 QMD is ever returned; the kernel reads bodies from the vault after resolve and
 filter.
 
-Standard library only. Depends on `memfw-ports` (the `RecallProvider` contract)
-and nothing else of memfw; memfw never imports this package. Import name
+Standard library plus PyYAML 6.0.3 (MIT, pinned; notes frontmatter is parsed
+with `yaml.safe_load`, the same reading as memfw's own notes index). Depends on
+`memfw-ports` (the `RecallProvider` contract) and nothing else of memfw; memfw
+never imports this package. Import name
 `memfw_adapter_qmd`.
 
 ## External project
@@ -64,8 +66,9 @@ memfw's runtime recall loader for `two_stage` (`vault.yaml`
 `runtime.recall.adapters: [{factory: "memfw_adapter_qmd:memory_factory",
 options: {...}}]`, landing with the bm25s adapter PR). The loader adds
 `vault` and `embedder` to the settings; both are accepted and ignored. Any
-other unknown key is refused. `qmd-notes` returns `kh:` refs, which a memory
-coordinator cannot resolve yet, so it adds nothing to `two_stage` today.
+other unknown key is refused. `qmd-notes` returns `kh:` refs; a coordinator
+resolves them only through `memfw.recall.builtin.NotesSegmentResolver` (note
+sections, returned apart from memory hits), which is not registered by default.
 
 Common: `endpoint` (default `http://localhost:8181/mcp`), `allow_remote`
 (default `false`: the endpoint must be a loopback literal), `collection`,
@@ -93,9 +96,13 @@ both; `local-private` is refused), `legacy_privacy` (level of a note without a
   contributes retired or historical memories. The coordinator then resolves the id
   against the vault and applies its own filter.
 - `qmd-notes`: a hit is returned only if the note file exists under
-  `notes_root` (no symlinks), its privacy level (frontmatter `privacy`,
-  `sensitivity`, `privacy:`/`sensitivity:` tags; an unreadable form is
-  `unknown`) is in `clearance`, and the call's tenant is the shared tenant `""`.
+  `notes_root` (no symlinks), its privacy level is in `clearance`, and the
+  call's tenant is the shared tenant `""`. The level is computed like memfw's
+  own notes reader: frontmatter parsed with `yaml.safe_load`, then
+  `memfw.ports.privacy.metadata_level` (`privacy`, `sensitivity`,
+  `privacy:`/`sensitivity:` tags; strictest wins). A YAML error, non-mapping
+  frontmatter, unreadable tags, an unterminated or misplaced `---` block, or a
+  stray `privacy:`/`sensitivity:` line near the top makes it `unknown`.
 - `available()` never touches the network. It reports `no_endpoint`,
   `bad_endpoint`, `endpoint_not_loopback`, `no_manifest`, `bad_manifest`,
   `manifest_lifecycle_not_ok`, `manifest_stale` or `no_notes_root`.

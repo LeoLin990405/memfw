@@ -417,10 +417,12 @@ Decisions the implementation took where the spec left a choice open:
 - **`qmd-notes`** searches a Knowledge-Hub collection whose tree is readable on
   this host (`notes_root`) and returns `kh:<path>#<heading>` refs (the heading
   of the hit's best line, as memfw's notes index names sections; characters a
-  recall ref cannot hold are percent-encoded). A note is returned only when its
-  own frontmatter privacy level is `public`/`shared` and in the configured
-  clearance; `legacy_privacy` (default `local-private`) is the level of notes
-  without a `privacy` field.
+  recall ref cannot hold are percent-encoded; `parse_kh_ref` decodes them, so
+  `NotesSegmentResolver` resolves these refs when it is registered). A note is
+  returned only when its privacy level, read like memfw's notes reader
+  (`yaml.safe_load` + `metadata_level`; anything unreadable is `unknown`), is
+  `public`/`shared` and in the configured clearance; `legacy_privacy` (default
+  `local-private`) is the level of notes without a `privacy` field.
 
 Both send one `tools/call` `query` per search (`searches` lex + vec,
 `rerank: false`, one collection, `candidateLimit: max(20, 4N)`), read only

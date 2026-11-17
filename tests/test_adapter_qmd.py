@@ -21,9 +21,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
 from projection_fixtures import DOCS, build_vault, stable_id
 
+from memfw.notes.index import NoteParseError, _split_frontmatter
 from memfw.ports import (
     AdapterRegistry,
     AdaptersConfig,
@@ -61,7 +61,7 @@ from memfw_adapter_qmd import (  # noqa: E402
 )
 from memfw_adapter_qmd.fake import FakeQmd  # noqa: E402
 from memfw_adapter_qmd.mcp import McpHttpClient, check_endpoint  # noqa: E402
-from memfw_adapter_qmd.provider import _frontmatter  # noqa: E402
+from memfw_adapter_qmd.provider import note_level  # noqa: E402
 
 FIXTURES = ROOT / "tests" / "fixtures" / "qmd_contract"
 RECORDING = json.loads((FIXTURES / "qmd-2.5.3.json").read_text(encoding="utf-8"))
@@ -497,85 +497,118 @@ def test_notes_never_follow_symlinks(fake: FakeQmd, tmp_path: Path) -> None:
     assert _notes(fake.url, tmp_path / "absent").available().reason == "no_notes_root"
 
 
-@pytest.mark.parametrize(
-    ("text", "expected"),
-    [
-        ("\ufeff---\nprivacy: shared\n---\n# H\n", "shared"),  # BOM is not a reason to drop
-        ("---\nprivacy: shared\n# never closed\n", "unknown"),
-        ("\n---\nprivacy: shared\n---\n# H\n", "unknown"),  # block not on line 1
-        ("# Title\n\nprivacy: public\n", "unknown"),  # a stray key in the head
-        ("# Title\n\n> Sensitivity: private\n", "unknown"),
-        ("# Title\n\nbody\n", "shared"),  # nothing: the legacy level
-    ],
-)
-def test_frontmatter_fails_closed_on_unusual_heads(text: str, expected: str) -> None:
-    found, _start = _frontmatter(text.splitlines(keepends=True))
-    assert metadata_level(found, "shared") == expected
+def _kernel_level(text: str, legacy: str) -> str:
+    """How memfw itself reads a note's level (``NotesSegmentResolver._level``)."""
+
+    try:
+        frontmatter, _body, _offset = _split_frontmatter(text)
+    except NoteParseError:
+        return "unknown"  # the kernel withholds such a note
+    return metadata_level(frontmatter, legacy)
+
+
+#: Forms the kernel reads as local-private that a hand-written reader missed.
+YAML_LEAK_FORMS = [
+    "---\n? sensitivity\n: private\n---\n",  # explicit key
+    "---\n<<: {sensitivity: private}\nprivacy: shared\n---\n",  # merge key
+    "---\nbase: &b {sensitivity: private}\n<<: *b\nprivacy: shared\n---\n",  # merge via anchor
+    '---\n"sensitivit\\x79": private\nprivacy: shared\n---\n',  # escaped quoted key
+    '---\n"sensitivity": private\nprivacy: shared\n---\n',  # double-quoted key
+    "---\n!!str sensitivity: private\nprivacy: shared\n---\n",  # tagged key
+    "---\ntags:\n- sensitivity:private\nprivacy: shared\n---\n",  # unindented block list
+    "---\n'privacy': local-private\n---\n",  # single-quoted key
+    "---\n{privacy: local-private, tags: [a]}\n---\n",  # flow mapping
+    "---\nprivacy: shared\nsensitivity: [private]\n---\n",
+    "---\nprivacy: shared\ntags: [a, 'privacy:local-private']\n---\n",
+]
+#: Read exactly as the kernel reads them.
+SAME_AS_KERNEL = [
+    "",
+    "# Title\n\nbody\n",
+    "---\n---\n",
+    "---\nprivacy: shared\n---\n",
+    "---\nprivacy: public\n---\n",
+    "---\nprivacy: Shared  # inline comment\n---\n",
+    "---\nprivacy:\n---\n",
+    "---\nprivacy: secret\n---\n",
+    "---\nprivacy: [shared]\n---\n",
+    "---\nprivacy: {a: b}\n---\n",
+    "---\nprivacy: shared\nprivacy: public\n---\n",
+    "---\nsensitivity: low\n---\n",
+    "---\nsensitivity: []\n---\n",
+    "---\nprivacy: >\n  shared\n---\n",
+    "---\nprivacy:\n  level: shared\n---\n",
+    "---\ntitle: x\nprivacy: shared\ntags: [2024, a]\n---\n",
+    "---\n: bad yaml [\n---\n",  # a YAML error: both withhold
+    "---\n- a list\n---\n",  # not a mapping: both withhold
+]
+#: Stricter than the kernel on purpose (fail closed).
+STRICTER_THAN_KERNEL = [
+    "\ufeff---\nprivacy: shared\n---\n",  # BOM: also the level without frontmatter
+    "---\nprivacy: shared\n# never closed\n",  # unterminated block
+    "\n---\nprivacy: shared\n---\n",  # block not on line 1
+    "# Title\n\nprivacy: public\n",  # a stray key in the head
+    "# Title\n\n> Sensitivity: private\n",
+    "---\ntags: a, sensitivity:private\nprivacy: shared\n---\n",  # tags not a list
+    "---\ntags: {x: 1}\nprivacy: shared\n---\n",
+    "---\ntags: [[sensitivity:private]]\nprivacy: shared\n---\n",  # nested list item
+    "---\ntag: [sensitivity:private]\nprivacy: shared\n---\n",  # ``tag`` adds levels
+]
+_RANK = {"public": 0, "shared": 1, "local-private": 2, "unknown": 3}
+LEGACY_LEVELS = ["public", "shared", "local-private"]
+
+
+@pytest.mark.parametrize("front", YAML_LEAK_FORMS)
+@pytest.mark.parametrize("legacy", LEGACY_LEVELS)
+def test_yaml_forms_the_kernel_reads_as_private_are_private_here(front: str, legacy: str) -> None:
+    text = front + "# Heading\n"
+    assert _kernel_level(text, legacy) == "local-private", front
+    assert note_level(text, legacy)[0] == "local-private", front
+
+
+@pytest.mark.parametrize("front", SAME_AS_KERNEL)
+@pytest.mark.parametrize("legacy", LEGACY_LEVELS)
+def test_note_level_is_the_kernel_level(front: str, legacy: str) -> None:
+    text = front + "# Heading\n"
+    assert note_level(text, legacy)[0] == _kernel_level(text, legacy), front
+
+
+@pytest.mark.parametrize("front", STRICTER_THAN_KERNEL)
+@pytest.mark.parametrize("legacy", LEGACY_LEVELS)
+def test_note_level_is_never_looser_than_the_kernel(front: str, legacy: str) -> None:
+    text = front + "# Heading\n"
+    adapter = note_level(text, legacy)[0]
+    assert _RANK[adapter] >= _RANK[_kernel_level(text, legacy)], front
+    if legacy != "local-private" and not front.startswith("\ufeff"):
+        assert adapter in ("local-private", "unknown"), front
+
+
+def test_every_private_yaml_form_is_withheld_end_to_end(fake: FakeQmd, tmp_path: Path) -> None:
+    root = tmp_path / "kh"
+    root.mkdir()
+    forms = [*YAML_LEAK_FORMS, *STRICTER_THAN_KERNEL[1:]]
+    names = [f"note{index:02d}.md" for index in range(len(forms))]
+    for name, front in zip(names, forms, strict=True):
+        (root / name).write_text(front + "# Heading\n\nbody\n", encoding="utf-8")
+    (root / "ok.md").write_text("---\nprivacy: shared\n---\n# Heading\n\nbody\n", "utf-8")
+    fake.results = lambda arguments: [
+        {"file": f"knowledge-hub/{name}", "score": 0.5, "line": 1} for name in [*names, "ok.md"]
+    ]
+    assert [c.ref for c in _search(_notes(fake.url, root), "q", limit=50)] == ["kh:ok.md"]
 
 
 def test_a_bom_note_is_read_like_one_without(fake: FakeQmd, tmp_path: Path) -> None:
     root = tmp_path / "kh"
     root.mkdir()
     (root / "bom.md").write_bytes("\ufeff---\nprivacy: shared\n---\n# H\n\nx\n".encode())
-    fake.results = lambda arguments: [{"file": "knowledge-hub/bom.md", "score": 0.5, "line": 6}]
+    (root / "bom-private.md").write_bytes(
+        "\ufeff---\nprivacy: local-private\n---\n# H\n\nx\n".encode()
+    )
+    fake.results = lambda arguments: [
+        {"file": "knowledge-hub/bom.md", "score": 0.5, "line": 6},
+        {"file": "knowledge-hub/bom-private.md", "score": 0.4, "line": 6},
+    ]
     assert [c.ref for c in _search(_notes(fake.url, root), "q")] == ["kh:bom.md#H"]
-
-
-FRONTMATTER_CASES = [
-    "",
-    "---\nprivacy: shared\n---\n",
-    "---\nprivacy: public\n---\n",
-    "---\nprivacy: local-private\n---\n",
-    "---\nprivacy: Shared  # inline comment\n---\n",
-    "---\nprivacy: 'shared'\n---\n",
-    "---\nprivacy:\n---\n",
-    "---\nprivacy: secret\n---\n",
-    "---\nprivacy: [shared]\n---\n",
-    "---\nprivacy: {a: b}\n---\n",
-    "---\nprivacy: shared\nprivacy: public\n---\n",
-    "---\nsensitivity: private\n---\n",
-    "---\nsensitivity: low\n---\n",
-    "---\nsensitivity: []\n---\n",
-    "---\ntags: [a, sensitivity:private]\nprivacy: shared\n---\n",
-    "---\ntags:\n  - a\n  - privacy:local-private\nprivacy: public\n---\n",
-    "---\ntags:\n- privacy:shared\nprivacy: public\n---\n",
-    "---\ntags: a, sensitivity:private\nprivacy: shared\n---\n",
-    "---\ntag: [sensitivity:private]\nprivacy: shared\n---\n",
-    "---\ntags: {x: 1}\nprivacy: shared\n---\n",
-    "---\nprivacy: >\n  shared\n---\n",
-    "---\nprivacy:\n  level: shared\n---\n",
-    "---\ntitle: x\nprivacy: shared\n---\n",
-    "---\nprivacy: shared\n",  # no closing line: no frontmatter
-]
-_RANK = {"public": 0, "shared": 1, "local-private": 2, "unknown": 3}
-
-
-@pytest.mark.parametrize("front", FRONTMATTER_CASES)
-@pytest.mark.parametrize("legacy", ["public", "shared", "local-private"])
-def test_frontmatter_reader_is_never_looser_than_yaml(front: str, legacy: str) -> None:
-    """The stdlib reader agrees with memfw's YAML reading, or is stricter."""
-
-    text = front + "# Heading\n"
-    found, _start = _frontmatter(text.splitlines(keepends=True))
-    adapter = metadata_level(found, legacy)
-    lines = text.splitlines(keepends=True)
-    if lines and lines[0].strip() == "---" and any(line.strip() == "---" for line in lines[1:]):
-        raw = text.split("---\n", 2)[1]
-        try:
-            loaded = yaml.safe_load(raw) or {}
-        except yaml.YAMLError:
-            loaded = None
-    else:
-        loaded = {}
-    if not isinstance(loaded, dict):
-        return  # memfw's notes index refuses such a note entirely
-    tags = loaded.get("tags", loaded.get("tag"))
-    if isinstance(tags, str):
-        loaded["tags"] = [part.strip() for part in tags.split(",") if part.strip()]
-    elif "tag" in loaded and "tags" not in loaded:
-        loaded["tags"] = loaded["tag"]
-    expected = metadata_level(loaded, legacy)
-    assert _RANK[adapter] >= _RANK[expected], (front, adapter, expected)
 
 
 # --------------------------------------------------------------------------- refs
@@ -846,7 +879,7 @@ def test_package_metadata_entry_points_and_isolation() -> None:
     data = tomllib.loads((ADAPTER / "pyproject.toml").read_text(encoding="utf-8"))
     project = data["project"]
     assert project["version"] == memfw_adapter_qmd.__version__ == "0.1.0"
-    assert project["dependencies"] == ["memfw-ports==0.3.0"]
+    assert project["dependencies"] == ["memfw-ports==0.3.0", "PyYAML==6.0.3"]
     points = project["entry-points"]["memfw.adapters"]
     assert points == {
         "qmd": "memfw_adapter_qmd:MEMORY_SPEC",
@@ -920,3 +953,27 @@ def test_two_stage_loader_builds_the_qmd_provider(
     )
     (loaded,) = loader.load_adapters(entries, root=root, embedder=None, taken=("fts",))
     assert isinstance(loaded.provider, QmdMemoryProvider) and loaded.provider.name == "qmd"
+
+
+def test_note_refs_resolve_through_the_kernel_notes_resolver(
+    projected: tuple[Path, Path], fake: FakeQmd, tmp_path: Path
+) -> None:
+    """The adapter's ``kh:`` refs are the ones ``NotesSegmentResolver`` parses and finds."""
+
+    from memfw.notes.index import NotesIndex
+    from memfw.recall.builtin import NotesSegmentResolver
+
+    root, _tree = projected
+    db = tmp_path / "notes.sqlite3"
+    NotesIndex(db).index(NOTES)
+    resolver = NotesSegmentResolver(
+        NOTES, db, clearance=frozenset({"public", "shared"}), legacy_privacy_default="shared"
+    )
+    resolvers = default_resolvers(root, schemes={"kh": resolver})
+    coordinator = Coordinator([_notes(fake.url)], resolvers=resolvers)
+    result = coordinator.search(NOTES_X["query"], limit=10, policy=FilterPolicy())
+    assert [hit.ref for hit in result.segments] == NOTES_X["expected_refs"]
+    assert {(hit.path, hit.anchor) for hit in result.segments} == {
+        parse_note_ref(ref) for ref in NOTES_X["expected_refs"]
+    }
+    assert result.ids == []  # sections are not memories

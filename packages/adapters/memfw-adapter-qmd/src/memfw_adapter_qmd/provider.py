@@ -28,8 +28,9 @@ through its MCP ``query`` tool (R6 design §5.1–5.2: one ``tools/call`` with
     best-matching line, and returned as a ``path`` candidate
     ``kh:<path>#<heading>`` (``kh:<path>`` when the line has no heading
     above it). A note is returned only when its privacy level, read from the
-    note file itself (``privacy`` / ``sensitivity`` / ``tags`` frontmatter, see
-    ``memfw.ports.privacy``), is in ``clearance`` (``public``/``shared`` only;
+    note file itself like memfw's notes reader (:func:`note_level`:
+    ``yaml.safe_load`` + ``memfw.ports.privacy.metadata_level``), is in
+    ``clearance`` (``public``/``shared`` only;
     ``local-private`` is refused in the settings). A note without a
     ``privacy`` field takes ``legacy_privacy`` (default ``local-private``, so
     nothing is returned until the operator says what unlabelled notes are).
@@ -57,6 +58,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from ._ports import (
     MAX_REF_CHARS,
     MEMORY_ID_RE,
@@ -68,6 +71,7 @@ from ._ports import (
     RecallBudget,
     admits,
     metadata_level,
+    strictest,
 )
 from .mcp import McpHttpClient, QmdResponseError, check_endpoint
 from .paths import handelize, heading_at, note_ref, strip_collection
@@ -672,93 +676,75 @@ def _scan_notes(root: Path) -> tuple[dict[str, str], frozenset[str]]:
     return table, frozenset(ambiguous)
 
 
-_FRONT_KEYS = frozenset({"privacy", "sensitivity", "tags", "tag"})
 #: Lines of a note without frontmatter searched for a stray privacy key.
 _HEAD_LINES = 20
 _PRIVACY_HINT = re.compile(r"^\s*[-*>#]*\s*[\"']?(privacy|sensitivity)[\"']?\s*:", re.IGNORECASE)
-_UNKNOWN = "\0unknown"
+#: Keys whose values decide a note's privacy level.
+_TAG_KEYS = ("tags", "tag")
 
 
-def _scalar(text: str) -> Any:
-    value = text.strip()
-    if " #" in value:
-        value = value.split(" #", 1)[0].rstrip()
-    if not value or value in ("~", "null", "Null", "NULL"):
-        return None
-    if value[0] in "{|>&*!%@`":
-        return _UNKNOWN
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
-        return value[1:-1]
-    return value
+def _tags_readable(value: Any) -> bool:
+    """A ``tags``/``tag`` value ``metadata_level`` can read: absent, or a list of scalars."""
+
+    if value is None:
+        return True
+    if not isinstance(value, list):
+        return False
+    return all(not isinstance(item, (list, dict, set)) for item in value)
 
 
-def _frontmatter(lines: list[str]) -> tuple[dict[str, Any], int]:
-    """The privacy-relevant frontmatter keys and the index of the first body line.
+def note_level(text: str, legacy: str) -> tuple[str, int]:
+    """A note's privacy level and the 0-based index of its first body line.
 
-    A deliberately small reader (this adapter is stdlib only): scalars, inline
-    ``[a, b]`` lists and block ``- a`` lists. A form it cannot read, or a key
-    given twice, makes ``privacy`` unknown, which no clearance admits. So
-    does anything that looks like an attempt at privacy metadata this reader
-    would otherwise miss: a ``---`` block that never closes or does not start
-    on the first line, or a ``privacy:`` / ``sensitivity:`` line among the
-    first ``_HEAD_LINES`` lines of a note without frontmatter.
+    The frontmatter is parsed with ``yaml.safe_load``, the same YAML reading as
+    memfw's notes index (``memfw.notes.index._split_frontmatter``), and the
+    level is ``memfw.ports.privacy.metadata_level`` of that mapping, so every
+    YAML form (explicit ``?`` keys, merge keys, anchors, escaped or tagged
+    keys) means here what it means to the kernel. On top of that, whatever the
+    kernel would read some other way is ``unknown`` (no clearance admits it):
+
+    - a YAML error, a frontmatter that is not a mapping, or ``tags``/``tag``
+      that are not a list of scalars;
+    - a ``---`` block that never closes, or that does not start on line 1;
+    - a ``privacy:``/``sensitivity:`` line among the first ``_HEAD_LINES``
+      lines of a note without frontmatter.
+
+    ``tag`` adds its levels to ``tags`` (it can only make a note stricter). A
+    note starting with a byte-order mark gets the stricter of its frontmatter's
+    level and the level without frontmatter (the kernel's notes reader does not
+    strip the mark).
     """
 
-    if lines:
-        lines = [lines[0].removeprefix("\ufeff"), *lines[1:]]
+    bom = text.startswith("\ufeff")
+    lines = text.removeprefix("\ufeff").splitlines(keepends=True)
     if not lines or lines[0].strip() != "---":
         head = lines[:_HEAD_LINES]
         first = next((line.strip() for line in head if line.strip()), "")
         if first == "---" or any(_PRIVACY_HINT.match(line) for line in head):
-            return {"privacy": _UNKNOWN}, 0
-        return {}, 0
+            return "unknown", 0
+        return metadata_level({}, legacy), 0
     end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
     if end is None:
-        return {"privacy": _UNKNOWN}, 0  # an unterminated block: unreadable
-    found: dict[str, Any] = {}
-    current: str | None = None
-    for raw in lines[1:end]:
-        line = raw.rstrip("\r\n")
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        if line[0] in " \t-":
-            item = line.strip()
-            if current is not None and item.startswith("-"):
-                value = _scalar(item[1:])
-                if isinstance(found.get(current), list):
-                    found[current].append(value)
-                else:
-                    found[current] = [value]
-            elif current is not None:
-                found["privacy"] = _UNKNOWN  # nested or continued value: unreadable
-            continue
-        key, sep, rest = line.partition(":")
-        key = key.strip().strip("'\"")
-        current = None
-        if not sep or key not in _FRONT_KEYS:
-            continue
-        if key in found:
-            found["privacy"] = _UNKNOWN
-            continue
-        current = key
-        rest = rest.strip()
-        if rest.startswith("[") and rest.endswith("]"):
-            found[key] = [_scalar(item) for item in rest[1:-1].split(",") if item.strip()]
-        else:
-            found[key] = _scalar(rest)
-    if "tag" in found:  # memfw's notes index reads ``tag`` too; it can only add levels
-        extra = found.pop("tag")
-        tags = found.get("tags")
-        merged = (tags if isinstance(tags, list) else [] if tags is None else [tags]) + (
-            extra if isinstance(extra, list) else [extra]
-        )
-        found["tags"] = merged
-    tags = found.get("tags")
-    if tags == _UNKNOWN or (isinstance(tags, list) and _UNKNOWN in tags):
-        found["privacy"] = _UNKNOWN  # unreadable tags may hide a sensitivity tag
-    if isinstance(found.get("tags"), str):
-        found["tags"] = [part.strip() for part in found["tags"].split(",") if part.strip()]
-    return found, end + 1
+        return "unknown", 0  # an unterminated block: unreadable
+    try:
+        loaded = yaml.safe_load("".join(lines[1:end]))
+    except (yaml.YAMLError, RecursionError, ValueError, TypeError):
+        return "unknown", end + 1
+    if loaded is None:
+        loaded = {}
+    if not isinstance(loaded, dict):
+        return "unknown", end + 1
+    if not all(_tags_readable(loaded.get(key)) for key in _TAG_KEYS):
+        return "unknown", end + 1
+    merged = dict(loaded)
+    merged["tags"] = [*(loaded.get("tags") or []), *(loaded.get("tag") or [])]
+    try:
+        level = metadata_level(merged, legacy)
+    except Exception:  # noqa: BLE001 - an odd value must not widen access
+        return "unknown", end + 1
+    if bom:
+        level = strictest([level, metadata_level({}, legacy)])
+    return level, end + 1
 
 
 class QmdNotesProvider(_QmdProvider):
@@ -818,12 +804,11 @@ class QmdNotesProvider(_QmdProvider):
         try:
             if path.stat().st_size > MAX_NOTE_BYTES:
                 return None
-            text = path.read_text(encoding="utf-8-sig", errors="replace")
-            lines = text.splitlines(keepends=True)
+            text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             return None
-        front, body_start = _frontmatter(lines)
-        level = metadata_level(front, self.settings.legacy_privacy)
+        level, body_start = note_level(text, self.settings.legacy_privacy)
+        lines = text.removeprefix("\ufeff").splitlines(keepends=True)
         if not admits(self.settings.clearance, level):
             return None
         heading = heading_at(lines, row.line, body_start=body_start) if row.line else ""
@@ -852,7 +837,8 @@ def memory_factory(settings: Mapping[str, Any]) -> QmdMemoryProvider:
 def notes_factory(settings: Mapping[str, Any]) -> QmdNotesProvider:
     """Factory for ``qmd-notes`` (same two entry routes as :func:`memory_factory`).
 
-    Its ``kh:`` path refs do not resolve to memories, so a memory coordinator
-    (``two_stage``) drops them as unresolved until a notes resolver exists."""
+    Its ``kh:`` path refs resolve to note sections through memfw's
+    ``NotesSegmentResolver`` when the coordinator registers it (not by default);
+    otherwise they are dropped as unresolved."""
 
     return QmdNotesProvider(NotesSettings.from_mapping(settings))

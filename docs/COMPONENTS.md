@@ -150,7 +150,7 @@ and asks for memory ids only. It is **off by default**; `memfw-adapter-qdrant sy
 ## QMD recall adapter
 
 `packages/adapters/memfw-adapter-qmd` (wheel `memfw_adapter_qmd`, version 0.1.0) implements
-the `RecallProvider` port twice, with the standard library only, over a running
+the `RecallProvider` port twice, with the standard library and PyYAML, over a running
 [QMD](https://github.com/tobi/qmd) (MIT, pinned 2.5.3) MCP server: `qmd` searches a collection
 built from a `memfw projection export` and returns memory ids mapped through the projection
 manifest; `qmd-notes` searches a Knowledge-Hub collection and returns `kh:<path>#<heading>`

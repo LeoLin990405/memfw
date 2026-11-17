@@ -10,7 +10,7 @@ memfw.
 from __future__ import annotations
 
 try:
-    from memfw.ports.privacy import PRIVACY_LEVELS, admits, metadata_level
+    from memfw.ports.privacy import PRIVACY_LEVELS, admits, metadata_level, strictest
     from memfw.ports.registry import AdapterSpec
     from memfw.ports.types import (
         MAX_REF_CHARS,
@@ -26,6 +26,7 @@ except ModuleNotFoundError:  # the standalone memfw-ports wheel
         PRIVACY_LEVELS,
         admits,
         metadata_level,
+        strictest,
     )
     from memfw_ports.registry import AdapterSpec  # type: ignore[no-redef]
     from memfw_ports.types import (  # type: ignore[no-redef]
@@ -50,4 +51,5 @@ __all__ = [
     "RecallBudget",
     "admits",
     "metadata_level",
+    "strictest",
 ]

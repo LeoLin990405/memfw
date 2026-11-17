@@ -304,3 +304,14 @@ def test_ci_wheel_job_builds_and_smokes_every_adapter_with_the_pins() -> None:
         assert f"uv build --wheel --package {package} " in ci, package
     assert "bm25s==0.3.16 jieba==0.42.1 PyYAML==6.0.3 numpy==2.4.6" in ci  # CI runs Python 3.11
     assert "wheel_smoke.py --recall --deepseek --bm25s --qdrant --qmd" in ci
+
+
+def test_qmd_adapter_dependencies_are_pinned_and_installed_first() -> None:
+    project = tomllib.loads(
+        (PACKAGES / "adapters" / "memfw-adapter-qmd" / "pyproject.toml").read_text("utf-8")
+    )
+    deps = project["project"]["dependencies"]
+    assert all("==" in dep for dep in deps), deps  # every dependency pinned exactly
+    third_party = [dep for dep in deps if not dep.startswith("memfw-")]
+    assert third_party == ["PyYAML==6.0.3"], deps
+    assert all(pin in ADAPTER_DEPENDENCIES for pin in third_party), third_party
