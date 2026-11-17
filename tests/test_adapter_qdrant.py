@@ -9,6 +9,7 @@ server that answers exactly what was recorded).
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import math
@@ -939,3 +940,37 @@ def test_qdrant_passes_the_contract_fts_passes(tmp_path: Path, fake: FakeQdrant,
     assert {"m-priv", "m-local", "m-odd"}.isdisjoint(result.ids)
     alpha = coordinator.search("homelab backup", limit=10, policy=policy.with_tenant("alpha"))
     assert alpha.ids == ["m-alpha"]
+
+
+def test_a_tenant_change_moves_the_point_on_the_next_sync(tmp_path: Path, fake: FakeQdrant) -> None:
+    repository = _vault(tmp_path)
+    provider = _provider(repository, fake)
+    sync(provider)
+    assert "m-hal" in _search(provider, "HAL9000 rack")
+    path = repository.root / "memories" / "m-hal.md"
+    text = path.read_text(encoding="utf-8")
+    assert "\ntenant: " not in text  # written without one: the empty tenant
+    path.write_text(text.replace("\nid: m-hal\n", "\nid: m-hal\ntenant: beta\n", 1), "utf-8")
+    report = sync(provider)
+    assert report.upserted == 1
+    assert "m-hal" not in _search(provider, "HAL9000 rack")
+    assert _search(provider, "HAL9000 rack", tenant="beta") == ["m-hal"]
+
+
+def test_adapter_imports_only_stdlib_yaml_and_the_ports() -> None:
+    allowed_roots = set(sys.stdlib_module_names) | {"memfw_adapter_qdrant", "memfw_ports", "yaml"}
+    for path in sorted((ADAPTER_SRC / "memfw_adapter_qdrant").glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                names = [node.module]
+            elif isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            else:
+                continue
+            for name in names:
+                ok = name.split(".")[0] in allowed_roots or name.startswith("memfw.ports.")
+                assert ok, (path.name, name)
+    kernel = ROOT / "src" / "memfw"
+    for path in kernel.rglob("*.py"):
+        assert "memfw_adapter_qdrant" not in path.read_text(encoding="utf-8"), path
