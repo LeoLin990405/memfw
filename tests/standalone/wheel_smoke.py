@@ -2,7 +2,8 @@
 
 Run it with the interpreter of a venv that has the wheels and NOT memfw:
 
-    python -I tests/standalone/wheel_smoke.py [--recall] [--deepseek] [--bm25s] [--qdrant] [--qmd]
+    python -I tests/standalone/wheel_smoke.py [--recall] [--deepseek] [--bm25s] [--qdrant]
+        [--qmd] [--ocr]
 
 It refuses to run when ``memfw`` is importable, imports the wheels, and runs
 the contract kit (``memfw_ports.testing``) against the reference
@@ -16,7 +17,9 @@ on a throwaway vault (index outside it, under the temporary root); with
 vault into its loopback ``FakeQdrant`` and passes ``check_recall_provider``;
 with ``--qmd``
 the ``memfw-adapter-qmd`` wheel's two recall providers pass
-``check_recall_provider`` against its loopback fake. Prints one
+``check_recall_provider`` against its loopback fake; with ``--ocr`` the
+``memfw-adapter-ocr`` wheel's deriver passes ``check_deriver`` with an
+in-process fake engine (no OCR tool). Prints one
 ``ok`` line per check and exits non-zero on the first failure. Standard
 library only; not collected by pytest (``tests/test_standalone_ports_wheel.py``
 drives it).
@@ -389,6 +392,52 @@ def _qmd(root: Path) -> None:
     _ok("check_recall_provider QmdMemoryProvider + QmdNotesProvider (fake server)")
 
 
+def _ocr(root: Path) -> None:
+    """The OCR adapter wheel over the memfw-ports wheel, with a fake engine."""
+
+    import hashlib
+    import json
+
+    from memfw_adapter_ocr import OcrDeriver, OcrLine, OcrPage, OcrResult, Settings
+    from memfw_adapter_ocr import _ports as seam
+    from memfw_ports.testing import check_deriver
+    from memfw_ports.types import Availability, DeriveRequest
+
+    assert seam.DeriveRequest is DeriveRequest, seam.DeriveRequest
+    _ok("import memfw_adapter_ocr (ports from memfw_ports)")
+
+    class Engine:
+        name = "fake"
+
+        def available(self) -> Availability:
+            return Availability.ok()
+
+        def extract(self, path: Path, *, media: str, budget: object, workdir: Path) -> OcrResult:
+            return OcrResult("fake", "1", "pdf", 1, (OcrPage(1, (OcrLine("hello"),)),))
+
+    originals = root / "originals"
+    originals.mkdir()
+    (originals / "a.pdf").write_bytes(b"%PDF-1.4 smoke")
+    sha = hashlib.sha256(b"%PDF-1.4 smoke").hexdigest()
+    deriver = OcrDeriver(Settings(source_roots=(str(originals),)), backend=Engine())
+    att = "att-01a1e931-1818-772b-8713-76e6bea4a716"
+    request = DeriveRequest(
+        kind="ocr_proxy",
+        memory_ids=(att,),
+        options={
+            "source": "a.pdf",
+            "sha256": sha,
+            "media_type": "application/pdf",
+            "privacy": "shared",
+        },
+    )
+    vault = root / "ocr-vault"
+    vault.mkdir()
+    view = check_deriver(deriver, vault=vault, request=request)
+    assert json.loads(view.content)["segments"][0]["locator"] == {"page": 1}, view.content
+    _ok("check_deriver OcrDeriver (fake engine)")
+
+
 def main(argv: list[str]) -> int:
     if importlib.util.find_spec("memfw") is not None:
         print("memfw is importable here; run this in a venv without memfw", file=sys.stderr)
@@ -406,6 +455,8 @@ def main(argv: list[str]) -> int:
             _qdrant(root)
         if "--qmd" in argv:
             _qmd(root)
+        if "--ocr" in argv:
+            _ocr(root)
     print("standalone wheel smoke passed")
     return 0
 

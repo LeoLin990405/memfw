@@ -29,6 +29,7 @@ CONSUMES = {
     "memfw-adapter-bm25s": {"RecallProvider"},
     "memfw-adapter-qdrant": {"RecallProvider"},
     "memfw-adapter-qmd": {"RecallProvider"},
+    "memfw-adapter-ocr": {"Deriver"},
 }
 
 
