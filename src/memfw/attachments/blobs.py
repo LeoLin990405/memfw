@@ -20,6 +20,7 @@ import os
 import re
 import stat
 import tempfile
+import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +34,8 @@ DEFAULT_BLOB_ROOT: Final = Path(".local/share/memfw/blobs")
 _SHA_RE: Final = re.compile(r"^[0-9a-f]{64}$")
 #: Staging area under the blob root (never a vault id: those are UUIDs).
 STAGING_DIR: Final = ".staging"
+#: A staging file older than this is reported as stale (an interrupted add).
+STALE_STAGE_SECONDS: Final = 60 * 60
 
 #: Synced-folder markers under the home directory: every marker of
 #: ``memfw.history.transcripts.SYNCED_MARKERS`` (a test keeps it a subset; the
@@ -292,6 +295,28 @@ class BlobStore:
             return BlobCheck(sha256, "modified", actual, size, loose)
         return BlobCheck(sha256, "ok", actual, size, loose)
 
+    def stale_stages(self, *, older_than: float = STALE_STAGE_SECONDS) -> list[str]:
+        """Staging temp files left by an interrupted add, older than ``older_than`` seconds.
+
+        Looks in the root's staging area and in the blob directory itself.
+        Younger files may belong to an add still running, so they are skipped.
+        Names are relative to the blob root; nothing is deleted.
+        """
+
+        cutoff = time.time() - older_than
+        found: list[str] = []
+        for directory in (self.staging, self.directory):
+            if directory.is_symlink() or not directory.is_dir():
+                continue
+            for item in sorted(directory.glob(".stage-*.tmp")):
+                try:
+                    info = os.lstat(item)
+                except FileNotFoundError:
+                    continue
+                if info.st_mtime < cutoff:
+                    found.append(f"{directory.name}/{item.name}")
+        return found
+
     def stored(self) -> Iterator[str]:
         """Every sha256 with a file at its address (no hashing). Temp files skipped."""
 
@@ -309,6 +334,7 @@ __all__ = [
     "CHUNK_BYTES",
     "DEFAULT_BLOB_ROOT",
     "STAGING_DIR",
+    "STALE_STAGE_SECONDS",
     "SYNCED_MARKERS",
     "BlobCheck",
     "BlobLocationError",

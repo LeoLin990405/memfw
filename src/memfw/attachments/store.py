@@ -495,14 +495,20 @@ class AttachmentStoreMixin:
                 for sha in store.stored():
                     if sha not in referenced:
                         problems.append(AttachmentProblem(None, "blob_orphan", sha))
+                for name in store.stale_stages():
+                    problems.append(AttachmentProblem(None, "blob_stage_stale", message=name))
         return wanted, problems
 
     def attachment_fsck_issues(self: RepositoryHost) -> list[dict[str, str | None]]:
-        """``fsck`` rows for attachments; empty (and no I/O past the log) without any."""
+        """``fsck`` rows for attachments; empty (and no I/O past the log) without any.
+
+        A vault "has attachments" once it has a record file, an ``attach``
+        event or a ``vault_id`` (an add may have stopped before its record).
+        """
 
         has_records = _attachments_dir(self).exists()
         events = self.events()
-        if not has_records and not committed_records(events):
+        if not has_records and not committed_records(events) and _vault_id(self) is None:
             return []
         _, problems = AttachmentStoreMixin.verify_attachments(self, events=events)
         return [

@@ -187,7 +187,7 @@ def verify(
 
 
 #: Reported but not failing: nothing an attachment needs is missing or changed.
-_WARNINGS = frozenset({"blob_orphan", "blob_mode_loose"})
+_WARNINGS = frozenset({"blob_orphan", "blob_mode_loose", "blob_stage_stale"})
 
 
 __all__ = ["app"]

@@ -168,12 +168,15 @@ for `vault_id` (`vault.yaml` is rewritten by `configure`, like
 | `blob_unavailable` | the blob directory cannot be used (no `vault_id`, refused location) |
 | `blob_orphan` (warning) | a blob no readable record names |
 | `blob_mode_loose` (warning) | a blob readable by group or others |
+| `blob_stage_stale` (warning) | a `.stage-*.tmp` older than an hour under the blob root (an interrupted `add`); never deleted |
 
 * `fsck` only reports attachment problems. It never registers an
   `external_delete` for an attachment (attachments are not memories in the
   replay projection) and never quarantines, rewrites or deletes a record or a
-  blob. On a vault without attachments it adds nothing and does not open the
-  blob store.
+  blob. On a vault without attachments (no record file, no `attach` event
+  and no `vault_id`) it adds nothing and does not open the blob store; once
+  `vault.yaml` has a `vault_id` it checks the blob directory even when
+  `attachments/` does not exist (an `add` may have stopped before its record).
 * Orphan blobs come from an interrupted `add` (the blob is linked before the
   record commits) or from a record removed by hand. MM1a reports them and
   deletes nothing.

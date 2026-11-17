@@ -916,3 +916,38 @@ def test_log_is_read_once_per_operation(tmp_path: Path, monkeypatch: pytest.Monk
     assert few == many
     for operation, reads in many.items():
         assert reads <= 2, (operation, reads)
+
+
+def test_stale_stages_are_reported_and_fsck_checks_a_vault_with_only_a_vault_id(
+    tmp_path: Path,
+) -> None:
+    repository = _repo(tmp_path)
+    repository.ensure_vault_id()
+    assert not (repository.root / ATTACHMENTS_DIR).exists()
+    store = repository.attachment_blob_store(create=True)
+    assert store is not None
+    # An add that stopped after linking its blob, before any record existed.
+    with _file(tmp_path, "o.txt", b"orphan").open("rb") as stream:
+        orphan = store.stage(stream, max_bytes=100)
+    store.link(orphan)
+    # And one that stopped while staging, long ago; plus one still running.
+    with _file(tmp_path, "s.txt", b"stale").open("rb") as stream:
+        stale = store.stage(stream, max_bytes=100)
+    with _file(tmp_path, "r.txt", b"running").open("rb") as stream:
+        running = store.stage(stream, max_bytes=100)
+    old = stale.temporary.stat().st_mtime - 2 * blobs_module.STALE_STAGE_SECONDS
+    os.utime(stale.temporary, (old, old))
+    assert running.temporary.exists()
+    issues = repository.fsck()
+    assert [(row["kind"], row["actual_hash"], row["message"]) for row in issues] == [
+        ("attachment_blob_orphan", orphan.sha256, None),
+        ("attachment_blob_stage_stale", None, f".staging/{stale.temporary.name}"),
+    ]
+    # Reported, never deleted; a warning, not a failure.
+    assert stale.temporary.exists()
+    result = _cli("attach", "verify", "--root", str(repository.root))
+    assert result.exit_code == 0
+    assert [row["status"] for row in json.loads(result.output)["problems"]] == [
+        "blob_orphan",
+        "blob_stage_stale",
+    ]
