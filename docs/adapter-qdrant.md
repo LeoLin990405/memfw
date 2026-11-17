@@ -153,6 +153,6 @@ service is down it reports `unreachable` (`no_collection`, `unauthorized`,
   idempotence and deletes, vault and embedder isolation, settings and URL rules, proxy bypass
   for loopback only, refused redirects, every availability code, T7 through the coordinator,
   hostile responses, the embedder fingerprint, the CLI, the registry spec, and the runtime
-  wiring (`runtime.recall.adapters`; skipped until that loader is on main).
+  wiring (`runtime.recall.adapters`).
 - `tests/standalone/wheel_smoke.py --qdrant` runs it from its wheel without memfw against the
   fake.

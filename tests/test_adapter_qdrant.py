@@ -886,9 +886,8 @@ def test_registry_spec_is_off_until_enabled(tmp_path: Path, fake: FakeQdrant) ->
 
 
 def test_runtime_wires_qdrant_through_module_factory(tmp_path: Path, fake: FakeQdrant) -> None:
-    """Through ``runtime.recall.adapters`` (the bm25s adapter PR adds the loader)."""
+    """Through ``runtime.recall.adapters`` (the ``module:factory`` loader)."""
 
-    pytest.importorskip("memfw.runtime.recall_adapters")
     from memfw.runtime import build_runtime
 
     repository = _vault(tmp_path)
