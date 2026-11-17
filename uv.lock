@@ -340,7 +340,8 @@ requires-dist = [
     { name = "bm25s", specifier = "==0.3.16" },
     { name = "jieba", specifier = "==0.42.1" },
     { name = "memfw-ports", editable = "packages/memfw-ports" },
-    { name = "numpy", specifier = ">=1.26" },
+    { name = "numpy", marker = "python_full_version < '3.12'", specifier = "==2.4.6" },
+    { name = "numpy", marker = "python_full_version >= '3.12'", specifier = "==2.5.5" },
 ]
 
 [[package]]

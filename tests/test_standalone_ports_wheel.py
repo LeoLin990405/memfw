@@ -88,9 +88,28 @@ MEMBERS = (
     "adapters/memfw-adapter-deepseek",
     "adapters/memfw-adapter-bm25s",
 )
-#: Third-party wheels an adapter needs, installed from the index by exact pin
-#: before the local wheels (which are then installed with ``--no-index``).
-ADAPTER_DEPENDENCIES = ("bm25s==0.3.16", "jieba==0.42.1", "numpy")
+#: Third-party wheels an adapter needs, by exact pin (the versions uv.lock
+#: resolves and the adapter's pyproject pins), installed before the local
+#: wheels (which are then installed with ``--no-index``).
+ADAPTER_DEPENDENCIES = (
+    "bm25s==0.3.16",
+    "jieba==0.42.1",
+    "numpy==2.4.6" if sys.version_info < (3, 12) else "numpy==2.5.5",
+)
+
+
+def _install_pinned(uv: str, python: Path) -> None:
+    """The pinned dependencies from uv's cache when it has them, else from the index."""
+
+    base = (uv, "pip", "install", "--quiet", "--python", python)
+    offline = subprocess.run(
+        [str(a) for a in (*base, "--offline", *ADAPTER_DEPENDENCIES)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if offline.returncode != 0:
+        _run(*base, *ADAPTER_DEPENDENCIES)
 
 
 def test_members_pin_their_build_backend_and_ship_license_and_notice() -> None:
@@ -231,7 +250,7 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
     venv = tmp_path / "venv"
     python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     _run(uv, "venv", "--quiet", "--python", f"{sys.version_info[0]}.{sys.version_info[1]}", venv)
-    _run(uv, "pip", "install", "--quiet", "--python", python, *ADAPTER_DEPENDENCIES)
+    _install_pinned(uv, python)
     _run(uv, "pip", "install", "--quiet", "--python", python, "--no-index", *dist.glob("*.whl"))
     # -I: no PYTHONPATH, no cwd or script directory on sys.path, so this tree's
     # src/ cannot leak in; the smoke refuses to run if memfw is importable.
@@ -241,3 +260,18 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
     assert "ok check_recall_provider InMemoryRecallProvider" in out
     assert "ok Coordinator.search" in out
     assert "ok check_recall_provider Bm25sProvider" in out
+
+
+def test_adapter_dependency_pins_match_the_lockfile_and_pyproject() -> None:
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    locked = {(pkg["name"], pkg["version"]) for pkg in lock["package"]}
+    for pin in ADAPTER_DEPENDENCIES:
+        name, version = pin.split("==")
+        assert (name, version) in locked, pin
+    project = tomllib.loads(
+        (PACKAGES / "adapters" / "memfw-adapter-bm25s" / "pyproject.toml").read_text("utf-8")
+    )
+    deps = project["project"]["dependencies"]
+    assert all("==" in dep for dep in deps), deps  # every dependency pinned exactly
+    for pin in ADAPTER_DEPENDENCIES:
+        assert any(dep.split(";")[0].strip() == pin for dep in deps), pin

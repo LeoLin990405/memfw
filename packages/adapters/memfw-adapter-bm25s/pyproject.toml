@@ -22,7 +22,9 @@ dependencies = [
     "memfw-ports==0.3.0",
     # The ranker (MIT). Pinned: the on-disk index format is bm25s's own.
     "bm25s==0.3.16",
-    "numpy>=1.26",
+    # bm25s's only runtime dependency; pinned to the versions uv.lock resolves.
+    "numpy==2.4.6; python_version < '3.12'",
+    "numpy==2.5.5; python_version >= '3.12'",
     # Chinese segmentation, the same dependency memfw's own FTS uses (MIT).
     "jieba==0.42.1",
 ]
