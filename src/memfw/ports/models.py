@@ -137,7 +137,7 @@ def render_tag_prompt(task: str, data: Mapping[str, Any]) -> tuple[str, str]:
 _SPACE = re.compile(r"\s+")
 #: A URL, a path or a host is not a project or component name (and may point
 #: somewhere private): an item with a path separator, a ``~``, a ``..``, a scheme
-#: (``https:``, ``file:``, ``mailto:`` ...) or a leading ``www.`` rejects the reply.
+#: (``https:``, ``file:``, ``mailto:`` ...) or a leading ``www.`` is dropped.
 _LOCATION = re.compile(r"(?i)(?:[/\\~]|\.\.|^[a-z][a-z0-9+.-]*:|^www\.)")
 
 
@@ -155,7 +155,7 @@ def _items(raw: Any) -> list[str] | None:
     out: list[str] = []
     for item in raw:
         if _LOCATION.search(item.strip()):
-            return None
+            continue  # not a name: drop this item, keep the rest of the reply
         cleaned = _clean(item, TAG_ITEM_CHARS)
         if cleaned and cleaned not in out:
             out.append(cleaned)
@@ -167,10 +167,13 @@ def normalize_tags(raw: Any) -> dict[str, Any] | None:
 
     Lower-cased, whitespace collapsed, lists de-duplicated and capped, every
     key present. A ``project`` or ``components`` item that looks like a URL, a
-    path or a host (``/``, ``\\``, ``~``, ``..``, a scheme, ``www.``) rejects
-    the reply. A missing ``task_type`` is ``other`` and a missing ``outcome`` is
-    ``unknown``; a value outside the vocabulary, an unknown key or a wrong
-    type rejects the whole reply (dropped, never repaired).
+    path or a host (``/``, ``\\``, ``~``, ``..``, a scheme, ``www.``) is dropped;
+    the rest of the reply is kept (a model at temperature 0 would repeat it, so
+    rejecting the reply would only pay for the same answer again). Secrets are
+    the caller's check and still drop the whole reply. A missing ``task_type``
+    is ``other`` and a missing ``outcome`` is ``unknown``; a value outside the
+    vocabulary, an unknown key or a wrong type rejects the whole reply
+    (dropped, never repaired).
     """
 
     if not isinstance(raw, Mapping) or set(raw) - set(TAG_KEYS):

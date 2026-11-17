@@ -138,9 +138,10 @@ The tag schema (validated, lower-cased and length-capped by memfw, then
 redacted again; any value outside the vocabulary, an unknown key, or a
 secret-shaped value drops the whole reply, which is retried next run; every
 string is redacted *before* it is lower-cased or cut, so a key or PEM header
-cannot hide by changing shape; a `project` or `components` item that looks
+cannot hide by changing shape. A `project` or `components` item that looks
 like a URL, a path or a host (any `/` or `\`, `~`, `..`, a scheme such as
-`https:`, `file:` or `mailto:`, or a leading `www.`) also drops the reply):
+`https:`, `file:` or `mailto:`, or a leading `www.`) is dropped on its own; the
+rest of the reply is kept, so a path-like name never costs a paid retry):
 
 ```json
 {"summary": "<= 2 sentences",

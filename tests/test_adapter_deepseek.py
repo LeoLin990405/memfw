@@ -472,13 +472,33 @@ def test_home_paths_are_redacted_before_lowercasing() -> None:
         "go to https://e.example now",
     ],
 )
-def test_urls_and_absolute_paths_are_not_tag_names(item: str) -> None:
+def test_urls_and_paths_are_dropped_as_tag_names_but_the_reply_is_kept(item: str) -> None:
     for key in ("project", "components"):
-        reply = _v2(**{key: ["memfw", item]})
-        assert parse_reply("chunk_summary", reply, prompt_version="conv-v2") is None, (key, item)
+        reply = _v2("Fixed it.", **{key: ["memfw", item, "Retry"]})
+        parsed = parse_reply("chunk_summary", reply, prompt_version="conv-v2")
+        assert parsed is not None, (key, item)
+        assert parsed["summary"] == "Fixed it." and parsed["tags"][key] == ["memfw", "retry"]
     names = ["memfw", "next.js", "c++", "retry worker"]
     ok = parse_reply("chunk_summary", _v2(components=names), prompt_version="conv-v2")
     assert ok is not None and ok["tags"]["components"] == names
+
+
+def test_a_path_like_name_never_costs_a_retry(tmp_path: Path, fake: FakeDeepSeek) -> None:
+    fake.default = tag_reply(
+        tags={"project": ["src/memfw", "some-user/memfw"], "components": ["Worker"]}
+    )
+    report = _worker(tmp_path, _backend(fake)).run()
+    assert report.errors == {} and report.jobs["session_summary:done"] == 3
+    assert len(fake.requests) == 6  # each job paid once
+    (row,) = _rows_of(
+        tmp_path, "SELECT tags FROM summaries WHERE app = 'codex' AND chunk_start = -1"
+    )
+    assert json.loads(row["tags"])["project"] == [] and "src/memfw" not in row["tags"]
+
+
+def test_a_secret_in_a_tag_still_drops_the_whole_reply() -> None:
+    reply = _v2(project=["memfw", f"key {AWS}"], components=["/Users/" + "someone/x"])
+    assert parse_reply("session_summary", reply, prompt_version="conv-v2") is None
 
 
 def test_conv_v1_parsing_is_unchanged() -> None:
