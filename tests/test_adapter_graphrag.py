@@ -46,28 +46,16 @@ from memfw_adapter_graphrag import (  # noqa: E402
 from memfw_adapter_graphrag.deriver import (  # noqa: E402
     INPUT_DIR,
     INPUT_INDEX,
-    endpoint_check,
+    check_endpoint,
     parse_list,
     read_output,
+    render_settings,
 )
 
 FIXTURE = ROOT / "tests" / "fixtures" / "graphrag_contract"
 NOW = datetime(2026, 11, 17, 12, 0, tzinfo=UTC)
 PRIVATE_MARKER = "walrus-private-marker-17"
-LOCAL_SETTINGS = """\
-completion_models:
-  default_completion_model:
-    model_provider: openai
-    model: qwen2.5:7b-instruct
-    api_base: http://127.0.0.1:11434/v1
-embedding_models:
-  default_embedding_model:
-    model_provider: openai
-    model: nomic-embed-text
-    api_base: http://localhost:11434/v1
-table_provider:
-  type: csv
-"""
+MODELS = {"completion_model": "qwen2.5:7b-instruct", "embedding_model": "nomic-embed-text"}
 
 
 def _counter() -> Any:
@@ -118,7 +106,6 @@ def export(vault: Path, tmp_path: Path) -> Path:
 def project(tmp_path: Path) -> Path:
     root = tmp_path / "graphrag"
     root.mkdir()
-    (root / "settings.yaml").write_text(LOCAL_SETTINGS, encoding="utf-8")
     shutil.copytree(FIXTURE / "output", root / "output")
     return root
 
@@ -138,7 +125,7 @@ class Runner:
 
 
 def make(project: Path, runner: Runner | None = None, **settings: Any) -> GraphRagDeriver:
-    parsed = Settings.from_mapping({"root": str(project), **settings})
+    parsed = Settings.from_mapping({"root": str(project), **MODELS, **settings})
     return GraphRagDeriver(parsed, runner=runner or Runner(), environ=ENVIRON)
 
 
@@ -278,16 +265,17 @@ def test_stage_input_refuses_a_bad_manifest(vault: Path, project: Path, tmp_path
 # -- 2. the batch run (never executed here) ---------------------------------------------------
 
 
-def _staged(project: Path) -> None:
+def _staged(project: Path, deriver: GraphRagDeriver | None = None) -> None:
     (project / INPUT_DIR).mkdir(exist_ok=True)
     (project / INPUT_DIR / INPUT_INDEX).write_text("{}\n", encoding="utf-8")
+    (deriver or make(project)).write_settings()
 
 
 def test_run_index_argv_env_and_log(project: Path) -> None:
-    _staged(project)
     runner = Runner()
     deriver = make(project, runner, command="/opt/graphrag/bin/graphrag", pass_env=["LOCAL_KEY"])
-    deriver._environ = {**ENVIRON, "LOCAL_KEY": "k"}
+    _staged(project, deriver)
+    deriver._environ = {**ENVIRON, "LOCAL_KEY": "k", "OPENAI_API_BASE": "https://x"}
     assert deriver.run_index() == 0
     (call,) = runner.calls
     assert call["argv"] == [
@@ -318,10 +306,10 @@ def test_run_index_failures_are_codes(project: Path, status: int, code: str) -> 
 
 def test_run_index_needs_staged_input_and_settings(project: Path) -> None:
     runner = Runner()
-    with pytest.raises(GraphRagError, match="no_input"):
-        make(project, runner, command="/opt/graphrag").run_index()
-    (project / "settings.yaml").unlink()
     with pytest.raises(GraphRagError, match="no_settings"):
+        make(project, runner, command="/opt/graphrag").run_index()
+    make(project).write_settings()
+    with pytest.raises(GraphRagError, match="no_input"):
         make(project, runner, command="/opt/graphrag").run_index()
     assert runner.calls == []
 
@@ -334,31 +322,78 @@ def test_run_index_missing_command_is_missing_dependency(project: Path) -> None:
     assert runner.calls == []
 
 
+def test_the_adapter_writes_settings_with_explicit_loopback_endpoints(project: Path) -> None:
+    make(project, embedding_api_base="http://127.0.0.2:8080/v1").write_settings()
+    config = json.loads((project / "settings.yaml").read_text(encoding="utf-8"))
+    completion = config["completion_models"]["default_completion_model"]
+    embedding = config["embedding_models"]["default_embedding_model"]
+    assert completion["api_base"] == "http://127.0.0.1:11434/v1"
+    assert embedding["api_base"] == "http://127.0.0.2:8080/v1"
+    assert completion["model"] == "qwen2.5:7b-instruct" and embedding["model"] == "nomic-embed-text"
+    assert config["table_provider"] == {"type": "csv"}
+    for key in ("input_storage", "output_storage", "update_output_storage", "reporting"):
+        assert config[key]["type"] == "file" and "/" not in config[key]["base_dir"], key
+    assert config["cache"]["storage"] == {"type": "file", "base_dir": "cache"}
+    assert "connection_string" not in json.dumps(config) and "${" not in json.dumps(config)
+    recorded = (project / ".memfw-settings.sha256").read_text().strip()
+    assert recorded == hashlib.sha256((project / "settings.yaml").read_bytes()).hexdigest()
+
+
 @pytest.mark.parametrize(
-    ("text", "code"),
+    "change",
     [
-        ("completion_models: {}\n", "no_local_endpoint"),
-        ("api_base: https://api.openai.com/v1\n", "cloud_not_allowed"),
-        ("api_base: http://127.0.0.1:1/v1\n# also https://example.com\n", "cloud_not_allowed"),
-        ("api_base: ${GRAPHRAG_API_BASE}\nurl: http://${HOST}/v1\n", "endpoint_placeholder"),
-        ("api_base: http://192.0.2.1:11434/v1\n", "cloud_not_allowed"),
-        (LOCAL_SETTINGS, ""),
+        lambda p: (p / "settings.yaml").write_text(
+            (p / "settings.yaml").read_text().replace("127.0.0.1", "192.0.2.1")
+        ),
+        lambda p: (p / "settings.yaml").write_text(
+            (p / "settings.yaml").read_text() + "# ${GRAPHRAG_API_BASE}\n"
+        ),
+        lambda p: (p / ".env").write_text("GRAPHRAG_API_BASE=https://example.com\n"),
+        lambda p: (p / ".memfw-settings.sha256").write_text("0" * 64 + "\n"),
     ],
 )
-def test_endpoint_gate(text: str, code: str) -> None:
-    assert endpoint_check(text, cloud=False) == code
-    assert endpoint_check(text, cloud=True) == ""
-
-
-def test_a_cloud_settings_file_never_starts_a_run(project: Path) -> None:
+def test_a_changed_settings_file_or_a_dotenv_never_starts_a_run(project: Path, change: Any) -> None:
     _staged(project)
-    (project / "settings.yaml").write_text("api_base: https://api.openai.com/v1\n")
+    change(project)
     runner = Runner()
-    with pytest.raises(GraphRagError, match="cloud_not_allowed"):
+    with pytest.raises(GraphRagError):
         make(project, runner, command="/opt/graphrag").run_index()
     assert runner.calls == []
-    make(project, runner, command="/opt/graphrag", cloud=True).run_index()
-    assert len(runner.calls) == 1
+
+
+def test_settings_from_another_adapter_configuration_are_stale(project: Path) -> None:
+    _staged(project)
+    runner = Runner()
+    with pytest.raises(GraphRagError, match="settings_changed"):
+        make(project, runner, command="/opt/graphrag", completion_model="other").run_index()
+    assert runner.calls == []
+
+
+@pytest.mark.parametrize(
+    ("url", "code"),
+    [
+        ("http://127.0.0.1:11434/v1", ""),
+        ("http://[::1]:11434/v1", ""),
+        ("http://localhost:11434/v1", "cloud_not_allowed"),
+        ("https://api.openai.com/v1", "cloud_not_allowed"),
+        ("http://192.0.2.1:11434/v1", "cloud_not_allowed"),
+        ("http://127.0.0.1:1/${X}", "bad_endpoint"),
+        ("http://user:pw@127.0.0.1/v1", "bad_endpoint"),
+        ("127.0.0.1:11434", "bad_endpoint"),
+    ],
+)
+def test_endpoint_rule_is_literal_loopback(url: str, code: str) -> None:
+    assert check_endpoint(url, cloud=False) == code
+
+
+def test_cloud_allows_only_https_elsewhere() -> None:
+    assert check_endpoint("https://api.openai.com/v1", cloud=True) == ""
+    assert check_endpoint("http://api.openai.com/v1", cloud=True) == "cloud_not_allowed"
+
+
+def test_rendering_needs_both_models(project: Path) -> None:
+    with pytest.raises(GraphRagError, match="no_models"):
+        render_settings(Settings(root=str(project)))
 
 
 # -- configuration and registry ---------------------------------------------------------------
@@ -375,6 +410,12 @@ def test_a_cloud_settings_file_never_starts_a_run(project: Path) -> None:
         ({"root": "/tmp", "method": "standard-update"}, "bad_option"),
         ({"root": "/tmp", "pass_env": ["lower"]}, "bad_option"),
         ({"root": "/tmp", "cloud": "yes"}, "bad_option"),
+        ({"root": "/tmp", "pass_env": ["OPENAI_API_BASE"]}, "bad_option"),
+        ({"root": "/tmp", "pass_env": ["MODEL_BASE_URL"]}, "bad_option"),
+        ({"root": "/tmp", "pass_env": ["LLM_ENDPOINT"]}, "bad_option"),
+        ({"root": "/tmp", "pass_env": ["OLLAMA_HOST"]}, "bad_option"),
+        ({"root": "/tmp", "api_base": "http://localhost:11434/v1"}, "bad_endpoint"),
+        ({"root": "/tmp", "completion_model": "a b"}, "bad_option"),
     ],
 )
 def test_bad_settings_are_unavailable_with_a_code(settings: dict[str, Any], code: str) -> None:

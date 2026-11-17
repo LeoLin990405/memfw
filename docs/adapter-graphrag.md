@@ -52,23 +52,32 @@ timeout (`timeout`, default 6 hours) and only these environment variables: `PATH
 `LANG`, `LC_ALL`, `TMPDIR`, `SYSTEMROOT` (when set), the names listed in `pass_env`, and
 `DO_NOT_TRACK=1`. Before it starts:
 
-- `<root>/settings.yaml` must exist and **every URL in it** (a line scan, comments included)
-  must be `http`/`https` to a loopback address, with at least one present: GraphRAG's default
-  model endpoint is a cloud API, so a file with no URL is refused (`no_local_endpoint`), as
-  is any other host (`cloud_not_allowed`) or a `${VAR}` placeholder in a URL
-  (`endpoint_placeholder`), unless the adapter settings say `cloud: true`;
-- `stage_input` must have run (`no_input`);
-- the command must resolve (`missing_dependency`).
+- the adapter's own `settings.yaml` must be in place and unchanged. The adapter writes it
+(`write_settings()`, JSON, which YAML reads as is) from its settings only:
+
+- both models (`completion_model`, `embedding_model`) on GraphRAG's `openai` provider with an
+  **explicit `api_base`** (`api_base`, and `embedding_api_base` if it differs). Without
+  `cloud: true` each must be plain `http` to a **literal loopback address** (`127.0.0.0/8` or
+  `[::1]`; `localhost` and other names are refused); with `cloud: true`, `https` elsewhere is
+  allowed. The key GraphRAG is handed is a fixed dummy a local endpoint ignores;
+- CSV tables, file storage, and every `base_dir` fixed inside the root (`input`, `output`,
+  `update_output`, `cache`, `logs`; the vector store at `output/lancedb`); claim extraction
+  and snapshots off.
+
+`write_settings()` records the file's SHA-256 in `<root>/.memfw-settings.sha256`. `run_index()`
+refuses when the file or its hash differs from what the current settings would write
+(`settings_changed`), when `${` appears in it (`settings_placeholder`), or when `<root>/.env`
+exists (`dotenv_present`; GraphRAG would read it). `pass_env` may not name a variable ending in
+`_BASE`, `_BASE_URL`, `_ENDPOINT` or `_HOST`. It also refuses when `stage_input` has not run
+(`no_input`) or the command does not resolve (`missing_dependency`).
 
 A non-zero exit is `index_failed`; a timeout is `index_timeout`. Point the models at a local
 OpenAI-compatible endpoint (for example Ollama's `/v1`); smaller local models give a weaker
-graph. Keys, if your local endpoint needs one, stay in the environment (`pass_env` lists the
-variable's name).
+graph.
 
 ### 3. Reading the output back
 
-Set `table_provider: {type: csv}` in `settings.yaml`: the adapter reads GraphRAG's output
-tables (`documents`, `text_units`, `entities`, `relationships`, `communities`,
+The adapter's settings select the CSV table provider; it reads GraphRAG's output tables (`documents`, `text_units`, `entities`, `relationships`, `communities`,
 `community_reports`) as CSV with the standard library, not parquet. A symlinked or missing
 table counts as empty.
 
@@ -103,6 +112,10 @@ adapters:
   enabled: [graphrag]
   graphrag:
     root: /srv/graphrag/memfw        # absolute; not inside the vault
+    completion_model: qwen2.5:7b-instruct
+    embedding_model: nomic-embed-text
+    # api_base: http://127.0.0.1:11434/v1   # literal loopback unless cloud: true
+    # embedding_api_base: ""                # defaults to api_base
     # command: graphrag              # or an absolute path to the executable
     # method: standard               # standard | fast
     # timeout: 21600
@@ -113,7 +126,7 @@ adapters:
     # max_report_chars: 2000
 ```
 
-Refusal codes from `available()`: `no_root`, `bad_root`, `bad_option`, `key_in_config`.
+Refusal codes from `available()`: `no_root`, `bad_root`, `bad_option`, `bad_endpoint`, `key_in_config`.
 
 ## Tests and fixtures
 

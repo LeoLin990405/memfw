@@ -14,12 +14,14 @@ Three steps, each its own call; only the middle one runs GraphRAG:
    subprocess (pinned :data:`EXTERNAL_VERSION`), with a small environment
    (``PATH``, ``HOME``, locale, ``DO_NOT_TRACK=1`` plus the variable names the
    settings pass through), a timeout and its output in ``<root>/logs``.
-   Before it starts, every URL in ``<root>/settings.yaml`` must be a loopback
-   address, and at least one must be set (GraphRAG's default model endpoint
-   is a cloud API), unless the adapter settings say ``cloud: true``. memfw
-   never runs it on its own, and the tests never run it.
-3. :meth:`GraphRagDeriver.derive` reads GraphRAG's output tables (CSV; set
-   ``table_provider: {type: csv}`` in ``settings.yaml``) from
+   The adapter writes ``<root>/settings.yaml`` itself (:func:`render_settings`,
+   JSON, which YAML reads as is): both models on an explicit ``api_base``
+   that must be a literal loopback address unless ``cloud: true``, CSV tables,
+   file storage and every ``base_dir`` fixed inside the root. It records the
+   file's hash and refuses to run when the file differs from what it would
+   write now, when ``<root>/.env`` exists, or when ``${`` appears in it.
+   memfw never runs it on its own, and the tests never run it.
+3. :meth:`GraphRagDeriver.derive` reads GraphRAG's output tables (CSV) from
    ``<root>/output`` into a read-only ``DerivedView``: kind ``graph``
    (entities and relationships) or ``reports`` (community reports). Each row
    is traced back through ``text_unit_ids`` → ``text_units.document_id`` →
@@ -78,7 +80,14 @@ _MEMORY_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 _ENV_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]{0,63}$")
 #: A list cell as GraphRAG's CSV writer leaves it: a Python or NumPy repr.
 _QUOTED_RE = re.compile(r"'([^'\\]*)'|\"([^\"\\]*)\"")
-_URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"#,]+")
+SETTINGS_FILE = "settings.yaml"
+SETTINGS_HASH = ".memfw-settings.sha256"
+#: Model names and the dummy key go into settings.yaml verbatim: a closed alphabet.
+_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$")
+#: Environment names that could redirect a model or storage endpoint: never passed.
+_ENDPOINT_ENV_RE = re.compile(r"(?:_BASE|_BASE_URL|_ENDPOINT|_HOST)$")
+#: The key GraphRAG's openai provider is handed; a local endpoint ignores it.
+LOCAL_API_KEY = "memfw-local-no-key"
 #: Variables every run gets from the parent, when set.
 BASE_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "SYSTEMROOT")
 FORBIDDEN_OPTIONS = frozenset({"api_key", "key", "token", "authorization", "password"})
@@ -106,7 +115,14 @@ class Settings:
     command: str = "graphrag"
     method: str = "standard"
     timeout: float = 6 * 3600.0
-    #: Allow a non-loopback model endpoint in settings.yaml.
+    #: Completion and embedding model names on the endpoint.
+    completion_model: str = ""
+    embedding_model: str = ""
+    #: The OpenAI-compatible endpoint for both models (literal loopback address
+    #: unless ``cloud``); ``embedding_api_base`` defaults to it.
+    api_base: str = "http://127.0.0.1:11434/v1"
+    embedding_api_base: str = ""
+    #: Allow an https model endpoint on another host.
     cloud: bool = False
     #: Names of extra environment variables the run may see (e.g. a local
     #: endpoint's key variable). Values are never in the settings.
@@ -126,9 +142,18 @@ class Settings:
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
             raise ValueError("bad_option")
         if not isinstance(self.pass_env, tuple) or not all(
-            isinstance(name, str) and _ENV_NAME_RE.fullmatch(name) for name in self.pass_env
+            isinstance(name, str)
+            and _ENV_NAME_RE.fullmatch(name)
+            and not _ENDPOINT_ENV_RE.search(name)
+            for name in self.pass_env
         ):
             raise ValueError("bad_option")
+        for model in (self.completion_model, self.embedding_model):
+            if not isinstance(model, str) or (model and not _MODEL_RE.fullmatch(model)):
+                raise ValueError("bad_option")
+        for url in (self.api_base, self.embedding_api_base):
+            if not isinstance(url, str) or (url and check_endpoint(url, cloud=self.cloud)):
+                raise ValueError("bad_endpoint")
         for name in ("max_memories", "max_rows", "max_report_chars"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
@@ -146,39 +171,81 @@ class Settings:
         return replace(cls(), **options)
 
 
-# -- settings.yaml gate ------------------------------------------------------------------
+# -- the settings.yaml the adapter writes ------------------------------------------------
 
 
-def _loopback(host: str) -> bool:
-    if host == "localhost":
-        return True
+def _loopback_literal(host: str) -> bool:
+    """A literal loopback IP (``127.0.0.0/8``, ``::1``). Names, ``localhost`` included, are not."""
+
     try:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False
 
 
-def endpoint_check(settings_text: str, *, cloud: bool) -> str:
-    """``""`` when GraphRAG's settings may run here, else a refusal code.
+def check_endpoint(url: str, *, cloud: bool) -> str:
+    """``""`` when ``url`` may be a model endpoint here, else a refusal code."""
 
-    A line scan, not a YAML parse: every URL anywhere in the file (comments
-    included) must be http(s) to a loopback host, and at least one must be
-    present, unless ``cloud`` is true. A ``${VAR}`` placeholder in a URL is a
-    refusal too: its value is not known here.
+    if len(url) > 200 or not url.isascii() or any(c in url for c in "$'\"{}\\ \t\r\n#"):
+        return "bad_endpoint"
+    parts = urlsplit(url)
+    if parts.username or parts.password or parts.query or parts.fragment or not parts.hostname:
+        return "bad_endpoint"
+    if parts.scheme == "http" and _loopback_literal(parts.hostname):
+        return ""
+    if cloud and parts.scheme == "https":
+        return ""
+    return "cloud_not_allowed"
+
+
+def render_settings(settings: Settings) -> str:
+    """The whole ``settings.yaml`` for ``settings`` (JSON; YAML reads it as is).
+
+    Every model has an explicit ``api_base``; tables are CSV; input, output,
+    update output, cache, reporting and the vector store live in fixed
+    directories inside the root. Nothing in it comes from the operator but the
+    two model names and the two endpoints, each checked first.
     """
 
-    if cloud:
-        return ""
-    urls = _URL_RE.findall(settings_text)
-    if not urls:
-        return "no_local_endpoint"
-    for url in urls:
-        if "${" in url:
-            return "endpoint_placeholder"
-        parts = urlsplit(url)
-        if parts.scheme not in ("http", "https") or not _loopback(parts.hostname or ""):
-            return "cloud_not_allowed"
-    return ""
+    if not settings.completion_model or not settings.embedding_model:
+        raise GraphRagError("no_models")
+    embedding_base = settings.embedding_api_base or settings.api_base
+    for url in (settings.api_base, embedding_base):
+        refused = check_endpoint(url, cloud=settings.cloud)
+        if refused:
+            raise GraphRagError(refused)
+
+    def model(name: str, api_base: str) -> dict[str, Any]:
+        return {
+            "model_provider": "openai",
+            "model": name,
+            "api_base": api_base,
+            "api_key": LOCAL_API_KEY,
+            "auth_method": "api_key",
+        }
+
+    def files(base_dir: str) -> dict[str, str]:
+        return {"type": "file", "base_dir": base_dir}
+
+    config = {
+        "completion_models": {
+            "default_completion_model": model(settings.completion_model, settings.api_base)
+        },
+        "embedding_models": {
+            "default_embedding_model": model(settings.embedding_model, embedding_base)
+        },
+        "input": {"type": "text", "file_pattern": ".*\\.txt$"},
+        "input_storage": files(INPUT_DIR),
+        "output_storage": files(OUTPUT_DIR),
+        "update_output_storage": files("update_output"),
+        "table_provider": {"type": "csv"},
+        "cache": {"type": "json", "storage": files("cache")},
+        "reporting": files(LOG_DIR),
+        "vector_store": {"type": "lancedb", "db_uri": f"{OUTPUT_DIR}/lancedb"},
+        "snapshots": {"graphml": False, "embeddings": False},
+        "extract_claims": {"enabled": False},
+    }
+    return json.dumps(config, indent=2, sort_keys=True) + "\n"
 
 
 # -- reading GraphRAG's CSV tables (data, never trusted) ----------------------------------
@@ -373,6 +440,21 @@ def candidates(view: DerivedView) -> list[IngestItem]:
 ProcessRunner = Callable[[Sequence[str], Mapping[str, str], Path, float, Path], int]
 
 
+def _write_new(directory: Path, name: str, data: bytes) -> None:
+    """Write ``directory/name`` through a fresh temporary file (no symlink followed)."""
+
+    temp = directory / f".{name}.{os.getpid()}.tmp"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(temp, flags, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        os.replace(temp, directory / name)
+    except BaseException:
+        temp.unlink(missing_ok=True)
+        raise
+
+
 def run_process(
     argv: Sequence[str], env: Mapping[str, str], cwd: Path, timeout: float, log: Path
 ) -> int:
@@ -521,18 +603,41 @@ class GraphRagDeriver:
         env["DO_NOT_TRACK"] = "1"
         return env
 
-    def run_index(self) -> int:
-        """Run ``graphrag index`` once, after the endpoint gate. Returns the exit status."""
+    def write_settings(self) -> str:
+        """Write ``<root>/settings.yaml`` (:func:`render_settings`) and record its hash."""
 
         self._ensure()
-        settings_file = self.root / "settings.yaml"
+        text = render_settings(self.settings)
+        data = text.encode("utf-8")
+        _write_new(self.root, SETTINGS_FILE, data)
+        _write_new(self.root, SETTINGS_HASH, (hashlib.sha256(data).hexdigest() + "\n").encode())
+        return hashlib.sha256(data).hexdigest()
+
+    def check_settings(self) -> None:
+        """Refuse unless ``settings.yaml`` is exactly what :meth:`write_settings` writes now."""
+
+        if (self.root / ".env").exists() or (self.root / ".env").is_symlink():
+            raise GraphRagError("dotenv_present")
+        path, recorded = self.root / SETTINGS_FILE, self.root / SETTINGS_HASH
+        if path.is_symlink() or recorded.is_symlink():
+            raise GraphRagError("settings_changed")
         try:
-            text = settings_file.read_text(encoding="utf-8")
+            data = path.read_bytes()
+            want = recorded.read_text(encoding="ascii").strip()
         except (OSError, UnicodeDecodeError) as exc:
             raise GraphRagError("no_settings") from exc
-        refused = endpoint_check(text, cloud=self.settings.cloud)
-        if refused:
-            raise GraphRagError(refused)
+        if b"${" in data:
+            raise GraphRagError("settings_placeholder")
+        expected = render_settings(self.settings).encode("utf-8")
+        digest = hashlib.sha256(data).hexdigest()
+        if digest != want or data != expected:
+            raise GraphRagError("settings_changed")
+
+    def run_index(self) -> int:
+        """Run ``graphrag index`` once, after the settings gate. Returns the exit status."""
+
+        self._ensure()
+        self.check_settings()
         if not (self.root / INPUT_DIR / INPUT_INDEX).is_file():
             raise GraphRagError("no_input")
         logs = self.root / LOG_DIR
@@ -603,7 +708,11 @@ def factory(settings: Mapping[str, Any] | None = None) -> GraphRagDeriver:
     try:
         parsed = Settings.from_mapping(settings)
     except (TypeError, ValueError) as exc:
-        code = str(exc) if str(exc) in {"bad_option", "key_in_config"} else "bad_option"
+        code = (
+            str(exc)
+            if str(exc) in {"bad_option", "key_in_config", "bad_endpoint"}
+            else "bad_option"
+        )
         return GraphRagDeriver(Settings(), refused=code)
     return GraphRagDeriver(parsed)
 
@@ -631,7 +740,8 @@ __all__ = [
     "StageResult",
     "__version__",
     "candidates",
-    "endpoint_check",
+    "check_endpoint",
+    "render_settings",
     "factory",
     "graph_rows",
     "parse_list",

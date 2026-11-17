@@ -22,9 +22,10 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   `stage_input` copies only `public`/`shared` documents of a
   `memfw projection export` generation (manifest class, file hash and the
   vault's current privacy all checked) to `<root>/input/<id>.v<version>.txt`;
-  `run_index` runs `graphrag index` as a subprocess only when called, after a
-  loopback-only endpoint check of `settings.yaml` (unless `cloud: true`), with
-  a minimal environment and `DO_NOT_TRACK=1`; `derive` reads the CSV output
+  `run_index` runs `graphrag index` as a subprocess only when called, over a
+  `settings.yaml` the adapter writes itself (explicit literal-loopback model
+  endpoints unless `cloud: true`, CSV tables, fixed directories; refused if
+  changed or if `.env` exists), with a minimal environment and `DO_NOT_TRACK=1`; `derive` reads the CSV output
   tables back, keeping only rows whose every source is a requested, shareable,
   current memory. Caps `inference` / causal `association`; `candidates(view)`
   yields staging candidates (`causal: none`). Tests never run GraphRAG. Docs:
