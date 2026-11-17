@@ -56,6 +56,13 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   value becomes `local-private`). Export → import keeps `local-private`.
 - notes MCP under a clearance: abstention is judged on visible notes and
   `notes_status` counts only visible notes.
+- Dream open questions (U3): a memory whose `privacy` field is not
+  `public`/`shared` counts as private and is never named; when either memory
+  sets the field, the candidate carries the stricter level and
+  `accept-question` writes it. Conversation-derived dream claims propose
+  `privacy: local-private`, and confirmed session captures are written
+  `local-private`. A non-human, unapproved write may not clear an explicit
+  `privacy` field.
 - `docs/READONLY-SERVICE-UPGRADE.md`: deploy the three service files together
   and pair `MEMFW_READONLY_CLEARANCE` with the vault's privacy defaults.
 

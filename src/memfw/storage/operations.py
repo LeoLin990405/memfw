@@ -325,6 +325,16 @@ class MemoryOperationsMixin:
             _check_supersession_target(self, memory_id, str(new_target))
         values = old.model_dump()
         values.update(folded_changes)
+        if (
+            "privacy" in folded_changes
+            and folded_changes["privacy"] is None
+            and old.privacy is not None
+            and actor != "human"
+            and not approved
+        ):
+            # Unset reads as the vault's defaults, which may change later: an
+            # explicit level is cleared only by a human decision (MM0).
+            raise IntegrityError("Only a human or an approved proposal may clear privacy")
         if {"privacy", "tags"} & set(folded_changes) and actor != "human" and not approved:
             # Fail closed (MM0): the level is the strictest of the field and the
             # ``privacy:``/``sensitivity:`` tags, so both are compared as a whole.

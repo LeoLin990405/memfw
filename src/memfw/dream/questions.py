@@ -35,10 +35,13 @@ Rules (all deterministic, no model):
 * **Privacy.** A candidate names its memories and its concept, and the question
   it proposes is recalled like any memory. A pair in which either memory is
   private in any way is skipped, so a question never reveals a private
-  memory's id: a ``sensitivity:*`` tag, a ``privacy:`` tag other than ``none``,
-  or a lifecycle meta-index item (joined by ``fleet_path``) whose privacy is not
+  memory's id: a ``privacy`` field other than ``public``/``shared`` (MM0), a
+  ``sensitivity:*`` tag, a ``privacy:`` tag other than ``none``, or a lifecycle
+  meta-index item (joined by ``fleet_path``) whose privacy is not
   ``none``. Unknown values, an id that does not match its ``fleet_path``, and a
-  meta-index that cannot be read all count as private (fail closed).
+  meta-index that cannot be read all count as private (fail closed). When
+  either memory sets the ``privacy`` field, the question carries the stricter
+  level of the two (``pair_privacy``) and ``accept-question`` writes it.
 """
 
 from __future__ import annotations
@@ -64,6 +67,12 @@ from memfw.core.epistemic import (
 from memfw.core.errors import IntegrityError, NotFoundError
 from memfw.core.models import MemoryDocument
 from memfw.core.repository import Repository
+from memfw.ports.privacy import (
+    LEGACY_PRIVACY_FALLBACK,
+    effective_level,
+    field_level,
+    strictest,
+)
 from memfw.projection import (
     MetaIndex,
     ProjectionError,
@@ -159,6 +168,10 @@ def load_lifecycle(root: Path, source: Path | None = None) -> Lifecycle:
 def is_private(document: MemoryDocument, lifecycle: Lifecycle | None = None) -> bool:
     """Whether a memory is private in any way (fail closed on unknown values)."""
 
+    # The ``privacy`` field (MM0): local-private or an unrecognised value is
+    # private; public and shared are not (tags below can still make it so).
+    if document.privacy is not None and field_level(document.privacy) not in ("public", "shared"):
+        return True
     tag_class = tag_privacy_class(document.tags)
     if tag_class != "none":
         return True
@@ -379,8 +392,32 @@ def _question_text(left: str, right: str, oid: str) -> str:
     return "Which of the two conflicting memories is right about this concept?"
 
 
+def pair_privacy(
+    left: MemoryDocument, right: MemoryDocument, legacy: str = LEGACY_PRIVACY_FALLBACK
+) -> str | None:
+    """The privacy level an open question naming ``left`` and ``right`` carries (MM0).
+
+    ``None`` when neither memory sets the field (nothing is stamped, as before);
+    otherwise the strictest effective level of the two, so the question is
+    never readable by anyone who may not read a memory it names.
+    """
+
+    if left.privacy is None and right.privacy is None:
+        return None
+    return strictest(
+        effective_level(document.privacy, document.tags, legacy=legacy)
+        for document in (left, right)
+    )
+
+
 def _candidate(
-    oid: str, left: MemoryDocument, right: MemoryDocument, reasons: Sequence[str], tenant: str
+    oid: str,
+    left: MemoryDocument,
+    right: MemoryDocument,
+    reasons: Sequence[str],
+    tenant: str,
+    *,
+    legacy_privacy: str = LEGACY_PRIVACY_FALLBACK,
 ) -> Candidate:
     ids = list(pair_key(left.id, right.id))
     detail = "; ".join(reasons) or "they disagree"
@@ -402,6 +439,9 @@ def _candidate(
             "resolved_by": None,
         },
     }
+    level = pair_privacy(left, right, legacy_privacy)
+    if level is not None:
+        new_memory["privacy"] = level
     return Candidate(
         operation="curate",
         action=ACTION,
@@ -425,6 +465,7 @@ def conflict_questions(
     staged: Sequence[StagedQuestion] = (),
     rejected: Mapping[Pair, Mapping[str, Any]] | None = None,
     lifecycle: Lifecycle | None = None,
+    legacy_privacy: str = LEGACY_PRIVACY_FALLBACK,
 ) -> tuple[list[Candidate], QuestionStats]:
     """Open-question candidates for the conflicts curate found.
 
@@ -481,7 +522,16 @@ def conflict_questions(
         if pending:
             stats.deduplicated += 1
             continue
-        candidates.append(_candidate(item.oid, left, right, conflict_reasons(left, right), tenant))
+        candidates.append(
+            _candidate(
+                item.oid,
+                left,
+                right,
+                conflict_reasons(left, right),
+                tenant,
+                legacy_privacy=legacy_privacy,
+            )
+        )
         stats.proposed += 1
     candidates.sort(key=lambda candidate: (candidate.oid, candidate.memory_ids))
     return candidates, stats
@@ -635,7 +685,14 @@ def accept_question(
             raise IntegrityError(
                 f"{left.id} and {right.id} no longer conflict; the conflict is settled"
             )
-        rebuilt = _candidate(oid, left, right, reasons, left.tenant)
+        rebuilt = _candidate(
+            oid,
+            left,
+            right,
+            reasons,
+            left.tenant,
+            legacy_privacy=repository.legacy_privacy_default(),
+        )
         changed = _differences(staged.candidate, rebuilt)
         if changed:
             raise IntegrityError(
@@ -676,6 +733,8 @@ def accept_question(
             "source": "dream",
             "provenance": "dream",
         }
+        if new_memory.get("privacy") is not None:
+            memory["privacy"] = new_memory["privacy"]
         plan = {
             "dream_id": dream_id,
             "candidate": os.fspath(staged.path.relative_to(repository.root)),
@@ -695,6 +754,7 @@ def accept_question(
             source=memory["source"],
             provenance=memory["provenance"],
             actor=actor,
+            privacy=memory.get("privacy"),
         )
     return {**plan, "dry_run": False, "memory_id": document.id, "status": "accepted"}
 

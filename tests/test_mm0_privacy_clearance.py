@@ -634,7 +634,7 @@ def test_non_human_writes_cannot_loosen_field_or_tags(
 ) -> None:
     repository = _private_vault(tmp_path)
     repository.add("x", "body", memory_id="x", **start)
-    with pytest.raises(IntegrityError, match="loosen"):
+    with pytest.raises(IntegrityError, match="loosen|clear"):
         repository.update("x", actor="mechanism", **change)
     repository.update("x", actor="human", **change)
 
@@ -886,3 +886,138 @@ def test_notes_status_and_abstention_follow_the_clearance(tmp_path: Path) -> Non
     none_left = gateway._cleared_hits("corpus keyword", _Result([private_hit]), 10, 0.5)
     assert none_left == ([], 0, True, "no candidates")
     assert gateway._cleared_hits("q", _Result([private_hit]), 10, None) == ([], 0, False, "")
+
+
+# ---------------------------------------------------------------------------
+# Review fixes (PR #62 round 3)
+# ---------------------------------------------------------------------------
+
+
+def test_explicit_privacy_is_never_cleared_without_a_human(tmp_path: Path) -> None:
+    # legacy_privacy_default local-private: clearing looks unchanged today,
+    # but a later legacy change would loosen it, so it is refused anyway.
+    repository = _private_vault(tmp_path, legacy="local-private")
+    repository.add("x", "body", memory_id="x", privacy="local-private")
+    with pytest.raises(IntegrityError, match="clear privacy"):
+        repository.update("x", actor="mechanism", privacy=None)
+    repository.update("x", actor="human", privacy=None)
+    assert repository.get("x").privacy is None
+
+
+def _conflict_vault(tmp_path: Path, old_privacy: str | None, new_privacy: str | None) -> Repository:
+    repository = _private_vault(tmp_path)
+    concept = "concept:svc:retry"
+    repository.add(
+        "Retry policy",
+        "Retry Count: 3\nowner = team red",
+        memory_id="m-old",
+        about=[concept],
+        epistemic="fact",
+        privacy=old_privacy,
+    )
+    repository.add(
+        "Retry policy",
+        "retry-count: 5\nOwner = team red",
+        memory_id="m-new",
+        about=[concept],
+        epistemic="inference",
+        privacy=new_privacy,
+    )
+    return repository
+
+
+def _open_questions(repository: Repository, dream_id: str | None = None) -> list:
+    from memfw.dream import DreamOptions, run_dream
+    from memfw.dream.questions import ACTION
+
+    result = run_dream(
+        repository.root,
+        now=datetime(2026, 3, 1, 12, 0, tzinfo=UTC),
+        dry_run=dream_id is None,
+        options=DreamOptions(dream_id=dream_id),
+    )
+    return [item for item in result.candidates if item.action == ACTION]
+
+
+@pytest.mark.parametrize("private", ["local-private", "LOCAL-PRIVATE", "secret"])
+def test_open_question_never_names_a_private_field_memory(tmp_path: Path, private: str) -> None:
+    from memfw.dream.questions import is_private
+
+    repository = _conflict_vault(tmp_path, "public", None)
+    path = repository.memories_dir / "m-new.md"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("\n---\n", f"\nprivacy: {private}\n---\n", 1),
+        encoding="utf-8",
+    )
+    assert is_private(repository.get("m-new"))
+    assert _open_questions(repository) == []
+
+
+def test_open_question_carries_the_stricter_level(tmp_path: Path) -> None:
+    from memfw.dream.questions import accept_question
+
+    repository = _conflict_vault(tmp_path, "public", "shared")
+    (question,) = _open_questions(repository, "dream-a")
+    assert question.changes["new_memory"]["privacy"] == "shared"
+    accepted = accept_question(repository, "dream-a", ["m-old", "m-new"], dry_run=False)
+    assert repository.get(accepted["memory_id"]).privacy == "shared"
+
+
+def test_open_question_without_fields_stamps_nothing(tmp_path: Path) -> None:
+    from memfw.dream.questions import accept_question
+
+    repository = _conflict_vault(tmp_path, None, None)
+    (question,) = _open_questions(repository, "dream-a")
+    assert "privacy" not in question.changes["new_memory"]
+    accepted = accept_question(repository, "dream-a", ["m-old", "m-new"], dry_run=False)
+    assert repository.get(accepted["memory_id"]).privacy is None
+
+
+def test_open_question_mixed_field_uses_the_legacy_level(tmp_path: Path) -> None:
+    repository = _conflict_vault(tmp_path, "public", None)  # legacy is shared
+    (question,) = _open_questions(repository)
+    assert question.changes["new_memory"]["privacy"] == "shared"
+
+
+def test_conversation_claims_propose_local_private(tmp_path: Path) -> None:
+    from memfw.dream.claims import DreamClaimStager
+    from memfw.ports.claims import ClaimEvidence, StagedClaim
+
+    repository = Repository(tmp_path / "vault")
+    repository.init()
+    claim = StagedClaim(
+        claim="the retry count is five",
+        oid="concept:svc:retry",
+        evidence=(ClaimEvidence(ref="h:1", session_id="s1", timestamp=None),),
+    )
+    assert DreamClaimStager().stage_claims(
+        repository.root, "batch-1", [claim], {}, created_at="2026-11-16T00:00:00+00:00"
+    )
+    staged = list((repository.root / "_candidates" / "dream" / "batch-1").rglob("*"))
+    texts = [path.read_text(encoding="utf-8") for path in staged if path.is_file()]
+    with_claim = [text for text in texts if "the retry count is five" in text]
+    assert with_claim
+    assert all("local-private" in text for text in with_claim)
+
+
+def test_session_capture_is_local_private(tmp_path: Path) -> None:
+    from memfw.capture import CaptureSession, TimedSignal
+    from memfw.capture.confirm import confirm_candidates
+    from memfw.core.models import CaptureState
+
+    repository = _private_vault(tmp_path)
+    session = CaptureSession(
+        repository=repository, session_id="s", initial_state=CaptureState.DORMANT
+    )
+    session.feed(
+        TimedSignal(
+            timestamp=repository._now(),
+            source="human",
+            action="remember",
+            text="[research] zebracorn capture.",
+            source_id="captured",
+        )
+    )
+    candidate_id = session.items()[0].candidate_id
+    confirm_candidates(repository, [f"{candidate_id}=keep"])
+    assert repository.get("captured").privacy == "local-private"

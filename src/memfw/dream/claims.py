@@ -29,7 +29,12 @@ class DreamClaimVerifier:
 
 
 class DreamClaimStager:
-    """Stages a batch of claims as one dream of ``distill`` candidates."""
+    """Stages a batch of claims as one dream of ``distill`` candidates.
+
+    Each candidate proposes ``privacy: local-private`` in ``changes`` (MM0):
+    a claim comes from a transcript and must not reach a remote exit by way
+    of the vault's defaults.
+    """
 
     def stage_claims(
         self,
@@ -56,6 +61,9 @@ class DreamClaimStager:
                     )
                     for evidence in item.evidence
                 ],
+                # Conversation-derived (MM0): transcripts are local-private, so
+                # the proposed memory is too, whatever the vault defaults say.
+                changes={"privacy": "local-private"},
             )
             for item in claims
         ]

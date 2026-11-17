@@ -229,6 +229,7 @@ def run_dream(
             staged=staged_questions(repository.root, tenant=options.tenant),
             rejected=rejections(repository.root, tenant=options.tenant),
             lifecycle=load_lifecycle(repository.root, options.lifecycle_source),
+            legacy_privacy=repository.legacy_privacy_default(),
         )
     distilled, distill_stats = distill(documents, verified, min_events=options.min_events)
     budget = check_budget(repository.root, config)
