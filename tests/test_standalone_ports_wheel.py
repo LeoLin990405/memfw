@@ -275,3 +275,11 @@ def test_adapter_dependency_pins_match_the_lockfile_and_pyproject() -> None:
     assert all("==" in dep for dep in deps), deps  # every dependency pinned exactly
     for pin in ADAPTER_DEPENDENCIES:
         assert any(dep.split(";")[0].strip() == pin for dep in deps), pin
+
+
+def test_ci_wheel_job_builds_and_smokes_every_adapter_with_the_pins() -> None:
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    for package in ("memfw-adapter-deepseek", "memfw-adapter-bm25s"):
+        assert f"uv build --wheel --package {package} " in ci, package
+    assert "bm25s==0.3.16 jieba==0.42.1 numpy==2.4.6" in ci  # CI runs Python 3.11
+    assert "wheel_smoke.py --recall --deepseek --bm25s" in ci

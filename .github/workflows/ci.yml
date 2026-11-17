@@ -21,9 +21,11 @@ jobs:
       - run: ruff check src/memfw tests packages/adapters
       - run: mypy src
   standalone-wheels:
-    # memfw-ports, memfw-recall and memfw-adapter-deepseek build as wheels and
-    # pass the contract kit in a fresh venv without memfw (docs/ports-and-recall.md
-    # section 1.1); the adapter runs against its loopback fake only.
+    # memfw-ports, memfw-recall and the adapters build as wheels and pass the
+    # contract kit in a fresh venv without memfw (docs/ports-and-recall.md
+    # section 1.1); the DeepSeek adapter runs against its loopback fake only,
+    # the bm25s adapter on a throwaway vault with its pinned dependencies
+    # (the versions uv.lock resolves for Python 3.11).
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -36,6 +38,8 @@ jobs:
       - run: uv build --wheel --package memfw-ports -o "$RUNNER_TEMP/dist"
       - run: uv build --wheel --package memfw-recall -o "$RUNNER_TEMP/dist"
       - run: uv build --wheel --package memfw-adapter-deepseek -o "$RUNNER_TEMP/dist"
+      - run: uv build --wheel --package memfw-adapter-bm25s -o "$RUNNER_TEMP/dist"
       - run: uv venv --python 3.11 "$RUNNER_TEMP/wheel-venv"
+      - run: uv pip install --python "$RUNNER_TEMP/wheel-venv/bin/python" bm25s==0.3.16 jieba==0.42.1 numpy==2.4.6
       - run: uv pip install --python "$RUNNER_TEMP/wheel-venv/bin/python" --no-index "$RUNNER_TEMP"/dist/*.whl
-      - run: '"$RUNNER_TEMP/wheel-venv/bin/python" -I tests/standalone/wheel_smoke.py --recall --deepseek'
+      - run: '"$RUNNER_TEMP/wheel-venv/bin/python" -I tests/standalone/wheel_smoke.py --recall --deepseek --bm25s'
