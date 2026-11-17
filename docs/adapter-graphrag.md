@@ -78,7 +78,7 @@ graph.
 ### 3. Reading the output back
 
 The adapter's settings select the CSV table provider; it reads GraphRAG's output tables (`documents`, `text_units`, `entities`, `relationships`, `communities`,
-`community_reports`) as CSV with the standard library, not parquet. A symlinked or missing
+`community_reports`, `covariates`) as CSV with the standard library, not parquet. A symlinked or missing
 table counts as empty.
 
 `derive(vault, DeriveRequest(kind, memory_ids))` traces every row back to memories:
@@ -90,7 +90,11 @@ file, a memory that turned private or a stale version is dropped.
 - `graph`: entity rows (`name`, `entity_type`, `description`) and relation rows (`source`,
   `target`, `description`).
 - `reports`: community reports (`community`, `level`, `title`, `summary` cut to
-  `max_report_chars`), kept only when the whole community's text units pass.
+  `max_report_chars`), kept only when **everything the report may draw on** passes: the
+  community's own `text_unit_ids`, the text units of each entity in `entity_ids` and each
+  relationship in `relationship_ids`, the text unit of every covariate (claim) whose subject
+  is one of those entities, and the same for every child community, recursively. An id that
+  does not resolve, a list cell that is not a list, or a cycle drops the report.
 
 The view cites exactly the memories its rows name, caps at `epistemic_cap: inference` and
 `causal_cap: association`, and carries at most `max_rows` rows. Re-run steps 1 and 2 after the

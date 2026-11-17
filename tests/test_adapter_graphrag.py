@@ -157,7 +157,7 @@ def test_graph_view_passes_the_contract_and_keeps_only_requested_current_rows(
     assert payload["format"] == "memfw-graphrag-v1"
     names = [row["name"] for row in payload["rows"] if row["type"] == "entity"]
     # Mixed with a now-private memory, a stale version, an unstaged file, no unit: dropped.
-    assert names == ["ADAPTER REGISTRY", "BACKUP JOB", "NAS"]
+    assert names == ["ADAPTER REGISTRY", "BACKUP JOB", "CRON", "NAS"]
     relations = [(r["source"], r["target"]) for r in payload["rows"] if r["type"] == "relation"]
     assert relations == [("BACKUP JOB", "NAS")]
     assert PRIVATE_MARKER not in view.content
@@ -176,10 +176,52 @@ def test_reports_view_keeps_communities_built_only_from_requested_memories(
 ) -> None:
     view = check_deriver(make(project), vault=vault, request=DeriveRequest("reports", IDS))
     rows = json.loads(view.content)["rows"]
-    assert [row["title"] for row in rows] == ["Nightly backup", "Release and backups"]
+    # Dropped: a private entity (2), an entity id the table lacks (3), a private
+    # child community (4), a covariate from an unstaged file (6), a private
+    # relationship (7), a community the table lacks (9).
+    assert [row["title"] for row in rows] == [
+        "Nightly backup",
+        "Release and backups",
+        "Backup overview",
+    ]
+    # Community 1's own units are m-release only; its entity adds m-backup.
     assert rows[1]["sources"] == ["m-backup", "m-release"]
     capped = make(project, max_report_chars=10).derive(vault, DeriveRequest("reports", IDS))
     assert {len(row["summary"]) for row in json.loads(capped.content)["rows"]} == {10}
+
+
+def test_community_tracing_follows_entities_relationships_covariates_and_children() -> None:
+    from memfw_adapter_graphrag.deriver import _CommunityUnits
+
+    output = read_output(FIXTURE / "output")
+    tracer = _CommunityUnits(output)
+    memories = lambda c: sorted({output.unit_memory.get(u, ("?", 0))[0] for u in tracer.units(c)})  # noqa: E731
+    assert memories("0") == ["m-backup"]
+    assert memories("1") == ["m-backup", "m-release"]
+    assert memories("2") == ["m-backup", "m-private"]
+    assert memories("4") == ["m-backup", "m-private"]  # through child 2
+    assert memories("6") == ["?", "m-backup"]  # the covariate's unit maps to no memory
+    assert memories("7") == ["m-backup", "m-private"]
+    assert tracer.units("3") is None and tracer.units("9") is None
+
+
+def test_community_tracing_refuses_malformed_cells_and_cycles() -> None:
+    from memfw_adapter_graphrag.deriver import Output, _CommunityUnits
+
+    def community(cid: str, **cells: str) -> dict[str, str]:
+        base = {"community": cid, "text_unit_ids": "[]", "entity_ids": "[]"}
+        return {**base, "relationship_ids": "[]", "children": "[]", **cells}
+
+    rows = [
+        community("1", children="[2]"),
+        community("2", children="[1]"),
+        community("3", entity_ids="not a list"),
+        community("4", children="[x]"),
+        community("5"),
+    ]
+    tracer = _CommunityUnits(Output({}, (), (), rows, ()))
+    assert [tracer.units(c) for c in ("1", "3", "4")] == [None, None, None]
+    assert tracer.units("5") == []
 
 
 def test_a_newer_vault_version_makes_the_index_stale(vault: Path, project: Path) -> None:

@@ -289,6 +289,7 @@ class Output:
     relationships: Sequence[Mapping[str, str]]
     communities: Sequence[Mapping[str, str]]
     reports: Sequence[Mapping[str, str]]
+    covariates: Sequence[Mapping[str, str]] = ()
 
 
 def read_output(directory: Path) -> Output:
@@ -308,7 +309,90 @@ def read_output(directory: Path) -> Output:
         read_table(directory, "relationships"),
         read_table(directory, "communities"),
         read_table(directory, "community_reports"),
+        read_table(directory, "covariates"),
     )
+
+
+def _strict_list(cell: Any) -> list[str] | None:
+    """A list cell's items, or ``None`` when the cell is not a list at all."""
+
+    if not isinstance(cell, str) or not (
+        cell.strip().startswith("[") and cell.strip().endswith("]")
+    ):
+        return None
+    return parse_list(cell)
+
+
+def _int_list(cell: Any) -> list[str] | None:
+    """``"[1, 2]"`` / ``"[1 2]"`` as ``["1", "2"]``; ``None`` when it is not such a list."""
+
+    if not isinstance(cell, str):
+        return None
+    text = cell.strip()
+    if not (text.startswith("[") and text.endswith("]")) or not re.fullmatch(
+        r"[\d\s,-]*", text[1:-1]
+    ):
+        return None
+    return re.findall(r"-?\d+", text[1:-1])
+
+
+class _CommunityUnits:
+    """Every text unit a community's report may draw on, or ``None`` if one cannot be resolved.
+
+    The union of the community's own ``text_unit_ids``, the text units of each
+    of its entities (``entity_ids``) and relationships (``relationship_ids``),
+    of the covariates (claims) whose subject is one of those entities, and of
+    every child community, recursively. Any id that does not resolve, a list
+    cell that is not a list, or a cycle makes the whole community unresolvable.
+    """
+
+    def __init__(self, output: Output) -> None:
+        self.communities = {
+            row.get("community", ""): row for row in output.communities if row.get("community")
+        }
+        self.entities = {row["id"]: row for row in output.entities if row.get("id")}
+        self.relationships = {row["id"]: row for row in output.relationships if row.get("id")}
+        self.covariates: dict[str, list[str]] = {}
+        for row in output.covariates:
+            self.covariates.setdefault(row.get("subject_id", ""), []).append(
+                row.get("text_unit_id", "")
+            )
+
+    def units(self, community: str, seen: frozenset[str] = frozenset()) -> list[str] | None:
+        row = self.communities.get(community)
+        if row is None or community in seen:
+            return None
+        own = _strict_list(row.get("text_unit_ids"))
+        entity_ids = _strict_list(row.get("entity_ids"))
+        relationship_ids = _strict_list(row.get("relationship_ids"))
+        children = _int_list(row.get("children"))
+        if own is None or entity_ids is None or relationship_ids is None or children is None:
+            return None
+        units = list(own)
+        for entity_id in entity_ids:
+            entity = self.entities.get(entity_id)
+            entity_units = None if entity is None else _strict_list(entity.get("text_unit_ids"))
+            if entity is None or entity_units is None:
+                return None
+            units += entity_units
+            for unit in self.covariates.get(entity.get("title", ""), []):
+                if not unit:
+                    return None
+                units.append(unit)
+        for relationship_id in relationship_ids:
+            relationship = self.relationships.get(relationship_id)
+            rel_units = (
+                None if relationship is None else _strict_list(relationship.get("text_unit_ids"))
+            )
+            if rel_units is None:
+                return None
+            units += rel_units
+        for child in children:
+            child_units = self.units(child, seen | {community})
+            if child_units is None:
+                return None
+            units += child_units
+        return units
 
 
 def _memories_of(
@@ -369,17 +453,20 @@ def graph_rows(
 def report_rows(
     output: Output, current: Mapping[str, int], *, max_rows: int, max_chars: int
 ) -> list[dict[str, Any]]:
-    """Community reports whose whole community comes from requested, current memories."""
+    """Community reports whose whole community comes from requested, current memories.
 
-    community_units = {
-        row.get("community", ""): parse_list(row.get("text_unit_ids"))
-        for row in output.communities
-        if row.get("community", "") != ""
-    }
+    "Whole" is :class:`_CommunityUnits`: the community's own text units plus
+    those of its entities, relationships, their covariates and its child
+    communities. One unit outside the request, or one id that does not
+    resolve, drops the report.
+    """
+
+    tracer = _CommunityUnits(output)
     rows: dict[tuple[Any, ...], dict[str, Any]] = {}
     for item in output.reports:
         community = item.get("community", "")
-        sources = _memories_of(community_units.get(community, ()), output, current)
+        units = tracer.units(community)
+        sources = None if units is None else _memories_of(units, output, current)
         title = _short(item.get("title"), MAX_NAME_CHARS)
         if sources is None or not title:
             continue

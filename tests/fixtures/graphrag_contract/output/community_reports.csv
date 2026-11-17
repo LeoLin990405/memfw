@@ -8,6 +8,21 @@ Release 0.4.0 ships the adapter registry the backup notes mention.",5.0,fixture,
 8c176d19321899fadffb58f5a7c608aa8a9b92c6875283ce4a8212c04c2fcde3c98c903c9ab21ae8000fffb2d856ebd97a07c05cc0bdc658acf96cdda8bbcd66,2,2,0,-1,[],Backup keys,Summarises a memory that is private now.,"# Backup keys
 
 Summarises a memory that is private now.",5.0,fixture,"[{'summary': 'Backup keys', 'explanation': 'Summarises a memory that is private now.'}]",{},2026-11-17,1
+67f4dad1e975248f13b76b39aa8aa7b1a81dfccddd1df77ecdb3829392d5cf497c128883f712a036c36904fb15c300336f169a859032fb4f4791ad8d12fff766,3,3,0,-1,[],Dangling entity,Its community names an entity the table does not have.,"# Dangling entity
+
+Its community names an entity the table does not have.",5.0,fixture,"[{'summary': 'Dangling entity', 'explanation': 'Its community names an entity the table does not have.'}]",{},2026-11-17,1
+cf7adf56e93c9d8ddcc58e0913c58b832fa344b1f1d04d321032823966b65ef74e0a375f68f192af87c3a3ca8c5a9c24b5cad6472e38b92e6788e689633b1623,4,4,0,-1,[],Backup parent,Has a child community built on a private memory.,"# Backup parent
+
+Has a child community built on a private memory.",5.0,fixture,"[{'summary': 'Backup parent', 'explanation': 'Has a child community built on a private memory.'}]",{},2026-11-17,1
+537e156c3ddae81a5a3b88ce3615f90c64e03d064d3abcfba1ea8727897ff7ab68721d3564126dba31623c8a128b3fad80b8d063d15fc23b0c15cfa4e8a9ce6c,5,5,0,-1,[],Backup overview,Parent of the nightly backup community only.,"# Backup overview
+
+Parent of the nightly backup community only.",5.0,fixture,"[{'summary': 'Backup overview', 'explanation': 'Parent of the nightly backup community only.'}]",{},2026-11-17,1
+4c0ad6e05195b834eceff60267bade1864443b24dd0ec844e82aab4990233c8ae471580059d6d906748a33fec1e1c1c99f8dcae7fd92bab820e65c62593760a8,6,6,0,-1,[],Cron claims,Draws on a claim from a file memfw never staged.,"# Cron claims
+
+Draws on a claim from a file memfw never staged.",5.0,fixture,"[{'summary': 'Cron claims', 'explanation': 'Draws on a claim from a file memfw never staged.'}]",{},2026-11-17,1
+e4dbf7dbbc4401a9d0c78c52631e68e5a98ed6a549a7e8c85ec4915bb40454b08234f28311a221ae88a88aa1da262286fe79d0572ed7c47bbf788cf8277c49a7,7,7,0,-1,[],Key relationship,Its relationship comes from a private memory.,"# Key relationship
+
+Its relationship comes from a private memory.",5.0,fixture,"[{'summary': 'Key relationship', 'explanation': 'Its relationship comes from a private memory.'}]",{},2026-11-17,1
 1d3a89a8a5f4ac9e16f7a34c8986ff51f82f8c58ef65e86525ea6011b7c125193f0032b0f990bda3cb6fe7189b7d9ad30420cbf7b2782e7f47dfd0785bbb3e8f,9,9,0,-1,[],Unknown community,A report whose community is not in the table.,"# Unknown community
 
 A report whose community is not in the table.",5.0,fixture,"[{'summary': 'Unknown community', 'explanation': 'A report whose community is not in the table.'}]",{},2026-11-17,1
