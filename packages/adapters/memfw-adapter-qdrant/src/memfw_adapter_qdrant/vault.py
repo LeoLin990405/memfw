@@ -12,23 +12,19 @@ clearance (``public``/``shared``, never ``local-private``) are sent.
 from __future__ import annotations
 
 import hashlib
-import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from ._ports import (
-    LEGACY_PRIVACY_FALLBACK,
-    LEGACY_PRIVACY_KEY,
     REMOTE_CLEARANCE,
     MemoryFile,
     admits,
     effective_level,
     iter_memories,
-    legacy_default,
+    legacy_default_from_config,
 )
-
-_LEGACY_LINE = re.compile(rf"^{LEGACY_PRIVACY_KEY}:[ \t]*(.*?)[ \t]*$")
 
 
 def vault_key(root: Path | str) -> str:
@@ -38,20 +34,25 @@ def vault_key(root: Path | str) -> str:
     return hashlib.sha256(resolved.encode("utf-8")).hexdigest()[:24]
 
 
-def legacy_privacy(vault: Path) -> str:
-    """``legacy_privacy_default`` from a line scan of ``vault.yaml`` (unsure: local-private)."""
+def read_config(vault: Path) -> Any:
+    """``yaml.safe_load`` of ``vault.yaml``, as memfw reads it; ``None`` if unreadable."""
+
+    import yaml
 
     try:
-        text = (vault / "vault.yaml").read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return LEGACY_PRIVACY_FALLBACK
-    found = [match.group(1) for line in text.splitlines() if (match := _LEGACY_LINE.match(line))]
-    if len(found) != 1:
-        return LEGACY_PRIVACY_FALLBACK
-    value = found[0]
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
-        value = value[1:-1]
-    return legacy_default(value)
+        return yaml.safe_load((vault / "vault.yaml").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        return None
+
+
+def legacy_privacy(vault: Path) -> str:
+    """The vault's ``legacy_privacy_default``, read exactly as memfw reads it.
+
+    As ``memfw.index.readonly.vault_legacy_privacy``: ``yaml.safe_load`` and
+    the L0 ``legacy_default_from_config``; anything invalid is ``local-private``.
+    """
+
+    return str(legacy_default_from_config(read_config(vault)))
 
 
 def privacy_level(memory: MemoryFile, legacy: str) -> str:

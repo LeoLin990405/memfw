@@ -1,8 +1,8 @@
 # memfw-adapter-qdrant: a RecallProvider that asks a Qdrant service (REST,
 # loopback by default) for the memories nearest to a query embedded with
 # memfw's own embedder, plus the `memfw-adapter-qdrant sync` command that
-# writes the vault's public/shared memories there. Standard library only
-# (urllib); it depends on memfw-ports for the RecallProvider contract and the
+# writes the vault's public/shared memories there. Standard library plus
+# PyYAML (urllib for HTTP); it depends on memfw-ports for the RecallProvider contract and the
 # stdlib vault reader, and on nothing else of memfw. memfw never imports it:
 # the operator names it in vault.yaml (runtime.recall.adapters).
 #
@@ -21,7 +21,11 @@ requires-python = ">=3.11"
 license = "Apache-2.0"
 # Symlinks to memfw's own LICENSE and NOTICE (one copy of the text).
 license-files = ["LICENSE", "NOTICE"]
-dependencies = ["memfw-ports==0.3.0"]
+dependencies = [
+    "memfw-ports==0.3.0",
+    # vault.yaml is read with yaml.safe_load, exactly as memfw reads it (MIT).
+    "PyYAML==6.0.3",
+]
 
 [project.scripts]
 memfw-adapter-qdrant = "memfw_adapter_qdrant.cli:main"

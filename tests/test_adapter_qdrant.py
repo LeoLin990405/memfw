@@ -317,6 +317,26 @@ def test_another_vault_and_another_embedder_never_match(tmp_path: Path, fake: Fa
 # --- settings, network rules -------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "legacy_privacy_default: public\n",
+        "legacy_privacy_default: public\n  local-private\n",
+        "x: [a,\nlegacy_privacy_default: public]\n",
+        "legacy_privacy_default: public\nlegacy_privacy_default: local-private\n",
+        "legacy_privacy_default: public\n---\nx: 1\n",
+        "",
+    ],
+)
+def test_legacy_default_is_read_exactly_as_memfw_reads_it(tmp_path: Path, text: str) -> None:
+    from memfw_adapter_qdrant.vault import legacy_privacy
+
+    from memfw.index.readonly import vault_legacy_privacy
+
+    (tmp_path / "vault.yaml").write_text(text, encoding="utf-8")
+    assert legacy_privacy(tmp_path) == vault_legacy_privacy(tmp_path), text
+
+
 def test_settings_are_checked(tmp_path: Path, fake: FakeQdrant) -> None:
     repository = _vault(tmp_path)
     root = str(repository.root)

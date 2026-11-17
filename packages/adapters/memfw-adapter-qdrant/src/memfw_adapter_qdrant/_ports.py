@@ -11,12 +11,10 @@ from __future__ import annotations
 
 try:
     from memfw.ports.privacy import (
-        LEGACY_PRIVACY_FALLBACK,
-        LEGACY_PRIVACY_KEY,
         REMOTE_CLEARANCE,
         admits,
         effective_level,
-        legacy_default,
+        legacy_default_from_config,
     )
     from memfw.ports.reference._vault import MemoryFile, is_vault, iter_memories
     from memfw.ports.registry import AdapterSpec
@@ -30,12 +28,10 @@ try:
     )
 except ModuleNotFoundError:  # the standalone memfw-ports wheel
     from memfw_ports.privacy import (  # type: ignore[no-redef,assignment,unused-ignore]
-        LEGACY_PRIVACY_FALLBACK,
-        LEGACY_PRIVACY_KEY,
         REMOTE_CLEARANCE,
         admits,
         effective_level,
-        legacy_default,
+        legacy_default_from_config,
     )
     from memfw_ports.reference._vault import (  # type: ignore[no-redef,assignment,unused-ignore]
         MemoryFile,
@@ -53,8 +49,6 @@ except ModuleNotFoundError:  # the standalone memfw-ports wheel
     )
 
 __all__ = [
-    "LEGACY_PRIVACY_FALLBACK",
-    "LEGACY_PRIVACY_KEY",
     "MEMORY_ID_RE",
     "REMOTE_CLEARANCE",
     "AdapterSpec",
@@ -68,5 +62,5 @@ __all__ = [
     "effective_level",
     "is_vault",
     "iter_memories",
-    "legacy_default",
+    "legacy_default_from_config",
 ]

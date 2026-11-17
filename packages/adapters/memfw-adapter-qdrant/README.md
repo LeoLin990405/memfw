@@ -12,7 +12,8 @@ Licences (re-checked from each project's `LICENSE`): the Qdrant server and the
 `qdrant-client` Python package are Apache-2.0. This adapter does not use
 `qdrant-client`: it speaks the REST API with the standard library, so it can
 refuse redirects and keep loopback requests off any `HTTP(S)_PROXY`. This
-package is Apache-2.0, like memfw, and depends only on `memfw-ports`.
+package is Apache-2.0, like memfw, and depends only on `memfw-ports` and
+PyYAML 6.0.3 (MIT, to read `vault.yaml` exactly as memfw does).
 
 - **Loopback only by default.** `url` defaults to `http://127.0.0.1:6333`; any
   other host is refused unless `allow_remote: true`. Run the server bound to
