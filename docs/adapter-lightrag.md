@@ -46,8 +46,21 @@ shows its configuration) and refuses to go on unless:
   `EMBEDDING_BINDING_HOST=http://127.0.0.1:11434` (its Ollama default names `localhost`,
   which is refused). `cloud: true` in the adapter settings lifts only this last rule.
 
+Limits of this gate, by design:
+
+- it trusts the server's own answer. `/health` reports what the server says it is configured
+  with; a modified or misconfigured server can claim loopback hosts and still send text
+  elsewhere. The gate catches a wrongly started server, not a hostile one;
+- it checks only the keys listed above (`llm_binding_host`, `embedding_binding_host`, the
+  rerank host and host-like keys under the per-role LLM settings). A model route the server
+  configures some other way is not seen.
+
 ## What it sends and reads
 
+- **One vault per server.** A LightRAG server (or workspace) must serve exactly one memfw
+  vault: `sync` deletes every document named like this adapter's that is not current and
+  shareable in *this* vault, so pointing two vaults at one server makes each delete the
+  other's documents.
 - `sync(vault, memory_ids)`: first lists the server's documents (`POST /documents/paginated`,
   every page) and deletes, in one `DELETE /documents/delete_document`
   (`delete_llm_cache: true`), each document named like this adapter's whose memory is gone,
