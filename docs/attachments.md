@@ -19,13 +19,19 @@ command prints for a vault without attachments.
   vault.yaml                     gains vault_id on the first attach
 ~/.local/share/memfw/blobs/      default blob root (attachments_blob_root)
   <vault-id>/<sha[:2]>/<sha256>  the original's exact bytes, stored once per sha256
+  .staging/.stage-*.tmp          an original being copied in (shared by the root's vaults)
 ```
 
 * Records are never under `memories/`, so no memory command, index or export
   sees them.
 * The blob directory is `<blob root>/<vault_id>`. The default root is the memfw
   data dir, next to the conversation store; set `attachments_blob_root` in
-  `vault.yaml` to move it. Several vaults can share one root.
+  `vault.yaml` to move it (an absolute or `~`-prefixed path; a relative one is
+  refused). Several vaults can share one root.
+* `vault_id` is a random UUID (never derived from `--id-seed`), generated once
+  under the vault lock: concurrent first adds agree on one id.
+* `add` copies the original into `<root>/.staging` first (no vault id
+  needed), then, holding the vault lock, moves it into `<root>/<vault_id>`.
 * Directories are created `0700`, blobs `0600`.
 
 ### Where the blob root may be
@@ -33,9 +39,12 @@ command prints for a vault without attachments.
 The root must be a private local location, the same rules as the conversation
 store: not inside a git work tree, not inside (or containing) the vault, not
 inside a synced folder (iCloud Drive, `Library/CloudStorage`, Dropbox, Google
-Drive, OneDrive, Nextcloud, Syncthing). The root itself and the vault's blob
-directory may not be symlinks (parents may: `/tmp` is one on macOS). A refused
-location stops `attach add` with an error and nothing is written.
+Drive, OneDrive, Nextcloud, Syncthing, and `~/Documents` and `~/Desktop`,
+which macOS iCloud "Desktop & Documents" syncs). A marker that is a symlink
+(`~/Dropbox` pointing elsewhere) is refused at its target too. The root itself
+and the vault's blob directory may not be symlinks (parents may: `/tmp` is one
+on macOS). A refused location stops `attach add` with an error and nothing is
+written, not even `vault_id`.
 
 ## Records
 
@@ -66,6 +75,10 @@ Optional human note.
   path or any of the original's bytes.
 * `storage` is always `embedded` in MM1a (`referenced` is MM1b).
 * Unknown keys written by a newer version are ignored on read.
+* The frontmatter opens and closes with lines that are exactly `---`, so
+  `---` inside a value (a name, origin, rights or tag) never ends it. Each
+  record is parsed back before it is written; one that does not read back
+  identically is refused and nothing is written.
 
 ## Privacy
 
@@ -214,8 +227,8 @@ count toward the vault's physical budget (as `other`); blobs do not.
   `tests/test_attachments_compat.py::test_base_ref_reader_of_an_attached_vault`.
 * A vault that only gained `vault_id` (no `attach` event) stays fully usable
   by 0.3.0.
-* So: **upgrade every host that reads or writes a vault before the first
-  `attach add`.** There is no downgrade once a vault has attachments.
+* So: **no downgrade to 0.3.0 after the first `attach add`; upgrade all hosts
+  that read the vault before first use.**
 
 ## What comes next
 

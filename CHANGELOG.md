@@ -75,10 +75,22 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   (`attachment_<status>`) and never registers an `external_delete` for them;
   orphan blobs are reported, never deleted. The first attach adds `vault_id`
   to `vault.yaml` (one `config_change`).
+- `vault_id` is a random UUID generated once under the vault lock
+  (concurrent first adds agree on one); originals are staged in
+  `<blob root>/.staging` and moved into the vault's blob directory under the
+  lock. `attachments_blob_root` must be absolute or `~`-prefixed. `~/Documents`,
+  `~/Desktop` and the targets of symlinked synced-folder markers are refused
+  as blob roots; a refused root writes nothing, not even `vault_id`. Record
+  frontmatter is delimited by whole `---` lines and every record is parsed
+  back before it is written. `attach list`, `add`, `verify` and `fsck` read
+  the event log once per operation. `verify`/`fsck` report stale staging
+  files (`blob_stage_stale`, a warning), and `fsck` checks the blob directory
+  as soon as `vault.yaml` has a `vault_id`.
 - Without attachments every command's output is byte-identical
   (`tests/test_attachments_compat.py`). **memfw 0.3.0 fails closed on a vault
-  with an `attach` event** (every command that reads the event log); upgrade
-  every host first. See [`docs/attachments.md`](docs/attachments.md).
+  with an `attach` event** (every command that reads the event log). **No
+  downgrade to 0.3.0 after the first `attach add`; upgrade all hosts that read
+  the vault before first use.** See [`docs/attachments.md`](docs/attachments.md).
 
 ## [0.3.0] — 2026-11-17
 
