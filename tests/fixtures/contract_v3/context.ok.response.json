@@ -1,0 +1,31 @@
+{
+  "contract": "memfw-http/3",
+  "generated_at": "<generated_at>",
+  "limit_tokens": 2000,
+  "pack_version": "3ddcae18dcc6e3290c4082c3080ca45ed59ad4a01f30d676a2efc1350d20f218",
+  "policy": "strict",
+  "slots": [
+    {
+      "entries": [
+        {
+          "anchor": null,
+          "causal": "none",
+          "content_hash": "sha256:2dd6e24a26113cc846109569d71a4310e17a4b999204e88d61b9d51c601ce46e",
+          "epistemic": null,
+          "id": "proc-a",
+          "layer": "current",
+          "text": "Run the alpha procedure.",
+          "title": "Procedure A",
+          "type": "procedural",
+          "version": 1
+        }
+      ],
+      "name": "core",
+      "overflow": 0,
+      "skipped": 0,
+      "truncated_ids": [],
+      "used_tokens_est": 6
+    }
+  ],
+  "v": 2
+}

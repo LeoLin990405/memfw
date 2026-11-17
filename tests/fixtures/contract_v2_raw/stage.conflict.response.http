@@ -1,0 +1,7 @@
+HTTP/1.0 409 Conflict
+Server: memfw 
+Content-Type: application/json; charset=utf-8
+Content-Length: 113
+Connection: close
+
+{"contract": "memfw-http/2", "error": {"code": "conflict", "message": "candidate exists with different content"}}

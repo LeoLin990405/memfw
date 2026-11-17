@@ -1,0 +1,7 @@
+{
+  "memory_id": "mem-beta",
+  "reason": "Sample deletion request.",
+  "request_id": "forget-sample",
+  "source": "conductor",
+  "tenant": "tenant-a"
+}

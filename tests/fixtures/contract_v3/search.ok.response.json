@@ -1,0 +1,54 @@
+{
+  "contract": "memfw-http/3",
+  "degraded": false,
+  "errors": [],
+  "mode": "fts",
+  "results": [
+    {
+      "content_hash": "sha256:ee91c51671498e30ea5758bd429569a2f0ebf6c5d9123080bb828f568f04ae90",
+      "id": "mem-alpha",
+      "index_version": "1",
+      "layer": "current",
+      "provenance_type": "user_said",
+      "raw_score": -2.3887240989789575e-06,
+      "recorded_at": "2026-11-06T00:00:00+00:00",
+      "related": [
+        "mem-beta"
+      ],
+      "score": 2.3887183929897664e-06,
+      "sot_version": "1",
+      "source": "manual",
+      "stale": false,
+      "summary": "alpha corpus keyword",
+      "superseded_by": null,
+      "tenant": "tenant-a",
+      "tier": "hot",
+      "title": "Alpha corpus note",
+      "valid_from": null,
+      "valid_to": null,
+      "why": "lexical"
+    },
+    {
+      "content_hash": "sha256:d020da71e7f7d485cd4745bbc51ab8d8fb955271724cc8b9058f0f13825eff3a",
+      "id": "mem-beta",
+      "index_version": "1",
+      "layer": "current",
+      "provenance_type": "imported",
+      "raw_score": -2.3347897329980713e-06,
+      "recorded_at": "2026-11-06T00:00:00+00:00",
+      "related": [],
+      "score": 2.3347842817677012e-06,
+      "sot_version": "1",
+      "source": "notes",
+      "stale": false,
+      "summary": "alpha corpus keyword companion",
+      "superseded_by": null,
+      "tenant": "tenant-a",
+      "tier": "hot",
+      "title": "Beta corpus note",
+      "valid_from": null,
+      "valid_to": null,
+      "why": "lexical"
+    }
+  ]
+}

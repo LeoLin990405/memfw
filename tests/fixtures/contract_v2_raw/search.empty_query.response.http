@@ -1,0 +1,7 @@
+HTTP/1.0 400 Bad Request
+Server: memfw 
+Content-Type: application/json; charset=utf-8
+Content-Length: 108
+Connection: close
+
+{"contract": "memfw-http/2", "error": {"code": "bad_request", "message": "query must be 1..512 characters"}}

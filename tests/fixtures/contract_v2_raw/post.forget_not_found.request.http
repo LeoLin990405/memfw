@@ -1,0 +1,11 @@
+POST /forget HTTP/1.1
+Host: localhost
+X-Memfw-Token: {write_token}
+Content-Type: application/json
+Content-Length: 52
+Connection: close
+
+{
+  "memory_id": "mem-alpha",
+  "request_id": "a"
+}

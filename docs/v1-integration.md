@@ -52,7 +52,9 @@ principle.
 ## Read-only remote service
 
 `scripts/memfw_readonly_service.py` is a small HTTP facade over an existing
-MemFW vault that implements contract **`memfw-http/2`**. It uses the standard
+MemFW vault that implements contract **`memfw-http/2`** and, selected per
+request, **`memfw-http/3`** (see "Contract memfw-http/3" below; this section
+describes v2, which stays byte-identical). It uses the standard
 library plus the project's PyYAML dependency and no web framework (the read
 path is the library module `memfw.index.readonly`, which a standalone copy
 loads from `readonly.py` and `read_path.py` beside the script); it reads the
@@ -70,9 +72,11 @@ vault. Every response body, including errors, carries
 | `POST /related` | read or write token | related items from the edges projection, else lexical FTS |
 | `POST /stage` | write token only | stage one Conductor proposal as a candidate |
 
-`forget`/delete does not exist (contract §8): no endpoint modifies or removes
-authoritative memories, and `DELETE`, `PUT`, `PATCH` and `HEAD` return 404. A
-`GET` on a `POST` endpoint also returns 404.
+Under `memfw-http/2`, `forget`/delete does not exist (contract §8): `POST
+/forget` and `POST /context` return 404 as before. Under either contract no
+endpoint modifies or removes authoritative memories (v3's `/forget` only
+records a deletion *request*), and `DELETE`, `PUT`, `PATCH` and `HEAD` return
+404. A `GET` on a `POST` endpoint also returns 404.
 
 `GET /health` needs no token and returns only non-sensitive fields: `ok`,
 `service: "memfw"`, `contract`, `index_present` (the SQLite index exists) and
@@ -135,6 +139,7 @@ Every non-2xx response uses the same shape and carries the contract tag:
 | 404 | `not_found` |
 | 409 | `conflict` |
 | 413 | `too_large` |
+| 429 | `too_many_requests` (`memfw-http/3` `/forget` only: the pending-request bound) |
 | 500 | `internal` (fixed message, no exception details) |
 
 `message` never contains a token, a host path or the raw request body.
@@ -305,6 +310,229 @@ write bridge"). Old candidates are not migrated automatically.
    `curl -s http://<host>:18080/health` must return
    `"contract": "memfw-http/2"` and `"service": "memfw"`. `/health` needs no
    token.
+
+
+## Contract memfw-http/3
+
+v3 adds the evidence fields of roadmap §4 item 3 to every read result, a
+`mode` vocabulary, `recorded_at`, a read-only `POST /context` and the
+deletion-request endpoint `POST /forget` (roadmap R5/R6). v2 stays served,
+unchanged, for at least one release cycle.
+
+### Selecting the contract
+
+The request header `MemFW-Contract` selects the contract for that request:
+
+| `MemFW-Contract` | Contract |
+|---|---|
+| absent, empty or `memfw-http/2` | v2: every response byte-identical to the v2-only service |
+| `memfw-http/3` | v3 |
+| anything else (case-sensitive), or the header repeated | 400 `bad_request`, message `contract is not available`, tagged `memfw-http/2` |
+
+The rule applies to every method and path, error paths included: under v3 a
+401, 403, 404, 409 or 413 body carries `"contract": "memfw-http/3"`. Paths
+stay the same (no path prefix), so a client keeps one base URL.
+
+**Discovery.** Every `GET /health` response, whatever the contract, carries
+the response header `MemFW-Contracts: memfw-http/2, memfw-http/3`; the v2
+body is unchanged. A client that wants v3 sends `MemFW-Contract:
+memfw-http/3` on `/health`: a v3 server answers the v3 body below, a
+v2-only server ignores the header and answers `"contract": "memfw-http/2"`,
+which tells the client to stay on v2. The v3 `/health` body adds:
+
+```json
+{"ok": true, "service": "memfw", "contract": "memfw-http/3",
+ "index_present": true, "related_index_present": true,
+ "contracts": ["memfw-http/2", "memfw-http/3"], "modes": ["fts"],
+ "endpoints": ["/health", "/search", "/related", "/stage", "/context", "/forget"]}
+```
+
+`endpoints` lists `/context` only when the deployment can serve it (it needs
+the `memfw` package and a configured clearance; see below). No field is a path, host name or token.
+
+### Endpoints under v3
+
+| Method and path | Auth | v3 behaviour |
+|---|---|---|
+| `GET /health` | none | v2 body plus `contracts`, `modes`, `endpoints` |
+| `POST /search` | read or write token | v2 result plus `recorded_at` on every hit; `mode` checked against `modes` |
+| `POST /related` | read or write token | v2 result plus `why` and `provenance_type` on every result |
+| `POST /stage` | write token only | unchanged apart from the contract tag |
+| `POST /context` | read or write token | the `memory_context` v2 pack (`core` slot), read-only; only with a clearance configured |
+| `POST /forget` | write token only | records one deletion-request candidate; never deletes |
+
+Request limits, the error shape, token handling, tenant binding
+(`MEMFW_TENANT`) and the privacy clearance (`MEMFW_READONLY_CLEARANCE`) are
+the v2 ones and apply to the new endpoints too; `/context` and `/forget`
+bodies are capped at 8 KiB. A body field naming an endpoint (`*_endpoint`,
+`*_url`, ...) is 400 on every endpoint of both contracts.
+
+### `mode`
+
+`/search` takes an optional `mode` (default `fts`); the response always
+carries the `mode` it ran. The values served over HTTP are the ones
+`/health` lists in `modes`: only `fts` today. Any other value, including
+`multihop` (an MCP pilot, roadmap R2; HTTP opens it only after a planner
+decision), is 400 `mode is not available`, as under v2.
+
+### Evidence fields
+
+Every `/search` hit already carries, under both contracts, `provenance_type`
+(`user_said`, `agent_inferred`, `imported`, `derived`), `why` (`lexical`,
+`semantic`, `expansion`, `related`, or `alias(<label>→<concept id>)` for an
+ontology alias hit), `index_version`, `sot_version` and `stale`. v3 adds:
+
+- `/search`: `recorded_at` (see "`recorded_at`" above: transaction time,
+  `created_at` for older files, null when neither exists), read from the
+  hit's own Markdown;
+- `/related`: `why` (`related` on the edges projection, `lexical` on the FTS
+  fallback) and `provenance_type` (a memory's own; `imported` for a note).
+
+These fields are computed only for results the tenant and the clearance have
+already admitted. They carry an enum, a timestamp or an alias label the
+query itself matched; never another memory's id or text. `related` lists keep
+the v2 trimming (a withheld or other-tenant id is never listed).
+
+### `POST /context`
+
+Request (all optional): `tenant` (bound as on `/search`), `limit_tokens`
+(integer, default 2000, clamped to `1..100000`), `policy` (`strict`, the
+default, or `compat_fts`), `slots` (only `["core"]`), `if_version` (a
+`pack_version`), `v` (only `2`). Wrong types or values are 400 with a fixed
+message (`slot is not available`, `policy must be compat_fts or strict`, ...).
+
+The response is `{"contract": "memfw-http/3", "v": 2, "limit_tokens": …}`
+plus the `ContextPack` of MCP `memory_context` `v=2`: `pack_version`,
+`policy`, `generated_at` and `slots` (one `core` slot of anchors and
+procedural memories). With `if_version` equal to the current
+`pack_version`, the slots are left out and `unchanged: true` is set.
+
+- **Read-only.** Built with the context cache, `memory_access` events and
+  usage signals all off; nothing under the vault is written.
+- **Privacy.** The tenant is exact (empty matches only empty), and with a
+  clearance only memories whose level it admits are carried; the level
+  includes the privacy field, the `privacy:`/`sensitivity:` tags and the
+  top-level `sensitivity` key. A withheld memory appears nowhere in the
+  pack, `truncated_ids` included.
+- **Slots.** `handoff` (the conversation share, read as a calling app) and
+  `topics` (vault-wide counts) have no HTTP caller identity yet and are
+  refused.
+- **Needs a clearance.** `/context` returns memory text, so it is never
+  served unfiltered: with `MEMFW_READONLY_CLEARANCE` (`--clearance`) unset
+  it is 404 `not found`, exactly like an unknown path, and `/health` leaves
+  it out of `endpoints`. Set a clearance (the remote default is
+  `public,shared`; `public,shared,local-private` admits every level) to
+  serve it. `/search` and `/related` keep the pre-MM0 behaviour without one.
+- **Needs `memfw`.** The pack is built by `memfw.runtime.http`. A
+  three-file deployment without the `memfw` package answers 404 `context is
+  not available`, and `/health` then leaves `/context` out of `endpoints`.
+
+### `POST /forget`
+
+`/forget` records a request that a human deletes a memory. It never deletes,
+closes or edits anything: the memory file, the event log and every
+projection are untouched, and the response says `deleted: false`.
+
+Request: `request_id` (required, `^[A-Za-z0-9_-]{1,128}$`, the idempotency
+key), `memory_id` (required, a memory id), `reason` (optional, at most 500
+characters), `source` (optional single line, default `conductor`) and
+`tenant` (bound as on `/stage`: with `MEMFW_TENANT` set, only that tenant).
+Without a `MEMFW_TENANT` binding the body `tenant` is self-asserted: any
+caller holding the write token can name any tenant, exactly as on `/stage`
+and `/search`. Tenant scoping then separates tenants' data, it does not
+authenticate them; bind `MEMFW_TENANT` (one service per tenant) where
+callers must not act for each other.
+
+`memory_id` must match `^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`, the id shape
+`memfw` generates. A memory whose id contains anything else (a `.`, for
+example, which hand-written or imported files can carry) cannot be named
+over HTTP: the request is 400 `memory_id is invalid`. Such a memory can
+only be deleted locally (`memfw delete`), after a human review as always.
+
+```json
+{"contract": "memfw-http/3", "requested": true, "duplicate": false,
+ "request_id": "<request_id>", "memory_id": "<memory_id>",
+ "candidate_id": "forget-<tenant_key>-<request_id>",
+ "path": "_candidates/forget/forget-<tenant_key>-<request_id>.md",
+ "deleted": false, "authority": false}
+```
+
+- **Auth.** Write token only, exactly like `/stage`: read token 403, no write
+  token configured 403, missing or wrong token 401.
+- **Visibility.** The memory must be one the caller could read: in the
+  request's tenant and admitted by the clearance. A missing memory, another
+  tenant's and a withheld one all answer the same 404 `memory not found`,
+  and nothing is written.
+- **Idempotent, per tenant.** `request_id` is scoped to the tenant:
+  `<tenant_key>` is the first 16 hex digits of `sha256(tenant)` (the empty
+  tenant included), so two tenants never share a candidate file and one
+  tenant's `request_id` is neither an oracle nor a pre-claim for another.
+  The same request again (same `request_id`, memory, tenant, source and
+  reason) is 200 with `duplicate: true` and no rewrite; the same
+  `request_id` with another memory, source or reason is 409 `conflict`
+  (`request exists with different content`), answered only once the named
+  memory passes the visibility check: a caller that may not see it (another
+  tenant, a lower clearance) gets the same 404 `memory not found` whether
+  or not a request for it was recorded. When the named memory is gone, only
+  an exact replay of the tenant's own request is `duplicate: true`; anything
+  else (another tenant, or a recorded `request_id` reused with another
+  memory id) is the same 404, never 409, so a reused `request_id` cannot
+  tell a missing memory from a hidden one. Publication is
+  atomic (temporary file + hard link), so concurrent requests converge on one
+  file.
+- **The candidate.** `<vault>/_candidates/forget/forget-<tenant_key>-<request_id>.md`, a
+  directory of its own so `memfw candidates` / `candidate-apply` never see a
+  deletion request. Frontmatter: `type: forget-request`, `status: pending`,
+  `request_id`, `memory_id`, `tenant`, `source`, `reason`,
+  `target_content_hash` (the memory's bytes at request time), `created_at`,
+  `recorded_at`, `deleted: false`, `authority: false`. The body names the
+  memory id only; no memory text is copied. Symlinked directory components
+  are refused with 500, as for `/stage`.
+- **Bounded, per tenant.** At most `MAX_PENDING_FORGET_REQUESTS` (1000)
+  request files of one tenant (those named `forget-<tenant_key>-*`) wait in
+  `_candidates/forget/`, so one tenant cannot fill another's queue; beyond
+  that the tenant's new request is 429
+  `too_many_requests` (`too many pending forget requests`) and writes
+  nothing, until a human reviews and removes some. Replays of recorded
+  requests and the visibility 404 are answered as usual. Concurrent requests
+  can pass the count together, so the bound is approximate.
+- **Review.** `memfw forget requests --root <vault>` lists the requests (read
+  only) with `target_present` and `target_changed`. Deleting stays a human
+  action (`memfw delete`, unchanged; the tombstone redesign of roadmap §6.3
+  waits for its own approval).
+
+### Residue check
+
+`memfw forget residue <memory_id> --root <vault> [--related-db P]
+[--entities-db P]` checks, read-only, that a forgotten memory left nothing in
+the derived stores: the FTS index, the related projection (default
+`<vault>/.memfw-related.sqlite`), `corroboration.sqlite3`, the usage
+projection and, when given, the entity projection. A hard-deleted (or
+never-existing) id may appear in none of them; a closed memory
+(`valid_to`/`superseded_by`) may keep FTS rows for history queries but must
+not be listed as current, and may not appear in the current-only related
+projection. The JSON report names each store, its row counts, whether it is
+residue and the rebuild that clears it; exit 0 is clean, 1 residue, 2 a
+usage error (bad id or vault root, as for every typer command), 3 a live
+memory. An unreadable store counts as residue (fail closed), and so do FTS
+rows of a closed memory whose current state cannot be told (no
+`memory_temporal` row). No SQLite
+sidecar is created, so a store in a read-only directory is read: a file
+without a pending `-wal`/`-journal` is opened `immutable=1`, one with a
+pending sidecar is copied (with it) to a private temporary directory and the
+copy is read. Either way the check reads a snapshot and assumes no writer is
+changing the store meanwhile; run it after a rebuild, not during one. The
+store and its sidecars are stat-ed before and after the read: a change
+re-runs it once, a second change reports the store unreadable. OKF exports on
+disk are not checked.
+
+### Fixtures
+
+`tests/fixtures/contract_v3/` holds the v3 sample set, built and replayed like
+the v2 one. `tests/test_readonly_service_v3.py` replays it and also runs every
+v2 sample three ways (no header, `memfw-http/2`, `memfw-http/3`): the first
+two must be byte-identical, and each v3 answer must equal the v2 answer plus
+only the additions listed above.
 
 
 ## Relatedness

@@ -1,0 +1,7 @@
+{
+  "contract": "memfw-http/3",
+  "error": {
+    "code": "bad_request",
+    "message": "mode is not available"
+  }
+}

@@ -35,6 +35,44 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 - `WorkState.session_labels` (read-only). Without the new options the output
   of every command and tool is byte-identical to before.
 
+### Added
+
+- **`memfw-http/3` beside `memfw-http/2`; `POST /forget` and `memfw forget
+  residue` (roadmap R5/R6).** The read-only service selects the contract per
+  request from the `MemFW-Contract` header; without it (or with
+  `memfw-http/2`) every answer is byte-identical to before, `/forget` and
+  `/context` included (404). An unknown value is 400 `contract is not
+  available`. Every `/health` answer carries `MemFW-Contracts: memfw-http/2,
+  memfw-http/3`, and the v3 body adds `contracts`, `modes` and `endpoints`.
+  v3 `/search` adds `recorded_at` to each hit and keeps `mode` to the served
+  vocabulary (`fts`); v3 `/related` adds `why` and `provenance_type`; v3
+  `POST /context` returns the `memory_context` v2 pack (`core` slot) built
+  read-only through `memfw.runtime.http` (no cache, no access events, no usage
+  signals; needs the `memfw` package and a configured
+  `MEMFW_READONLY_CLEARANCE`, else 404 and left out of `/health`
+  `endpoints`). v3 `POST /forget` (write
+  token only) records one deletion-request candidate under
+  `<vault>/_candidates/forget/` and never deletes; the target must be visible
+  to the caller (tenant and clearance), hidden and missing targets answer the
+  same 404, and `request_id` makes it idempotent within the tenant (replay
+  `duplicate: true`, different content 409). The candidate file is
+  `forget-<sha256(tenant)[:16]>-<request_id>.md`, so request ids never
+  collide across tenants, and while the memory exists the visibility check
+  runs before the duplicate/409 check: another tenant or a lower clearance
+  replaying a recorded request gets the same 404; a recorded `request_id`
+  reused with a missing, another tenant's or a withheld memory id is that
+  same 404 too, never 409. At most 1000 requests per tenant
+  wait for review; beyond that the tenant's new one is 429 `too_many_requests`. Tenant binding and the MM0 clearance (sensitivity
+  key included) apply to every v3 addition. `memfw forget requests` lists the
+  requests; `memfw forget residue <id>` checks, read-only, that a forgotten
+  memory is gone from the FTS index, the related, corroboration, usage and
+  (optionally) entity projections, naming the rebuild for each store that
+  still carries it (exit 0 clean, 1 residue, 2 usage error, 3 the memory is
+  still live). Hard delete is unchanged. New v3 sample set in
+  `tests/fixtures/contract_v3/`; the v2 set is unchanged, and
+  `tests/fixtures/contract_v2_raw/` pins the raw v2 bytes (status line,
+  headers, body) recorded from the service before v3.
+
 ### Added — `current` context slot (U6, off by default)
 
 - `memory_context(v=2, slots=["current"])` and `memfw://context/current`: short-lived

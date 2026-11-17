@@ -1,0 +1,7 @@
+{
+  "contract": "memfw-http/3",
+  "error": {
+    "code": "forbidden",
+    "message": "write credential required"
+  }
+}

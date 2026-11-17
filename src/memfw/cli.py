@@ -2092,6 +2092,53 @@ def forget_run(
     typer.echo(json.dumps(result.as_dict(), ensure_ascii=False, sort_keys=True, indent=2))
 
 
+@forget_app.command("residue")
+def forget_residue(
+    memory_id: Annotated[str, typer.Argument(help="The forgotten memory's id")],
+    root: Annotated[Path, typer.Option("--root", "-r")] = Path("."),
+    related_db: Annotated[
+        Path | None,
+        typer.Option(
+            "--related-db",
+            help="Related projection to check (default <root>/.memfw-related.sqlite)",
+        ),
+    ] = None,
+    entities_db: Annotated[
+        Path | None, typer.Option("--entities-db", help="Entity projection to check too")
+    ] = None,
+) -> None:
+    """Check that a forgotten memory left nothing in the index or projections.
+
+    Read-only. Exit 0 when clean, 1 when a store still carries the memory
+    (each one names its rebuild remedy), 2 on a usage error (bad id or root),
+    3 when the memory is still live.
+    """
+    from .curation.residue import projection_residue
+
+    try:
+        report = projection_residue(root, memory_id, related_db=related_db, entities_db=entities_db)
+    except (MemfwError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+    if report["clean"] is None:
+        # Not 2: typer uses 2 for usage errors (BadParameter).
+        raise typer.Exit(code=3)
+    if not report["clean"]:
+        raise typer.Exit(code=1)
+
+
+@forget_app.command("requests")
+def forget_requests(root: Annotated[Path, typer.Option("--root", "-r")] = Path(".")) -> None:
+    """List deletion requests staged by HTTP ``POST /forget`` (memfw-http/3). Read-only."""
+    from .curation.residue import list_forget_requests
+
+    typer.echo(
+        json.dumps(
+            {"requests": list_forget_requests(root)}, ensure_ascii=False, sort_keys=True, indent=2
+        )
+    )
+
+
 @tier_app.command("status")
 def tier_status(root: Annotated[Path, typer.Option("--root", "-r")] = Path(".")) -> None:
     """Report hot/cold memory counts and bytes."""
