@@ -3,7 +3,7 @@
 Run it with the interpreter of a venv that has the wheels and NOT memfw:
 
     python -I tests/standalone/wheel_smoke.py [--recall] [--deepseek] [--bm25s] [--qdrant]
-        [--qmd] [--ocr] [--pageindex]
+        [--qmd] [--ocr] [--pageindex] [--langextract]
 
 It refuses to run when ``memfw`` is importable, imports the wheels, and runs
 the contract kit (``memfw_ports.testing``) against the reference
@@ -21,7 +21,10 @@ the ``memfw-adapter-qmd`` wheel's two recall providers pass
 ``memfw-adapter-ocr`` wheel's deriver passes ``check_deriver`` with an
 in-process fake engine (no OCR tool); with ``--pageindex`` the
 ``memfw-adapter-pageindex`` wheel's provider passes ``check_recall_provider``
-over a tree it builds (titles mode, no model). Prints one
+over a tree it builds (titles mode, no model); with ``--langextract`` the
+``memfw-adapter-langextract`` wheel's deriver passes ``check_deriver`` over a
+replayed LangExtract output (LangExtract itself is not installed, no model
+runs). Prints one
 ``ok`` line per check and exits non-zero on the first failure. Standard
 library only; not collected by pytest (``tests/test_standalone_ports_wheel.py``
 drives it).
@@ -464,6 +467,57 @@ def _pageindex(root: Path) -> None:
     _ok("PageIndex note privacy via PyYAML + metadata_level")
 
 
+def _langextract(root: Path) -> None:
+    """The deriver wheel over the memfw-ports wheel, LangExtract replaced by a replay."""
+
+    from memfw_adapter_langextract import TASK, LangExtractDeriver, Settings, candidates
+    from memfw_adapter_langextract import _ports as seam
+    from memfw_ports.models import ModelReply
+    from memfw_ports.testing import check_deriver
+    from memfw_ports.types import DeriveRequest
+
+    assert seam.ModelReply is ModelReply, seam.ModelReply
+    _ok("import memfw_adapter_langextract (ports from memfw_ports)")
+    vault = root / "lx-vault"
+    (vault / "memories").mkdir(parents=True)
+    (vault / "vault.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+    text = "The backup job copies the vault to the NAS."
+    for memory_id, privacy in (("m-pub", "public"), ("m-priv", "local-private")):
+        (vault / "memories" / f"{memory_id}.md").write_text(
+            f"---\nid: {memory_id}\nprivacy: {privacy}\nversion: 1\ntags: []\n---\n{text}\n",
+            encoding="utf-8",
+        )
+
+    class Backend:
+        name, local, tasks = "smoke", True, (TASK,)
+
+        def run(self, task: str, data: dict[str, object], *, max_tokens: int) -> ModelReply:
+            return ModelReply("```json\n{}\n```", 5, 5)
+
+    sent: list[object] = []
+
+    def runner(documents: object, call: object, buffer: int) -> list[dict[str, object]]:
+        sent.append(documents)
+        assert callable(call) and call("prompt") == "```json\n{}\n```"
+        span = {"start_pos": 4, "end_pos": 14}
+        row = {
+            "extraction_class": "entity",
+            "extraction_text": "backup job",
+            "char_interval": span,
+            "alignment_status": "match_exact",
+            "attributes": {"type": "service"},
+        }
+        return [{"document_id": "m-pub", "text": text, "extractions": [row]}]
+
+    deriver = LangExtractDeriver(Settings(), backend=Backend(), runner=runner)
+    view = check_deriver(
+        deriver, vault=vault, request=DeriveRequest("entities", ("m-pub", "m-priv"))
+    )
+    assert view.cited_ids() == ("m-pub",) and sent == [[("m-pub", text)]], (view, sent)
+    assert len(candidates(view)) == 1
+    _ok("check_deriver LangExtractDeriver (replayed output)")
+
+
 def main(argv: list[str]) -> int:
     if importlib.util.find_spec("memfw") is not None:
         print("memfw is importable here; run this in a venv without memfw", file=sys.stderr)
@@ -485,6 +539,8 @@ def main(argv: list[str]) -> int:
             _ocr(root)
         if "--pageindex" in argv:
             _pageindex(root)
+        if "--langextract" in argv:
+            _langextract(root)
     print("standalone wheel smoke passed")
     return 0
 

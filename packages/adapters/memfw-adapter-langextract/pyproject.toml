@@ -1,0 +1,33 @@
+# memfw-adapter-langextract: a Deriver that extracts entities and relations
+# from public/shared memories with Google LangExtract (Apache-2.0, pinned
+# 1.7.2), with character-level grounding back into each memory body. The model
+# behind it is a memfw ModelBackend (a local Ollama backend ships here; a
+# non-local backend needs cloud: true). Standard library only; LangExtract
+# itself is an operator-installed dependency the adapter checks at runtime
+# (`pip install langextract==1.7.2`), so neither memfw nor this workspace
+# pulls it in. memfw never imports this package.
+#
+# Build a wheel:  uv build --wheel --package memfw-adapter-langextract
+[build-system]
+requires = ["hatchling==1.33.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "memfw-adapter-langextract"
+version = "0.1.0"
+description = "LangExtract entity/relation Deriver for memfw (staged candidates only)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+# Symlinks to memfw's own LICENSE and NOTICE (one copy of the text).
+license-files = ["LICENSE", "NOTICE"]
+dependencies = ["memfw-ports==0.3.0"]
+
+[project.entry-points."memfw.adapters"]
+langextract = "memfw_adapter_langextract:SPEC"
+
+[tool.uv.sources]
+memfw-ports = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/memfw_adapter_langextract"]

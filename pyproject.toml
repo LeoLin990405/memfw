@@ -46,6 +46,7 @@ members = [
     "packages/adapters/memfw-adapter-qmd",
     "packages/adapters/memfw-adapter-ocr",
     "packages/adapters/memfw-adapter-pageindex",
+    "packages/adapters/memfw-adapter-langextract",
 ]
 
 [tool.pytest.ini_options]
