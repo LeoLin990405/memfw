@@ -2,10 +2,11 @@
 
 - Off (no ``runtime.usage`` in vault.yaml, no ``MEMFW_USAGE_SIGNAL``): the tool
   is not listed (``tools/list`` is exactly ``schema.TOOLS``), calling it is an
-  unknown tool, and no ``usage.sqlite3`` appears.
-- On: one row per visible id in ``usage.sqlite3`` (mode 0600) with the id,
+  unknown tool, and no usage store appears.
+- On: one row per visible id in the usage store (outside the vault, under
+  ``~/.local/share/memfw/usage/``, mode 0600) with the id,
   session_ref, app and time only; unknown, other-tenant, disallowed-source and
-  malformed ids are dropped and the answer is the same either way.
+  malformed ids are dropped and the answer's content is the same either way.
 - The vault (memories, ``events.jsonl``, ``vault.yaml``) never changes.
 """
 
@@ -16,7 +17,7 @@ import json
 import os
 import stat
 from contextlib import redirect_stdout
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -31,11 +32,12 @@ from memfw.ports.reference import MemoryUsageSink, NullUsageSink
 from memfw.ports.testing import ContractError, check_usage_sink, tree_digest
 from memfw.runtime import build_runtime
 from memfw.runtime.usage import RuntimeOptions, env_switch, options_from_config
-from memfw.usage import FILENAME, SqliteUsageSink, UsageStoreError, projection_path
+from memfw.stats import measure_physical_disk_bytes
+from memfw.usage import SqliteUsageSink, UsageStoreError, projection_path
 
 T0 = datetime(2026, 11, 16, 9, 0, tzinfo=UTC)
-#: Disposable files a call may create or change (projections and the lock).
-PROJECTIONS = (FILENAME, "index.sqlite3", ".memfw.lock", f"{FILENAME}-journal")
+#: Disposable files a call may create or change (the index and the lock).
+PROJECTIONS = ("index.sqlite3", ".memfw.lock")
 
 
 def _vault(tmp_path: Path, *, usage: Any = None) -> Repository:
@@ -84,9 +86,10 @@ def _tools(gateway: Gateway) -> list[dict[str, Any]]:
 
 
 @pytest.fixture(autouse=True)
-def _no_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def _no_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("MEMFW_USAGE_SIGNAL", raising=False)
     monkeypatch.delenv("MEMFW_RECORD_ACCESS", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
 
 
 # --- off by default -------------------------------------------------------------
@@ -175,7 +178,7 @@ def test_enabled_lists_the_tool_and_records(
     assert SqliteUsageSink(path).counts(["m-port", "m-none"]) == {"m-port": 1, "m-none": 0}
 
 
-def test_unknown_foreign_and_malformed_ids_are_indistinguishable(tmp_path: Path) -> None:
+def test_unknown_foreign_and_malformed_ids_give_the_same_answer(tmp_path: Path) -> None:
     repository = _vault(tmp_path, usage=True)
     gateway = _gateway(repository.root, allowed_sources=("manual",))
     known = _call(gateway, {"ids": ["m-backup"], "session_ref": "s1"})
@@ -230,10 +233,104 @@ def test_memory_used_never_changes_the_vault(tmp_path: Path) -> None:
     assert tree_digest(repository.root, exclude=PROJECTIONS) == before
 
 
+def test_store_lives_outside_the_vault_and_is_keyed_by_it(tmp_path: Path) -> None:
+    repository = _vault(tmp_path, usage=True)
+    other = Repository(tmp_path / "other")
+    other.init()
+    path = projection_path(repository.root)
+    assert repository.root not in path.parents
+    assert path.parent == tmp_path / "home" / ".local" / "share" / "memfw" / "usage"
+    assert projection_path(other.root) != path
+    _gateway(repository.root).memory_used(["m-backup"], "s1")
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert not any("usage" in p.name for p in repository.root.rglob("*"))
+
+
+def test_budget_inputs_are_unaffected_by_usage_volume(tmp_path: Path) -> None:
+    """Physical size (what budget enforcement acts on) and the fingerprint stay put."""
+
+    from memfw.curation.engine import enforce_budget
+
+    repository = _vault(tmp_path, usage=True)
+    config = repository.read_config()
+    # A 1 MB physical budget the vault fits in; 2000 signals would have pushed a
+    # store inside the vault past it (hard forget = deletion).
+    config.update(budget_mode="total", budget_level="1MB", forget_action="hard", budget_scope="all")
+    repository.configure(config)
+    physical = measure_physical_disk_bytes(repository.root)
+    fingerprint = repository._tree_fingerprint()
+    gateway = _gateway(repository.root)
+    for number in range(2000):
+        gateway.memory_used(["m-backup", "m-port"], f"s{number}")
+    assert SqliteUsageSink(projection_path(repository.root)).counts()["m-backup"] == 2000
+    assert projection_path(repository.root).stat().st_size > 64 * 1024
+    assert measure_physical_disk_bytes(repository.root) == physical
+    assert repository._tree_fingerprint() == fingerprint
+    result = enforce_budget(repository, now=T0)
+    assert result.applied_ids == () and result.satisfied_after_apply is True
+    assert result.physical_bytes_before == physical
+    assert {doc.id for doc in repository.list()} == {"m-backup", "m-port", "m-alpha"}
+
+
+def test_retention_prunes_by_age_and_count(tmp_path: Path) -> None:
+    sink = SqliteUsageSink(tmp_path / "u.sqlite3", max_rows=5, max_age_days=10)
+
+    def signal(day: int, memory_id: str) -> UsageSignal:
+        return UsageSignal(
+            memory_ids=(memory_id,), session_ref="s1", app="", at=T0 + timedelta(days=day)
+        )
+
+    sink.record(signal(0, "m-old"))
+    sink.record(signal(11, "m-new"))  # m-old is now 11 days old
+    assert [row["memory_id"] for row in sink.rows()] == ["m-new"]
+    for n in range(7):
+        sink.record(signal(11, f"m-{n}"))
+    assert [row["memory_id"] for row in sink.rows()] == [f"m-{n}" for n in range(2, 7)]
+    with pytest.raises(ValueError):
+        SqliteUsageSink(tmp_path / "x", max_rows=0)
+    with pytest.raises(ValueError):
+        SqliteUsageSink(tmp_path / "x", max_age_days=0)
+
+
+def test_missing_vault_is_not_cached(tmp_path: Path) -> None:
+    root = tmp_path / "late"
+    runtime = build_runtime(root)
+    assert runtime.options() == RuntimeOptions(usage_enabled=False, record_access=False)
+    _vault(tmp_path / "x", usage=True)  # unrelated vault, for the layout
+    repository = Repository(root)
+    repository.init()
+    config = repository.read_config()
+    config["runtime"] = {"usage": {"enabled": True}}
+    repository.configure(config)
+    assert runtime.options() == RuntimeOptions(usage_enabled=True, record_access=True)
+    # Cached from now on.
+    config["runtime"] = {"usage": {"enabled": False}}
+    repository.configure(config)
+    assert runtime.usage_enabled() is True
+
+
+def test_unreadable_vault_yaml_fails_closed_and_is_not_cached(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    good = repository.config_path.read_bytes()
+    repository.config_path.write_text("runtime: [unclosed\n", encoding="utf-8")
+    runtime = build_runtime(repository.root)
+    assert runtime.options() == RuntimeOptions(usage_enabled=False, record_access=False)
+    assert runtime.record_access() is False
+    repository.config_path.write_bytes(good)
+    assert runtime.options() == RuntimeOptions(usage_enabled=False, record_access=True)
+
+
+def test_explicit_switches_need_no_vault(tmp_path: Path) -> None:
+    runtime = build_runtime(tmp_path / "missing", usage_signal=True, record_access=True)
+    assert runtime.options() == RuntimeOptions(usage_enabled=True, record_access=True)
+
+
 def test_a_broken_store_does_not_change_the_answer(tmp_path: Path) -> None:
     repository = _vault(tmp_path, usage=True)
     target = tmp_path / "elsewhere.sqlite3"
-    projection_path(repository.root).symlink_to(target)
+    link = projection_path(repository.root)
+    link.parent.mkdir(parents=True)
+    link.symlink_to(target)
     gateway = _gateway(repository.root)
     assert gateway.memory_used(["m-backup"], "s1") == {"ok": True}
     assert not target.exists()

@@ -77,6 +77,28 @@ do not contain `memfw/__init__.py`, so this does not affect them.
   change to the ports API (major for a breaking one). The members pin their build backend
   (`hatchling==1.33.0`) and ship memfw's `LICENSE` and `NOTICE` (symlinks in each package
   directory) under `.dist-info/licenses/`.
+- **Compatibility table.** Each package version and the contract version (`PORT_VERSION`,
+  `memfw.ports.PORT_VERSIONS`) of every port it ships or builds on. An adapter checked
+  against a port's version stays compatible while that number is unchanged.
+  `tests/test_port_versions.py` checks this table against `PORT_VERSIONS` and the package
+  metadata; update both together.
+
+<!-- port-versions:start -->
+| Package | Version | Port | PORT_VERSION |
+|---|---|---|---|
+| `memfw-ports` | 0.2.0 | `RecallProvider` | 1 |
+| `memfw-ports` | 0.2.0 | `Projector` | 1 |
+| `memfw-ports` | 0.2.0 | `Ingestor` | 1 |
+| `memfw-ports` | 0.2.0 | `Deriver` | 1 |
+| `memfw-ports` | 0.2.0 | `Clock` | 1 |
+| `memfw-ports` | 0.2.0 | `IdGen` | 1 |
+| `memfw-ports` | 0.2.0 | `ClaimVerifier` | 1 |
+| `memfw-ports` | 0.2.0 | `ClaimStager` | 1 |
+| `memfw-ports` | 0.2.0 | `ContextSlotProvider` | 1 |
+| `memfw-ports` | 0.2.0 | `UsageSink` | 1 |
+| `memfw-recall` | 0.2.0 | `RecallProvider` | 1 |
+<!-- port-versions:end -->
+
 - **Wheels only.** `uv build --wheel --package memfw-ports` (and `memfw-recall`). An sdist is
   not supported because the sources live outside the package directory. Editable installs of
   the members are not supported either; `uv sync` installs memfw alone, as before.
@@ -729,7 +751,9 @@ whether a caller sends it depends on its prompt, so the C4 eval never relies on 
 
 - **Switch.** `vault.yaml` `runtime: {usage: {enabled: true}}`, or `MEMFW_USAGE_SIGNAL`
   (`1`/`true`/`yes`/`on`, `0`/`false`/`no`/`off`; a set variable wins; any other value refuses
-  to start). The section is read once per server, on first use. Off, or a value that is not a
+  to start). The section is read on first use and kept once read; while the vault is missing
+  or `vault.yaml` is unreadable it is read again on every use and both switches are closed
+  (usage off, access not recorded), never cached. Off, or a value that is not a
   boolean: the tool is not in `tools/list` (exactly `TOOLS`, byte for byte), calling it is
   `-32601 unknown tool: memory_used`, and the Runtime's sink is `NullUsageSink`.
 - **Arguments.** `ids`: a list of 1 to 100 strings; `session_ref`: a token as above. Wrong
@@ -737,12 +761,22 @@ whether a caller sends it depends on its prompt, so the C4 eval never relies on 
 - **Filtering.** Each well-formed id is read from the vault (`Repository.get`, which warms
   nothing). Ids that do not exist, cannot be read, are malformed, or fall outside the
   caller's tenant or allowed sources (the `memory_get` rule) are dropped. The answer is
-  always `{"ok": true}`, also when the store cannot be written (best effort), so it never
-  tells the caller whether an id exists.
-- **Store.** `usage.sqlite3` at the vault root (next to `corroboration.sqlite3`), created
-  0600 with `O_EXCL`/`O_NOFOLLOW` (a planted symlink or non-database is refused, and the
-  signal dropped) and kept 0600. One row per id: `memory_id`, `session_ref`, `app` (from
+  always `{"ok": true}`, also when the store cannot be written (best effort): its content
+  does not say which ids were kept. This is not a hiding guarantee: response timing differs
+  (a kept id costs a write), and `memory_get` already distinguishes a visible id from an
+  unknown one.
+- **Store.** Outside the vault, in memfw's local data directory and keyed by vault:
+  `~/.local/share/memfw/usage/<key>.sqlite3` (`<key>`: the first 24 hex digits of sha256 of
+  the vault's resolved path; `memfw.usage.projection_path`). So it never counts toward the
+  physical-size budget that budget enforcement acts on, nor the transaction fingerprint,
+  whatever the signal volume. The directory is 0700; the file is created 0600 with
+  `O_EXCL`/`O_NOFOLLOW` (a planted symlink or non-database is refused, and the signal
+  dropped) and kept 0600. One row per id: `memory_id`, `session_ref`, `app` (from
   `--app`/`MEMFW_APP`, lower case; `""` when unnamed), `at`. No query text, no body text.
+- **Retention.** Each write prunes rows older than 90 days (`DEFAULT_MAX_AGE_DAYS`, from the
+  new signal's time) and then the oldest rows beyond 100000 (`DEFAULT_MAX_ROWS`);
+  `SqliteUsageSink(path, max_rows=, max_age_days=)` takes other limits. With the 100-id cap
+  per call the file stays at a few MB.
   It is a projection in the sense that it is disposable and never authoritative: deleting it
   (`SqliteUsageSink.reset()`) loses only signals, and memfw rebuilds it empty on the next one.
   Nothing ranks or filters by it; `SqliteUsageSink.counts()` and `rows()` are for the C4
@@ -760,7 +794,7 @@ neither appends to the event chain. Reads keep it as follows:
 |---|---|
 | `memory_context` (v1, v2, every slot) and `memfw://context/*` | never |
 | `memory_search` `fts`, `multihop` | never |
-| `memory_used` | never (writes only `usage.sqlite3`) |
+| `memory_used` | never (writes only its store outside the vault) |
 | `memory_search` `hybrid`, `vector` | by default yes: one `memory_access` event per returned hit, and a cold or stub hit is warmed (autowarm: `tier_change`/`memory_restore` events, the memory file, history and archive change). Off with `record_access: false` |
 | `memory_search` `two_stage` | by default yes: the same, for each hit the coordinator returns after the filter (never for a hit the policy dropped; #55). Off with `record_access: false` |
 
@@ -771,8 +805,7 @@ appends an event or warms a memory (cold and stub hits are returned as they are)
 call above leaves the memory files, `events.jsonl`, `events.state.json`, `vault.yaml` and
 `_candidates/` byte-identical. A non-boolean value fails closed to `false`. Disposable
 projections may still be built or refreshed during a session: `index.sqlite3`,
-`.memory-hybrid.sqlite` (and its manifest), `usage.sqlite3`, their SQLite side files and
-`.memfw.lock`. `tests/test_session_no_vault_writes.py` hashes the vault before and after a
+`.memory-hybrid.sqlite` (and its manifest), their SQLite side files and `.memfw.lock`. `tests/test_session_no_vault_writes.py` hashes the vault before and after a
 session of every call above (both settings) and checks that the default exception is only
 access and warming events.
 

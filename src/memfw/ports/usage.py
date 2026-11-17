@@ -2,12 +2,12 @@
 
 ``memory_used(ids, session_ref)`` only leaves a signal: it never changes a
 memory, the vault or its event chain. The Runtime checks the ids (unknown,
-other-tenant and unreadable ids are dropped without saying so), builds one
+other-tenant and unreadable ids are dropped; the answer does not list them), builds one
 ``UsageSignal`` and hands it to a ``UsageSink``, the first event kind of the
 architecture's ``EventSink`` port. memfw ships three sinks:
 
-- ``memfw.usage.SqliteUsageSink``: the rebuildable ``usage.sqlite3``
-  projection (file mode 0600, next to ``corroboration.sqlite3``);
+- ``memfw.usage.SqliteUsageSink``: a disposable SQLite store outside the
+  vault (file mode 0600, in memfw's local data directory, keyed by vault);
 - ``memfw.ports.reference.NullUsageSink``: drops every signal (the wiring
   when the signal is off);
 - ``memfw.ports.reference.MemoryUsageSink``: keeps signals in memory (tests).

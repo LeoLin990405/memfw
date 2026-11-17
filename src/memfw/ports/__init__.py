@@ -89,6 +89,7 @@ from .usage import (
     UsageSignal,
     UsageSink,
 )
+from .versions import PORT_VERSIONS
 
 #: Version of the ``memfw.ports`` API as a whole (semver). The standalone
 #: ``memfw-ports`` wheel carries exactly this version, and
@@ -101,6 +102,7 @@ __all__ = [
     "CLAIMS_PORT_VERSION",
     "MAX_USAGE_IDS",
     "PORTS_API_VERSION",
+    "PORT_VERSIONS",
     "POLARITIES",
     "ClaimEvidence",
     "ClaimStager",

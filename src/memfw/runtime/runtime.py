@@ -214,33 +214,33 @@ class Runtime:
 
         Explicit values (``build_runtime`` arguments, i.e. ``MEMFW_USAGE_SIGNAL``
         and ``MEMFW_RECORD_ACCESS``) win; for one left ``None`` the vault's
-        ``runtime:`` section decides. ``vault.yaml`` is read at most once per
-        Runtime, and not at all when both are explicit; no vault (or an
-        unreadable one) gives the defaults: usage off, access recorded.
+        ``runtime:`` section decides. A successful read is kept for the
+        Runtime's life; ``vault.yaml`` is not read when both are explicit. No
+        vault, or an unreadable ``vault.yaml``, fails closed (usage off, access
+        not recorded) and is not cached: the next use reads again.
         """
 
         with self._options_lock:
-            if self._options is None:
-                from_vault = RuntimeOptions()
-                if self._usage_signal is None or self._record_access is None:
-                    try:
-                        repository: Repository | None = self.open_repository()
-                    except (MemfwError, OSError, ValueError):
-                        repository = None
-                    from_vault = read_options(repository)
-                self._options = RuntimeOptions(
-                    usage_enabled=(
-                        from_vault.usage_enabled
-                        if self._usage_signal is None
-                        else self._usage_signal
-                    ),
-                    record_access=(
-                        from_vault.record_access
-                        if self._record_access is None
-                        else self._record_access
-                    ),
-                )
-            return self._options
+            if self._options is not None:
+                return self._options
+            from_vault, cacheable = RuntimeOptions(), True
+            if self._usage_signal is None or self._record_access is None:
+                try:
+                    repository: Repository | None = self.open_repository()
+                except (MemfwError, OSError, ValueError):
+                    repository = None
+                from_vault, cacheable = read_options(repository)
+            options = RuntimeOptions(
+                usage_enabled=(
+                    from_vault.usage_enabled if self._usage_signal is None else self._usage_signal
+                ),
+                record_access=(
+                    from_vault.record_access if self._record_access is None else self._record_access
+                ),
+            )
+            if cacheable:
+                self._options = options
+            return options
 
     def usage_enabled(self) -> bool:
         """Whether ``memory_used`` is registered (default off)."""
@@ -275,8 +275,9 @@ class Runtime:
         ``memory_get`` rule) is dropped. The rest, if any, become one
         ``UsageSignal`` (ids, ``session_ref``, the calling app, the time) for
         ``usage_sink``. A sink failure is swallowed: the signal is best effort.
-        The answer is the same whatever was dropped or recorded, so it never
-        tells the caller whether an id exists.
+        The answer's content is the same whatever was dropped or recorded. That
+        is not a hiding guarantee: timing differs (a kept id costs a write), and
+        ``memory_get`` already tells a visible id from an unknown one.
         """
 
         wanted, ref = checked_used_request(ids, session_ref)

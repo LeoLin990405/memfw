@@ -332,8 +332,8 @@ MEMORY_USED_TOOL: dict[str, Any] = {
     "description": (
         "Signal which memories this session actually used (ids from memory_context or "
         "memory_search). Records only the ids, the time, the calling app and session_ref "
-        "in a disposable usage projection; never changes a memory or the vault. Ids that "
-        "are unknown or not visible are ignored; the answer is the same either way."
+        "in a disposable usage store outside the vault; never changes a memory or the vault. "
+        "Ids that are unknown or not visible are ignored, and the answer does not say which."
     ),
     "inputSchema": {
         "type": "object",

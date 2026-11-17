@@ -30,12 +30,19 @@ from memfw.index import MemoryIndex
 from memfw.mcp.server import Gateway
 from memfw.notes import HashEmbeddingProvider
 from memfw.ports.testing import tree_digest
+from memfw.usage import projection_path
 from tests.conversation_fixtures import standard_rows, write_store
 
 pytest.importorskip("sqlite_vec")
 
+
+@pytest.fixture(autouse=True)
+def _home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+
 #: Disposable files at the vault root a read may build or refresh: the FTS and
-#: hybrid indexes, the usage projection, SQLite side files and the lock. Never
+#: hybrid indexes, SQLite side files and the lock (the usage store is outside the vault). Never
 #: a memory, the event log, its head, vault.yaml or a candidate.
 PROJECTIONS = (
     ".memfw.lock",
@@ -44,8 +51,6 @@ PROJECTIONS = (
     ".memory-hybrid.sqlite",
     ".memory-hybrid.sqlite-journal",
     ".memory-hybrid.manifest.json",
-    "usage.sqlite3",
-    "usage.sqlite3-journal",
 )
 
 SEARCHES: list[dict[str, Any]] = [
@@ -181,8 +186,8 @@ def test_session_safe_reads_leave_the_vault_unchanged(tmp_path: Path) -> None:
     # Cold and stub hits were returned but not warmed.
     assert repository.get("m-cold").tier == Tier.COLD
     assert repository.get("m-stub").is_stub
-    # memory_used did record, outside the vault's authority.
-    assert (repository.root / "usage.sqlite3").is_file()
+    # memory_used did record, outside the vault.
+    assert projection_path(repository.root).is_file()
 
 
 def test_session_safe_via_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

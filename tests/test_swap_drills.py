@@ -205,7 +205,8 @@ SLOT_PROVIDERS: dict[str, Callable[[Repository], object]] = {
 
 #: ``UsageSink`` (C5): the persistent projection and the two reference sinks.
 USAGE_SINKS: dict[str, Callable[[Path], object]] = {
-    "sqlite": lambda vault: SqliteUsageSink(vault / "usage.sqlite3"),
+    # Outside the vault, as the Runtime wires it.
+    "sqlite": lambda vault: SqliteUsageSink(vault.parent / "usage" / "usage.sqlite3"),
     "null": lambda _vault: NullUsageSink(),
     "memory": lambda _vault: MemoryUsageSink(),
 }
@@ -919,6 +920,6 @@ def test_usage_sinks_pass_the_same_contract(tmp_path: Path, name: str) -> None:
         sink,  # type: ignore[arg-type]
         signals=signals,
         vault=repository.root,
-        vault_exclude=(*LOCK, "usage.sqlite3", "usage.sqlite3-journal"),
+        vault_exclude=LOCK,
         stored=stored,
     )

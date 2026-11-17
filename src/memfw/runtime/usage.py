@@ -16,9 +16,11 @@ the behaviour before them):
 
 A set variable wins over ``vault.yaml`` (``1``/``true``/``yes``/``on`` or
 ``0``/``false``/``no``/``off``; any other value refuses to start). The
-section is read once per Runtime, on first use; restart the server to pick
-up a change. A value that is not a boolean fails closed: the usage signal
-stays off and access recording is off.
+section is read on first use and then kept for the Runtime's life (restart
+the server to pick up a change), but only once it was read: while the vault
+is missing or ``vault.yaml`` is unreadable, every use reads again and gets the
+closed answer (usage off, access not recorded). A value that is not a boolean
+also fails closed.
 """
 
 from __future__ import annotations
@@ -78,16 +80,25 @@ def options_from_config(config: Mapping[str, Any]) -> RuntimeOptions:
     )
 
 
-def read_options(repository: Repository | None) -> RuntimeOptions:
-    """The vault's options; the defaults when there is no vault or it is unreadable."""
+#: What a missing vault or an unreadable ``vault.yaml`` gives: closed on both switches.
+CLOSED = RuntimeOptions(usage_enabled=False, record_access=False)
+
+
+def read_options(repository: Repository | None) -> tuple[RuntimeOptions, bool]:
+    """The vault's options and whether they may be cached.
+
+    No vault, or a ``vault.yaml`` that cannot be read or validated, gives
+    ``CLOSED`` (usage off, access not recorded) and ``False``: the caller
+    reads again next time instead of keeping a guess.
+    """
 
     if repository is None:
-        return RuntimeOptions()
+        return CLOSED, False
     try:
         config = repository.read_config()
     except (MemfwError, OSError, ValueError):
-        return RuntimeOptions()
-    return options_from_config(config)
+        return CLOSED, False
+    return options_from_config(config), True
 
 
 def checked_used_request(ids: object, session_ref: object) -> tuple[tuple[str, ...], str]:
@@ -137,6 +148,7 @@ def readable_ids(repository: Repository, wanted: tuple[str, ...], visible: Any) 
 
 
 __all__ = [
+    "CLOSED",
     "RuntimeOptions",
     "UsageSignal",
     "checked_used_request",
