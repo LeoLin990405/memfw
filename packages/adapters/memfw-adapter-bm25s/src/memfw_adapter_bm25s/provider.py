@@ -19,7 +19,8 @@ adds ``vault``):
 ``vault``
     The vault root (required).
 ``data_dir``
-    Where the index lives (default ``~/.local/share/memfw/adapters/bm25s``).
+    Where the index lives (default ``~/.local/share/memfw/adapters/bm25s``);
+    a directory at or under the vault root is refused.
 ``clearance``
     Comma separated privacy levels to index (default ``public,shared``).
 ``name``, ``k1``, ``b``
@@ -134,6 +135,10 @@ class Bm25sProvider:
         self.projection_version = ""
         self._lock = threading.Lock()
         self._built: store.Built | None = None
+        index = self.index_dir().expanduser().resolve()
+        vault = self.root.resolve()
+        if index == vault or vault in index.parents:
+            raise ValueError("data_dir must be outside the vault")
 
     # --- the index ------------------------------------------------------------
 

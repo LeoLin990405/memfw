@@ -277,6 +277,39 @@ def test_unavailable_without_a_vault_and_refuses_a_symlinked_data_dir(tmp_path: 
     assert list(target.iterdir()) == []
 
 
+def test_a_data_dir_inside_the_vault_is_refused(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    for inside in (repository.root, repository.root / "idx", repository.root / "a" / ".." / "b"):
+        with pytest.raises(ValueError, match="outside the vault"):
+            factory({"vault": str(repository.root), "data_dir": str(inside)})
+    link = tmp_path / "link"
+    link.symlink_to(repository.root)
+    with pytest.raises(ValueError, match="outside the vault"):
+        factory({"vault": str(repository.root), "data_dir": str(link / "idx")})
+
+
+def test_a_data_dir_of_another_user_or_not_private_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = _vault(tmp_path)
+    data = tmp_path / "data"
+    provider = factory({"vault": str(repository.root), "data_dir": str(data)})
+    data.mkdir(mode=0o755)
+    os.chmod(data, 0o755)
+    assert _search(provider, "homelab")  # our own directory: tightened to 0700
+    assert stat.S_IMODE(os.lstat(data).st_mode) == 0o700
+    real_uid = os.getuid()
+    monkeypatch.setattr(os, "getuid", lambda: real_uid + 1)
+    repository.add("Quokka", "quokka plan", memory_id="m-quokka")  # forces a save
+    with pytest.raises(store.StoreError, match="another user"):
+        provider.search("quokka", limit=5, budget=RecallBudget(), tenant="", as_of=None)
+    monkeypatch.setattr(os, "getuid", lambda: real_uid)
+    os.chmod(data, 0o755)
+    monkeypatch.setattr(os, "chmod", lambda *args, **kwargs: None)  # cannot tighten
+    with pytest.raises(store.StoreError, match="not private"):
+        provider.search("quokka", limit=5, budget=RecallBudget(), tenant="", as_of=None)
+
+
 def test_registry_spec_is_off_until_enabled(tmp_path: Path) -> None:
     repository = _vault(tmp_path)
     registry = AdapterRegistry()

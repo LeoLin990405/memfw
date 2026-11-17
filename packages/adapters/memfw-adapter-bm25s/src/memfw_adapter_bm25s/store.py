@@ -200,15 +200,25 @@ def default_data_dir(home: Path | None = None) -> Path:
 
 
 def private_dir(path: Path) -> None:
-    """Create ``path`` (and parents) 0700; refuse a symlink; tighten one we own to 0700."""
+    """Create ``path`` (and parents) 0700 and check it is ours and private.
+
+    A symlink, a non-directory, a directory owned by another user, or one that
+    still has group or other permission bits after we tighten our own to 0700
+    is refused (``StoreError``): the index must not be readable by, or
+    planted by, anyone else.
+    """
 
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
     if path.is_symlink() or not path.is_dir():
         raise StoreError("bm25s data directory is not a directory")
     info = os.lstat(path)
     getuid = getattr(os, "getuid", None)
-    if stat.S_IMODE(info.st_mode) != 0o700 and (getuid is None or info.st_uid == getuid()):
+    if getuid is not None and info.st_uid != getuid():
+        raise StoreError("bm25s data directory is owned by another user")
+    if stat.S_IMODE(info.st_mode) != 0o700:
         os.chmod(path, 0o700)
+        if stat.S_IMODE(os.lstat(path).st_mode) & 0o077:
+            raise StoreError("bm25s data directory is not private")
 
 
 def _write_private(path: Path, payload: Any) -> None:
@@ -266,6 +276,7 @@ def save(built: Built, directory: Path, *, bm25s_version: str) -> Path:
     builds of this vault are removed (best effort).
     """
 
+    private_dir(directory.parent)
     private_dir(directory)
     final = directory / f"idx-{built.fingerprint}"
     if (final / MANIFEST).is_file():
