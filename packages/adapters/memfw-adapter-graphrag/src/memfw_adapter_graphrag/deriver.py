@@ -86,7 +86,12 @@ SETTINGS_HASH = ".memfw-settings.sha256"
 #: Model names and the dummy key go into settings.yaml verbatim: a closed alphabet.
 _MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$")
 #: Environment names that could redirect a model or storage endpoint: never passed.
-_ENDPOINT_ENV_RE = re.compile(r"(?:_BASE|_BASE_URL|_ENDPOINT|_HOST)$")
+#: ... nor one that routes traffic or changes what code loads.
+_ENDPOINT_ENV_RE = re.compile(
+    r"(?:_BASE|_BASE_URL|_ENDPOINT|_HOST|_PROXY)$"
+    r"|^(?:ALL_PROXY|NO_PROXY|PYTHONPATH|PYTHONSTARTUP|PYTHONHOME)$"
+    r"|^(?:DYLD_|LD_)"
+)
 #: The key GraphRAG's openai provider is handed; a local endpoint ignores it.
 LOCAL_API_KEY = "memfw-local-no-key"
 #: Variables every run gets from the parent, when set.
@@ -252,12 +257,23 @@ def render_settings(settings: Settings) -> str:
 # -- reading GraphRAG's CSV tables (data, never trusted) ----------------------------------
 
 
-def parse_list(cell: Any) -> list[str]:
-    """The quoted items of a list cell (``"['a', 'b']"`` or NumPy's ``"['a' 'b']"``)."""
+def parse_list(cell: Any) -> list[str] | None:
+    """The quoted items of a list cell (``"['a', 'b']"`` or NumPy's ``"['a' 'b']"``).
 
-    if not isinstance(cell, str) or not cell.strip().startswith("["):
-        return []
-    return [a or b for a, b in _QUOTED_RE.findall(cell)]
+    ``None`` (the caller drops the row) unless the cell is ``[...]`` holding
+    nothing but quoted items, whitespace and commas: a NumPy summary
+    (``['u1' 'u2' ... 'u1000']``) or an unquoted item would otherwise lose ids.
+    """
+
+    if not isinstance(cell, str):
+        return None
+    text = cell.strip()
+    if not (text.startswith("[") and text.endswith("]")):
+        return None
+    inner = text[1:-1]
+    if _QUOTED_RE.sub("", inner).strip(" \t\r\n,"):
+        return None
+    return [a or b for a, b in _QUOTED_RE.findall(inner)]
 
 
 def read_table(directory: Path, name: str) -> list[dict[str, str]]:
@@ -327,12 +343,8 @@ def read_output(directory: Path) -> Output:
 
 
 def _strict_list(cell: Any) -> list[str] | None:
-    """A list cell's items, or ``None`` when the cell is not a list at all."""
+    """A list cell's items, or ``None`` when it is not a clean list (see :func:`parse_list`)."""
 
-    if not isinstance(cell, str) or not (
-        cell.strip().startswith("[") and cell.strip().endswith("]")
-    ):
-        return None
     return parse_list(cell)
 
 
@@ -359,7 +371,11 @@ class _CommunityUnits:
     cell that is not a list, or a cycle makes the whole community unresolvable.
     """
 
+    #: Deeper community nesting than this is unresolvable (dropped).
+    MAX_DEPTH = 64
+
     def __init__(self, output: Output) -> None:
+        self._memo: dict[str, list[str] | None] = {}
         self.communities = {
             row.get("community", ""): row for row in output.communities if row.get("community")
         }
@@ -372,8 +388,22 @@ class _CommunityUnits:
             )
 
     def units(self, community: str, seen: frozenset[str] = frozenset()) -> list[str] | None:
+        """Memoised per community, so shared children (a diamond) are traced once."""
+
+        if community in self._memo:
+            return self._memo[community]
+        if community in seen or len(seen) >= self.MAX_DEPTH:
+            return None
+        try:
+            result = self._units(community, seen)
+        except RecursionError:
+            result = None
+        self._memo[community] = result
+        return result
+
+    def _units(self, community: str, seen: frozenset[str]) -> list[str] | None:
         row = self.communities.get(community)
-        if row is None or community in seen:
+        if row is None:
             return None
         own = _strict_list(row.get("text_unit_ids"))
         entity_ids = _strict_list(row.get("entity_ids"))
@@ -382,7 +412,7 @@ class _CommunityUnits:
         if own is None or entity_ids is None or relationship_ids is None or children is None:
             return None
         units = list(own)
-        for entity_id in entity_ids:
+        for entity_id in dict.fromkeys(entity_ids):
             entity = self.entities.get(entity_id)
             entity_units = None if entity is None else _strict_list(entity.get("text_unit_ids"))
             if entity is None or entity_units is None:
@@ -400,12 +430,12 @@ class _CommunityUnits:
             if rel_units is None:
                 return None
             units += rel_units
-        for child in children:
+        for child in dict.fromkeys(children):
             child_units = self.units(child, seen | {community})
             if child_units is None:
                 return None
             units += child_units
-        return units
+        return list(dict.fromkeys(units))  # each unit once, so shared children stay small
 
 
 def _memories_of(
@@ -430,7 +460,8 @@ def graph_rows(
 ) -> list[dict[str, Any]]:
     rows: dict[tuple[str, ...], dict[str, Any]] = {}
     for item in output.entities:
-        sources = _memories_of(parse_list(item.get("text_unit_ids")), output, current)
+        unit_ids = parse_list(item.get("text_unit_ids"))
+        sources = None if unit_ids is None else _memories_of(unit_ids, output, current)
         name = _short(item.get("title"), MAX_NAME_CHARS)
         if sources is None or not name:
             continue
@@ -445,7 +476,8 @@ def graph_rows(
             },
         )
     for item in output.relationships:
-        sources = _memories_of(parse_list(item.get("text_unit_ids")), output, current)
+        unit_ids = parse_list(item.get("text_unit_ids"))
+        sources = None if unit_ids is None else _memories_of(unit_ids, output, current)
         source = _short(item.get("source"), MAX_NAME_CHARS)
         target = _short(item.get("target"), MAX_NAME_CHARS)
         if sources is None or not source or not target:
@@ -742,8 +774,10 @@ class GraphRagDeriver:
         input_dir.mkdir(mode=0o700, exist_ok=True)
         names = {input_name(memory): data for memory, data in wanted.values()}
         for existing in input_dir.iterdir():
-            if existing.suffix == ".txt" and (existing.is_symlink() or not existing.is_file()):
-                raise GraphRagError("bad_input_dir")  # e.g. a directory named *.txt
+            if existing.is_symlink() or not existing.is_file():
+                # A subdirectory (GraphRAG would read *.txt below it), a symlink,
+                # a directory named *.txt: nothing but our own files belongs here.
+                raise GraphRagError("bad_input_dir")
             if existing.name not in names and existing.suffix == ".txt":
                 existing.unlink()
         for name, data in sorted(names.items()):

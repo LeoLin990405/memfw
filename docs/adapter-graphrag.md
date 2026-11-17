@@ -38,7 +38,8 @@ What is staged is the vault file's own bytes, not the projection rendering: `<ve
 `<hash>` (the first 12 hex digits of their SHA-256) label exactly what GraphRAG indexed, so a
 memory that changes, even one without a version, gets a new name and its old rows drop out of
 every view. Each file is written through a fresh temporary file (`O_EXCL`, `O_NOFOLLOW`); an
-entry named `*.txt` that is not a regular file stops staging (`bad_input_dir`).
+entry in `input/` that is not a regular file (a subdirectory, which GraphRAG would also read,
+a symlink, a directory named `*.txt`) stops staging (`bad_input_dir`).
 
 The projection export projects every privacy class by default, so this re-check is what keeps
 private memories out; exporting with `--skip-privacy unknown,local-private` as well does no
@@ -75,12 +76,15 @@ timeout (`timeout`, default 6 hours) and only these environment variables: `PATH
 refuses when the file or its hash differs from what the current settings would write
 (`settings_changed`), when `${` appears in it (`settings_placeholder`), or when `<root>/.env`
 exists (`dotenv_present`; GraphRAG would read it). `pass_env` may not name a variable ending in
-`_BASE`, `_BASE_URL`, `_ENDPOINT` or `_HOST`. It also refuses when `stage_input` has not run
+`_BASE`, `_BASE_URL`, `_ENDPOINT`, `_HOST` or `_PROXY`, nor `ALL_PROXY`, `NO_PROXY`,
+`PYTHONPATH`, `PYTHONSTARTUP`, `PYTHONHOME`, or any `DYLD_*` / `LD_*` loader variable. It also refuses when `stage_input` has not run
 (`no_input`), when the command does not resolve (`missing_dependency`), or when the GraphRAG
 installed in the command's environment is not 3.3.0 (`version_mismatch`) or cannot be told
 (`version_unknown`). The version is read from that environment's
 `graphrag-<version>.dist-info` (beside the script, or beside the interpreter its `#!` line
-names); nothing is executed to find it.
+names); nothing is executed to find it. This is a guard against running the wrong release
+by mistake, not proof: a dist-info can be edited, and the command could be a wrapper that
+runs something else.
 
 The run gets its own session; on timeout the whole process group is killed
 (`index_timeout`). A non-zero exit is `index_failed`. Point the models at a local
@@ -94,7 +98,10 @@ The adapter's settings select the CSV table provider; it reads GraphRAG's output
 table counts as empty.
 
 `derive(vault, DeriveRequest(kind, memory_ids))` traces every row back to memories:
-`text_unit_ids` → `text_units.document_id` → `documents.title` (`<id>.v<version>.<hash>.txt`). A row
+`text_unit_ids` → `text_units.document_id` → `documents.title` (`<id>.v<version>.<hash>.txt`).
+A list cell counts only when it is `[...]` holding nothing but quoted ids, whitespace and
+commas; anything else (a NumPy summary such as `['u1' 'u2' ... 'u1000']`, which hides the
+elided ids, or an unquoted item) drops the row. A row
 is kept only when **every** text unit behind it maps to a memory that is in the request, still
 shareable and still at the version that was indexed; anything that also draws on another
 file, a memory that turned private or a stale version is dropped.
@@ -106,7 +113,9 @@ file, a memory that turned private or a stale version is dropped.
   community's own `text_unit_ids`, the text units of each entity in `entity_ids` and each
   relationship in `relationship_ids`, the text unit of every covariate (claim) whose subject
   is one of those entities, and the same for every child community, recursively. An id that
-  does not resolve, a list cell that is not a list, or a cycle drops the report.
+  does not resolve, a list cell that is not a clean list, a cycle, or nesting deeper than 64
+  communities drops the report. Each community is traced once and memoised, so shared
+  children do not multiply the work.
 
 The view cites exactly the memories its rows name, caps at `epistemic_cap: inference` and
 `causal_cap: association`, and carries at most `max_rows` rows. Re-run steps 1 and 2 after the

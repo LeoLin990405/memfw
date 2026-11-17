@@ -334,6 +334,15 @@ def test_stage_input_refuses_odd_entries_in_the_input_directory(
         make(project).stage_input(tree, vault)
 
 
+def test_stage_input_refuses_subdirectories_in_the_input_directory(
+    vault: Path, project: Path, tmp_path: Path
+) -> None:
+    tree = export(vault, tmp_path)
+    (project / INPUT_DIR / "nested").mkdir(parents=True)
+    with pytest.raises(GraphRagError, match="bad_input_dir"):
+        make(project).stage_input(tree, vault)
+
+
 def test_stage_input_refuses_a_root_inside_the_vault(vault: Path, tmp_path: Path) -> None:
     inside = vault / "graphrag"
     inside.mkdir()
@@ -564,6 +573,14 @@ def test_rendering_needs_both_models(project: Path) -> None:
         ({"root": "/tmp", "pass_env": ["MODEL_BASE_URL"]}, "bad_option"),
         ({"root": "/tmp", "pass_env": ["LLM_ENDPOINT"]}, "bad_option"),
         ({"root": "/tmp", "pass_env": ["OLLAMA_HOST"]}, "bad_option"),
+        ({"root": "/tmp", "pass_env": ["HTTPS_PROXY"]}, "bad_option"),
+        ({"root": "/tmp", "pass_env": ["ALL_PROXY"]}, "bad_option"),
+        ({"root": "/tmp", "pass_env": ["NO_PROXY"]}, "bad_option"),
+        ({"root": "/tmp", "pass_env": ["PYTHONPATH"]}, "bad_option"),
+        ({"root": "/tmp", "pass_env": ["PYTHONSTARTUP"]}, "bad_option"),
+        ({"root": "/tmp", "pass_env": ["PYTHONHOME"]}, "bad_option"),
+        ({"root": "/tmp", "pass_env": ["DYLD_INSERT_LIBRARIES"]}, "bad_option"),
+        ({"root": "/tmp", "pass_env": ["LD_PRELOAD"]}, "bad_option"),
         ({"root": "/tmp", "api_base": "http://localhost:11434/v1"}, "bad_endpoint"),
         ({"root": "/tmp", "completion_model": "a b"}, "bad_option"),
     ],
@@ -588,8 +605,85 @@ def test_list_cells_parse_python_and_numpy_reprs() -> None:
     assert parse_list("['a', 'b']") == ["a", "b"]
     assert parse_list("['a' 'b'\n 'c']") == ["a", "b", "c"]
     assert parse_list('["a"]') == ["a"]
-    for bad in ("", "a, b", None, 3, "[]"):
-        assert parse_list(bad) == []
+    assert parse_list("[]") == [] and parse_list(" [ ] ") == []
+    for bad in ("", "a, b", None, 3, "['a'", "'a']"):
+        assert parse_list(bad) is None, bad
+
+
+@pytest.mark.parametrize(
+    "cell",
+    [
+        "['u1' 'u2' 'u3' ... 'u998' 'u999' 'u1000']",  # NumPy summarises long arrays
+        "['u1', ..., 'u1000']",
+        "['u1', u2]",  # an unquoted item
+        "['u1', 3]",
+        "['u1' 'u2\\'' 'u3']",  # an escaped quote
+        "['u1'] trailing",
+    ],
+)
+def test_list_cells_that_could_hide_ids_are_refused(cell: str) -> None:
+    assert parse_list(cell) is None
+
+
+def test_graph_and_reports_drop_rows_with_elided_or_mixed_unit_lists(
+    vault: Path, project: Path
+) -> None:
+    from memfw_adapter_graphrag.deriver import Output, _CommunityUnits, graph_rows
+
+    output = read_output(project / "output")
+    unit = next(iter(output.unit_memory))
+    current = {mid: name for mid, name in output.unit_memory.values()}
+    for cell in (f"['{unit}' ... '{unit}']", f"['{unit}', u2]"):
+        entity = {"id": "e1", "title": "X", "type": "t", "description": "", "text_unit_ids": cell}
+        relation = {"id": "r1", "source": "X", "target": "Y", "text_unit_ids": cell}
+        partial = Output(output.unit_memory, [entity], [relation], (), ())
+        assert graph_rows(partial, current, max_rows=10) == []
+        community = {
+            "community": "1",
+            "text_unit_ids": cell,
+            "entity_ids": "[]",
+            "relationship_ids": "[]",
+            "children": "[]",
+        }
+        tracer = _CommunityUnits(Output(output.unit_memory, (), (), [community], ()))
+        assert tracer.units("1") is None
+    clean = {
+        "id": "e1",
+        "title": "X",
+        "type": "t",
+        "description": "",
+        "text_unit_ids": f"['{unit}']",
+    }
+    assert (
+        len(graph_rows(Output(output.unit_memory, [clean], (), (), ()), current, max_rows=10)) == 1
+    )
+
+
+def test_community_tracing_is_memoised_and_bounded() -> None:
+    from memfw_adapter_graphrag.deriver import Output, _CommunityUnits
+
+    def community(cid: str, children: list[str]) -> dict[str, str]:
+        return {
+            "community": cid,
+            "text_unit_ids": "['u']",
+            "entity_ids": "[]",
+            "relationship_ids": "[]",
+            "children": "[" + ", ".join(children) + "]",
+        }
+
+    # A ladder of diamonds: each level has two parents of the next level.
+    # Without memoisation tracing level 0 would visit 2**40 paths.
+    rows = []
+    for level in range(40):
+        a, b = str(2 * level), str(2 * level + 1)
+        below = [str(2 * level + 2), str(2 * level + 3)] if level < 39 else []
+        rows += [community(a, below), community(b, below)]
+    tracer = _CommunityUnits(Output({}, (), (), rows, ()))
+    units = tracer.units("0")
+    assert units == ["u"] and len(tracer._memo) == 79  # every community below 0, once
+    # Deeper than MAX_DEPTH: unresolvable, not a RecursionError.
+    chain = [community(str(i), [str(i + 1)]) for i in range(200)] + [community("200", [])]
+    assert _CommunityUnits(Output({}, (), (), chain, ())).units("0") is None
 
 
 def test_fixture_tables_have_graphrag_final_columns() -> None:
