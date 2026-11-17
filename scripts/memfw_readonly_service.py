@@ -244,6 +244,8 @@ CANDIDATE_DIRECTORY = ("_candidates", "remember")
 #: ``/forget`` (v3) writes here: a separate directory, so ``memfw candidates``
 #: and ``candidate-apply`` can never turn a deletion request into a memory.
 FORGET_DIRECTORY = ("_candidates", "forget")
+#: Pending ``/forget`` request files after which a new request is refused (429).
+MAX_PENDING_FORGET_REQUESTS = 1000
 MEMORY_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 MAX_REASON_CHARS = 500
 READ_TOKEN_ENV = "MEMFW_READONLY_TOKEN"
@@ -1240,6 +1242,30 @@ def forget_candidate_id(tenant: str, request_id: str) -> str:
     return f"forget-{tenant_key}-{request_id}"
 
 
+def _pending_forget_requests(directory: Path) -> int:
+    try:
+        with os.scandir(directory) as entries:
+            return sum(
+                1
+                for entry in entries
+                if entry.name.startswith("forget-")
+                and entry.name.endswith(".md")
+                and entry.is_file(follow_symlinks=False)
+            )
+    except FileNotFoundError:
+        return 0
+    except OSError as exc:
+        raise _internal() from exc
+
+
+def _forget_queue_full() -> ServiceError:
+    error = ServiceError(429, "too many pending forget requests")
+    # ``readonly.py`` maps 429 to nothing (it stays unchanged for the
+    # three-file deploy), so the v3 code is set here.
+    error.code = "too_many_requests"
+    return error
+
+
 def _forget_markdown(header: dict[str, Any]) -> str:
     rendered = yaml.dump(
         _single_line(header),
@@ -1328,6 +1354,11 @@ def forget_request(
     if recorded:
         _existing_forget_request(base, relative, expected)
         return response(True)
+    # A bound on what a write token can pile up for review. Replays above are
+    # still answered; a request beyond the cap writes nothing. Concurrent
+    # requests may pass the count together, so the cap is approximate.
+    if _pending_forget_requests(directory) >= MAX_PENDING_FORGET_REQUESTS:
+        raise _forget_queue_full()
     try:
         target_hash = "sha256:" + hashlib.sha256(memory_path.read_bytes()).hexdigest()
     except OSError as exc:

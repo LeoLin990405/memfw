@@ -817,6 +817,36 @@ def test_forget_validation_is_400(
     assert not (root / "_candidates").exists()
 
 
+def test_forget_pending_requests_are_capped(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = seed_vault(tmp_path / "vault")
+    _use_vault(monkeypatch, root)
+    monkeypatch.setattr(service, "MAX_PENDING_FORGET_REQUESTS", 2)
+    for index in range(2):
+        body = {**FORGET_OK, "request_id": f"cap-{index}"}
+        status, payload = _v3(httpd, "/forget", body, WRITE_TOKEN)
+        assert status == 200 and payload["duplicate"] is False
+    before = _tree(root)
+    status, payload = _v3(httpd, "/forget", {**FORGET_OK, "request_id": "cap-2"}, WRITE_TOKEN)
+    assert status == 429
+    assert payload == {
+        "contract": V3,
+        "error": {"code": "too_many_requests", "message": "too many pending forget requests"},
+    }
+    assert _tree(root) == before
+    # A replay of a recorded request is still answered; a hidden target is still 404.
+    status, payload = _v3(httpd, "/forget", {**FORGET_OK, "request_id": "cap-0"}, WRITE_TOKEN)
+    assert status == 200 and payload["duplicate"] is True
+    body = {"request_id": "cap-3", "memory_id": "mem-gamma", "tenant": "tenant-a"}
+    status, payload = _v3(httpd, "/forget", body, WRITE_TOKEN)
+    assert (status, payload) == (404, NOT_FOUND_V3)
+    # Once a human clears one, a new request fits again.
+    next((root / "_candidates" / "forget").glob("forget-*.md")).unlink()
+    status, payload = _v3(httpd, "/forget", {**FORGET_OK, "request_id": "cap-2"}, WRITE_TOKEN)
+    assert status == 200 and payload["duplicate"] is False
+
+
 def test_forget_refuses_a_symlinked_directory(tmp_path: Path) -> None:
     root = seed_vault(tmp_path / "vault")
     outside = tmp_path / "outside"

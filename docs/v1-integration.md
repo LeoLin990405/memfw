@@ -139,6 +139,7 @@ Every non-2xx response uses the same shape and carries the contract tag:
 | 404 | `not_found` |
 | 409 | `conflict` |
 | 413 | `too_large` |
+| 429 | `too_many_requests` (`memfw-http/3` `/forget` only: the pending-request bound) |
 | 500 | `internal` (fixed message, no exception details) |
 
 `message` never contains a token, a host path or the raw request body.
@@ -468,6 +469,12 @@ characters), `source` (optional single line, default `conductor`) and
   `recorded_at`, `deleted: false`, `authority: false`. The body names the
   memory id only; no memory text is copied. Symlinked directory components
   are refused with 500, as for `/stage`.
+- **Bounded.** At most `MAX_PENDING_FORGET_REQUESTS` (1000) request files
+  wait in `_candidates/forget/`; beyond that a new request is 429
+  `too_many_requests` (`too many pending forget requests`) and writes
+  nothing, until a human reviews and removes some. Replays of recorded
+  requests and the visibility 404 are answered as usual. Concurrent requests
+  can pass the count together, so the bound is approximate.
 - **Review.** `memfw forget requests --root <vault>` lists the requests (read
   only) with `target_present` and `target_changed`. Deleting stays a human
   action (`memfw delete`, unchanged; the tombstone redesign of roadmap §6.3
