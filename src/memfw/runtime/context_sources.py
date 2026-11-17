@@ -10,15 +10,23 @@ composition root adapts them here: the conversation share (L3,
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from memfw.context import SessionFeed, SessionSummary, SlotUnavailable, TopicCatalogue
+
+if TYPE_CHECKING:
+    from memfw.conversations.store import ConversationSource
 
 #: ``merged_into`` hops followed before giving up (the ontology's own bound).
 _MAX_MERGE_HOPS = 16
 
 
-def share_feed(root: Path, app: str) -> SessionFeed:
+def share_feed(root: Path, app: str, *, source: ConversationSource | None = None) -> SessionFeed:
     """The latest sessions ``app`` may read, as handoff summaries.
+
+    ``source`` (default: the store ``vault.yaml`` names) replaces the
+    conversation store read, as ``open_share`` takes it; the C4 evaluation
+    passes the store file given on its command line (opened read-only).
 
     Everything goes through ``ConversationShare``: ``list_sessions`` (policy
     filtered: hidden and opted-out apps never appear, ``can_read`` narrows)
@@ -34,7 +42,7 @@ def share_feed(root: Path, app: str) -> SessionFeed:
         caller = app.strip()
         if not caller or caller.lower() == OPERATOR:
             return []
-        share = open_share(root, caller)
+        share = open_share(root, caller, source=source)
         try:
             share.policy.scope(share.caller)
         except ConversationError:

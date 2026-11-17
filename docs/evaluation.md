@@ -162,3 +162,87 @@ Two layers are reported separately:
 
 The experiment is synthetic and small; it shows the gate and the labels behave as
 specified on these cases, not that they generalise to real arguments.
+
+## C4 context pack evaluation
+
+`memfw eval context SNAPSHOT` measures the session-start context pack
+(`memory_context` v2, iteration C) on a **read-only vault snapshot**, so the
+defaults (2000-token budget, per-slot caps, a resident-prefix cap) can be set
+from data. It changes no default; any change still needs the report and an
+explicit approval.
+
+**What it measures**, per slot (`core`, `handoff`, `topics`, and `current`
+when the build has that slot) and for the pack:
+
+- *coverage*: of the memories a session's searches returned, the share already
+  in the opening pack. `core` covers a memory by carrying it (`direct`);
+  `topics` covers the memories about a listed concept and `handoff` those whose
+  `evidence` cites a listed session (`pointer`: the pack pointed at them).
+  Sweep rows give `coverage` (every resident slot) and `coverage_direct`
+  (memory entries only).
+- *waste*: of the pack's items, the share a session never used. "Used" is a
+  C5 `memory_used` signal of the session when a usage store is given
+  (`waste_basis: memory_used`), otherwise it is estimated as "returned by one of
+  the session's searches" (`estimated_from_hits`).
+- *latency*: P50/P95 (nearest rank) over `--repeats` builds of each slot's real
+  provider (`Runtime.context_slot_provider`, so the C3 cache is warm after the
+  first build of `core`).
+- *token cost*: each slot's `used_tokens_est`.
+
+**Where sessions come from**, in this order: the snapshot's `memory_access`
+events of search operations (grouped by `details.session_id` when present,
+otherwise split after `--session-gap-minutes` of silence, default 30); the
+usage store's `memory_used` signals (one session per `session_ref`); or a
+synthetic query set (`--sessions` x `--queries` queries drawn with `--seed`
+from the visible memories and run through `memory_search(mode=fts)`). The
+report's `basis` names the source. The pack is built from the snapshot as it
+is now, not as it was when each session started: read old sessions as an
+approximation.
+
+**The sweep.** Each slot is built at every cap of `--slot-caps` (default
+500,1000,2000,4000; `--slot-cap NAME=CAP,...` sets one slot's list), and every
+combination is scored against every `--resident-caps` value (default
+1000,2000,4000,6000). The resident prefix is *simulated*: slots are taken in
+order while their tokens fit under the cap; the first that does not fit and all
+later ones are demoted (they would become a catalogue line plus a
+`memory_search(mode=two_stage)` hint) and add neither cost nor coverage. A slot
+that is degraded (for example `handoff` without `--conversations`:
+`unavailable`) costs and covers nothing; a slot the build does not know is one
+`available: false` row and is left out of the sweep.
+
+**Read-only, by construction.** The snapshot is never opened in place. The
+command refuses a path without `vault.yaml`, a snapshot with an interrupted
+write (`.pending.json`, `.event-append.pending.json`: reading it would need
+`memfw recover`, which writes), an `--out` inside the snapshot and a store
+inside it. It copies the snapshot (without its search index and lock file) to
+a private temporary directory, runs everything there and deletes it.
+`--conversations` and `--usage` are opened `mode=ro`. The snapshot and both
+stores are fingerprinted (path, size, mtime) before and after; any change
+fails the run with no report.
+
+**Privacy.** Visibility is the MCP server's: `--tenant`, `--source`,
+`--clearance` and `--app` (else `MEMFW_TENANT`, `MEMFW_ALLOWED_SOURCES`,
+`MEMFW_MCP_CLEARANCE`, `MEMFW_APP`; no embedder is ever loaded), the
+`--policy` (`compat_fts` or `strict`), and `conversation_share` for `handoff`.
+A hit the caller may not see is not counted (only `hits_dropped`). The report
+holds counts, ratios, token estimates, timings, slot names and caps: no body,
+title, query, memory or session id, path or tenant name.
+
+**Deterministic.** The same snapshot, stores, options and seed give the same
+report except the `latency_ms` fields. `--now` fixes the policy instant
+(default: the snapshot's latest memory or event time).
+
+```sh
+# Copy the vault first; the command never writes the copy either.
+rsync -a --exclude index.sqlite3 /path/to/vault/ /tmp/vault-snapshot/
+memfw eval context /tmp/vault-snapshot \
+  --conversations /tmp/conversations-copy.sqlite \
+  --usage /tmp/usage-copy.sqlite3 \
+  --clearance public,shared --app claude --policy compat_fts \
+  --out /tmp/c4-report
+# -> /tmp/c4-report/context-eval.json and context-eval.md
+```
+
+The tests (`tests/test_context_eval.py`) check every number on a hand-worked
+synthetic fixture (`tests/context_eval_fixtures.py`) plus invariants on a
+generated one; none of it is real data.

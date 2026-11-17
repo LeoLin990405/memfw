@@ -2261,6 +2261,146 @@ def eval_causal(
     )
 
 
+def _cap_list(value: str, what: str) -> tuple[int, ...]:
+    try:
+        caps = tuple(int(item) for item in value.split(",") if item.strip())
+    except ValueError as exc:
+        raise typer.BadParameter(f"{what} must be comma-separated integers") from exc
+    if not caps:
+        raise typer.BadParameter(f"{what} must name at least one cap")
+    return caps
+
+
+@eval_app.command("context")
+def eval_context(
+    snapshot: Annotated[
+        Path, typer.Argument(help="A read-only vault snapshot (a copy; never written)")
+    ],
+    conversations: Annotated[
+        Path | None,
+        typer.Option("--conversations", help="Conversation store file for handoff (read-only)"),
+    ] = None,
+    usage: Annotated[
+        Path | None,
+        typer.Option("--usage", help="C5 usage projection file (memory_used; read-only)"),
+    ] = None,
+    policy: Annotated[str, typer.Option("--policy", help="compat_fts or strict")] = "compat_fts",
+    tenant: Annotated[
+        str | None, typer.Option("--tenant", help="Tenant (default MEMFW_TENANT)")
+    ] = None,
+    sources: Annotated[
+        list[str] | None,
+        typer.Option("--source", help="Allowed source, repeatable (default MEMFW_ALLOWED_SOURCES)"),
+    ] = None,
+    clearance: Annotated[
+        str | None,
+        typer.Option("--clearance", help="Privacy levels, comma separated (MEMFW_MCP_CLEARANCE)"),
+    ] = None,
+    app_name: Annotated[
+        str | None, typer.Option("--app", help="Calling app for handoff (default MEMFW_APP)")
+    ] = None,
+    slots: Annotated[
+        str | None, typer.Option("--slots", help="Slots, comma separated, in pack order")
+    ] = None,
+    slot_caps: Annotated[
+        str, typer.Option("--slot-caps", help="Token caps swept for every slot")
+    ] = "500,1000,2000,4000",
+    slot_cap: Annotated[
+        list[str] | None,
+        typer.Option("--slot-cap", help="NAME=CAP[,CAP...]: caps for one slot (repeatable)"),
+    ] = None,
+    resident_caps: Annotated[
+        str, typer.Option("--resident-caps", help="Resident-prefix caps swept (tokens)")
+    ] = "1000,2000,4000,6000",
+    seed: Annotated[int, typer.Option("--seed")] = 17,
+    sessions: Annotated[int, typer.Option("--sessions", help="Synthetic sessions")] = 20,
+    queries: Annotated[int, typer.Option("--queries", help="Queries per synthetic session")] = 5,
+    repeats: Annotated[int, typer.Option("--repeats", help="Timed builds per slot and cap")] = 5,
+    session_gap: Annotated[
+        float, typer.Option("--session-gap-minutes", help="Silence that splits access sessions")
+    ] = 30.0,
+    now: Annotated[
+        str | None, typer.Option("--now", help="ISO instant (default: the snapshot's latest)")
+    ] = None,
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", help="Directory for context-eval.json and context-eval.md"),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print the JSON report")] = False,
+) -> None:
+    """C4: coverage, waste, latency and token cost of the context pack (read-only).
+
+    Runs the real slot providers on a private copy of SNAPSHOT for every slot
+    cap and resident-prefix cap and prints a markdown table (``--json``: the
+    JSON report). The report holds counts, ratios and timings only. No
+    default changes; see docs/evaluation.md, "C4 context pack evaluation".
+    """
+
+    from datetime import datetime as _datetime
+
+    from .runtime.context_eval import (
+        EVAL_SLOTS,
+        EvalOptions,
+        SnapshotChanged,
+        SnapshotRefused,
+        evaluate_snapshot,
+        render_markdown,
+    )
+
+    names = (
+        tuple(item.strip() for item in slots.split(",") if item.strip()) if slots else EVAL_SLOTS
+    )
+    per_slot: dict[str, tuple[int, ...]] = {}
+    for item in slot_cap or []:
+        name, sep, caps = item.partition("=")
+        if not sep or not name.strip():
+            raise typer.BadParameter("--slot-cap must be NAME=CAP[,CAP...]")
+        per_slot[name.strip()] = _cap_list(caps, "--slot-cap")
+    moment = None
+    if now:
+        try:
+            moment = _datetime.fromisoformat(now.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise typer.BadParameter("--now must be an ISO 8601 instant") from exc
+        if moment.tzinfo is None:
+            raise typer.BadParameter("--now must include a timezone")
+    options = EvalOptions(
+        policy=policy,
+        tenant=tenant,
+        allowed_sources=tuple(sources) if sources else None,
+        clearance=clearance,
+        app=app_name,
+        slots=names,
+        slot_caps=per_slot,
+        default_slot_caps=_cap_list(slot_caps, "--slot-caps"),
+        resident_caps=_cap_list(resident_caps, "--resident-caps"),
+        seed=seed,
+        sessions=sessions,
+        queries=queries,
+        repeats=repeats,
+        session_gap_minutes=session_gap,
+        now=moment,
+    )
+    outputs = [out / "context-eval.json", out / "context-eval.md"] if out else []
+    try:
+        report = evaluate_snapshot(
+            snapshot,
+            options=options,
+            conversations=conversations,
+            usage=usage,
+            outputs=[out, *outputs] if out else [],
+        )
+    except (SnapshotRefused, SnapshotChanged, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    payload = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    markdown = render_markdown(report)
+    if out:
+        out.mkdir(parents=True, exist_ok=True)
+        outputs[0].write_text(payload, encoding="utf-8")
+        outputs[1].write_text(markdown, encoding="utf-8")
+    typer.echo(payload if json_output else markdown, nl=False)
+
+
 @okf_app.command("export")
 def okf_export(
     out: Annotated[Path, typer.Argument(help="Output directory for the OKF bundle")],
