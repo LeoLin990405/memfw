@@ -21,7 +21,11 @@ from .code_retrieval import CodeIndex, index_code
 from .conversations.cli import app as conversations_app
 from .conversations.policy import OPERATOR, SharePolicy
 from .core import invocation
-from .core.epistemic import validate_epistemic_write
+from .core.epistemic import (
+    OPEN_QUESTION_TYPE,
+    validate_epistemic_write,
+    validate_open_question_references,
+)
 from .core.errors import IntegrityError, MemfwError, NotFoundError
 from .core.models import Layer, Tier
 from .core.repository import Repository, open_vault
@@ -79,6 +83,7 @@ from .projections import ObsidianProjector
 from .related import RelatedIndex
 from .retrieval import VaultRetriever
 from .stats import measure_runtime
+from .storage.operations import lookup_current
 from .tiers import BudgetAwareTierPolicy
 
 app = typer.Typer(help="Local-first Markdown memory vault", no_args_is_help=True)
@@ -1031,6 +1036,83 @@ def _json_option(raw: str | None, option: str) -> Any:
     return parsed
 
 
+def _open_question_block(
+    current: dict[str, Any] | None,
+    question: str | None,
+    conflicts: list[str] | None,
+    missing: str | None,
+) -> dict[str, Any] | None:
+    """The ``open_question`` block from ``--question/--conflicts/--missing``.
+
+    ``None`` when none of the options is given (the write carries no block).
+    ``current`` is the stored block of an update: given options replace its
+    fields (``--conflicts`` replaces the whole list), the rest is kept. The
+    write gates (type, no claim, conflicts exist in the same tenant) run in
+    the repository; this only shapes the block.
+    """
+
+    if question is None and conflicts is None and missing is None:
+        return None
+    block: dict[str, Any] = dict(current or {})
+    if question is not None:
+        block["question"] = question
+    if conflicts is not None:
+        block["conflicts"] = [
+            part.strip() for item in conflicts for part in item.split(",") if part.strip()
+        ]
+    if missing is not None:
+        block["missing"] = missing
+    if "question" not in block:
+        raise typer.BadParameter("--conflicts and --missing need --question")
+    block.setdefault("conflicts", [])
+    block.setdefault("missing", "")
+    return block
+
+
+def _resolve_open_question(root: Path, memory_id: str, answer_id: str, *, dry_run: bool) -> None:
+    """``memfw update QUESTION --resolved-by ANSWER``: a human closes an open question."""
+
+    try:
+        repository = _repo(root)
+        if dry_run:
+            question = repository.get(memory_id)
+            if question.type != OPEN_QUESTION_TYPE or question.open_question is None:
+                raise IntegrityError(f"Not an open question: {memory_id}")
+            if question.open_question.resolved_by is not None:
+                raise IntegrityError(
+                    f"Open question is already resolved by {question.open_question.resolved_by}: "
+                    + memory_id
+                )
+            if question.valid_to is not None:
+                raise IntegrityError(f"Open question is no longer current: {memory_id}")
+            values = question.model_dump()
+            block = question.open_question.model_dump(mode="json")
+            values.update(
+                open_question={**block, "resolved_by": answer_id}, valid_to=repository._now()
+            )
+            validate_open_question_references(
+                values,
+                lookup=lambda ref: lookup_current(repository, ref),
+                previous=question.model_dump(),
+            )
+            typer.echo(
+                json.dumps(
+                    {
+                        "memory_id": memory_id,
+                        "resolved_by": answer_id,
+                        "valid": True,
+                        "version": question.version + 1,
+                    }
+                )
+            )
+            return
+        repository.resolve_open_question(memory_id, answer_id)
+        _enforce_after_write(repository)
+    except MemfwError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(f"Resolved {memory_id} by {answer_id}")
+
+
 def _parse_now(raw: str | None) -> datetime | None:
     if raw is None:
         return None
@@ -1194,50 +1276,84 @@ def add(
             help="public, shared or local-private. Unset: the vault's legacy_privacy_default",
         ),
     ] = None,
+    tenant: Annotated[
+        str, typer.Option("--tenant", help='Tenant of the memory (default: "")')
+    ] = "",
+    question: Annotated[
+        str | None,
+        typer.Option(
+            "--question",
+            help="What is unknown (with --type open-question; such a memory takes no "
+            "--epistemic, --causal, --causal-record or --experience)",
+        ),
+    ] = None,
+    conflicts: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--conflicts",
+            help="Id of a memory that contradicts another on the question (repeatable or "
+            "comma-separated; each must exist in the same tenant)",
+        ),
+    ] = None,
+    missing: Annotated[
+        str | None, typer.Option("--missing", help="What evidence would answer the question")
+    ] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run/--apply")] = False,
 ) -> None:
-    """Add a Markdown memory."""
+    """Add a Markdown memory (--type open-question --question ... records an unknown)."""
     try:
         privacy_value(privacy)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     record = _json_option(causal_record, "--causal-record")
     experience_record = _json_option(experience, "--experience")
+    block = _open_question_block(None, question, conflicts, missing)
     try:
         if dry_run:
-            if root.exists() and (root / "vault.yaml").exists():
+            vault_exists = root.exists() and (root / "vault.yaml").exists()
+            if vault_exists:
                 repository = _repo(root)
                 if memory_id is not None:
                     repository._check_id(memory_id)
                     if any(event.memory_id == memory_id for event in repository.events()):
                         raise IntegrityError(f"Memory id already used: {memory_id}")
-            validate_epistemic_write(
-                {
-                    "type": memory_type,
-                    "epistemic": epistemic,
-                    "causal": causal,
-                    "causal_record": record,
-                    "limitations": limitation or [],
-                    "experience": experience_record,
-                    "evidence": evidence or [],
-                    "body": body,
-                    "source": "manual",
-                    "provenance": "human-authored",
-                },
-                actor="human",
-            )
-            typer.echo(
-                json.dumps(
-                    {
-                        "valid": True,
-                        "memory_id": memory_id,
-                        "layer": layer.value,
-                        "tier": tier.value,
-                        "epistemic": epistemic,
-                        "causal": causal,
-                    }
+            gate_values: dict[str, Any] = {
+                "type": memory_type,
+                "epistemic": epistemic,
+                "causal": causal,
+                "causal_record": record,
+                "limitations": limitation or [],
+                "experience": experience_record,
+                "evidence": evidence or [],
+                "body": body,
+                "source": "manual",
+                "provenance": "human-authored",
+            }
+            if block is not None:
+                # Only with the open-question options: other dry runs are unchanged.
+                gate_values.update(id=memory_id, tenant=tenant, open_question=block)
+            validate_epistemic_write(gate_values, actor="human")
+            if block is not None and block["conflicts"] and not vault_exists:
+                # The conflicts cannot be checked without the vault, and the
+                # real write would fail: do not report a dry run as valid.
+                raise IntegrityError(
+                    "open_question.conflicts can only be checked in an existing vault: " + str(root)
                 )
-            )
+            if block is not None and vault_exists:
+                validate_open_question_references(
+                    gate_values, lookup=lambda ref: lookup_current(repository, ref)
+                )
+            summary: dict[str, Any] = {
+                "valid": True,
+                "memory_id": memory_id,
+                "layer": layer.value,
+                "tier": tier.value,
+                "epistemic": epistemic,
+                "causal": causal,
+            }
+            if block is not None:
+                summary["open_question"] = block
+            typer.echo(json.dumps(summary))
             return
         repository = _repo(root)
         doc = repository.add(
@@ -1247,6 +1363,8 @@ def add(
             layer=layer,
             tier=tier,
             memory_type=memory_type,
+            tenant=tenant,
+            open_question=block,
             epistemic=epistemic,  # type: ignore[arg-type]
             causal=causal,  # type: ignore[arg-type]
             causal_record=record,
@@ -1262,9 +1380,29 @@ def add(
 
 
 @app.command("list")
-def list_memories(root: Annotated[Path, typer.Option("--root", "-r")] = Path(".")) -> None:
+def list_memories(
+    root: Annotated[Path, typer.Option("--root", "-r")] = Path("."),
+    as_json: Annotated[bool, typer.Option("--json", help="Print one JSON object instead")] = False,
+) -> None:
     """List current memories and show integrity warnings."""
     repository = _repo(root)
+    if as_json:
+        documents = repository.list()
+        warnings = repository.list_warnings()
+        rows = [
+            {
+                "id": document.id,
+                "tier": document.tier.value,
+                "layer": document.layer.value,
+                "title": document.title,
+                "stub": document.is_stub,
+            }
+            for document in documents
+        ]
+        typer.echo(json.dumps({"memories": rows, "warnings": warnings}, ensure_ascii=False))
+        for warning in warnings:
+            typer.echo(f"warning: {warning}", err=True)
+        return
     for document in repository.list():
         suffix = "\tstub" if document.is_stub else ""
         typer.echo(
@@ -1278,11 +1416,17 @@ def list_memories(root: Annotated[Path, typer.Option("--root", "-r")] = Path("."
 def show(
     memory_id: Annotated[str, typer.Argument()],
     root: Annotated[Path, typer.Option("--root", "-r")] = Path("."),
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Print the parsed memory as one JSON object")
+    ] = False,
 ) -> None:
     """Show one memory as Markdown."""
     try:
         repository = _repo(root)
-        repository.get(memory_id)
+        document = repository.get(memory_id)
+        if as_json:
+            typer.echo(json.dumps(document.model_dump(mode="json"), ensure_ascii=False))
+            return
         typer.echo(repository._current_path(memory_id).read_bytes().decode("utf-8"), nl=False)
     except MemfwError as exc:
         raise typer.BadParameter(str(exc)) from exc
@@ -1315,11 +1459,51 @@ def update(
     limitation: Annotated[
         list[str] | None, typer.Option("--limitation", help="Known limitation (repeatable)")
     ] = None,
+    question: Annotated[
+        str | None,
+        typer.Option("--question", help="Open question only: reword what is unknown"),
+    ] = None,
+    conflicts: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--conflicts",
+            help="Open question only: replace the conflicting memory ids (repeatable or "
+            "comma-separated; same tenant)",
+        ),
+    ] = None,
+    missing: Annotated[
+        str | None,
+        typer.Option("--missing", help="Open question only: what evidence would answer it"),
+    ] = None,
+    resolved_by: Annotated[
+        str | None,
+        typer.Option(
+            "--resolved-by",
+            help="Open question only: resolve it with this answer memory (sets valid_to; "
+            "a human decision, not combinable with other changes)",
+        ),
+    ] = None,
+    privacy: Annotated[
+        str | None,
+        typer.Option("--privacy", help="public, shared or local-private (a human decision)"),
+    ] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run/--apply")] = False,
 ) -> None:
     """Update selected memory fields; --dry-run validates without writing."""
     if status is not None and status not in {"confirmed", "unconfirmed", "disputed"}:
         raise typer.BadParameter("--status must be confirmed, unconfirmed or disputed")
+    if privacy is not None:
+        try:
+            privacy = privacy_value(privacy)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+    if resolved_by is not None:
+        others = (title, body, layer, tier, status, evidence, epistemic, causal, causal_record)
+        extra = (limitation, question, conflicts, missing, privacy)
+        if any(value is not None for value in (*others, *extra)):
+            raise typer.BadParameter("--resolved-by cannot be combined with other changes")
+        _resolve_open_question(root, memory_id, resolved_by, dry_run=dry_run)
+        return
     record = _json_option(causal_record, "--causal-record")
     changes: dict[str, Any] = {
         key: value
@@ -1334,17 +1518,39 @@ def update(
             "causal": causal,
             "causal_record": record,
             "limitations": limitation,
+            "privacy": privacy,
         }.items()
         if value is not None
     }
     try:
         repository = _repo(root)
+        if question is not None or conflicts is not None or missing is not None:
+            stored = repository.get(memory_id).open_question
+            current = stored.model_dump(mode="json") if stored is not None else None
+            changes["open_question"] = _open_question_block(current, question, conflicts, missing)
         if dry_run:
             old = repository.get(memory_id)
-            if set(changes) & {"epistemic", "causal", "causal_record", "limitations", "body"}:
+            if set(changes) & {
+                "epistemic",
+                "causal",
+                "causal_record",
+                "limitations",
+                "body",
+                "open_question",
+            }:
                 values = old.model_dump()
                 values.update(changes)
                 validate_epistemic_write(values, actor="human", previous_causal=old.causal)
+            if changes and OPEN_QUESTION_TYPE in (old.type, changes.get("type")):
+                # As the real update: every write to an open question re-checks
+                # its references, whichever fields it changes.
+                values = old.model_dump()
+                values.update(changes)
+                validate_open_question_references(
+                    values,
+                    lookup=lambda ref: lookup_current(repository, ref),
+                    previous=old.model_dump(),
+                )
             typer.echo(
                 json.dumps(
                     {
@@ -1447,6 +1653,10 @@ def index_search(
         bool,
         typer.Option("--query-stdin", help="Read the query from stdin (keeps it out of argv)"),
     ] = False,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Print one JSON object (results, warnings, metrics)"),
+    ] = False,
 ) -> None:
     """Search current Markdown and cold summary stubs; hits may trigger measured autowarm."""
     if query_stdin:
@@ -1468,6 +1678,17 @@ def index_search(
         return
     retriever = VaultRetriever(repository, index)
     identifiers = retriever.retrieve(query)
+    if as_json:
+        results: list[dict[str, str]] = []
+        warnings: list[str] = []
+        for memory_id in identifiers:
+            try:
+                results.append({"id": memory_id, "title": repository.get(memory_id).title})
+            except MemfwError as exc:
+                warnings.append(f"{memory_id}: {exc}")
+        payload = {"results": results, "warnings": warnings, "metrics": retriever.last_metrics}
+        typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return
     for memory_id in identifiers:
         try:
             doc = repository.get(memory_id)
@@ -2423,3 +2644,78 @@ def corroboration_queue(
         _projection_fail(exc)
         return
     typer.echo(json.dumps(payload, ensure_ascii=False))
+
+
+# --- grouped top-level help ----------------------------------------------------
+
+PANEL_DAILY = "Daily"
+PANEL_APPROVAL = "Approval"
+PANEL_OPS = "Ops"
+PANEL_EXPORT = "Export"
+
+#: The ``memfw --help`` panel of every top-level command and group. Help layout
+#: only: names, options and behaviour are unchanged. A new top-level command
+#: must be added here (``tests/test_cli_tidy.py`` checks that none is missing).
+HELP_PANELS: dict[str, str] = {
+    # Day-to-day reading and writing of memories.
+    "init": PANEL_DAILY,
+    "add": PANEL_DAILY,
+    "list": PANEL_DAILY,
+    "show": PANEL_DAILY,
+    "update": PANEL_DAILY,
+    "delete": PANEL_DAILY,
+    "rollback": PANEL_DAILY,
+    "supersede": PANEL_DAILY,
+    "layer-set": PANEL_DAILY,
+    "layer": PANEL_DAILY,
+    "stats": PANEL_DAILY,
+    "concepts": PANEL_DAILY,
+    "memory-related": PANEL_DAILY,
+    "handoff": PANEL_DAILY,
+    "notes": PANEL_DAILY,
+    "code": PANEL_DAILY,
+    # Human decisions: proposals, staged candidates, dream questions.
+    "record-proposal": PANEL_APPROVAL,
+    "approve-proposal": PANEL_APPROVAL,
+    "review": PANEL_APPROVAL,
+    "candidates": PANEL_APPROVAL,
+    "candidate-apply": PANEL_APPROVAL,
+    "candidates-expire": PANEL_APPROVAL,
+    "capture": PANEL_APPROVAL,
+    "consolidate": PANEL_APPROVAL,
+    "dream": PANEL_APPROVAL,
+    "experience": PANEL_APPROVAL,
+    "corroboration": PANEL_APPROVAL,
+    # Vault health, indexes, budgets, tiers, stores and settings.
+    "fsck": PANEL_OPS,
+    "recover": PANEL_OPS,
+    "index": PANEL_OPS,
+    "log": PANEL_OPS,
+    "budget": PANEL_OPS,
+    "forget": PANEL_OPS,
+    "tiers": PANEL_OPS,
+    "tier": PANEL_OPS,
+    "cold-archive": PANEL_OPS,
+    "cold-restore": PANEL_OPS,
+    "memory-related-build": PANEL_OPS,
+    "history": PANEL_OPS,
+    "conversations": PANEL_OPS,
+    "privacy": PANEL_OPS,
+    "eval": PANEL_OPS,
+    # Read-only exits to other tools.
+    "okf": PANEL_EXPORT,
+    "projection": PANEL_EXPORT,
+    "project": PANEL_EXPORT,
+    "resolve": PANEL_EXPORT,
+}
+
+
+def _assign_help_panels() -> None:
+    for command in app.registered_commands:
+        name = command.name or typer.main.get_command_name(command.callback.__name__)  # type: ignore[union-attr]
+        command.rich_help_panel = HELP_PANELS.get(name)
+    for group in app.registered_groups:
+        group.rich_help_panel = HELP_PANELS.get(str(group.name))
+
+
+_assign_help_panels()

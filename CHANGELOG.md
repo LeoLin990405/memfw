@@ -11,6 +11,26 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
+### Added — CLI tidy-up: open questions, `--json`, grouped help
+
+- `memfw add --type open-question --question TEXT [--conflicts ID ...]
+  [--missing TEXT] [--tenant T]` creates an open question from the CLI, and
+  `memfw update ID --question/--conflicts/--missing` edits its block
+  (`--conflicts` replaces the list; repeatable or comma-separated).
+  `memfw update ID --resolved-by ANSWER` resolves it (sets `valid_to`; not
+  combinable with other changes). All go through the U1 gates: human actor,
+  no epistemic/causal/causal_record/experience, conflicts and answer exist in
+  the question's tenant; `--dry-run` runs the same checks. No MCP or HTTP
+  write path was added. `memfw update --privacy LEVEL` sets a memory's level.
+- `--json` on `list`, `show` and `index search` (the read commands that did
+  not print JSON). Without the flag their output is byte-identical to before
+  (`tests/harness/cli_tidy_probe.py`, opt-in with `MEMFW_ARCH_BASE_REF`).
+- `memfw --help` groups the top-level commands into Daily, Approval, Ops and
+  Export panels (`memfw.cli.HELP_PANELS`). Command names and behaviour are
+  unchanged.
+- `docs/cli-mcp-parity.md`: every capability × CLI / MCP / HTTP, each gap
+  marked by design or accidental (filled or open).
+
 ### Added — privacy levels and clearance filtering on the exits (MM0)
 
 - `MemoryDocument.privacy`: `public`, `shared` or `local-private` (read
