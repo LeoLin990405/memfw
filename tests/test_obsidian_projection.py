@@ -28,6 +28,16 @@ from memfw.projections.obsidian import (
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 LOCK = (".memfw.lock",)
 
+
+@pytest.fixture(autouse=True)
+def _home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Out-of-vault projections live under the home directory: give every test its own."""
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    return home
+
+
 #: Markers that only hidden memories carry (id, title, body, concept); none may
 #: appear anywhere in a default-clearance board.
 HIDDEN_MARKERS = (

@@ -14,7 +14,14 @@ This module picks the store, turns the caller's settings into an
   checked against the three rules above, with the vault's current
   ``legacy_privacy_default``; a concept file that states a privacy level is
   re-read too. A memory that was deleted or made private after the last
-  rebuild is therefore hidden before the next one.
+  rebuild is therefore hidden before the next one. A concept node must still
+  exist in the vault: a concept file (or a label/alias of one, through the
+  alias index), else a value a memory the caller may see names in ``about``
+  or ``applies_to`` (read on first need, once per match). Any other concept
+  node, such as one only a deleted memory named, is hidden;
+* **which vault**: the projection must have been built from this vault
+  (``memfw.edges.vault_store`` checks the identity it records), else the
+  match fails with "projection belongs to another vault: rebuild".
 
 A hidden node is treated as absent: a path through it is never returned, it
 does not count towards the fan-out, and a start node the caller may not see
@@ -100,6 +107,7 @@ class _LiveCheck:
         self.concepts = load_concepts(repository.root)
         self.aliases = project_aliases(self.concepts)
         self._memories: dict[str, bool] = {}
+        self._named: frozenset[str] | None = None
 
     def memory(self, memory_id: str) -> MemoryDocument | None:
         try:
@@ -126,12 +134,41 @@ class _LiveCheck:
         )
         return admits(self.clearance, level)
 
+    def named_concepts(self) -> frozenset[str]:
+        """``about``/``applies_to`` values of the memories the caller may see (read once)."""
+
+        if self._named is None:
+            names: set[str] = set()
+            try:
+                documents = self.repository.list()
+            except (MemfwError, OSError, UnicodeDecodeError, ValueError):
+                documents = []  # fail closed: no unregistered concept is shown
+            for document in documents:
+                visible = self._admits(document)
+                self._memories.setdefault(document.id, visible)
+                if not visible:
+                    continue
+                for value in (*document.about, *document.applies_to):
+                    if isinstance(value, str) and value.strip():
+                        names.add(value.strip())
+            self._named = frozenset(names)
+        return self._named
+
+    def concept_visible(self, node: str) -> bool:
+        if node in self.concepts:
+            level = concept_level(self.concepts[node])
+            return level is None or admits(self.clearance, level)
+        found = concept_ref(self.concepts, self.aliases, node)
+        if found is not None:
+            return found[1] is None or admits(self.clearance, found[1])
+        # Not a concept of this vault: shown only while a visible memory names it.
+        return node in self.named_concepts()
+
     def __call__(self, node: str, kind: str) -> bool:
         if kind == "memory":
             return self.memory_visible(node)
-        if kind == "concept" and node in self.concepts:
-            level = concept_level(self.concepts[node])
-            return level is None or admits(self.clearance, level)
+        if kind == "concept":
+            return self.concept_visible(node)
         return True
 
     def start(self, value: str) -> tuple[str, str]:
@@ -175,8 +212,9 @@ def graph_match(
 ) -> dict[str, Any]:
     """Paths from ``start`` along ``path`` that the caller may see.
 
-    ``store`` defaults to the vault's edge projection; a missing projection
-    raises ``GraphError`` (run ``memfw graph rebuild``). The answer is
+    ``store`` defaults to the vault's edge projection; a missing projection,
+    or one built from another vault, raises ``GraphError`` (run ``memfw graph
+    rebuild``). The answer is
     ``{from, path, paths, truncated}``; ``path`` is the canonical spelling
     (inverse names resolved).
     """
@@ -190,7 +228,10 @@ def graph_match(
     except PatternError as exc:
         raise GraphError(str(exc)) from exc
     scope = EdgeScope(tenant, _clearance(clearance))
-    backend: ProjectionStore = store if store is not None else vault_store(repository)
+    try:
+        backend: ProjectionStore = store if store is not None else vault_store(repository)
+    except MemfwError as exc:
+        raise GraphError(f"vault identity unreadable: {exc}") from exc
     # One read-only connection for the whole match (SQLite store).
     with backend.reading() if isinstance(backend, SqliteProjectionStore) else nullcontext():
         return _match(

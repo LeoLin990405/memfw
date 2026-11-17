@@ -45,8 +45,9 @@ the same keys and Bases columns line up. The page body is the memory body.
   (`fleet_path:`, `sensitivity:`, `privacy:`) are left out. The page's
   `privacy` property carries the class instead.
 - **Corroboration.** `corroboration.count` is added when the U4 corroboration
-  projection (`corroboration.sqlite3`, built by `memfw corroboration rebuild`)
-  exists. The count is trimmed by the `conversation_share` policy, the same
+  projection (built by `memfw corroboration rebuild`, kept outside the vault)
+  exists for this vault; one built from another vault at the same path is
+  left out with a warning on stderr. The count is trimmed by the `conversation_share` policy, the same
   way as `memfw corroboration show`. The board shows only the count, never
   app or session names.
 

@@ -175,8 +175,8 @@ reachable from the CLI, MCP and HTTP (and why a gap is there) is in
   about with `open_question:<id>`, and one the question lists as conflicting with `conflicted`
   (always in `mode=two_stage`, otherwise with `labels: true`). The tool tells agents to say
   "unknown" rather than guess.
-- **Corroboration.** `memfw corroboration rebuild` writes a rebuildable
-  `corroboration.sqlite3`: per memory, the independent (app, session) pairs that mention it.
+- **Corroboration.** `memfw corroboration rebuild` writes a rebuildable projection
+  (outside the vault, under `~/.local/share/memfw/corroboration/`): per memory, the independent (app, session) pairs that mention it.
   Ids, names, counts and times only, trimmed to what the asking app may read. With `labels: true`,
   MCP `memory_search` shows it on every row; `memfw corroboration queue` lists unresolved
   questions with corroborated conflicts first.

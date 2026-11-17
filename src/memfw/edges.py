@@ -18,6 +18,14 @@ however many edges it holds. An ``edges.sqlite3`` left at the vault root by
 an earlier build is ignored (``legacy_path``); ``memfw graph rebuild`` notes
 it, and nothing deletes it.
 
+**Which vault.** The file's meta table records the vault's identity
+(``memfw.core.local_data.vault_identity``: resolved path, ``vault_id`` and
+the first event's hash). ``vault_store`` checks it on every connection it
+opens, so a projection left by a vault that was deleted and re-created at the
+same path is refused ("projection belongs to another vault: rebuild") instead
+of answering with the old vault's edges. Schema 1 files (no identity) are
+refused as another schema version.
+
 **What becomes an edge** (``field`` names where it was read):
 
 * memory ``about`` / ``applies_to`` → concept. The value is a concept oid
@@ -77,7 +85,13 @@ from pathlib import Path
 from typing import Any, Final
 
 from .core.errors import MemfwError
-from .core.local_data import ensure_private_dir, projection_file
+from .core.local_data import (
+    OTHER_VAULT,
+    VaultIdentity,
+    ensure_private_dir,
+    projection_file,
+    vault_identity,
+)
 from .core.models import MemoryDocument
 from .core.repository import Repository
 from .ontology.model import AliasIndex, Concept, _resolve, load_concepts, project_aliases
@@ -109,7 +123,8 @@ from .ports.projection_store import (
 )
 from .ports.types import Availability
 
-SCHEMA_VERSION: Final = 1
+#: 2: the meta table records the vault identity (``local_data.IDENTITY_KEYS``).
+SCHEMA_VERSION: Final = 2
 FILENAME: Final = "edges.sqlite3"
 #: The ``memfw.core.local_data`` kind: ``~/.local/share/memfw/edges/<key>.sqlite3``.
 KIND: Final = "edges"
@@ -409,9 +424,11 @@ class SqliteProjectionStore:
     """The ``ProjectionStore`` the CLI uses: one SQLite file, replaced whole on rebuild.
 
     ``forbid`` names a directory the file may never be written into (the
-    vault). The file is created 0600 with ``O_EXCL`` and renamed into place,
-    so a reader never sees a half-built projection; a missing parent
-    directory is created 0700.
+    vault). With ``identity``, a rebuild records it and every connection
+    checks it (and the schema version) before reading: a file built from
+    another vault raises ``EdgeError``. The file is created 0600 with
+    ``O_EXCL`` and renamed into place, so a reader never sees a half-built
+    projection; a missing parent directory is created 0700.
 
     A ``query`` pushes the tenant and clearance filter, the relation filter,
     the cursor and the limit into SQL (``edge_visible`` is applied again to
@@ -422,9 +439,16 @@ class SqliteProjectionStore:
 
     name = "sqlite"
 
-    def __init__(self, path: Path | str, *, forbid: Path | None = None) -> None:
+    def __init__(
+        self,
+        path: Path | str,
+        *,
+        forbid: Path | None = None,
+        identity: VaultIdentity | None = None,
+    ) -> None:
         self.path = Path(path)
         self.forbid = forbid
+        self.identity = identity
         self._shared: sqlite3.Connection | None = None
         self._depth = 0
 
@@ -435,7 +459,22 @@ class SqliteProjectionStore:
         if self.path.is_symlink():
             raise EdgeError("refusing a symlinked edge projection")
         uri = f"{self.path.resolve().as_uri()}?mode=ro"
-        return sqlite3.connect(uri, uri=True)
+        connection = sqlite3.connect(uri, uri=True)
+        try:
+            self._check(connection)
+        except BaseException:
+            connection.close()
+            raise
+        return connection
+
+    def _check(self, connection: sqlite3.Connection) -> None:
+        """Refuse another schema version, or (with ``identity``) another vault's file."""
+
+        meta = dict(connection.execute("SELECT key, value FROM meta").fetchall())
+        if meta.get("schema_version") != str(SCHEMA_VERSION):
+            raise EdgeError("edge projection has another schema version: rebuild it")
+        if self.identity is not None and not self.identity.matches(meta):
+            raise EdgeError(f"edge {OTHER_VAULT} it (`memfw graph rebuild`)")
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
@@ -501,10 +540,10 @@ class SqliteProjectionStore:
             with connection:
                 for statement in _SCHEMA:
                     connection.execute(statement)
-                connection.executemany(
-                    "INSERT INTO meta (key, value) VALUES (?, ?)",
-                    [("schema_version", str(SCHEMA_VERSION)), ("version", version)],
-                )
+                meta = [("schema_version", str(SCHEMA_VERSION)), ("version", version)]
+                if self.identity is not None:
+                    meta.extend(self.identity.meta().items())
+                connection.executemany("INSERT INTO meta (key, value) VALUES (?, ?)", sorted(meta))
                 placeholders = ", ".join("?" for _ in _COLUMNS)
                 connection.executemany(
                     f"INSERT INTO edges ({', '.join(_COLUMNS)}) VALUES ({placeholders})",
@@ -525,11 +564,6 @@ class SqliteProjectionStore:
         try:
             self._open()
             with self._connection() as connection:
-                schema = connection.execute(
-                    "SELECT value FROM meta WHERE key = 'schema_version'"
-                ).fetchone()
-                if schema is None or schema[0] != str(SCHEMA_VERSION):
-                    raise EdgeError("edge projection has another schema version: rebuild it")
                 row = connection.execute("SELECT value FROM meta WHERE key = 'version'").fetchone()
         except sqlite3.DatabaseError as exc:
             raise EdgeError(f"unreadable edge projection: {exc}") from exc
@@ -648,15 +682,34 @@ def _after_bound(
 
 
 def vault_store(repository: Repository) -> SqliteProjectionStore:
-    """The store at the vault's projection path (outside it), refusing the vault itself."""
+    """The store at the vault's projection path (outside it), checked against the vault.
 
-    return SqliteProjectionStore(projection_path(repository.root), forbid=repository.root)
+    Refuses to write inside the vault, and to read a file another vault built
+    (``identity``, see the module docstring).
+    """
+
+    return SqliteProjectionStore(
+        projection_path(repository.root),
+        forbid=repository.root,
+        identity=vault_identity(repository),
+    )
 
 
 def rebuild(repository: Repository, store: SqliteProjectionStore | None = None) -> RebuildResult:
-    """Rebuild the projection from the vault. Read-only on the vault."""
+    """Rebuild the projection from the vault. Read-only on the vault.
 
-    return (store or vault_store(repository)).rebuild(collect_edges(repository))
+    The vault is read (its identity and every edge) under the vault lock, the
+    one writers hold, so a rebuild running beside a write sees the vault
+    before or after it, never a pending transaction; the file is written
+    after the lock is released (it is outside the vault).
+    """
+
+    with repository._locked():
+        target = store or vault_store(repository)
+        if target.identity is not None:
+            target.identity = vault_identity(repository)
+        found = collect_edges(repository)
+    return target.rebuild(found)
 
 
 __all__ = [

@@ -171,9 +171,20 @@ open_question:
 
 ## Corroboration (derived)
 
-`memfw corroboration rebuild` writes `corroboration.sqlite3` at the vault root (next to
-`index.sqlite3`; never inside `memories/`). It is a rebuildable projection: delete it and
-rebuild it and the bytes are identical. It never writes the vault and never changes
+`memfw corroboration rebuild` writes the corroboration projection **outside the vault**,
+in memfw's local data directory and keyed by the vault:
+`~/.local/share/memfw/corroboration/<key>.sqlite3` (the rule the usage and edge
+projections follow, `memfw.core.local_data`; `rebuild` prints the full path). Outside the
+vault it never counts toward the physical-size budget (which total-mode budget
+enforcement acts on) or the transaction fingerprint, however large it grows. The vault is
+read under its lock, so a rebuild beside a write never fails on a pending transaction. The
+file records the vault's identity (path, `vault_id`, first event; see `docs/ontology.md`,
+K3), and every reader refuses a file built from another vault at the same path. A
+`corroboration.sqlite3` left at the vault root by an earlier release is ignored: `rebuild`
+adds `"legacy_file"` to its answer and notes on stderr that you may delete it; memfw never
+deletes it. A vault rooted at `$HOME` cannot have the projection (it would be inside the
+vault). It is a rebuildable projection: delete it and rebuild it and the bytes are
+identical. It never writes the vault and never changes
 `epistemic` or `status`. It is read only for display and for the open-question review
 order (U5, below); it changes no ranking.
 
@@ -230,7 +241,9 @@ rebuild. `first_seen`/`last_seen` use the evidence timestamp, else the carrier's
   `labels` the output is byte-identical to before. When it cannot be shown the field is
   `{"degraded": CODE}` and the search itself is not degraded: `caller_app_required` (no
   `--app`, or the reserved `operator` name over MCP), `share_policy_invalid`,
-  `projection_missing` (run `memfw corroboration rebuild`), `projection_unreadable`.
+  `projection_missing` (run `memfw corroboration rebuild`), `projection_other_vault` (the
+  file was built from another vault at this path, e.g. one deleted and re-created: rebuild),
+  `projection_unreadable`.
   The projection can be stale until the next rebuild.
 * **Reverse signal: review order.**
   `memfw corroboration queue [--as-app APP] [--tenant T] [--policy strict|compat_fts]`

@@ -29,6 +29,17 @@ from memfw.recall.priority import (
 from memfw.runtime import build_runtime
 
 T0 = datetime(2026, 3, 1, 12, 0, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Out-of-vault projections live under the home directory: give every test its own."""
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    return home
+
+
 PORT = "concept:service-port"
 SHARE: dict[str, Any] = {
     "conversation_share": {
@@ -202,7 +213,9 @@ def test_missing_projection_degrades(tmp_path: Path, mode: str) -> None:
 
 def test_unreadable_projection_degrades(tmp_path: Path) -> None:
     repository = _vault(tmp_path, build=False)
-    projection_path(repository.root).write_bytes(b"not a sqlite file")
+    path = projection_path(repository.root)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"not a sqlite file")
     for mode in ("fts", "two_stage"):
         for row in _search(_gateway(repository.root), mode, labels=True)["results"]:
             assert row["corroboration"] == {"degraded": "projection_unreadable"}

@@ -28,9 +28,17 @@ from .core.epistemic import (
     validate_open_question_references,
 )
 from .core.errors import IntegrityError, MemfwError, NotFoundError
+from .core.local_data import vault_identity
 from .core.models import Layer, Tier
 from .core.repository import Repository, open_vault
-from .corroboration import CorroborationError, corroboration_for, projection_path
+from .corroboration import (
+    CorroborationError,
+    OtherVaultError,
+    corroboration_for,
+    legacy_path,
+    projection_path,
+)
+from .corroboration import check_projection as check_corroboration
 from .corroboration import rebuild as rebuild_corroboration
 from .curation.engine import enforce_budget, plan_forget, run_forget
 from .curation.review_cli import review_command as run_review
@@ -2744,15 +2752,24 @@ def _share_rules(repository: Repository) -> SharePolicy:
 def corroboration_rebuild(
     root: Annotated[Path, typer.Option("--root", "-r", help="memfw vault (read only)")] = Path("."),
 ) -> None:
-    """Rebuild corroboration.sqlite3 from the vault (the vault is only read)."""
+    """Rebuild the corroboration projection (kept outside the vault; the vault is only read)."""
     repository = _repo(root)
     try:
         counts = rebuild_corroboration(repository, _share_rules(repository))
     except (MemfwError, CorroborationError, OSError) as exc:
         _projection_fail(exc)
         return
-    path = projection_path(repository.root).relative_to(repository.root).as_posix()
-    typer.echo(json.dumps({"path": path, **counts}, ensure_ascii=False))
+    payload: dict[str, Any] = {"path": str(projection_path(repository.root)), **counts}
+    legacy = legacy_path(repository.root)
+    if legacy.is_file() or legacy.is_symlink():
+        payload["legacy_file"] = legacy.name
+    typer.echo(json.dumps(payload, ensure_ascii=False))
+    if "legacy_file" in payload:
+        typer.echo(
+            f"note: {payload['legacy_file']} at the vault root is from an earlier release and is"
+            " no longer used; you may delete it (memfw will not).",
+            err=True,
+        )
 
 
 @project_app.command("obsidian")
@@ -2777,14 +2794,25 @@ def project_obsidian(
         if corroboration_path.is_file():
             repository = _repo(root)
             rules = _share_rules(repository)
+            identity = vault_identity(repository)
+            try:
+                check_corroboration(corroboration_path, identity)
+            except OtherVaultError as exc:
+                # Like a missing projection: the board is built without counts.
+                typer.echo(f"warning: {exc}; corroboration counts left out", err=True)
+            else:
 
-            def lookup(ids: Any) -> dict[str, int]:
-                answer = corroboration_for(
-                    ids, caller_app=OPERATOR, rules=rules, path=corroboration_path
-                )
-                return {key: value.count for key, value in answer.items()}
+                def lookup(ids: Any) -> dict[str, int]:
+                    answer = corroboration_for(
+                        ids,
+                        caller_app=OPERATOR,
+                        rules=rules,
+                        path=corroboration_path,
+                        identity=identity,
+                    )
+                    return {key: value.count for key, value in answer.items()}
 
-            projector.corroboration = lookup
+                projector.corroboration = lookup
         result = projector.build(root, out)
     except (MemfwError, CorroborationError, OSError, ValueError) as exc:
         _projection_fail(exc)
@@ -2810,6 +2838,7 @@ def corroboration_show(
             caller_app=as_app,
             rules=_share_rules(repository),
             path=projection_path(repository.root),
+            identity=vault_identity(repository),
         )
     except (MemfwError, CorroborationError, OSError) as exc:
         _projection_fail(exc)

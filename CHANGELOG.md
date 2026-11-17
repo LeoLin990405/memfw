@@ -27,6 +27,48 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   requests` rows gain `target_privacy` (`null` for such older requests);
   nothing else in its output changes.
 
+### Fixed — out-of-vault projections know which vault they belong to; corroboration moves out of the vault
+
+- **Vault identity.** The edge projection (K3) and the corroboration
+  projection (U4) record the vault's identity in their meta table: its
+  resolved path, `vault.yaml`'s `vault_id` when set, and the hash of its first
+  event (`memfw.core.local_data.vault_identity`). `memfw graph match`,
+  `memfw corroboration show`, MCP `memory_search` with `labels: true` and the
+  open-question queue refuse a file built from another vault at the same path
+  (before, deleting a vault and running `memfw init` there let the new vault
+  read the old vault's edges, concept names included). The message is
+  "projection belongs to another vault: rebuild it"; MCP shows
+  `corroboration: {"degraded": "projection_other_vault"}`, and
+  `memfw project obsidian` leaves the counts out with a warning.
+- **K4 live check:** a concept node that is neither a concept of the vault
+  (file or alias) nor named in `about`/`applies_to` by a memory the caller may
+  see is hidden.
+- **Corroboration moves out of the vault**, to
+  `~/.local/share/memfw/corroboration/<key>.sqlite3` (0600, directory 0700),
+  so it never counts toward the physical-size budget or the transaction
+  fingerprint. `corroboration rebuild` prints the full path (before: the
+  vault-relative `corroboration.sqlite3`), refuses any path inside the vault
+  (before: inside `memories/`), and notes an old vault-root
+  `corroboration.sqlite3` (`"legacy_file"` plus one stderr line); the old file
+  is ignored and never deleted.
+- Edge and corroboration rebuilds read the vault under its lock, so a rebuild
+  beside a write no longer fails with "A pending transaction needs explicit
+  `memfw recover`".
+- `memfw concepts lint-relations` strips `memory:`/`mem:` from
+  `superseded_by`, `evidence` and `experience.evidence`, as the edge builder
+  does (before: a prefixed reference was reported dangling, and a prefixed
+  cross-tenant one was missed).
+- Docs (`docs/ontology.md`): moved, symlinked and `$HOME`-rooted vaults, and
+  the `max_expansions` limit with many hidden neighbours.
+- **Deploy:** the edge projection changes schema (`1` → `2`) and the
+  corroboration projection changes place (and schema). After upgrading, run
+  `memfw graph rebuild` and `memfw corroboration rebuild` on every deployed
+  vault that uses them: until then `graph match` answers "another schema
+  version: rebuild it" and corroboration shows `projection_missing`. Nothing
+  is deleted: the edge rebuild replaces its own file in place, and a
+  vault-root `corroboration.sqlite3` stays until you delete it by hand (it
+  still counts toward the vault's size until you do).
+
 ### Added — two-stage conversation search and tag filters (M3c)
 
 - `memfw conversations search` and MCP `conversations_search` gain tag

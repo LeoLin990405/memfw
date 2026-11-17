@@ -129,7 +129,8 @@ only to the provider's API host. memfw never imports the adapter; it is built as
 
 ## Corroboration projection
 
-`memfw corroboration rebuild` writes `corroboration.sqlite3` at the vault root: per memory, the
+`memfw corroboration rebuild` writes the corroboration projection outside the vault
+(`~/.local/share/memfw/corroboration/<key>.sqlite3`, tagged with the vault's identity): per memory, the
 independent (app, session) pairs that mention it, from its own `conv:` evidence, staged
 conversation-worker claims and accepted experience points. One count per app and session;
 carriers that cite the memory itself, generated provenance and hidden or opted-out apps do
