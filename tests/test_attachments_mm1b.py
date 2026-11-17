@@ -911,6 +911,8 @@ def test_recover_scrubs_stores_like_a_purge(
     record = repository.add_attachment(_outside_file(tmp_path, name, b"bytes")).record
     database = repository.root / "derived.sqlite3"
     connection = sqlite3.connect(database)
+    # Some builds (Debian/Ubuntu) zero freed pages by default; keep them.
+    connection.execute("PRAGMA secure_delete = OFF")
     connection.execute("CREATE TABLE t (v TEXT)")
     connection.execute("INSERT INTO t VALUES (?)", (name * 50,))
     connection.commit()
