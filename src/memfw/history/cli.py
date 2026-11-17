@@ -222,6 +222,14 @@ def history_ingest(
         Path | None,
         typer.Option("--path", help="Read this store root instead of the defaults (one agent)"),
     ] = None,
+    settled_minutes: Annotated[
+        float | None,
+        typer.Option(
+            "--settled-minutes",
+            min=0,
+            help="Skip sessions active within N minutes; archive the settled ones",
+        ),
+    ] = None,
 ) -> None:
     """Incrementally ingest agent conversations into the local, redacted conversation store."""
 
@@ -247,7 +255,7 @@ def history_ingest(
         for reader in readers:
             roots = roots_override if roots_override is not None else store_roots(reader)
             try:
-                counts = store.ingest(reader, roots).as_dict()
+                counts = store.ingest(reader, roots, settled_minutes=settled_minutes).as_dict()
             except Exception as exc:  # one broken reader must not stop the others
                 counts = {"error": type(exc).__name__}
             results[reader.agent] = counts | {

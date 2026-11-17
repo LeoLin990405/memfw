@@ -121,6 +121,18 @@ def ts_display(key: str | None) -> str:
     return key
 
 
+def session_fingerprint(turns: int, last_offset: int, updated_at: str) -> str:
+    """The shape of one stored session: ``turns:last_offset:updated_at``.
+
+    ``updated_at`` is the :func:`ts_display` of the newest turn timestamp. The
+    conversation worker keys its jobs by this value and the store records it as
+    a session's ``archived_fingerprint`` (settled ingest), so both agree on when
+    a session changed: new turns give a new fingerprint.
+    """
+
+    return f"{turns}:{last_offset}:{updated_at}"
+
+
 GOAL_SCAN_TURNS = 200
 """At most this many leading turns are examined; only user turns can yield the goal."""
 

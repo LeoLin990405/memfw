@@ -52,6 +52,7 @@ from .store import (
     ensure_private_dir,
     ensure_private_file,
     safe_text,
+    session_fingerprint,
     ts_key,
 )
 
@@ -139,7 +140,9 @@ def _digest(*parts: Any) -> str:
 
 
 def fingerprint(info: SessionInfo) -> str:
-    return f"{info.turns}:{info.last_offset}:{info.updated_at}"
+    """The session's job key; the store's ``archived_fingerprint`` uses the same value."""
+
+    return session_fingerprint(info.turns, info.last_offset, info.updated_at)
 
 
 def _parse_ts(value: str) -> datetime | None:

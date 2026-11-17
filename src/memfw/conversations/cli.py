@@ -37,6 +37,13 @@ AsAppOption = Annotated[
     str, typer.Option("--as-app", help="Read as this app (its visibility rules apply)")
 ]
 AppOption = Annotated[str | None, typer.Option("--app", help="Only this app (claude, codex ...)")]
+ArchiveStateOption = Annotated[
+    bool,
+    typer.Option("--with-archive-state", help="Add archived: true/false (settled ingest)"),
+]
+ArchivedOnlyOption = Annotated[
+    bool, typer.Option("--archived-only", help="Only sessions archived by settled ingest")
+]
 
 
 def _dump(value: Any) -> str:
@@ -58,13 +65,25 @@ def search(
     since: Annotated[str | None, typer.Option("--since")] = None,
     limit: Annotated[int, typer.Option("--limit")] = 10,
     offset: Annotated[int, typer.Option("--offset")] = 0,
+    with_archive_state: ArchiveStateOption = False,
+    archived_only: ArchivedOnlyOption = False,
 ) -> None:
     """Redacted snippets of turns matching every query term."""
 
     try:
         share = open_share(root, as_app, store=store)
         typer.echo(
-            _dump(share.search(query, app=app_name, since=since, limit=limit, offset=offset))
+            _dump(
+                share.search(
+                    query,
+                    app=app_name,
+                    since=since,
+                    limit=limit,
+                    offset=offset,
+                    with_archive_state=with_archive_state,
+                    archived_only=archived_only,
+                )
+            )
         )
     except (ConversationError, MemfwError) as exc:
         raise _fail(exc) from exc
@@ -79,13 +98,24 @@ def list_sessions(
     since: Annotated[str | None, typer.Option("--since")] = None,
     limit: Annotated[int, typer.Option("--limit")] = 20,
     offset: Annotated[int, typer.Option("--offset")] = 0,
+    with_archive_state: ArchiveStateOption = False,
+    archived_only: ArchivedOnlyOption = False,
 ) -> None:
     """Sessions, most recently updated first."""
 
     try:
         share = open_share(root, as_app, store=store)
         typer.echo(
-            _dump(share.list_sessions(app=app_name, since=since, limit=limit, offset=offset))
+            _dump(
+                share.list_sessions(
+                    app=app_name,
+                    since=since,
+                    limit=limit,
+                    offset=offset,
+                    with_archive_state=with_archive_state,
+                    archived_only=archived_only,
+                )
+            )
         )
     except (ConversationError, MemfwError) as exc:
         raise _fail(exc) from exc
@@ -101,13 +131,25 @@ def get(
     start: Annotated[int, typer.Option("--start")] = 0,
     end: Annotated[int | None, typer.Option("--end")] = None,
     max_bytes: Annotated[int, typer.Option("--max-bytes")] = 16 * 1024,
+    with_archive_state: ArchiveStateOption = False,
+    archived_only: ArchivedOnlyOption = False,
 ) -> None:
     """A redacted, size-capped range of one session's turns."""
 
     try:
         share = open_share(root, as_app, store=store)
         typer.echo(
-            _dump(share.get(session_id, app=app_name, start=start, end=end, max_bytes=max_bytes))
+            _dump(
+                share.get(
+                    session_id,
+                    app=app_name,
+                    start=start,
+                    end=end,
+                    max_bytes=max_bytes,
+                    with_archive_state=with_archive_state,
+                    archived_only=archived_only,
+                )
+            )
         )
     except (ConversationError, MemfwError) as exc:
         raise _fail(exc) from exc
@@ -155,6 +197,12 @@ def worker(
     max_tokens: Annotated[int | None, typer.Option("--max-tokens")] = None,
     max_seconds: Annotated[float | None, typer.Option("--max-seconds")] = None,
     idle_minutes: Annotated[float | None, typer.Option("--idle-minutes")] = None,
+    settled_minutes: Annotated[
+        float | None,
+        typer.Option(
+            "--settled-minutes", min=0, help="Settled ingest: active sessions stay out of the store"
+        ),
+    ] = None,
 ) -> None:
     """One idempotent, locked, budgeted processing run; prints counts only."""
 
@@ -176,6 +224,7 @@ def worker(
             max_tokens=max_tokens,
             max_seconds=max_seconds,
             idle_minutes=idle_minutes,
+            settled_minutes=settled_minutes,
         )
         report = runner.run()
     except (ConversationError, MemfwError, ValueError) as exc:

@@ -4,6 +4,10 @@ Every result is redacted again on the way out (:func:`store.safe_text`),
 paginated and size-capped, filtered by :class:`policy.SharePolicy` for the
 calling app, and labelled as data, not instructions. There are no write
 operations here.
+
+Archive state (settled ingest) is opt-in: ``with_archive_state`` adds
+``archived: bool`` to each session / result, ``archived_only`` keeps archived
+sessions only. Both default off, and the output is then unchanged.
 """
 
 from __future__ import annotations
@@ -170,6 +174,26 @@ class ConversationShare:
             raise ConversationError(f"session id is ambiguous; pass app (one of: {apps})")
         return found[0]
 
+    def _archive_states(self, infos: Sequence[SessionInfo]) -> dict[tuple[str, str], bool]:
+        lookup = getattr(self.source, "archive_state", None)
+        if not callable(lookup):
+            raise ConversationError("this conversation store does not record archive state")
+        return dict(lookup(list(infos)))
+
+    def _hit_states(self, hits: Sequence[Turn], states: dict[tuple[str, str], bool]) -> None:
+        """Add the archive state of every session in ``hits`` not yet in ``states``."""
+
+        infos = []
+        for key in dict.fromkeys((hit.app, hit.session_id) for hit in hits):
+            if key in states:
+                continue
+            info = self.source.session(*key)
+            if info is None:
+                states[key] = False
+            else:
+                infos.append(info)
+        states.update(self._archive_states(infos))
+
     # -- operations -------------------------------------------------------------
 
     def list_sessions(
@@ -180,24 +204,37 @@ class ConversationShare:
         since: str | None = None,
         limit: int = 20,
         offset: int = 0,
+        with_archive_state: bool = False,
+        archived_only: bool = False,
     ) -> dict[str, Any]:
         self._ready()
         limit = _clamp(limit, 1, MAX_LIMIT)
         offset = max(0, int(offset))
         include, exclude = self.policy.narrow(self.caller, self._requested(app, agent))
-        rows, next_offset = _page(
-            lambda count, position: self.source.sessions(
+        states: dict[tuple[str, str], bool] = {}
+        tracked = with_archive_state or archived_only
+
+        def fetch(count: int, position: int) -> list[SessionInfo]:
+            rows = self.source.sessions(
                 apps=include, exclude=exclude, since=since, limit=count, offset=position
-            ),
-            lambda row: self.policy.allowed(self.caller, row.app),
-            limit,
-            offset,
-        )
-        return {
-            "notice": DATA_NOTICE,
-            "sessions": [row.as_dict() for row in rows],
-            "next_offset": next_offset,
-        }
+            )
+            if tracked:
+                states.update(self._archive_states(rows))
+            return rows
+
+        def keep(row: SessionInfo) -> bool:
+            if not self.policy.allowed(self.caller, row.app):
+                return False
+            return not archived_only or states.get((row.app, row.session_id), False)
+
+        rows, next_offset = _page(fetch, keep, limit, offset)
+        sessions = []
+        for row in rows:
+            item = row.as_dict()
+            if with_archive_state:
+                item["archived"] = states.get((row.app, row.session_id), False)
+            sessions.append(item)
+        return {"notice": DATA_NOTICE, "sessions": sessions, "next_offset": next_offset}
 
     def search(
         self,
@@ -208,6 +245,8 @@ class ConversationShare:
         since: str | None = None,
         limit: int = 10,
         offset: int = 0,
+        with_archive_state: bool = False,
+        archived_only: bool = False,
     ) -> dict[str, Any]:
         self._ready()
         query = str(query or "").strip()[:500]
@@ -217,15 +256,24 @@ class ConversationShare:
         offset = max(0, int(offset))
         include, exclude = self.policy.narrow(self.caller, self._requested(app, agent))
         terms = query.split()
+        states: dict[tuple[str, str], bool] = {}
+        tracked = with_archive_state or archived_only
 
         def fetch(count: int, position: int) -> list[Turn]:
-            return self.source.search(
+            hits = self.source.search(
                 query, apps=include, exclude=exclude, since=since, limit=count, offset=position
             )
+            if tracked:
+                self._hit_states(
+                    [hit for hit in hits if self.policy.allowed(self.caller, hit.app)], states
+                )
+            return hits
 
         def keep(hit: Turn) -> bool:
             # A turn that would be withheld is not a hit: no probing for its content.
-            return self.policy.allowed(self.caller, hit.app) and not safe_text(hit.text)[1]
+            if not self.policy.allowed(self.caller, hit.app) or safe_text(hit.text)[1]:
+                return False
+            return not archived_only or states.get((hit.app, hit.session_id), False)
 
         hits, next_offset = _page(fetch, keep, limit, offset)
         if not hits:
@@ -244,6 +292,8 @@ class ConversationShare:
                     "snippet": _snippet(text, terms),
                 }
             )
+            if with_archive_state:
+                results[-1]["archived"] = states.get((hit.app, hit.session_id), False)
         return {"notice": DATA_NOTICE, "results": results, "next_offset": next_offset}
 
     def get(
@@ -254,9 +304,18 @@ class ConversationShare:
         start: int = 0,
         end: int | None = None,
         max_bytes: int = DEFAULT_BYTES,
+        with_archive_state: bool = False,
+        archived_only: bool = False,
     ) -> dict[str, Any]:
         self._ready()
         info = self._resolve(session_id, app)
+        session = info.as_dict()
+        if with_archive_state or archived_only:
+            archived = self._archive_states([info]).get((info.app, info.session_id), False)
+            if archived_only and not archived:
+                raise ConversationError("session is not archived")
+            if with_archive_state:
+                session["archived"] = archived
         start = max(0, int(start))
         stop = start + MAX_RANGE if end is None else _clamp(end, start, start + MAX_RANGE)
         cap = _clamp(max_bytes, MIN_BYTES, MAX_BYTES)
@@ -264,7 +323,7 @@ class ConversationShare:
         out: list[dict[str, Any]] = []
         frame = {
             "notice": DATA_NOTICE,
-            "session": info.as_dict(),
+            "session": session,
             "turns": [],
             "truncated": True,
             "next_start": 10**9,
@@ -308,7 +367,7 @@ class ConversationShare:
         limit_end = info.turns if end is None else min(int(end), info.turns)
         return {
             "notice": DATA_NOTICE,
-            "session": info.as_dict(),
+            "session": session,
             "turns": out,
             "truncated": truncated,
             # Nothing fitted: no cursor, so a paging client cannot loop on the same start.

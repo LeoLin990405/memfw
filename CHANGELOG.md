@@ -11,6 +11,23 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
+### Added — settled ingest and archive state (M3e-a)
+
+- `memfw history ingest --settled-minutes N` skips transcripts whose last
+  activity (the later of newest turn timestamp and file mtime; timestamp first
+  for sessions in a shared database; future stamps ignored) is within `N`
+  minutes, and
+  archives the settled sessions: new store table `conversation_archive`
+  (`archived_at`, `archived_fingerprint`) and cursor column
+  `settled_fingerprint`, both added on open without a cursor reset. A session
+  that becomes active again, or gets new turns, is no longer archived until the
+  next settled ingest. `memfw conversations worker --settled-minutes N` runs its
+  ingest the same way; the archive fingerprint is the worker's job key, so a
+  session is processed once per final shape.
+- `memfw conversations list/search/get` accept `--with-archive-state`
+  (`archived: true/false`) and `--archived-only`. Without the new flags every
+  command's output is byte-identical (`tests/harness/settled_probe.py`).
+
 ### Added — read-only Obsidian projection (O1a, #64)
 
 - New `memfw project obsidian --out <dir> [--root <vault>] [--clearance
