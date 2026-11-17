@@ -79,6 +79,12 @@ and where it is stored:
 | `broader` / `narrower` | concept → concept | `broader`; `narrower` derived |
 | `decided_by`, `authored_by`, `contradicts`, `derived_from`, `part_of`, `runs_on` | concept → concept | the key of the same name |
 
+**Version 1 is additive.** New rows (such as `conflicts` and `resolved_by`)
+may be added to `relations.yaml` without changing `version: 1`; a row is
+never removed, renamed or narrowed (fewer node kinds, fields or a weaker
+filter) under the same version. A change of that kind bumps `version`, which
+the loader then refuses until the code knows it.
+
 Each row states which node kinds each end allows, whether cycles are allowed,
 the strongest `epistemic` type an edge of that kind can carry (`about` is
 `inference`), and that it is filtered by privacy and tenant. Every row must
@@ -110,7 +116,7 @@ it.
 | everything in the K1 lint | |
 | `relation_unknown_type` | a concept-file key that is neither a core key nor a concept relation in the table |
 | `relation_dangling` | a memory's `about`/`applies_to` names no concept (checked only when `concepts/` exists), or its `superseded_by` names no memory |
-| `relation_cross_tenant` | a memory's `superseded_by`, `evidence` or `experience.evidence` names a memory of another tenant. The K3 projection never builds such an edge; other exits apply their own tenant rule (the plain-file projection admits `""` and `fleet` together by default), so lint reports it rather than assuming it is hidden |
+| `relation_cross_tenant` | a memory's `superseded_by`, `evidence`, `experience.evidence`, `related`, `open_question.conflicts` or `open_question.resolved_by` names a memory of another tenant (a `memory:`/`mem:` prefix is read as the projection reads it). The K3 projection never builds such an edge; other exits apply their own tenant rule (the plain-file projection admits `""` and `fleet` together by default), so lint reports it rather than assuming it is hidden |
 
 ## K3: the typed-edge projection
 

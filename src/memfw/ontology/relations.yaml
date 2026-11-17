@@ -6,6 +6,9 @@
 # or context path; it backs lint and the edge projection (K3, memfw.edges),
 # which builds an edge only for a relation listed here.
 #
+# Version 1 is additive: rows may be added under it; removing, renaming or
+# narrowing a row needs a new version.
+#
 # Per relation:
 #   from / to       node kinds allowed at each end
 #   fields          where the relation is written, per file kind

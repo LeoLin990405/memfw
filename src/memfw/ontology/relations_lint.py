@@ -12,8 +12,10 @@ Review kinds:
 * ``relation_dangling``: a memory's ``about``/``applies_to`` names no concept
   (checked only when the vault has ``concepts/``), or its ``superseded_by``
   names no memory;
-* ``relation_cross_tenant``: a memory's ``superseded_by``, ``evidence`` or
-  ``experience.evidence`` names a memory of another tenant. The edge
+* ``relation_cross_tenant``: a memory's ``superseded_by``, ``evidence``,
+  ``experience.evidence``, ``related``, ``open_question.conflicts`` or
+  ``open_question.resolved_by`` names a memory of another tenant (a
+  ``memory:``/``mem:`` prefix is read the way the edge projection reads it). The edge
   projection (``memfw.edges``, K3) drops such an edge when it is built, and
   its query admits one caller tenant at a time. That is not a promise about
   every exit: each applies its own tenant rule (the plain-file projection,
@@ -67,6 +69,13 @@ def lint_relations(vault: Path, table: RelationTable | None = None) -> list[dict
         refs = [("evidence", ref) for ref in _strings(meta.get("evidence"))]
         if isinstance(experience, dict):
             refs.extend(("experience_of", ref) for ref in _strings(experience.get("evidence")))
+        refs.extend(("related", _bare(ref)) for ref in _strings(meta.get("related")))
+        question = meta.get("open_question")
+        if isinstance(question, dict):
+            refs.extend(("conflicts", _bare(ref)) for ref in _strings(question.get("conflicts")))
+            refs.extend(
+                ("resolved_by", _bare(ref)) for ref in _strings(question.get("resolved_by"))
+            )
         for relation, target in refs:
             if target in tenants and target != memory_id and tenants[target] != tenant:
                 items.append(_item("relation_cross_tenant", memory_id, relation, target))
@@ -87,6 +96,15 @@ def _memories(root: Path) -> list[tuple[str, dict[str, Any]]]:
             continue
         rows.append((path.stem, fold_temporal_aliases(_frontmatter(path), strict=False)))
     return rows
+
+
+def _bare(ref: str) -> str:
+    """A memory reference without a ``memory:``/``mem:`` prefix (as ``memfw.edges``)."""
+
+    for prefix in ("memory:", "mem:"):
+        if ref.lower().startswith(prefix):
+            return ref[len(prefix) :]
+    return ref
 
 
 def _strings(value: Any) -> list[str]:

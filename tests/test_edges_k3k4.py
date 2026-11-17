@@ -220,6 +220,42 @@ def test_a_self_loop_made_only_by_a_merge_is_no_cycle(tmp_path: Path) -> None:
     assert {"broader_merged", "broader_on_merged"} <= kinds  # still reported as such
 
 
+def test_cross_tenant_lint_covers_related_and_open_question_links(tmp_path: Path) -> None:
+    from memfw.ontology import lint_relations
+
+    repository = _vault(tmp_path)
+    _add(repository, "m-theirs", tenant="other")
+    _add(repository, "m-ours")
+    _add(repository, "m-link")
+    _rewrite(
+        repository,
+        "m-link",
+        related=["memory:m-theirs", "m-ours"],
+        open_question={
+            "question": "which one?",
+            "status": "open",
+            "conflicts": ["m-theirs", "mem:m-ours"],
+            "resolved_by": "m-theirs",
+        },
+    )
+    found = {
+        (item["relation"], item["detail"])
+        for item in lint_relations(repository.root)
+        if item["kind"] == "relation_cross_tenant" and item["memory_id"] == "m-link"
+    }
+    assert found == {
+        ("related", "m-theirs"),
+        ("conflicts", "m-theirs"),
+        ("resolved_by", "m-theirs"),
+    }
+
+
+def test_relation_table_version_one_is_documented_as_additive() -> None:
+    docs = (Path(__file__).resolve().parents[1] / "docs" / "ontology.md").read_text("utf-8")
+    assert "Version 1 is additive" in docs
+    assert "Version 1 is additive" in TABLE_PATH.read_text("utf-8")
+
+
 def test_lint_docstring_no_longer_promises_every_exit_hides_cross_tenant() -> None:
     from memfw.ontology import relations_lint
 
