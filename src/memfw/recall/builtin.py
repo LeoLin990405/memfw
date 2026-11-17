@@ -5,8 +5,14 @@ own siblings, so the coordinator can be replaced or extracted; this module is
 the adapter between it and today's vault and retrievers.
 
 - ``VaultIdResolver`` / ``meta_from_document``: ``memory_id`` refs → the vault
-  document's filter metadata (read-only).
-- ``default_resolvers``: the id resolver plus ``MemoryPathResolver`` on top.
+  document's filter metadata (read-only), joined to the lifecycle meta-index
+  (``join_lifecycle``) for documents that carry a ``fleet_path`` tag.
+- ``NotesSegmentResolver``: ``kh:<path>#<heading>`` refs → a section of the
+  built-in notes index (``memfw.notes``), with the ``notes_search`` privacy
+  rules, as ``SegmentResolution``s.
+- ``default_resolvers``: the id resolver plus ``MemoryPathResolver`` on top,
+  behind a ``SchemePathResolver`` where ``kh:`` (and, from MM2b, ``att:``)
+  resolvers can be registered.
 - ``FtsProvider``: the shared ``search_vault`` that MCP ``memory_search``
   ``mode=fts`` and HTTP ``/search`` use.
 - ``HybridProvider``: ``MemoryHybridRetriever`` in ``hybrid`` or ``vector``
@@ -28,11 +34,13 @@ server uses.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import re
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -41,7 +49,15 @@ from memfw.core.epistemic import OPEN_QUESTION_TYPE
 from memfw.core.errors import MemfwError
 from memfw.core.models import MemoryDocument
 from memfw.core.repository import Repository
-from memfw.ports.privacy import sensitivity_key_levels
+from memfw.notes.index import NoteParseError, _note_file_inside_root, _split_frontmatter
+from memfw.ports.privacy import (
+    LEGACY_PRIVACY_FALLBACK,
+    PRIVACY_LEVELS,
+    REMOTE_CLEARANCE,
+    legacy_default,
+    metadata_level,
+    sensitivity_key_levels,
+)
 from memfw.ports.types import (
     Availability,
     Candidate,
@@ -50,11 +66,26 @@ from memfw.ports.types import (
     RecallBudget,
     RefKind,
 )
-from memfw.projection import tag_privacy_class
+from memfw.projection import (
+    MetaIndex,
+    ProjectionError,
+    fleet_paths,
+    join_meta,
+    load_meta_index,
+    tag_privacy_class,
+)
 
 from .labels import OpenQuestionIndex, open_question_labels
 from .policy import ACTIVE_LIFECYCLES, FilterPolicy, MemoryMeta, classify_privacy, evaluate
-from .resolve import MemoryPathResolver, Resolution, Resolver
+from .resolve import (
+    AnyResolution,
+    MemoryPathResolver,
+    Resolution,
+    Resolver,
+    SchemePathResolver,
+    SegmentResolution,
+    parse_kh_ref,
+)
 
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
@@ -149,16 +180,129 @@ def meta_from_document(document: MemoryDocument) -> MemoryMeta:
     )
 
 
-class VaultIdResolver:
-    """``memory_id`` refs → the vault document's metadata. Read-only."""
+#: The lifecycle meta-index read when none is named (relative to the vault);
+#: the same default as ``memfw dream`` (``memfw.dream.questions``).
+DEFAULT_LIFECYCLE_SOURCE = Path("status") / "memory-meta-index.json"
 
-    def __init__(self, root: Path | str) -> None:
+#: Stands in for a meta-index temporal value that is not a string: the strict
+#: policy cannot parse it, so it fails closed (``expiry_unparsable``).
+_UNPARSABLE = "unparsable"
+
+
+@dataclass(frozen=True)
+class Lifecycle:
+    """The lifecycle meta-index for one resolve call (``meta=None``: none present)."""
+
+    meta: MetaIndex | None = None
+    unreadable: bool = False
+
+
+def load_lifecycle(root: Path, source: Path | str | None = None) -> Lifecycle:
+    """Read the lifecycle meta-index: ``source``, else ``<vault>/status/memory-meta-index.json``.
+
+    No default file means no meta-index: the vault alone decides, as before.
+    A named file that is missing or unreadable, or a default file that is a
+    symlink, unreadable or malformed, is ``unreadable``: every document with
+    a ``fleet_path`` tag then fails closed under the strict policy.
+    """
+
+    if source is None:
+        path = Path(root) / DEFAULT_LIFECYCLE_SOURCE
+        if path.is_symlink():
+            return Lifecycle(unreadable=True)
+        if not path.exists():
+            return Lifecycle()
+    else:
+        path = Path(source).expanduser()
+    try:
+        return Lifecycle(meta=load_meta_index(path))
+    except ProjectionError:
+        return Lifecycle(unreadable=True)
+
+
+def _temporal(value: Any) -> str | None:
+    if value is None or value == "":
+        return None
+    return value if isinstance(value, str) else _UNPARSABLE
+
+
+def _declared(value: Any) -> str | None:
+    """A meta-index ``privacy`` value as a declared value (non-string → unrecognised)."""
+
+    if value is None:
+        return None
+    return value if isinstance(value, str) else _UNPARSABLE
+
+
+def join_lifecycle(meta: MemoryMeta, tags: Sequence[str], lifecycle: Lifecycle) -> MemoryMeta:
+    """``meta`` with the meta-index's lifecycle fields merged in (§3.8, §5.4).
+
+    Only a document with a ``fleet_path`` tag is joined, and only when a
+    meta-index is present; otherwise ``meta`` comes back unchanged. A failed
+    join (no unique item for the path, an ``f``+12-hex id that does not match
+    the path, an unreadable meta-index) sets ``lifecycle_join="unjoined"``,
+    which the strict policy drops. A joined item adds, each only ever
+    restricting:
+
+    - ``lifecycle`` and ``lifecycle_override``: the strongest of them and the
+      vault's ``lifecycle:`` tags (retired > superseded > other non-active >
+      active);
+    - ``superseded_by`` (non-empty): counts as ``lifecycle: superseded``;
+    - ``valid_until`` and ``valid_to``: the strict expiry (the earlier of
+      every end date; a value that does not parse fails closed);
+    - ``privacy``: one more declared value (the strictest wins).
+
+    These land in fields the ``compat_fts`` policy does not read
+    (``lifecycle``, ``valid_until``, ``meta_valid_to``, ``lifecycle_join``,
+    and ``privacy`` which it does not check), so its output is unchanged.
+    The vault's own ``superseded_by`` and ``valid_to`` are left as they are.
+    """
+
+    if not fleet_paths(tags) or (lifecycle.meta is None and not lifecycle.unreadable):
+        return meta
+    if lifecycle.unreadable:
+        return replace(meta, lifecycle_join="unjoined")
+    join = join_meta(meta.memory_id, tags, lifecycle.meta)
+    if join.status != "ok" or join.item is None:
+        return replace(meta, lifecycle_join="unjoined")
+    item = join.item
+    lifecycles = [meta.lifecycle] if meta.lifecycle else []
+    for key in ("lifecycle", "lifecycle_override"):
+        value = item.get(key)
+        if value is not None:
+            lifecycles.append(value if isinstance(value, str) else _UNPARSABLE)
+    if item.get("superseded_by") not in (None, ""):
+        lifecycles.append("superseded")
+    privacy_values = [value for value in (meta.privacy, _declared(item.get("privacy"))) if value]
+    return replace(
+        meta,
+        lifecycle=_strongest_lifecycle(lifecycles),
+        privacy=_strictest_privacy(privacy_values) if privacy_values else meta.privacy,
+        valid_until=_temporal(item.get("valid_until")),
+        meta_valid_to=_temporal(item.get("valid_to")),
+        lifecycle_join="ok",
+    )
+
+
+class VaultIdResolver:
+    """``memory_id`` refs → the vault document's metadata. Read-only.
+
+    A document with a ``fleet_path`` tag is joined to the lifecycle
+    meta-index (``lifecycle_source``, else the vault's default file; see
+    :func:`load_lifecycle` and :func:`join_lifecycle`). The meta-index is
+    read at most once per ``resolve`` call, and only when such a document is
+    resolved, so a vault without imported documents never reads it.
+    """
+
+    def __init__(self, root: Path | str, *, lifecycle_source: Path | str | None = None) -> None:
         self.root = Path(root).expanduser().resolve()
+        self.lifecycle_source = lifecycle_source
         self._repository = Repository(self.root)
 
     def resolve(self, refs: Sequence[str]) -> Mapping[str, Resolution]:
         out: dict[str, Resolution] = {}
         memories = self.root / "memories"
+        lifecycle: Lifecycle | None = None
         for ref in refs:
             if ref in out or not _ID_RE.fullmatch(ref):
                 continue
@@ -170,13 +314,171 @@ class VaultIdResolver:
             except Exception:  # noqa: BLE001 - unreadable file fails closed
                 out[ref] = Resolution(ref, None)
                 continue
-            out[ref] = Resolution(document.id, meta_from_document(document))
+            meta = meta_from_document(document)
+            if fleet_paths(document.tags):
+                if lifecycle is None:
+                    lifecycle = load_lifecycle(self.root, self.lifecycle_source)
+                meta = join_lifecycle(meta, document.tags, lifecycle)
+            out[ref] = Resolution(document.id, meta)
         return out
 
 
-def default_resolvers(root: Path | str) -> dict[RefKind, Resolver]:
-    ids = VaultIdResolver(root)
-    return {"memory_id": ids, "path": MemoryPathResolver(ids)}
+#: The ``SegmentResolution.source`` of a note section.
+NOTES_SOURCE = "notes"
+
+
+class NotesSegmentResolver:
+    """``kh:<path>#<heading>`` refs → a section of the built-in notes index. Read-only.
+
+    The notes index (``memfw.notes.NotesIndex``, ``db``) covers the Markdown
+    tree at ``root``; the QMD notes and PageIndex providers name its sections
+    as ``kh:`` refs. A ref resolves only when every check passes; otherwise
+    it is left out (unresolved), the same answer whatever the reason, so a
+    withheld note is indistinguishable from a missing one:
+
+    - the ref parses (:func:`memfw.recall.resolve.parse_kh_ref`): a relative
+      path without ``..``, absolute or backslash forms;
+    - the file is a regular file under ``root`` with no symlink anywhere on
+      its path and does not resolve outside it;
+    - its privacy, read from the file itself like ``notes_search`` with a
+      clearance does (``metadata_level``: frontmatter ``privacy``, missing →
+      ``legacy_privacy_default``; ``privacy:``/``sensitivity:`` tags; strictest
+      wins), is a known level inside ``clearance``; unreadable or bad
+      frontmatter is withheld;
+    - the index lists the note with the same content hash as the file now
+      (a note edited since it was indexed is withheld until reindexed, so a
+      removed line is never returned);
+    - the note has a section with exactly that heading (the first, by
+      position, when it has several); no heading means the note's first
+      section.
+
+    The resolution carries the note's title, the section heading and the
+    section text exactly as ``notes_search`` returns them (``title``,
+    ``heading``, ``content``), plus the privacy level and ``tenant`` (the
+    tenant the notes tree is bound to; the coordinator drops it for any
+    other). Nothing else of the note is read into it.
+    """
+
+    def __init__(
+        self,
+        root: Path | str,
+        db: Path | str,
+        *,
+        clearance: frozenset[str] = REMOTE_CLEARANCE,
+        legacy_privacy_default: str = LEGACY_PRIVACY_FALLBACK,
+        tenant: str = "",
+    ) -> None:
+        cleared = frozenset(clearance)
+        if not cleared <= set(PRIVACY_LEVELS):
+            raise ValueError("clearance must list only public, shared, local-private")
+        if not isinstance(tenant, str):
+            raise ValueError("tenant must be a string")
+        self.root = Path(root).expanduser().resolve()
+        self.db = Path(db).expanduser()
+        self.clearance = cleared
+        self.legacy_privacy_default = legacy_default(legacy_privacy_default)
+        self.tenant = tenant
+
+    def _level(self, text: str) -> str | None:
+        try:
+            frontmatter, _body, _offset = _split_frontmatter(text)
+        except NoteParseError:
+            return None
+        return metadata_level(frontmatter, self.legacy_privacy_default)
+
+    def _read(self, rel: str) -> tuple[str, str] | None:
+        """``(level, content hash)`` of the note at ``rel`` when it may be shown.
+
+        The hash is the one the notes index stores (``sha256`` of the text as
+        ``parse_markdown`` reads it). ``None`` when the note may not be shown.
+        """
+
+        path = self.root / rel
+        if not _note_file_inside_root(path, self.root):
+            return None
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        level = self._level(text)
+        if level is None or level not in self.clearance:
+            return None
+        return level, hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def resolve(self, refs: Sequence[str]) -> Mapping[str, AnyResolution]:
+        wanted: dict[str, tuple[str, str]] = {}
+        for ref in refs:
+            parsed = parse_kh_ref(ref)
+            if parsed is not None:
+                wanted[ref] = parsed
+        if not wanted or self.db.is_symlink() or not self.db.is_file():
+            return {}
+        out: dict[str, AnyResolution] = {}
+        try:
+            uri = f"{self.db.resolve().as_uri()}?mode=ro"
+            with closing(sqlite3.connect(uri, uri=True, timeout=5)) as connection:
+                for ref, (rel, heading) in wanted.items():
+                    found = self._resolve_one(connection, rel, heading)
+                    if found is not None:
+                        out[ref] = found
+        except (OSError, sqlite3.Error):
+            return {}
+        return out
+
+    def _resolve_one(
+        self, connection: sqlite3.Connection, rel: str, heading: str
+    ) -> SegmentResolution | None:
+        read = self._read(rel)
+        if read is None:
+            return None
+        level, digest = read
+        note = connection.execute(
+            "SELECT id, title, content_hash FROM notes WHERE path = ?", (rel,)
+        ).fetchone()
+        if note is None or str(note[2]) != digest:
+            return None
+        if heading:
+            section = connection.execute(
+                "SELECT heading, content FROM sections WHERE note_id = ? AND heading = ? "
+                "ORDER BY ordinal, id LIMIT 1",
+                (note[0], heading),
+            ).fetchone()
+        else:
+            section = connection.execute(
+                "SELECT heading, content FROM sections WHERE note_id = ? "
+                "ORDER BY ordinal, id LIMIT 1",
+                (note[0],),
+            ).fetchone()
+        if section is None:
+            return None
+        return SegmentResolution(
+            source=NOTES_SOURCE,
+            path=rel,
+            anchor=str(section[0]),
+            title=str(note[1]),
+            snippet=str(section[1]),
+            privacy=level,
+            tenant=self.tenant,
+        )
+
+
+def default_resolvers(
+    root: Path | str,
+    *,
+    lifecycle_source: Path | str | None = None,
+    schemes: Mapping[str, Resolver] | None = None,
+) -> dict[RefKind, Resolver]:
+    """The vault resolvers: ``memory_id`` and ``path`` (``memories/<id>.md``).
+
+    ``schemes`` registers resolvers for scheme path refs: ``{"kh":
+    NotesSegmentResolver(...)}`` for notes, and (MM2b) ``{"att": …}`` for
+    attachment segments. None by default, so ``kh:``/``att:`` refs stay
+    unresolved and the output is what it was without this argument.
+    """
+
+    ids = VaultIdResolver(root, lifecycle_source=lifecycle_source)
+    path = SchemePathResolver(MemoryPathResolver(ids), schemes)
+    return {"memory_id": ids, "path": path}
 
 
 def _indexed_question_ids(repository: Repository, tenant: str) -> list[str] | None:
@@ -610,14 +912,20 @@ class MultihopProvider:
 
 
 __all__ = [
+    "DEFAULT_LIFECYCLE_SOURCE",
+    "NOTES_SOURCE",
     "PAGE_CAP",
     "FtsProvider",
     "HybridProvider",
+    "Lifecycle",
     "MultihopProvider",
+    "NotesSegmentResolver",
     "Observe",
     "Prepare",
     "VaultIdResolver",
     "default_resolvers",
+    "join_lifecycle",
+    "load_lifecycle",
     "meta_from_document",
     "open_question_index",
     "open_questions",

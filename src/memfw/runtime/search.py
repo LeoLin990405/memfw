@@ -13,7 +13,7 @@ from __future__ import annotations
 import hashlib
 import os
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -766,7 +766,39 @@ def _search_two_stage(
     }
     if ambiguities:
         payload["ambiguity"] = ambiguities
+    notes = note_rows(result.segments, clearance=runtime.clearance)
+    if notes:
+        # Only when a notes resolver answered: memory-only output is unchanged.
+        payload["notes"] = notes
     return payload
+
+
+def note_rows(
+    segments: Sequence[Any], *, clearance: frozenset[str] | None = None
+) -> list[dict[str, Any]]:
+    """``two_stage`` rows for the note sections the coordinator returned.
+
+    Kept apart from ``results`` (memories) and labelled ``source: notes``.
+    ``title``, ``heading`` and ``content`` are what ``notes_search`` returns
+    for the section; nothing else of the note is added. A Runtime privacy
+    clearance (MM0) applies to them as to memory rows.
+    """
+
+    return [
+        {
+            "source": "notes",
+            "ref": segment.ref,
+            "path": segment.path,
+            "title": segment.title,
+            "heading": segment.anchor,
+            "content": segment.snippet,
+            "score": segment.score,
+            "providers": list(segment.providers),
+            "recall_labels": list(segment.labels),
+        }
+        for segment in segments
+        if segment.source == "notes" and (clearance is None or segment.privacy in clearance)
+    ]
 
 
 __all__ = [
@@ -777,4 +809,5 @@ __all__ = [
     "checked_scope",
     "frontmatter_version",
     "memory_search",
+    "note_rows",
 ]

@@ -405,21 +405,77 @@ all leave the ref `unresolved`, and it is dropped:
 - a resolver that raises, times out, is still busy or returns something that is not a
   mapping. This is reported in `labels.resolvers_degraded` (`error`, `timeout`, `busy`,
   `invalid`) and counted in `resolver_errors`;
-- an entry that is not a `Resolution`, or has an invalid memory id.
+- an entry that is not a `Resolution` or a valid `SegmentResolution`, or has an invalid
+  memory id.
 
 A `Resolution` whose `meta.memory_id` differs from its `memory_id` is dropped as
 `id_mismatch`.
-`memfw.recall.builtin.default_resolvers(root)` returns:
+`memfw.recall.builtin.default_resolvers(root, *, lifecycle_source=None, schemes=None)`
+returns:
 
-- `VaultIdResolver(root)` for `memory_id`: reads `memories/<id>.md` (no symlinks). An
-  unreadable file gives `meta=None`, which fails closed.
-- `MemoryPathResolver(ids)` for `path` refs of the form `memories/<id>.md` (optionally under
-  `./` or `fleet-memory/`); other path forms stay unresolved.
+- `VaultIdResolver(root, lifecycle_source=...)` for `memory_id`: reads `memories/<id>.md`
+  (no symlinks). An unreadable file gives `meta=None`, which fails closed.
+  `meta_from_document` reads privacy from tags: `privacy:<value>` is the declared value,
+  `sensitivity:private` marks the memory private, `lifecycle:<value>` is the lifecycle.
+- `SchemePathResolver(MemoryPathResolver(ids), schemes)` for `path` refs.
+  `MemoryPathResolver` resolves `memories/<id>.md` (optionally under `./` or
+  `fleet-memory/`). A ref that starts with a registered scheme (`kh:`, `att:`) goes only to
+  that scheme's resolver; every other ref goes to `MemoryPathResolver` as before. No scheme
+  is registered by default, so `kh:`/`att:` refs stay unresolved.
 
-The full path resolver (`files/<rel>` → `stable_id` → meta-index) is R6 PR-1's `join_meta`.
-It plugs in through the same protocol (`PathResolver` marks the seam). Until then
-`meta_from_document` reads privacy from tags: `privacy:<value>` is the declared value,
-`sensitivity:private` marks the memory private, `lifecycle:<value>` is the lifecycle.
+**Lifecycle from the meta-index (every provider).** Imported documents keep their
+`lifecycle`, `valid_until` and `superseded_by` only in the meta-index
+(`status/memory-meta-index.json`, keyed by path; R6 §3.8), not in the vault. For a document
+with a `fleet_path:<rel>` tag, `VaultIdResolver` joins it with `memfw.projection.join_meta`,
+reading the meta-index at most once per resolve call (`lifecycle_source`, else
+`<vault>/status/memory-meta-index.json`; a vault without imported documents never reads it).
+Because every provider's refs end at this resolver, this covers FTS, hybrid and adapter
+providers alike. `join_lifecycle` merges, each only ever restricting:
+
+| Meta-index field | Merged into | Strict effect |
+|---|---|---|
+| `lifecycle`, `lifecycle_override` | `lifecycle` (strongest of these and the `lifecycle:` tags) | `retired`, `superseded`, other non-active → `lifecycle` |
+| `superseded_by` (non-empty) | `lifecycle = superseded` | `superseded` |
+| `valid_until` | `valid_until` | `expired` / `expiry_unparsable` |
+| `valid_to` | `meta_valid_to` | `expired` / `expiry_unparsable` (earliest end wins) |
+| `privacy` | one more declared value (strictest wins) | `privacy` |
+
+A failed join (no unique item for the path, two `fleet_path` tags, an `f`+12-hex id that is
+not `stable_id(rel)`, a named source that is missing, a default file that is a symlink or
+malformed) sets `lifecycle_join = "unjoined"`, dropped by the strict policy as `unjoined`
+whatever `include_retired` says. No meta-index file at all keeps the vault-only reading.
+`compat_fts` reads none of these fields (its temporal rule is the index's), so `mode=fts`
+equivalence and the default `two_stage` output do not change; a meta-index whose items carry
+no such field gives exactly the metadata of no meta-index.
+
+**Segments (`kh:` notes, the `att:` hook).** A scheme resolver may answer with
+`SegmentResolution(source, path, anchor, title, snippet, privacy, tenant)` instead of a
+memory `Resolution`. `source` is one of `SEGMENT_SOURCES` (`notes`, `attachments`);
+`privacy` is the MM0 level (`public`/`shared`/`local-private`) the resolver read. Segments
+never become memory hits: the coordinator filters them with `segment_verdict` (tenant must
+match; the level must map to a class in `privacy_clearance`, always checked, `unknown`
+never admitted; a policy restricted to memory sources drops them as `source`), fuses them
+apart (same RRF, same `limit`) into `RecallResult.segments` (`SegmentHit`), and counts their
+drops in the same `dropped` mapping. Memory `hits`, `resolved` and `returned` are unchanged;
+`metrics.as_dict()` gains `segments` only when there are any.
+
+`NotesSegmentResolver(root, db, *, clearance=REMOTE_CLEARANCE, legacy_privacy_default=
+"local-private", tenant="")` resolves `kh:<path>#<heading>` (the QMD notes and PageIndex
+providers' refs, percent-encoded; `parse_kh_ref`) against the built-in notes index. A ref
+resolves only when the path is relative and clean, the file is under `root` with no symlink
+on its path, its level (read from the file, as `notes_search` with a clearance reads it) is
+known and inside `clearance`, the index lists it with the file's current content hash, and a
+section has exactly that heading (none: the first section). Anything else is left
+unresolved, the same answer for a withheld and a missing note. `title`, `anchor` (heading)
+and `snippet` (section text) are what `notes_search` returns for that section. Register it
+with `default_resolvers(root, schemes={"kh": NotesSegmentResolver(...)})`. MCP
+`memory_search mode=two_stage` lists such sections under a separate `notes` key
+(`source: notes`, `title`, `heading`, `content`, ...; the Runtime clearance applies), present
+only when there are any; the Runtime registers no notes resolver yet.
+
+`att:<id>#<locator>` refs are left to MM2b: an attachment resolver registers as
+`schemes={"att": resolver}` and returns `SegmentResolution(source="attachments", ...)`
+after its own privacy and tenant checks. None is registered by default.
 
 ### 3.4 Filter
 
@@ -442,6 +498,7 @@ Missing metadata fails closed. Reasons are the fixed codes in `DROP_REASONS`:
 | `not_yet_valid` | `valid_from` after now (strict); with `as_of`, `valid_from` (else `created_at`) after it | `valid_from`, `created_at` |
 | `id_mismatch` | resolver returned metadata for another id (coordinator) | resolver result |
 | `archived` | `drop_archived` and (`is_stub` or `tier == "cold"`) | `is_stub`, `tier` |
+| `unjoined` | strict: a `fleet_path` document whose meta-index join failed | `lifecycle_join` |
 
 With `as_of`, a superseded memory is judged by its validity window at that instant and kept
 with a `superseded` label when it was valid then. `include_retired` keeps retired,

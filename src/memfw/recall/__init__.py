@@ -21,6 +21,7 @@ from .coordinator import (
     RecallMetrics,
     RecallResult,
     Router,
+    SegmentHit,
 )
 from .fusion import DEFAULT_RRF_K, FusedHit, rrf_fuse
 from .labels import (
@@ -38,8 +39,18 @@ from .policy import (
     classify_privacy,
     evaluate,
     parse_clearance,
+    segment_verdict,
 )
-from .resolve import MemoryPathResolver, PathResolver, Resolution, Resolver
+from .resolve import (
+    SEGMENT_SOURCES,
+    MemoryPathResolver,
+    PathResolver,
+    Resolution,
+    Resolver,
+    SchemePathResolver,
+    SegmentResolution,
+    parse_kh_ref,
+)
 from .routing import AllProvidersRouter, DefaultRouter, RouteDecision, classify_query
 
 __all__ = [
@@ -69,11 +80,17 @@ __all__ = [
     "Resolver",
     "RouteDecision",
     "Router",
+    "SEGMENT_SOURCES",
+    "SchemePathResolver",
+    "SegmentHit",
+    "SegmentResolution",
     "Verdict",
     "classify_privacy",
     "classify_query",
     "evaluate",
     "open_question_labels",
     "parse_clearance",
+    "parse_kh_ref",
     "rrf_fuse",
+    "segment_verdict",
 ]

@@ -12,10 +12,16 @@ One ``Coordinator.search`` call:
    run as a fallback wave.
 3. **Resolve** refs to memory ids through the resolver for each ref kind,
    also in a bounded worker under the same deadline. A ref nobody resolves
-   in time is dropped (``unresolved``).
+   in time is dropped (``unresolved``). A resolver may instead answer with a
+   ``SegmentResolution`` (a note section for ``kh:`` refs; later an
+   attachment segment): those never become memory hits.
 4. **Filter** with the kernel rules (``memfw.recall.policy``). Missing
-   metadata fails closed.
-5. **Fuse** the filtered lists with weighted RRF and a deterministic order.
+   metadata fails closed. Segments get ``segment_verdict`` (tenant, privacy
+   class, source restriction).
+5. **Fuse** the filtered lists with weighted RRF and a deterministic order;
+   segments are fused on their own into ``RecallResult.segments``, so memory
+   hits, their order and the metrics' memory counts are what they would be
+   without them.
 6. **Label** each hit with its providers, and the result with degraded
    providers/resolvers, projection versions and ``fail_closed``.
 7. **Metrics**: latency, counts and drop reasons as fixed codes. The query
@@ -27,7 +33,9 @@ has an in-flight limit (default 1): while an earlier call is still running,
 new calls skip it as ``busy``, so a hung adapter holds at most that many
 threads instead of one per search.
 
-Body text never passes through here; callers read it from the vault by id.
+Memory body text never passes through here; callers read it from the vault
+by id. A segment carries only the title, anchor and snippet its own source's
+search returns (``SegmentResolution``).
 """
 
 from __future__ import annotations
@@ -54,9 +62,9 @@ from ._ports import (
     check_name,
     validate_candidate,
 )
-from .fusion import DEFAULT_RRF_K, rrf_fuse
-from .policy import FilterPolicy, MemoryMeta, Verdict, evaluate
-from .resolve import Resolution, Resolver
+from .fusion import DEFAULT_RRF_K, FusedHit, rrf_fuse
+from .policy import FilterPolicy, MemoryMeta, Verdict, evaluate, segment_verdict
+from .resolve import AnyResolution, Resolution, Resolver, SegmentResolution, valid_segment
 from .routing import DefaultRouter, RouteDecision
 
 _log = logging.getLogger(__name__)
@@ -142,6 +150,44 @@ class RecallHit:
 
 
 @dataclass(frozen=True, slots=True)
+class SegmentHit:
+    """One fused non-memory result (a note section; later an attachment segment).
+
+    ``source`` labels where it comes from (``notes``); ``ref`` is the first
+    ref a provider gave for it. ``title``, ``anchor`` and ``snippet`` are
+    the resolver's, which match what that source's own search returns.
+    """
+
+    source: str
+    ref: str
+    path: str
+    anchor: str
+    title: str
+    snippet: str
+    score: float
+    providers: tuple[str, ...]
+    ranks: Mapping[str, int]
+    labels: tuple[str, ...] = ()
+    #: The MM0 level the resolver read (``public``/``shared``/``local-private``).
+    privacy: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "source": self.source,
+            "ref": self.ref,
+            "path": self.path,
+            "anchor": self.anchor,
+            "title": self.title,
+            "snippet": self.snippet,
+            "score": self.score,
+            "providers": list(self.providers),
+            "ranks": dict(self.ranks),
+            "labels": list(self.labels),
+            "privacy": self.privacy,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class RecallLabels:
     route: str
     providers: tuple[str, ...]
@@ -175,9 +221,12 @@ class RecallMetrics:
     dropped: Mapping[str, int]
     privacy_source_mismatch: int = 0
     resolver_errors: int = 0
+    #: Segments returned (``RecallResult.segments``); ``resolved``/``returned``
+    #: count memories only.
+    segments: int = 0
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "total_ms": round(self.total_ms, 3),
             "route": self.route,
             "providers": [report.as_dict() for report in self.providers],
@@ -187,6 +236,10 @@ class RecallMetrics:
             "privacy_source_mismatch": self.privacy_source_mismatch,
             "resolver_errors": self.resolver_errors,
         }
+        if self.segments:
+            # Only when there are any: memory-only output keeps its shape.
+            out["segments"] = self.segments
+        return out
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,6 +247,9 @@ class RecallResult:
     hits: tuple[RecallHit, ...]
     labels: RecallLabels
     metrics: RecallMetrics
+    #: Non-memory results, fused apart from ``hits`` (empty unless a
+    #: resolver answered with ``SegmentResolution``s).
+    segments: tuple[SegmentHit, ...] = ()
 
     @property
     def ids(self) -> list[str]:
@@ -379,12 +435,31 @@ class Coordinator:
         unresolved_refs: set[tuple[str, str]] = set()
         lists: list[tuple[str, list[str]]] = []
         first_candidate: dict[str, Candidate] = {}
+        segment_verdicts: dict[str, Verdict] = {}
+        segment_lists: list[tuple[str, list[str]]] = []
+        segment_first: dict[str, tuple[Candidate, SegmentResolution]] = {}
         for name in ok:
             kept: list[str] = []
+            kept_segments: list[str] = []
             for candidate in outcomes[name].candidates:
                 resolution = resolutions.get((candidate.ref_kind, candidate.ref))
                 if resolution is None:
                     unresolved_refs.add((candidate.ref_kind, candidate.ref))
+                    continue
+                if isinstance(resolution, SegmentResolution):
+                    key = resolution.key
+                    seg_verdict = segment_verdicts.get(key)
+                    if seg_verdict is None:
+                        seg_verdict = segment_verdict(
+                            source=resolution.source,
+                            tenant=resolution.tenant,
+                            privacy=resolution.privacy,
+                            policy=policy,
+                        )
+                        segment_verdicts[key] = seg_verdict
+                    if seg_verdict.kept and key not in kept_segments:
+                        kept_segments.append(key)
+                        segment_first.setdefault(key, (candidate, resolution))
                     continue
                 memory_id = resolution.memory_id
                 verdict = verdicts.get(memory_id)
@@ -396,8 +471,12 @@ class Coordinator:
                 if memory_id not in kept:
                     kept.append(memory_id)
                     first_candidate.setdefault(memory_id, candidate)
-            outcomes[name].report = _with(outcomes[name].report, kept=len(kept))
+            outcomes[name].report = _with(
+                outcomes[name].report, kept=len(kept) + len(kept_segments)
+            )
             lists.append((name, kept))
+            if kept_segments:
+                segment_lists.append((name, kept_segments))
         dropped: dict[str, int] = {}
         if unresolved_refs:
             dropped["unresolved"] = len(unresolved_refs)
@@ -407,6 +486,9 @@ class Coordinator:
                 dropped[verdict.reason] = dropped.get(verdict.reason, 0) + 1
             if verdict.privacy_mismatch:
                 mismatch += 1
+        for verdict in segment_verdicts.values():
+            if verdict.reason is not None:
+                dropped[verdict.reason] = dropped.get(verdict.reason, 0) + 1
         weights = {name: self.config(name).weight for name in ok}
         item_weights = {mid: verdict.weight for mid, verdict in verdicts.items() if verdict.kept}
         fused = rrf_fuse(
@@ -416,10 +498,22 @@ class Coordinator:
         for name in ok:
             for candidate in outcomes[name].candidates:
                 resolution = resolutions.get((candidate.ref_kind, candidate.ref))
-                if resolution is not None:
+                if isinstance(resolution, Resolution):
                     per = scores_by_id.setdefault(resolution.memory_id, {})
                     per.setdefault(name, float(candidate.score))
         fail_closed = not ok
+        segments: tuple[SegmentHit, ...] = ()
+        if segment_lists and not fail_closed:
+            fused_segments = rrf_fuse(
+                segment_lists,
+                weights={name: weights[name] for name, _ in segment_lists},
+                k=self.rrf_k,
+                limit=limit,
+            )
+            segments = tuple(
+                _segment_hit(item, *segment_first[item.memory_id], segment_verdicts)
+                for item in fused_segments
+            )
         hits = (
             ()
             if fail_closed
@@ -459,11 +553,14 @@ class Coordinator:
             total_ms=max(0.0, self.timer() - started) * 1000.0,
             route=decision.kind,
             providers=tuple(outcomes[name].report for name in tried),
-            resolved=len({res.memory_id for res in resolutions.values()}),
+            resolved=len(
+                {res.memory_id for res in resolutions.values() if isinstance(res, Resolution)}
+            ),
             returned=len(hits),
             dropped=dropped,
             privacy_source_mismatch=mismatch,
             resolver_errors=len(resolver_degraded),
+            segments=len(segments),
         )
         self.last_metrics = metrics
         if self.metrics_sink is not None:
@@ -471,7 +568,7 @@ class Coordinator:
                 self.metrics_sink(metrics)
             except Exception:  # noqa: BLE001 - metrics never break a search
                 _log.warning("recall metrics sink failed")
-        return RecallResult(hits=hits, labels=labels, metrics=metrics)
+        return RecallResult(hits=hits, labels=labels, metrics=metrics, segments=segments)
 
     # -- steps ---------------------------------------------------------
 
@@ -561,13 +658,13 @@ class Coordinator:
 
     def _resolve(
         self, candidates: Sequence[Candidate], *, deadline: float
-    ) -> tuple[dict[tuple[str, str], Resolution], dict[str, str]]:
+    ) -> tuple[dict[tuple[str, str], AnyResolution], dict[str, str]]:
         """Resolve per ref kind in bounded workers. Failures leave refs unresolved."""
 
         by_kind: dict[str, set[str]] = {}
         for candidate in candidates:
             by_kind.setdefault(candidate.ref_kind, set()).add(candidate.ref)
-        out: dict[tuple[str, str], Resolution] = {}
+        out: dict[tuple[str, str], AnyResolution] = {}
         degraded: dict[str, str] = {}
         running: list[tuple[str, list[str], _Slot]] = []
         for kind in sorted(by_kind):
@@ -601,6 +698,8 @@ class Coordinator:
                         and (resolution.meta is None or type(resolution.meta) is MemoryMeta)
                     ):
                         out[(kind, ref)] = resolution
+                    elif valid_segment(resolution):
+                        out[(kind, ref)] = resolution  # type: ignore[assignment]
             except Exception:  # noqa: BLE001 - malformed resolver output
                 degraded[kind] = "invalid"
         return out, degraded
@@ -641,6 +740,27 @@ def _resolver_call(resolver: Resolver, refs: list[str]) -> Callable[[], object]:
     return call
 
 
+def _segment_hit(
+    item: FusedHit,
+    candidate: Candidate,
+    resolution: SegmentResolution,
+    verdicts: Mapping[str, Verdict],
+) -> SegmentHit:
+    return SegmentHit(
+        source=resolution.source,
+        ref=candidate.ref,
+        path=resolution.path,
+        anchor=resolution.anchor,
+        title=resolution.title,
+        snippet=resolution.snippet,
+        score=item.score,
+        providers=item.providers,
+        ranks=item.ranks,
+        labels=verdicts[item.memory_id].labels,
+        privacy=resolution.privacy,
+    )
+
+
 def _with(report: ProviderReport, *, kept: int) -> ProviderReport:
     return ProviderReport(
         report.name,
@@ -672,4 +792,5 @@ __all__ = [
     "RecallMetrics",
     "RecallResult",
     "Router",
+    "SegmentHit",
 ]
