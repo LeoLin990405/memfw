@@ -5,29 +5,36 @@ All notable changes to memfw. The format follows
 [Semantic Versioning](https://semver.org/). Entries name the pull request that
 carried the change; `#N` links to `LeoLin990405/memfw` pull request `N`.
 
-The vault format did not change between `0.1.1` and `0.2.0`: `vault.yaml`
-stays at `schema_version: 1`, and files written by an earlier version keep
-their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
+The vault format did not change in `0.3.0` either: `vault.yaml` stays at
+`schema_version: 1`, and files written by an earlier version keep their bytes.
+`0.3.0` adds optional frontmatter that is written only when set and that memfw
+0.2.0 drops on rewrite; see the 0.3.0
+[Compatibility / upgrade notes](#compatibility--upgrade-notes) (and, for
+`0.1.x` → `0.2.0`, [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
 ## [0.3.0] — 2026-11-17
 
 The second numbered release: a layered core behind swappable ports, recall and
-context packs v2, uncertainty as a first-class record, a concept taxonomy,
-per-memory privacy levels with opt-in clearance on every exit, and a settled,
-optionally model-tagged conversation store. New behaviour is off by default or
-additive: with no new flag, setting or `vault.yaml` key, outputs match 0.2.0
-except for the fail-closed fixes listed below. The entries after this summary
-give the details, newest first.
+context packs v2, epistemic types and reviewed experience points, uncertainty
+as a first-class record, a concept taxonomy, per-memory privacy levels with
+opt-in clearance on every exit, and a settled, optionally model-tagged
+conversation store. New behaviour is off by default or additive: with no new
+flag, setting or `vault.yaml` key, outputs match 0.2.0 except for the
+fail-closed and security fixes and two `memfw-http/2` changes (`/related`
+without a tenant answers 404 for a tenanted memory; `/stage` with a known
+`proposal_id` but changed content answers 409). See the upgrade notes below.
+The entries after this summary give the details, newest first.
 
 ### Summary
 
 - **Architecture, ports and runtime.** Package layers L0 ports → L5 interface,
   enforced by `tests/test_architecture_layers.py` (shrink-only allowlist, 25
   entries → 1). `memfw.runtime` is the composition root; the MCP server only
-  parses, calls the Runtime and serialises (A0–A4). Eleven ports in
-  `memfw.ports.PORT_VERSIONS` (`PORTS_API_VERSION` 0.2.0); ten have swap
+  parses, calls the Runtime and serialises (A0–A4). The read-only service's
+  read path moved into the library, `memfw.index.readonly` (A1). Eleven ports
+  in `memfw.ports.PORT_VERSIONS` (`PORTS_API_VERSION` 0.2.0); ten have swap
   drills with two or more implementations through one contract kit, and
   `ModelBackend` is checked against the extractive and DeepSeek backends.
   Standalone `memfw-ports` / `memfw-recall` wheels (0.2.0) are built in CI
@@ -39,6 +46,13 @@ give the details, newest first.
   (C1, C2), with a per-process cache of ids and versions and `if_version`
   (C3). `memory_used` (C5, off by default) and a session-safe
   `record_access: false` switch so a session never writes the vault (C6).
+  The backend-neutral recall projection `memfw projection export` (R6).
+- **Epistemic and experience.** Optional `epistemic` type and `causal` grade
+  with one write gate (a `verified` causal claim needs an identified,
+  evidenced record and a human), reviewed `type: experience-point` memories
+  staged through `memfw experience draft` / `from-github` / `invalidate`, and
+  the pseudo-causality evaluation `memfw eval causal` (R3, #32; see
+  `docs/epistemic-and-experience.md`).
 - **Uncertainty.** `type: open-question` memories (U1), `open_question:<id>`
   and `conflicted` recall labels (U2), the corroboration projection and its
   display on recall rows plus `memfw corroboration queue` (U4, U5a), and dream
@@ -52,33 +66,51 @@ give the details, newest first.
   clearance on the HTTP service, OKF export, the notes MCP server and the
   memfw MCP server (MM0). A top-level `sensitivity:` key is read the same at
   every exit and kept on rewrite (#69). Fail-closed fixes: privacy and
-  lifecycle tags in the strict policy, supersede keeps the tenant and scope,
-  tenant-scoped `/related` and MCP reads.
-- **Conversations.** A DeepSeek `conv-v2` tagging adapter behind the new
-  `ModelBackend` port, **off unless `conversations.cloud: true` and a key are
-  set** (M3a); settled ingest and archive state (`--settled-minutes`, M3e).
+  lifecycle tags in the strict policy, supersede keeps the tenant and scope.
+- **Security and integrity (#35 audit).** Tenant-exact `/related` and MCP
+  reads, `MEMFW_ALLOWED_SOURCES` on every MCP read, history tools honouring
+  opt-out and `can_read`, the service bind guard and `/stage` tenant binding
+  (S1–S9); vault integrity fixes (frontmatter ending only at a closing `---`,
+  complete `rollback`, `delete` pruning body objects, event-summary hashes);
+  service, MCP, index, CLI and OKF fixes.
+- **Conversations.** Conversation store schema 2 (turn ownership per locator,
+  migrated on first open) and reader fixes; a DeepSeek `conv-v2` tagging
+  adapter behind the new `ModelBackend` port, **off unless
+  `conversations.cloud: true` and a key are set** (M3a); settled ingest and
+  archive state (`--settled-minutes`, M3e).
 - **CLI.** Open questions from `memfw add` / `update`, `--json` on `list`,
   `show` and `index search`, grouped `--help` panels, and
   [`docs/cli-mcp-parity.md`](docs/cli-mcp-parity.md).
-- **Obsidian projection.** `memfw project obsidian` writes a read-only,
-  deterministic Obsidian board (O1a), never touching the vault.
+- **OKF and Obsidian.** `memfw okf import` stages a bundle's concepts as
+  candidates (never the vault); `memfw project obsidian` writes a read-only,
+  deterministic Obsidian board (O1a).
 
 ### Compatibility / upgrade notes
 
 - **Upgrade every host that reads or writes a shared vault together.** memfw
-  0.2.0 reads 0.3.0 files without error, but it lists the new frontmatter in
-  `ignored_keys` and **drops it on rewrite**:
-  - the `open_question` block (the memory keeps `type: open-question`; 0.3.0
-    then refuses gated writes to it and `fsck` reports
-    `open_question_missing_block`);
-  - the `privacy` field and a top-level `sensitivity:` key, so a 0.2.0 rewrite
-    loosens a memory to the vault's legacy default.
+  0.2.0 reads 0.3.0 files without error, but it lists every key it does not
+  know in `ignored_keys` and **drops it on rewrite**. The memory fields new in
+  0.3.0 are `epistemic`, `causal`, `causal_record`, `limitations`,
+  `experience` (R3), `open_question` (U1), `privacy` (MM0) and the top-level
+  `sensitivity:` key (#69). So a 0.2.0 rewrite:
+  - loses the epistemic type, causal grade and record, limitations and the
+    experience-point record;
+  - loses the `open_question` block (the memory keeps `type: open-question`;
+    `fsck` then reports `open_question_missing_block`, and a person can restore
+    the block with `memfw update ID --question … [--conflicts …]`);
+  - loses `privacy` and the top-level `sensitivity:` key, which loosens the
+    memory to the vault's legacy default.
 
   Concept files keep `broader` under 0.2.0 (it lints it as
   `unknown_relation`). 0.2.0 accepts and keeps the new `vault.yaml` keys.
 - **No downgrade after compaction.** Once 0.3.0 compacts a vault's event log,
   memfw 0.2.0 can no longer read that log. A vault 0.3.0 never compacted stays
   readable by 0.2.0.
+- **`memfw-http/2` clients.** `/related` without a `tenant` sees only
+  empty-tenant memories: asking about a tenanted memory answers 404 and other
+  tenants' neighbours are dropped, so clients must send the tenant they read.
+  `/stage` with an existing `proposal_id` but different content answers 409
+  `conflict` instead of `duplicate: true`. Clients must handle both.
 - **Read-only HTTP service.** Deploy `scripts/memfw_readonly_service.py`,
   `src/memfw/index/readonly.py` and `src/memfw/index/read_path.py` from the
   same revision. `read_path.py` now carries `READ_PATH_VERSION = 2`, and the
@@ -93,6 +125,22 @@ give the details, newest first.
   get a level, `new_privacy_default`) with `memfw privacy legacy-default` /
   `new-default` before enabling a clearance. Unset clearance filters nothing,
   as in 0.2.0.
+- **Conversation store schema 2.** The first open by 0.3.0 migrates the store
+  in one transaction (turn ownership backfilled, cursors cleared), so the next
+  ingest re-reads every session once. The session fingerprint now includes a
+  UTC-normalised `updated_at`, so the next conversation worker run re-processes
+  every session once. Readers skip a store directory that is a symlink
+  resolving outside its root (a warning names it); point the root at the real
+  directory.
+- **Cloud tagging is off; turn it on after the re-processing.** The DeepSeek
+  adapter is a separate wheel; the worker uses it only with `conversations:
+  {backend, cloud: true}` in `vault.yaml` and `DEEPSEEK_API_KEY` set.
+  Otherwise the worker behaves as in 0.2.0. The one-time re-processing above
+  counts every session as *changed*, and `backfill_days` / `replan_limit`
+  only hold back *unchanged* sessions, so those caps do not limit it. Run the
+  worker once on the default extractive backend after upgrading, then enable
+  the cloud backend; its re-planning of the then unchanged history is capped
+  (30 days, newest 1000 sessions by default).
 - **Expected stricter output.** Fail-closed fixes can hide rows 0.2.0 showed
   or keep records 0.2.0 dropped: `privacy:`, `sensitivity:` and `lifecycle:`
   tags match in any case and the strictest wins under the `strict` policy, an
@@ -102,10 +150,6 @@ give the details, newest first.
 - **Derived stores.** `corroboration.sqlite3` and the Obsidian output are
   projections you can delete and rebuild at any time; the `memory_used` store
   (outside the vault) is disposable. None of them is part of the vault.
-- **Cloud tagging is off.** The DeepSeek adapter is a separate wheel; the
-  conversation worker uses it only with `conversations: {backend, cloud:
-  true}` in `vault.yaml` and `DEEPSEEK_API_KEY` set. Otherwise the worker
-  behaves as in 0.2.0.
 - **Packages.** `memfw` 0.3.0 still ships `memfw.ports` itself and does not
   depend on `memfw-ports`. `memfw-ports` and `memfw-recall` are 0.2.0
   (`PORTS_API_VERSION` 0.2.0), `memfw-adapter-deepseek` is 0.1.0. Nothing is
@@ -949,9 +993,11 @@ side; wall-clock stamps and run ids aside). Six allowlist entries are gone
   log. Vaults that were never compacted by this version stay readable by 0.2.0.
 - **`open_question` is new frontmatter.** memfw 0.2.0 reads an open-question
   file without error, keeps `type: open-question`, and lists `open_question` in
-  `ignored_keys`; a write by 0.2.0 drops the block, after which this version
-  refuses gated writes to that memory and `fsck` reports
-  `open_question_missing_block`. Files without the block keep their bytes.
+  `ignored_keys`; a write by 0.2.0 drops the block, after which `fsck`
+  reports `open_question_missing_block` and a person can restore the block
+  with `memfw update ID --question … [--conflicts …]`. Files without the block
+  keep their bytes.
+
 ### Breaking for memfw-http/2 clients
 
 - `/related` without a `tenant` now only sees empty-tenant memories: asking
@@ -1033,6 +1079,7 @@ side; wall-clock stamps and run ids aside). Six allowlist entries are gone
 - Code retrieval matches the ignore list against repo-relative paths,
   updates embeddings by row, and resolves recent files against the repo
   root (I9).
+
 ### Fixed — CLI, OKF export and candidates
 
 - `okf export --force` refuses an output that is the vault, contains it or
@@ -1074,6 +1121,7 @@ side; wall-clock stamps and run ids aside). Six allowlist entries are gone
   run.
 - `memfw eval causal` works from an installed wheel: its fixtures ship as
   package data under `memfw/eval_data/causal_eval/`.
+
 ### Conversation store and readers (fixes)
 
 - Ingest no longer rolls back a session holding a lone UTF-16 surrogate:
@@ -1115,6 +1163,7 @@ side; wall-clock stamps and run ids aside). Six allowlist entries are gone
   stripped, and a redacted cwd skips git with a note in `system.notes`.
 - The conversation worker no longer treats a session without timestamps as
   idle on first sight; it waits `idle_minutes` after it last saw it change.
+
 ### Added
 
 - `type: open-question` memories with an `open_question` block (`question`,
@@ -1144,11 +1193,12 @@ side; wall-clock stamps and run ids aside). Six allowlist entries are gone
 - The candidate staging writer moved from `memfw.mcp.server` to
   `memfw.capture.staging` so `memory_remember` and `okf import` share it; the
   candidate file `memory_remember` writes is unchanged.
+
+### Recall projection
+
 R6 PR-1: the backend-neutral recall projection, documented in
 `docs/qmd-projection.md`. memfw contains no QMD code; it couples to a recall
 backend only through exported files and the `resolve` interface.
-
-### Recall projection
 
 - `memfw projection export` writes one Markdown file per projectable memory,
   `manifest.json`, `delta.json` and `export-failures.jsonl` into a new
@@ -1181,6 +1231,7 @@ backend only through exported files and the `resolve` interface.
 - No change to existing command output: `index search` default and
   `--dry-run` output are unchanged, and every new command is read-only on the
   vault.
+
 ### Compat framework: ports and recall coordinator
 
 - New `memfw.ports`: the four port protocols (`RecallProvider`, `Projector`,
@@ -1261,6 +1312,35 @@ names `shared_readonly()` exposes.
   imports `scripts`, names a `scripts/` path or the service module, edits
   `sys.path` (aliases included), or calls `exec`, `site.addsitedir`,
   `SourceFileLoader` or `runpy.run_path`.
+
+### Added — epistemic type, causal grade, experience points (R3, #32)
+
+- Memories may carry `epistemic` (`experience`, `fact`, `judgment`,
+  `inference`), `causal` (`none`, `association`, `hypothesis`, `verified`),
+  `causal_record`, `limitations` and `experience`. Defaults stay off the file,
+  so older memories parse and render byte-identically. `memfw add` / `update`
+  take `--epistemic`, `--causal` and `--causal-record`.
+- One write gate (`memfw.core.epistemic`) for add, update, proposals, the
+  human approval that applies one, and dream candidate staging: `causal:
+  verified` needs a non-empty estimand and identification with no untested
+  assumptions, evidence outside the vault (chat or model narrative caps a
+  claim at `hypothesis`), robustness or limitations, and a human writer or a
+  recorded human decision. Agent and dream writes stop at `hypothesis`.
+- MCP `memory_search`, `memory_get` and `memory_context` rows carry
+  `epistemic` and `causal`; `memory_get` returns the whole causal record. OKF
+  export carries the fields inside the `memfw:` envelope.
+- Reviewed experience points: `type: experience-point` with the reviewed
+  record (task, conditions, actions, evidence, review, counterexamples,
+  `invalidated_when`). `memfw experience draft --from FILE [--apply]` stages a
+  candidate under `_candidates/experience/` (never the vault), `memfw
+  experience from-github --repo OWNER/NAME --pr N` drafts one from a merged
+  pull request through `gh` (read-only), and `memfw experience invalidate ID
+  --reason …` stages a pending-revision proposal. Schema:
+  `docs/experience-points.md`.
+- Pseudo-causality evaluation: `memfw eval causal [--json]` runs synthetic
+  confounded, narrative-only and fully identified materials through the real
+  write path and reports spurious promotions, false accepts and false
+  rejects. See `docs/epistemic-and-experience.md` and `docs/evaluation.md`.
 
 ## [0.2.0] — 2026-11-15
 

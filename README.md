@@ -147,6 +147,7 @@ rebuild: it detects the missing tables and degrades instead (no temporal filteri
 | Search | `index rebuild`, `index search`; `resolve` (batch, read-only lifecycle/validity/privacy check of recall hits) |
 | Concepts | `concepts` (one canonical concept per thing, with aliases that may be scoped; optional `broader` parents, `narrower` derived), `concepts relations` (the versioned relation-type table), `concepts lint-relations` |
 | Uncertainty | `add --type open-question --question … [--conflicts ID …] [--missing …]`, `update ID --question/--conflicts/--missing`, `update ID --resolved-by ANSWER`; `corroboration rebuild`, `corroboration show ID --as-app APP`, `corroboration queue` (review order); `dream accept-question` / `reject-question` |
+| Epistemic and experience | `add` / `update --epistemic --causal --causal-record` (one write gate; `causal: verified` needs a human), `experience draft` / `from-github` / `invalidate` (reviewed experience points, staged as candidates), `eval causal` |
 | Privacy | `add --privacy LEVEL`, `update --privacy LEVEL`, `privacy legacy-default [LEVEL]`, `privacy new-default [LEVEL]` (levels `public`, `shared`, `local-private`) |
 | Review gate | `candidates`, `candidate-apply [--apply]`, `candidates-expire` (30-day TTL, never deletes), `record-proposal`, `approve-proposal`, `review` |
 | Retention | `budget`, `forget` (`fifo`, `lru`, `decay`, `salience`, `consolidate_then_forget`), `tiers` / `tier` (hot and cold), `cold-archive`, `cold-restore`, `layer` / `layer-set`, `consolidate` |
@@ -433,9 +434,13 @@ workers keep working (an older worker simply ignores the scan cursor). Details i
 [`docs/dream.md`](docs/dream.md#memory-fields).
 
 **From 0.2.0 to 0.3.0, upgrade every host that shares a vault together.** memfw 0.2.0 reads
-0.3.0 files, but a rewrite by 0.2.0 drops an `open_question` block, the `privacy` field and a
-top-level `sensitivity:` key (so it can loosen a memory), and once 0.3.0 compacts a vault's event
-log, 0.2.0 can no longer read that log. See
+0.3.0 files, but a rewrite by 0.2.0 drops every memory field it does not know: `epistemic`,
+`causal`, `causal_record`, `limitations`, `experience`, the `open_question` block, `privacy` and
+a top-level `sensitivity:` key (so it can loosen a memory). Once 0.3.0 compacts a vault's event
+log, 0.2.0 can no longer read that log. The conversation store moves to schema 2 on first open
+(every session is re-read and re-processed once), and two `memfw-http/2` answers changed:
+`/related` without a tenant gives 404 for a tenanted memory, and `/stage` with a known
+`proposal_id` but changed content gives 409. See
 [`CHANGELOG.md` → Compatibility / upgrade notes](CHANGELOG.md#compatibility--upgrade-notes).
 
 ## 🌐 Integration and federation
@@ -541,23 +546,24 @@ on synthetic duplicate, conflict and stale cases with `python -m eval.dreams`
 
 ## 📍 Status and boundaries
 
-Release status: **v0.3.0** (2026-11-17). Apache-2.0; runs offline on one machine; not
-published to PyPI. Implemented: the vault and hash-linked event log, retention and the `10MB`
-budget, the disposable FTS5 index and the read path (per-term matching, concept aliases,
-multi-hop), the layered core with eleven ports and the `memfw.runtime` composition root,
-`two_stage` recall, context packs v2 with slots, resources and `if_version`, open questions,
-recall labels and corroboration, the concept taxonomy and relation-type table, privacy levels
-with opt-in clearance, the MCP servers, the notes index and code retrieval, the read-only
-transcript index, the conversation store with 14 readers, settled ingest, sharing and the worker
-(with an optional, off-by-default DeepSeek tagging adapter), handoff packs, dream (verify,
-curate, distill, budget, skills, open-question candidates), OKF v0.2 export and import, the
-Obsidian projection and the read-only HTTP service (`memfw-http/2`). Changes are listed in
-[`CHANGELOG.md`](CHANGELOG.md).
+Release status: **v0.3.0** (2026-11-17). Apache-2.0; runs offline on one machine; not published
+to PyPI. Implemented: the vault and hash-linked event log, retention and the `10MB` budget, the
+disposable FTS5 index and the read path (per-term matching, concept aliases, multi-hop),
+epistemic types, causal grades and reviewed experience points, the layered core with eleven
+ports and the `memfw.runtime` composition root, `two_stage` recall, context packs v2 with
+slots, resources and `if_version`, open questions, recall labels and corroboration, the concept
+taxonomy and relation-type table, privacy levels with opt-in clearance, the MCP servers, the
+notes index and code retrieval, the read-only transcript index, the conversation store with 14
+readers, settled ingest, sharing and the worker (with an optional, off-by-default DeepSeek
+tagging adapter), handoff packs, dream (verify, curate, distill, budget, skills, open-question
+candidates), OKF v0.2 export and import, the Obsidian projection and the read-only HTTP service
+(`memfw-http/2`). Changes are listed in [`CHANGELOG.md`](CHANGELOG.md).
 
 **Upgrade boundary.** `vault.yaml` stays at `schema_version: 1`, and a file without the new
-keys keeps its bytes through parse → render. New frontmatter (`open_question`, `privacy`, a
-top-level `sensitivity:`) is written only when set, and memfw 0.2.0 drops it on rewrite, so
-upgrade every host that shares a vault in one go. The FTS5 index is a disposable projection and
+keys keeps its bytes through parse → render. New frontmatter (`epistemic`, `causal`,
+`causal_record`, `limitations`, `experience`, `open_question`, `privacy`, a top-level
+`sensitivity:`) is written only when set, and memfw 0.2.0 drops it on rewrite, so upgrade every
+host that shares a vault in one go. The FTS5 index is a disposable projection and
 is **not** migrated in place: the MCP server (`memfw-mcp`) and `memfw index search` rebuild a
 stale index before they use it; the read-only HTTP service never writes, so deploy its three
 files together and run `memfw index rebuild` once before pointing it at an upgraded vault.

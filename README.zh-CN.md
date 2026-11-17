@@ -117,6 +117,7 @@ Claude Code 可以直接运行 `claude mcp add memfw -- memfw-mcp --root /path/t
 | 搜索 | `index rebuild`、`index search`；`resolve`（批量、只读地核对召回结果的生命周期、有效期和隐私） |
 | 概念 | `concepts`（一个事物一个规范概念，别名可以限定作用域；可选的上位概念 `broader`，下位 `narrower` 自动推导）、`concepts relations`（带版本号的关系类型表）、`concepts lint-relations` |
 | 不确定性 | `add --type open-question --question … [--conflicts ID …] [--missing …]`、`update ID --question/--conflicts/--missing`、`update ID --resolved-by ANSWER`；`corroboration rebuild`、`corroboration show ID --as-app APP`、`corroboration queue`（审核顺序）；`dream accept-question` / `reject-question` |
+| 认知类型与经验 | `add` / `update --epistemic --causal --causal-record`（同一道写入闸门；`causal: verified` 必须由人写入）、`experience draft` / `from-github` / `invalidate`（经人审核的经验点，以候选形式暂存）、`eval causal` |
 | 隐私 | `add --privacy LEVEL`、`update --privacy LEVEL`、`privacy legacy-default [LEVEL]`、`privacy new-default [LEVEL]`（级别为 `public`、`shared`、`local-private`） |
 | 审核关口 | `candidates`、`candidate-apply [--apply]`、`candidates-expire`（30 天过期，从不删文件）、`record-proposal`、`approve-proposal`、`review` |
 | 保留策略 | `budget`、`forget`（`fifo`、`lru`、`decay`、`salience`、`consolidate_then_forget`）、`tiers` / `tier`（冷热层）、`cold-archive`、`cold-restore`、`layer` / `layer-set`、`consolidate` |
@@ -296,7 +297,7 @@ memfw dream skills --root /path/to/vault --from-queue          # 用 worker 排�
 
 候选文件、报告和 worker 状态只会新增键或表，旧的 reader 和 worker 照常工作（旧 worker 只是忽略扫描游标）。细节见 [`docs/dream.md`](docs/dream.md#memory-fields)。
 
-**从 0.2.0 升到 0.3.0 时，共用同一个 vault 的所有机器要一起升。** memfw 0.2.0 能读 0.3.0 写出的文件，但它一旦改写某条记忆，就会丢掉 `open_question` 块、`privacy` 字段和顶层的 `sensitivity:` 键（记忆因此可能被放宽）；0.3.0 压缩过事件日志之后，0.2.0 也再读不了这份日志。见 [`CHANGELOG.md` → Compatibility / upgrade notes](CHANGELOG.md#compatibility--upgrade-notes)。
+**从 0.2.0 升到 0.3.0 时，共用同一个 vault 的所有机器要一起升。** memfw 0.2.0 能读 0.3.0 写出的文件，但它一旦改写某条记忆，就会丢掉所有它不认识的字段：`epistemic`、`causal`、`causal_record`、`limitations`、`experience`、`open_question` 块、`privacy`，以及顶层的 `sensitivity:` 键（记忆因此可能被放宽）。0.3.0 压缩过事件日志之后，0.2.0 也再读不了这份日志。会话库在第一次打开时迁移到 schema 2（每个会话都会重读、重新处理一次）；`memfw-http/2` 有两处回应变了：不带租户的 `/related` 查有租户的记忆时返回 404，`/stage` 用已有的 `proposal_id` 提交不同内容时返回 409。见 [`CHANGELOG.md` → Compatibility / upgrade notes](CHANGELOG.md#compatibility--upgrade-notes)。
 
 ## 🌐 集成与联邦
 
@@ -368,9 +369,9 @@ memfw 分成若干层，只允许向下依赖，并由 CI 强制检查：
 
 ## 📍 现状与边界
 
-发版状态：**v0.3.0**（2026-11-17）。Apache-2.0 许可，在单机上离线运行，没有发布到 PyPI。已经实现：vault 与哈希链事件日志、保留策略与 `10MB` 预算、可重建的 FTS5 索引与读路径（按词匹配、概念别名、多跳）、带十一个端口和 `memfw.runtime` 组装根的分层内核、`two_stage` 召回、带槽位、资源和 `if_version` 的上下文包 v2、待解问题、召回标签与佐证、概念层级与关系类型表、隐私级别与按需开启的 clearance、MCP 服务、notes 索引与代码检索、只读转录索引、带 14 个 reader 的会话库、跳过进行中会话的 settled 导入、共享与 worker（附一个默认关闭的 DeepSeek 打标签适配器）、交接包、dream（核对、整理、提炼、预算、技能、待解问题候选）、OKF v0.2 导出与导入、Obsidian 投影，以及只读 HTTP 服务（`memfw-http/2`）。逐条变更见 [`CHANGELOG.md`](CHANGELOG.md)。
+发版状态：**v0.3.0**（2026-11-17）。Apache-2.0 许可，在单机上离线运行，没有发布到 PyPI。已经实现：vault 与哈希链事件日志、保留策略与 `10MB` 预算、可重建的 FTS5 索引与读路径（按词匹配、概念别名、多跳）、认知类型、因果分级与经人审核的经验点、带十一个端口和 `memfw.runtime` 组装根的分层内核、`two_stage` 召回、带槽位、资源和 `if_version` 的上下文包 v2、待解问题、召回标签与佐证、概念层级与关系类型表、隐私级别与按需开启的 clearance、MCP 服务、notes 索引与代码检索、只读转录索引、带 14 个 reader 的会话库、跳过进行中会话的 settled 导入、共享与 worker（附一个默认关闭的 DeepSeek 打标签适配器）、交接包、dream（核对、整理、提炼、预算、技能、待解问题候选）、OKF v0.2 导出与导入、Obsidian 投影，以及只读 HTTP 服务（`memfw-http/2`）。逐条变更见 [`CHANGELOG.md`](CHANGELOG.md)。
 
-**升级边界。** `vault.yaml` 仍是 `schema_version: 1`；不带新键的文件解析再渲染后保持原字节。新的 frontmatter（`open_question`、`privacy`、顶层 `sensitivity:`）只在设置时才写出，而 memfw 0.2.0 改写文件时会把它们丢掉，所以共用一个 vault 的机器要一次性全部升级。FTS5 索引是可丢弃的投影，**不会就地迁移**：MCP 服务（`memfw-mcp`）和 `memfw index search` 会在使用前重建过期索引；只读 HTTP 服务从不写盘，所以要把它的三个文件一起部署，并先跑一次 `memfw index rebuild` 再指向升级后的 vault。
+**升级边界。** `vault.yaml` 仍是 `schema_version: 1`；不带新键的文件解析再渲染后保持原字节。新的 frontmatter（`epistemic`、`causal`、`causal_record`、`limitations`、`experience`、`open_question`、`privacy`、顶层 `sensitivity:`）只在设置时才写出，而 memfw 0.2.0 改写文件时会把它们丢掉，所以共用一个 vault 的机器要一次性全部升级。FTS5 索引是可丢弃的投影，**不会就地迁移**：MCP 服务（`memfw-mcp`）和 `memfw index search` 会在使用前重建过期索引；只读 HTTP 服务从不写盘，所以要把它的三个文件一起部署，并先跑一次 `memfw index rebuild` 再指向升级后的 vault。
 
 **边界。** 匹配是基于词面的（没有共同用词的改写会漏掉）；dream 只暂存候选（没有 `dream apply`：由人用 `update` / `supersede` 落地，待解问题候选用 `dream accept-question` 写入）；notes、转录和会话索引都是派生索引，与 vault 分开；`two_stage` 和上下文 v2 只在 MCP 里提供（只读 HTTP 服务和命令行里没有）；只读 HTTP 服务用读写 token 鉴权，未配置写路径时一律拒绝；定时运行只提供打印出来的 launchd plist；评估规模较小。详见 [`docs/dream.md`](docs/dream.md#limitations) 和 [`docs/RELEASE-READINESS.md`](docs/RELEASE-READINESS.md)。
 
