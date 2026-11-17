@@ -12,6 +12,7 @@ re-runs the same contract.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -32,6 +33,7 @@ from .context import (
     compute_pack_version,
     pack_version_payload,
 )
+from .models import TAG_PROMPT_VERSION, TAG_TASKS, ModelReply, parse_tagged
 from .protocols import Deriver, Ingestor, Projector, RecallProvider
 from .staging import CANDIDATES_DIR
 from .types import (
@@ -613,7 +615,85 @@ def check_usage_sink(
             _require(leaf in allowed, f"stored rows keep text that is not a signal field: {leaf!r}")
 
 
+#: Inputs for :func:`check_model_backend`, one per task (redacted-looking text).
+MODEL_SAMPLES: dict[str, dict[str, object]] = {
+    "chunk_summary": {
+        "turns": [
+            {"role": "user", "text": "Fix the flaky retry test in the sync worker."},
+            {"role": "assistant", "text": "Fixed the race; the tests pass now."},
+        ]
+    },
+    "session_summary": {
+        "first_user": "Fix the flaky retry test in the sync worker.",
+        "chunks": ["The user asked to fix a flaky test. The race was fixed."],
+    },
+    "memory_claims": {"summary": "The race in the sync worker retry test was fixed."},
+}
+PROMPT_VERSIONS = ("conv-v1", TAG_PROMPT_VERSION)
+
+
+def check_model_backend(
+    backend: object,
+    *,
+    samples: dict[str, dict[str, object]] | None = None,
+    max_tokens: int = 256,
+) -> list[ModelReply]:
+    """A ``ModelBackend`` answers every task it accepts with a JSON object reply.
+
+    ``name`` is a non-empty string and ``local`` a bool; ``prompt_version``
+    (default ``conv-v1``) is a known version and ``tasks`` (default: every
+    sample task) a tuple of task names. Each accepted task returns a
+    :class:`~memfw.ports.models.ModelReply` with a string ``text`` that is
+    one JSON object, non-negative token counts, and leaves its input
+    unchanged. A ``conv-v2`` backend's tag tasks match the tag schema. A task
+    outside ``tasks`` raises instead of answering.
+    """
+
+    samples = MODEL_SAMPLES if samples is None else samples
+    name = getattr(backend, "name", None)
+    _require(isinstance(name, str) and bool(name), "backend.name must be a non-empty string")
+    _require(isinstance(getattr(backend, "local", None), bool), "backend.local must be a bool")
+    run = getattr(backend, "run", None)
+    _require(callable(run), "backend.run must be callable")
+    version = getattr(backend, "prompt_version", "conv-v1")
+    _require(version in PROMPT_VERSIONS, f"unknown prompt_version {version!r}")
+    tasks = getattr(backend, "tasks", tuple(samples))
+    _require(
+        isinstance(tasks, tuple) and all(isinstance(task, str) for task in tasks),
+        "backend.tasks must be a tuple of task names",
+    )
+    replies: list[ModelReply] = []
+    for task, data in samples.items():
+        before = copy.deepcopy(data)
+        if task not in tasks:
+            try:
+                run(task, copy.deepcopy(data), max_tokens=max_tokens)  # type: ignore[misc]
+            except Exception:
+                continue
+            raise ContractError(f"backend answered task {task} it does not accept")
+        reply = run(task, data, max_tokens=max_tokens)  # type: ignore[misc]
+        _require(data == before, f"run({task}) changed its input")
+        _require(isinstance(reply, ModelReply), f"run({task}) did not return a ModelReply")
+        _require(isinstance(reply.text, str), f"run({task}) reply text is not a string")
+        for count in (reply.tokens_in, reply.tokens_out):
+            _require(
+                isinstance(count, int) and not isinstance(count, bool) and count >= 0,
+                f"run({task}) token counts must be integers >= 0",
+            )
+        try:
+            value = json.loads(reply.text)
+        except ValueError as exc:
+            raise ContractError(f"run({task}) reply is not JSON") from exc
+        _require(isinstance(value, dict), f"run({task}) reply is not a JSON object")
+        if version == TAG_PROMPT_VERSION and task in TAG_TASKS:
+            _require(parse_tagged(value) is not None, f"run({task}) reply breaks the tag schema")
+        replies.append(reply)
+    _require(bool(replies), "backend accepted none of the sample tasks")
+    return replies
+
+
 __all__ = [
+    "MODEL_SAMPLES",
     "ContractError",
     "check_claim_stager",
     "check_claim_verifier",
@@ -623,6 +703,7 @@ __all__ = [
     "check_deriver",
     "check_id_gen",
     "check_ingestor",
+    "check_model_backend",
     "check_projector",
     "check_recall_provider",
     "check_usage_sink",

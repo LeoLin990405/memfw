@@ -11,13 +11,22 @@ import re
 import tomllib
 from pathlib import Path
 
-from memfw.ports import CLAIMS_PORT_VERSION, PORT_VERSIONS, USAGE_PORT_VERSION
+import memfw.ports
+from memfw.ports import (
+    CLAIMS_PORT_VERSION,
+    MODELS_PORT_VERSION,
+    PORT_VERSIONS,
+    USAGE_PORT_VERSION,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 DOC = ROOT / "docs" / "ports-and-recall.md"
 ROW = re.compile(r"^\| `([a-z-]+)` \| ([0-9.]+) \| `([A-Za-z]+)` \| (\d+) \|$")
 #: Ports each non-ports package builds on.
-CONSUMES = {"memfw-recall": {"RecallProvider"}}
+CONSUMES = {
+    "memfw-recall": {"RecallProvider"},
+    "memfw-adapter-deepseek": {"ModelBackend"},
+}
 
 
 def _table() -> list[tuple[str, str, str, int]]:
@@ -32,8 +41,10 @@ def _table() -> list[tuple[str, str, str, int]]:
 
 
 def _version(package: str) -> str:
-    data = tomllib.loads((ROOT / "packages" / package / "pyproject.toml").read_text("utf-8"))
-    return str(data["project"]["version"])
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    (member,) = [m for m in data["tool"]["uv"]["workspace"]["members"] if Path(m).name == package]
+    project = tomllib.loads((ROOT / member / "pyproject.toml").read_text("utf-8"))
+    return str(project["project"]["version"])
 
 
 def test_ports_rows_are_exactly_port_versions() -> None:
@@ -61,3 +72,15 @@ def test_every_table_package_is_a_workspace_member() -> None:
 def test_named_port_constants_feed_the_table() -> None:
     assert PORT_VERSIONS["ClaimVerifier"] == PORT_VERSIONS["ClaimStager"] == CLAIMS_PORT_VERSION
     assert PORT_VERSIONS["UsageSink"] == USAGE_PORT_VERSION
+    assert PORT_VERSIONS["ModelBackend"] == MODELS_PORT_VERSION
+
+
+def test_every_exported_protocol_has_a_port_version() -> None:
+    protocols = {
+        name
+        for name in memfw.ports.__all__
+        if isinstance(getattr(memfw.ports, name), type)
+        and getattr(getattr(memfw.ports, name), "_is_protocol", False)
+    }
+    assert "ModelBackend" in protocols and "UsageSink" in protocols
+    assert protocols == set(PORT_VERSIONS), protocols ^ set(PORT_VERSIONS)

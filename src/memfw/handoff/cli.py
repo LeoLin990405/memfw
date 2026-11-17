@@ -24,7 +24,7 @@ from typing import Annotated, Any, NoReturn
 import typer
 
 from memfw.conversations.adapter import checked_location, store_path
-from memfw.conversations.backends import load_backend
+from memfw.conversations.backends import gated_loader
 from memfw.conversations.policy import SharePolicy
 from memfw.conversations.service import read_config
 from memfw.conversations.store import ConversationError, check_id, check_private_location
@@ -118,6 +118,8 @@ def run(
         raise HandoffError(EXIT_USAGE, message=str(exc)) from exc
     try:
         config, vault = read_config(root)
+        # A non-local --summarize backend needs --allow-cloud AND conversations.cloud.
+        loader = gated_loader(config)
     except (ConversationError, MemfwError) as exc:
         raise HandoffError(EXIT_USAGE, message=str(exc)[:200]) from exc
     _policy_check(config, name, target)
@@ -160,7 +162,7 @@ def run(
             allow_cloud=allow_cloud,
             measure=measure,
             saved_as=reservation.path.name if reservation else None,
-            loader=load_backend,
+            loader=loader,
         )
         body = render(pack)
         if ledger is not None and reservation is not None:
@@ -192,7 +194,11 @@ def handoff(
         typer.Option("--summarize", help="Add a model summary with this backend (module:factory)"),
     ] = None,
     allow_cloud: Annotated[
-        bool, typer.Option("--allow-cloud", help="Allow a non-local --summarize backend")
+        bool,
+        typer.Option(
+            "--allow-cloud",
+            help="Allow a non-local --summarize backend (also needs conversations.cloud: true)",
+        ),
     ] = False,
     task_file: Annotated[
         Path | None,

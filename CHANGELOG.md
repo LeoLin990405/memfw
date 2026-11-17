@@ -117,6 +117,37 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   `topics` are not cached. `memfw.context` gains the `CoreCandidates` seam
   (`CoreSlotProvider(candidates=...)`), `is_core_shaped`, `select_core` and
   `if_version_request`.
+### Added — DeepSeek tagging adapter and conv-v2 tags (M3a)
+
+- New L0 port `memfw.ports.models`: `ModelBackend`, `ModelReply` (moved from
+  `memfw.conversations.backends`, which re-exports them unchanged),
+  `BackendUnavailable`, `BackendBudgetExhausted` and the `conv-v2` tag schema
+  (summary plus `project`, `task_type`, `components`, `intent`, `outcome`).
+  Contract check `memfw.ports.testing.check_model_backend`.
+  It ships in the same ports API release as `UsageSink` (`PORTS_API_VERSION`
+  stays `0.2.0`); `ModelBackend` is registered in `PORT_VERSIONS`.
+- New workspace package `packages/adapters/memfw-adapter-deepseek`
+  (`memfw_adapter_deepseek:factory`): a standard-library `conv-v2` backend over
+  DeepSeek's chat completions API with JSON mode, retries with backoff on
+  429/5xx (an outage stops the run without failing jobs), and a per-run token
+  and cost budget (price defaults are placeholders). The key comes only from
+  `DEEPSEEK_API_KEY` and is sent only to `https://api.deepseek.com`. Built and
+  smoke-tested as a standalone wheel in CI.
+- The conversation worker may take its backend from `vault.yaml`
+  (`conversations: {backend, cloud, options}`), gated on `cloud: true` and the
+  adapter being available; otherwise the run is `degraded` (no fallback). A
+  non-local `--backend` (and `memfw handoff --summarize`) also needs
+  `conversations.cloud: true`; `--allow-cloud` can only narrow it. A new prompt
+  version re-plans only new, changed or last-30-days sessions, and at most the
+  newest 1000 already-processed ones (wider only with
+  `conversations.backfill_days` / `--backfill-days` or
+  `conversations.replan_limit`; held-back sessions are reported), newest first.
+  `memfw conversations status` shows the configured backend's state.
+  `memory_claims` stays extractive. Worker state gains `summaries.tags`,
+  `jobs.prompt_version` and `jobs.session_ts` (additive migration; existing
+  rows untouched). With no
+  `conversations` backend configured the worker's output is unchanged.
+  See `docs/conversations-share.md`.
 
 ### Added — concept taxonomy and relation-type table (K1, K2)
 

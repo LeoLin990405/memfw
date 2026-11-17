@@ -2,12 +2,14 @@
 
 Run it with the interpreter of a venv that has the wheels and NOT memfw:
 
-    python -I tests/standalone/wheel_smoke.py [--recall]
+    python -I tests/standalone/wheel_smoke.py [--recall] [--deepseek]
 
 It refuses to run when ``memfw`` is importable, imports the wheels, and runs
 the contract kit (``memfw_ports.testing``) against the reference
 implementations on a throwaway vault. With ``--recall`` it also runs
-``memfw_recall.Coordinator`` over the reference recall provider. Prints one
+``memfw_recall.Coordinator`` over the reference recall provider; with
+``--deepseek`` the ``memfw-adapter-deepseek`` wheel's backend passes
+``check_model_backend`` against its loopback fake (no network). Prints one
 ``ok`` line per check and exits non-zero on the first failure. Standard
 library only; not collected by pytest (``tests/test_standalone_ports_wheel.py``
 drives it).
@@ -211,6 +213,25 @@ def _recall(root: Path) -> None:
     _ok(f"Coordinator.search over InMemoryRecallProvider -> {result.ids}")
 
 
+def _deepseek() -> None:
+    """The adapter wheel over the memfw-ports wheel, against its loopback fake only."""
+
+    from memfw_adapter_deepseek import DeepSeekBackend, Settings
+    from memfw_adapter_deepseek import _ports as seam
+    from memfw_adapter_deepseek.fake import FakeDeepSeek
+    from memfw_ports.models import ModelReply
+    from memfw_ports.testing import check_model_backend
+
+    assert seam.ModelReply is ModelReply, seam.ModelReply
+    _ok("import memfw_adapter_deepseek (ports from memfw_ports)")
+    with FakeDeepSeek() as fake:
+        backend = DeepSeekBackend(Settings(base_url=fake.url), key="smoke-test-key")
+        replies = check_model_backend(backend)
+        assert len(replies) == 2 and len(fake.requests) == 2, fake.requests
+        assert fake.requests[0]["path"] == "/chat/completions", fake.requests[0]
+    _ok("check_model_backend DeepSeekBackend (fake server)")
+
+
 def main(argv: list[str]) -> int:
     if importlib.util.find_spec("memfw") is not None:
         print("memfw is importable here; run this in a venv without memfw", file=sys.stderr)
@@ -220,6 +241,8 @@ def main(argv: list[str]) -> int:
         _ports(root)
         if "--recall" in argv:
             _recall(root)
+        if "--deepseek" in argv:
+            _deepseek()
     print("standalone wheel smoke passed")
     return 0
 

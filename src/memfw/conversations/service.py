@@ -9,7 +9,12 @@ from memfw.core.repository import Repository
 from memfw.ports.claims import ClaimStager, ClaimVerifier
 
 from .adapter import SqliteStoreSource, checked_location, store_ingestor, store_path
-from .backends import ModelBackend
+from .backends import (
+    ModelBackend,
+    configured_backend,
+    configured_backfill_days,
+    configured_replan_limit,
+)
 from .policy import SharePolicy
 from .share import ConversationShare
 from .store import ConversationError, ConversationSource
@@ -46,7 +51,7 @@ def open_share(
 def open_worker(
     root: Path | None,
     *,
-    backend: ModelBackend,
+    backend: ModelBackend | None = None,
     store: Path | None = None,
     state: Path | None = None,
     ingest: bool = True,
@@ -54,12 +59,15 @@ def open_worker(
     verifier: ClaimVerifier | None = None,
     stager: ClaimStager | None = None,
     settled_minutes: float | None = None,
+    backfill_days: float | None = None,
     **budgets: Any,
 ) -> ConversationWorker:
     """The worker for ``root``; a vault root needs ``stager`` and ``verifier`` (or
     ``judge``), injected by the caller (``memfw conversations work`` passes
     :mod:`memfw.dream.claims`). ``settled_minutes`` makes the run's ingest a
-    settled one (``history ingest --settled-minutes``)."""
+    settled one (``history ingest --settled-minutes``). ``backend=None`` takes the
+    one ``vault.yaml`` names under ``conversations`` (extractive when it names none;
+    a refused one gives a degraded run, see :func:`~.backends.configured_backend`)."""
 
     config, vault = read_config(root)
     policy = SharePolicy.from_config(config)
@@ -73,7 +81,7 @@ def open_worker(
     return ConversationWorker(
         SqliteStoreSource(db),
         work,
-        backend=backend,
+        backend=configured_backend(config) if backend is None else backend,
         policy=policy,
         budgets=Budgets.from_config(config, **budgets),
         ingestor=ingestor,
@@ -81,4 +89,8 @@ def open_worker(
         judge=judge,
         verifier=verifier,
         stager=stager,
+        backfill_days=(
+            configured_backfill_days(config) if backfill_days is None else backfill_days
+        ),
+        replan_limit=configured_replan_limit(config),
     )

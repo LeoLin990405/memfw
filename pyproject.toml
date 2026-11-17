@@ -34,9 +34,14 @@ artifacts = ["src/memfw/agents/prompts/*.txt", "src/memfw/eval_data/**/*.json"]
 
 # Standalone wheels built from this tree (docs/ports-and-recall.md section 1.1).
 # memfw does not depend on them: it keeps shipping src/memfw/ports and
-# src/memfw/recall itself.
+# src/memfw/recall itself. Adapters (packages/adapters/*) are separate
+# distributions memfw never imports; the operator installs and enables them.
 [tool.uv.workspace]
-members = ["packages/memfw-ports", "packages/memfw-recall"]
+members = [
+    "packages/memfw-ports",
+    "packages/memfw-recall",
+    "packages/adapters/memfw-adapter-deepseek",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

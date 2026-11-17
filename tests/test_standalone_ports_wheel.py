@@ -81,8 +81,12 @@ def test_wheel_versions_follow_the_ports_api_version() -> None:
         assert data["project"]["version"] == PORTS_API_VERSION, package
 
 
+#: Workspace members: the two wheels built from memfw's tree, then the adapters.
+MEMBERS = ("memfw-ports", "memfw-recall", "adapters/memfw-adapter-deepseek")
+
+
 def test_members_pin_their_build_backend_and_ship_license_and_notice() -> None:
-    for package in ("memfw-ports", "memfw-recall"):
+    for package in MEMBERS:
         data = tomllib.loads((PACKAGES / package / "pyproject.toml").read_text("utf-8"))
         assert data["build-system"]["requires"] == ["hatchling==1.33.0"], package
         assert data["project"]["license-files"] == ["LICENSE", "NOTICE"], package
@@ -94,9 +98,10 @@ def test_members_pin_their_build_backend_and_ship_license_and_notice() -> None:
 def test_workspace_lists_both_packages_and_memfw_does_not_depend_on_them() -> None:
     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     members = data["tool"]["uv"]["workspace"]["members"]
-    assert members == ["packages/memfw-ports", "packages/memfw-recall"]
+    assert members == [f"packages/{name}" for name in MEMBERS]
     deps = " ".join(data["project"]["dependencies"])
     assert "memfw-ports" not in deps and "memfw-recall" not in deps  # self-contained
+    assert "memfw-adapter" not in deps  # memfw never depends on an adapter
 
 
 def _seam_branches() -> tuple[list[ast.ImportFrom], list[ast.ImportFrom]]:
@@ -204,19 +209,24 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
     uv = shutil.which("uv")
     assert uv is not None
     dist = tmp_path / "dist"
-    for package in ("memfw-ports", "memfw-recall"):
+    for package in ("memfw-ports", "memfw-recall", "memfw-adapter-deepseek"):
         _run(uv, "build", "--wheel", "--package", package, "-o", dist)
     wheels = sorted(p.name for p in dist.glob("*.whl"))
     from memfw.ports import PORTS_API_VERSION as v
 
-    assert wheels == [f"memfw_ports-{v}-py3-none-any.whl", f"memfw_recall-{v}-py3-none-any.whl"]
+    assert wheels == [
+        "memfw_adapter_deepseek-0.1.0-py3-none-any.whl",
+        f"memfw_ports-{v}-py3-none-any.whl",
+        f"memfw_recall-{v}-py3-none-any.whl",
+    ]
     venv = tmp_path / "venv"
     python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     _run(uv, "venv", "--quiet", "--python", f"{sys.version_info[0]}.{sys.version_info[1]}", venv)
     _run(uv, "pip", "install", "--quiet", "--python", python, "--no-index", *dist.glob("*.whl"))
     # -I: no PYTHONPATH, no cwd or script directory on sys.path, so this tree's
     # src/ cannot leak in; the smoke refuses to run if memfw is importable.
-    out = _run(python, "-I", SMOKE, "--recall", cwd=tmp_path)
+    out = _run(python, "-I", SMOKE, "--recall", "--deepseek", cwd=tmp_path)
     assert "standalone wheel smoke passed" in out
+    assert "ok check_model_backend DeepSeekBackend (fake server)" in out
     assert "ok check_recall_provider InMemoryRecallProvider" in out
     assert "ok Coordinator.search" in out

@@ -62,8 +62,12 @@ run report (`candidates_to_review`). State lives in
 work tree, the vault or a synced folder).
 
 - Backend: `extractive` (no model) by default. `--backend module:factory`
-  picks another; a backend that is not `local` also needs `--allow-cloud`.
-  `vault.yaml` cannot choose a backend.
+  picks another; a backend that is not `local` needs `conversations.cloud:
+  true` in `vault.yaml` and `--allow-cloud` (the flag can only narrow the
+  vault's switch, never widen it). Without `--backend`, `vault.yaml` may name one under `conversations`
+  (`backend`, `cloud`, `options`); see [DeepSeek tagging adapter](#deepseek-tagging-adapter).
+  A configured backend that cannot be used is refused: the run is `degraded`
+  and processes nothing; it never falls back to `extractive`.
 - Memory candidates: model-proposed claims are verified against the session
   first (the dream `classify` check, or `--judge module:function`), must not
   copy 40+ characters of the transcript, and are staged under
@@ -95,6 +99,144 @@ work tree, the vault or a synced folder).
   outcome). `memfw dream skills --from-queue` consumes them (`EpisodeQueue`
   claim, then ack after staging or release on failure; claims older than six
   hours are taken back).
+
+## DeepSeek tagging adapter
+
+`packages/adapters/memfw-adapter-deepseek` (import `memfw_adapter_deepseek`)
+is a separate distribution memfw never imports. It implements the
+`ModelBackend` port (`memfw.ports.models`) over DeepSeek's OpenAI-compatible
+chat completions API with the standard library only, and speaks prompt
+version `conv-v2`: for each chunk and each session it returns a summary of at
+most two sentences and tags. It does not extract facts or memory claims.
+
+```yaml
+conversations:
+  backend: "memfw_adapter_deepseek:factory"
+  cloud: true                 # required: the adapter is not local
+  backfill_days: 30           # optional; see "Re-runs" below
+  replan_limit: 1000          # optional; see "Re-runs" below
+  options:                    # optional; every key has a default
+    model: deepseek-chat
+    max_run_tokens: 400000
+    max_run_cost_usd: 0.50
+    price_in_per_mtok: 0.28   # PLACEHOLDER: set the provider's real price
+    price_out_per_mtok: 0.42  # PLACEHOLDER: set the provider's real price
+```
+
+Install it into the venv memfw runs from. The `memfw-ports` pin is not on
+PyPI, and inside memfw the adapter uses memfw's own `memfw.ports`, so install
+the wheel without dependencies:
+
+```sh
+uv build --wheel --package memfw-adapter-deepseek -o dist/
+<memfw venv>/bin/python -m pip install --no-deps dist/memfw_adapter_deepseek-0.1.0-py3-none-any.whl
+```
+
+(Outside memfw, install the locally built `memfw-ports` wheel next to it.)
+
+The tag schema (validated, lower-cased and length-capped by memfw, then
+redacted again; any value outside the vocabulary, an unknown key, or a
+secret-shaped value drops the whole reply, which is retried next run; every
+string is redacted *before* it is lower-cased or cut, so a key or PEM header
+cannot hide by changing shape. A `project` or `components` item that looks
+like a URL, a path or a host (any `/` or `\`, `~`, `..`, a scheme such as
+`https:`, `file:` or `mailto:`, or a leading `www.`) is dropped on its own; the
+rest of the reply is kept, so a path-like name never costs a paid retry):
+
+```json
+{"summary": "<= 2 sentences",
+ "tags": {"project": ["..."], "task_type": "dev|review|debug|plan|ops|research|chat|other",
+          "components": ["..."], "intent": "<one sentence>",
+          "outcome": "done|blocked|abandoned|ongoing|unknown"}}
+```
+
+Tags are stored as JSON in the new `summaries.tags` column of the worker
+state, on `conv-v2` rows only. The summary and the tags are **untrusted model
+output**: validated and redacted, but written by a model from transcript
+text, so a reader must treat them as data, never as instructions (M3c labels
+them as such when it returns them). Session rows also fill `intent` and `outcome`
+(`done` -> `success`, `blocked`/`abandoned` -> `failed`, else `unknown`) so
+episodes keep their vocabulary.
+
+- **Gate.** The adapter runs only when `vault.yaml` names it, sets
+  `cloud: true`, and the worker process has `DEEPSEEK_API_KEY`. Missing any of
+  these, `memfw conversations worker` reports `status: degraded`,
+  `stopped: backend_refused` with a code (`cloud_not_allowed`,
+  `unavailable:missing_key`, ...), and `memfw conversations status` shows a
+  `backend` entry with `state: degraded`. Nothing is processed and nothing is
+  sent. `--backend` on the command line still overrides `vault.yaml`, but a
+  non-local one still needs `cloud: true` there.
+- **Host.** The key is only ever sent to `https://api.deepseek.com` (a fixed
+  allowlist in the adapter; `base_url` may name nothing else) or, for tests,
+  to plain http on a loopback address. Redirects are refused.
+- **What is sent.** One `POST https://api.deepseek.com/chat/completions` per
+  `chunk_summary` and per `session_summary` job:
+  `{"model", "messages": [{"role": "system", "content": <conv-v2
+  instructions>}, {"role": "user", "content": "<data>JSON</data>"}],
+  "response_format": {"type": "json_object"}, "max_tokens": <= 512,
+  "temperature": 0, "stream": false}`. The data is the worker's already
+  redacted input: chunk turns as `{"role", "text"}` (turns that would be
+  withheld are left out) or, for a session, the first request and the chunk
+  summaries. No session ids, paths or app names are added. Raw transcripts
+  never leave the machine.
+- **Privacy controls.** Apps with `conversation_share.apps.<app>.process:
+  false`, hidden apps and `conversation_optout` agents are never queued, so
+  never sent. `cloud` is off unless set. `memory_claims` never goes to the
+  adapter: it stays on the extractive backend (U4 corroboration depends on
+  it), and `episode` jobs make no model call.
+- **Key handling.** The key is read only from the `DEEPSEEK_API_KEY`
+  environment variable when the backend is built. It is never read from a
+  file, never accepted in `vault.yaml` (an `api_key` option is refused),
+  never logged, and never part of a report, `repr` or error (errors carry
+  codes such as `http_400`, `transient` or `auth`). Under launchd, keep the key in a macOS
+  Keychain item and have the job's own wrapper script read it at run time
+  (for example with `security find-generic-password -w`) and export it for
+  the worker process only; do not put it in the plist.
+- **Budget and retries.** Each run (one backend instance) has a token budget
+  (`max_run_tokens`, default 400000) and a cost budget (`max_run_cost_usd`,
+  default 0.50 USD). The cost is computed with `price_in_per_mtok` and
+  `price_out_per_mtok` (USD per million tokens). **Their defaults (0.28 and
+  0.42) are placeholders, not verified current prices: set both from the
+  provider's price list**, or the cost budget means nothing (cache-hit
+  discounts are ignored either way). Every attempt, retries included, must
+  fit its worst case (input estimate plus `max_tokens`); an attempt that timed
+  out or broke off is charged that worst case, since it may have been billed.
+  When the next attempt does not fit, the run stops: `stopped:
+  backend_budget`, recorded in the run row, and the job waits for the next run
+  without spending an attempt. HTTP 429 and 5xx (and network errors) are
+  retried with exponential backoff (`max_retries` 3, `backoff` 1 s, at most
+  `max_backoff` 30 s, `Retry-After` honoured up to that cap). When the
+  retries are used up, or a key is rejected (401/403), the run stops as
+  `degraded` (`stopped: backend_unavailable`, `errors: {backend_transient}` or
+  `{backend_auth}`) and the job is re-queued without spending an attempt, so an
+  outage never fails jobs; only bad output (and non-retryable errors such as
+  HTTP 400) counts against a job's 3 attempts. The worker hands the adapter
+  what is left of `max_seconds` before each call; a request or backoff that
+  would overrun it ends the run with `stopped: max_seconds`. The worker's own
+  `conversation_worker.max_tokens` budget still applies.
+- **Re-runs, no silent backfill.** Jobs carry the backend's prompt version
+  (`jobs.prompt_version`, existing rows are `conv-v1`). Under `conv-v2` the
+  worker plans sessions it never planned, sessions that changed, and
+  unchanged sessions updated within the last 30 days. Older, unchanged
+  history is not re-processed unless asked for: `conversations.backfill_days`
+  in `vault.yaml` or `--backfill-days N` widens the window (a backfill costs
+  money; size it first). On top of that, at most 1000 already-processed
+  sessions (the newest 1000 in the store, the M3d pilot size) are ever
+  re-planned by default; `conversations.replan_limit` sets another cap, and
+  an explicit `backfill_days` without `replan_limit` lifts it. Sessions never
+  planned before (new ones) are always planned and do not count. A run that
+  held sessions back reports `replan_held_back: N` (absent when 0, so
+  `conv-v1` reports are unchanged). `conv-v2` jobs run newest session first
+  (`jobs.session_ts`, which a reused chunk takes over from its session's newest
+  plan), and a page of jobs that are all waiting on others is skipped rather
+  than ending the run, so new sessions never wait behind a backfill. `conv-v1`
+  rows are kept, and switching back re-uses the `conv-v1` work already done.
+- **Testing.** The adapter ships `memfw_adapter_deepseek.fake.FakeDeepSeek`, a
+  loopback-only fake of the endpoint. memfw's tests run the shared
+  `memfw.ports.testing.check_model_backend` contract against the extractive
+  backend and against the adapter over the fake, and inspect the fake's
+  request bodies to check that only redacted text is sent. No test uses the
+  network or a real key.
 
 ## Store adapter
 

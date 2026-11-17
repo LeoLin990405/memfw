@@ -3,8 +3,9 @@
 Called only when the operator passes ``--summarize``; without it the pack
 makes no model call at all. The backend is chosen the same way as for the
 conversation worker: the caller injects the ``loader`` (``memfw handoff``
-passes :func:`memfw.conversations.backends.load_backend`, an operator-given
-``module:factory``; a backend that is not ``local`` needs ``--allow-cloud``),
+passes :func:`memfw.conversations.backends.gated_loader`, an operator-given
+``module:factory``; a backend that is not ``local`` needs ``--allow-cloud``
+and ``conversations.cloud: true`` in ``vault.yaml``),
 so this package does not import the conversations package. The built-in
 ``extractive`` backend calls no model and cannot summarise, so it is refused.
 
