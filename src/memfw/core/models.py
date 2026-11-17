@@ -202,12 +202,21 @@ class MemoryDocument(BaseModel):
     #: ``"block"`` or ``"invalid"`` when the source file carried an
     #: ``open_question`` key on a memory that is not an open question (ignored).
     _stray_open_question: str | None = PrivateAttr(default=None)
+    #: Value of a hand-added top-level ``sensitivity`` key (ignored as a field,
+    #: kept here so every exit reads it like ``memfw.ports.privacy``).
+    _top_level_sensitivity: Any = PrivateAttr(default=None)
 
     @property
     def ignored_keys(self) -> tuple[str, ...]:
         """Frontmatter keys this version did not know and ignored when parsing."""
 
         return self._ignored_keys
+
+    @property
+    def top_level_sensitivity(self) -> Any:
+        """The source file's top-level ``sensitivity`` value, ``None`` when it had none."""
+
+        return self._top_level_sensitivity
 
     @property
     def stray_open_question(self) -> str | None:

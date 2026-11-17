@@ -131,6 +131,23 @@ def tag_levels(tags: Iterable[Any]) -> list[str]:
     return levels
 
 
+SENSITIVITY_KEY = "sensitivity"
+
+
+def _sensitivity_item(value: Any) -> str:
+    if isinstance(value, str) and value.strip().lower() == "private":
+        return "local-private"
+    return "unknown"
+
+
+def sensitivity_key_levels(raw: Any) -> list[str]:
+    if raw is None or (isinstance(raw, (str, list, dict)) and len(raw) == 0):
+        return []
+    if isinstance(raw, list):
+        return [_sensitivity_item(item) for item in raw]
+    return [_sensitivity_item(raw)]
+
+
 def strictest(levels: Iterable[str]) -> str:
     best = "public"
     for level in levels:
@@ -146,12 +163,13 @@ def effective_level(
     *,
     present: bool | None = None,
     legacy: str = LEGACY_PRIVACY_FALLBACK,
+    sensitivity: Any = None,
 ) -> str:
     has_field = (privacy is not None) if present is None else present
     base = field_level(privacy) if has_field else legacy_default(legacy)
     if isinstance(tags, (str, bytes)) or not isinstance(tags, Iterable):
         tags = ()
-    return strictest([base, *tag_levels(tags)])
+    return strictest([base, *tag_levels(tags), *sensitivity_key_levels(sensitivity)])
 
 
 def parse_clearance(value: Any) -> frozenset[str] | None:
@@ -184,11 +202,12 @@ def admits(clearance: frozenset[str] | None, level: str) -> bool:
 
 
 def metadata_level(metadata: Mapping[str, Any], legacy: str = LEGACY_PRIVACY_FALLBACK) -> str:
-    """Level of one parsed frontmatter mapping (``privacy`` field plus ``tags``)."""
+    """Level of one parsed frontmatter mapping (``privacy``, ``tags``, ``sensitivity``)."""
 
     tags = metadata.get("tags")
     return effective_level(
         metadata.get("privacy"),
         tags if isinstance(tags, list) else (),
         legacy=legacy,
+        sensitivity=metadata.get(SENSITIVITY_KEY),
     )

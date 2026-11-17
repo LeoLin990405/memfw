@@ -203,7 +203,15 @@ def export_okf(
         kept = [
             document
             for document in documents
-            if admits(cleared, effective_level(document.privacy, document.tags, legacy=legacy))
+            if admits(
+                cleared,
+                effective_level(
+                    document.privacy,
+                    document.tags,
+                    legacy=legacy,
+                    sensitivity=document.top_level_sensitivity,
+                ),
+            )
         ]
         withheld = len(documents) - len(kept)
         documents = kept

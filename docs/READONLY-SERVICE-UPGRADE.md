@@ -64,6 +64,13 @@ no field is written, as before MM0). Tags still apply on top of both:
 `sensitivity:private` or `privacy:local-private` makes a memory
 `local-private`, so such memories stop being served under `public,shared`.
 
+A hand-added top-level `sensitivity:` key counts too (v0.3.0): `private` (any
+case) makes the memory `local-private`; any other non-empty value makes it
+`unknown`, which no clearance admits. The rule lives in `read_path.py`
+(`sensitivity_key_levels`), so this is another reason to deploy the three
+files together: an older `read_path.py` ignores the key and serves such a
+memory under `public,shared`. Without a clearance nothing changes.
+
 ## Check a URL
 
 `check_readonly_contract(url)` performs one `GET /health`. Pass either the

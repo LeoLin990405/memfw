@@ -22,6 +22,7 @@ from typer.testing import CliRunner
 import scripts.memfw_readonly_service as service
 from memfw.cli import app
 from memfw.core.errors import IntegrityError, NotFoundError
+from memfw.core.markdown_parse import parse_memory_markdown
 from memfw.core.models import EventKind, MemoryDocument
 from memfw.core.repository import Repository
 from memfw.index import MemoryIndex, read_path
@@ -32,6 +33,7 @@ from memfw.notes.index import NotesIndex
 from memfw.notes.mcp import NotesGateway
 from memfw.okf import export_okf
 from memfw.ports import privacy
+from memfw.ports.reference import _vault as reference
 from memfw.related import RelatedIndex
 from memfw.storage.markdown import MarkdownStorageMixin
 from scripts.memfw_readonly_service import ServiceError, related_vault
@@ -1110,3 +1112,200 @@ def test_review_queue_honours_field_and_clearance(tmp_path: Path) -> None:
         public.runtime.open_question_queue(repository, app=None, allow_operator=True)["questions"]
         == []
     )
+
+
+# ---------------------------------------------------------------------------
+# Top-level ``sensitivity`` key: one rule for every exit (v0.3.0 §11 item 1)
+# ---------------------------------------------------------------------------
+
+_REF_RANK = {"none": 0, "local-private": 1, "unknown": 2}
+#: ``privacy`` lines as a hand edit writes them (absent first).
+KEY_FIELDS = [
+    "",
+    "privacy: public\n",
+    "privacy: PUBLIC\n",
+    'privacy: " shared "\n',
+    "privacy: local-private\n",
+    "privacy: Local-Private\n",
+    "privacy: x\n",
+]
+KEY_PRIVACY_TAGS = [
+    None,
+    "privacy:public",
+    "privacy:fleet",
+    "privacy:none",
+    "privacy:local-private",
+    "privacy:weird",
+]
+KEY_SENSITIVITY_TAGS = [None, "sensitivity:private", "SENSITIVITY:Private", "sensitivity:secret"]
+#: Top-level ``sensitivity`` forms -> the level the key alone imposes
+#: (``None``: nothing). Case, quoting, null spellings, lists and non-strings.
+KEY_FORMS: list[tuple[str, str | None]] = [
+    ("", None),
+    ("sensitivity:\n", None),
+    ("sensitivity: null\n", None),
+    ("sensitivity: ~\n", None),
+    ('sensitivity: ""\n', None),
+    ("sensitivity: []\n", None),
+    ("sensitivity: {}\n", None),
+    ("Sensitivity: private\n", None),  # another key: neither reader acts on it
+    ("sensitivity: private\n", "local-private"),
+    ("sensitivity: Private\n", "local-private"),
+    ("sensitivity: PRIVATE\n", "local-private"),
+    ('sensitivity: " private "\n', "local-private"),
+    ("sensitivity: 'private'\n", "local-private"),
+    ("sensitivity: private # hand edit\n", "local-private"),
+    ('sensitivity: "  "\n', "unknown"),
+    ("sensitivity: secret\n", "unknown"),
+    ("sensitivity: local-private\n", "unknown"),
+    ("sensitivity: public\n", "unknown"),
+    ("sensitivity: none\n", "unknown"),
+    ("sensitivity: true\n", "unknown"),
+    ("sensitivity: 1\n", "unknown"),
+    ("sensitivity: 0.5\n", "unknown"),
+    ("sensitivity: 2026-01-01\n", "unknown"),
+    ("sensitivity:\n- private\n", "local-private"),
+    ("sensitivity:\n- Private\n- PRIVATE\n", "local-private"),
+    ("sensitivity:\n- private\n- secret\n", "unknown"),
+    ("sensitivity:\n- null\n", "unknown"),
+    ("sensitivity:\n- 1\n", "unknown"),
+]
+
+
+def _key_file(field: str, ptag: str | None, stag: str | None, form: str) -> str:
+    tags = [tag for tag in (ptag, stag) if tag]
+    block = "tags:\n" + "".join(f"- {tag}\n" for tag in tags) if tags else ""
+    return (
+        "---\nid: m-key\ntitle: key\n"
+        "created_at: 2026-11-06T00:00:00Z\nupdated_at: 2026-11-06T00:00:00Z\n"
+        f"{field}{block}{form}---\nbody\n"
+    )
+
+
+def _as_reference_class(level: str) -> str:
+    return {"public": "none", "shared": "none"}.get(level, level)
+
+
+def test_sensitivity_key_alone_reads_the_same_in_all_three_readers() -> None:
+    for form, expected in KEY_FORMS:
+        text = _key_file("privacy: public\n", None, None, form)
+        metadata = yaml.safe_load(text.split("---\n")[1])
+        key_value = metadata.get(privacy.SENSITIVITY_KEY)
+        assert privacy.sensitivity_key_levels(key_value) == read_path.sensitivity_key_levels(
+            key_value
+        )
+        level = privacy.metadata_level(metadata)
+        assert level == (expected or "public"), form
+        memory = reference.parse_memory("m-key", text.encode("utf-8"))
+        assert memory is not None, form
+        assert memory.privacy_class() == _as_reference_class(level), form
+
+
+def test_sensitivity_key_parity_on_the_exhaustive_matrix() -> None:
+    """ports, its stdlib copy, the parsed-document path and the reference reader agree."""
+
+    checked = 0
+    for field, ptag, stag, (form, _key) in itertools.product(
+        KEY_FIELDS, KEY_PRIVACY_TAGS, KEY_SENSITIVITY_TAGS, KEY_FORMS
+    ):
+        text = _key_file(field, ptag, stag, form)
+        metadata = yaml.safe_load(text.split("---\n")[1])
+        document = parse_memory_markdown(text, expected_id="m-key")
+        memory = reference.parse_memory("m-key", text.encode("utf-8"))
+        assert memory is not None, text
+        file_class = memory.privacy_class()
+        for legacy in LEGACIES:
+            level = privacy.metadata_level(metadata, legacy)  # type: ignore[arg-type]
+            assert read_path.metadata_level(metadata, legacy) == level, (text, legacy)
+            assert (
+                privacy.effective_level(
+                    document.privacy,
+                    document.tags,
+                    legacy=legacy,  # type: ignore[arg-type]
+                    sensitivity=document.top_level_sensitivity,
+                )
+                == level
+            ), (text, legacy)
+            # The reference reader has no legacy default: a missing field adds
+            # the vault's level on top of what the file itself says.
+            legacy_class = (
+                _as_reference_class(privacy.legacy_default(legacy)) if not field else "none"
+            )
+            expected = max(file_class, legacy_class, key=_REF_RANK.__getitem__)
+            assert _as_reference_class(level) == expected, (text, legacy)
+            for clearance in (REMOTE, "public", None):
+                parsed = privacy.parse_clearance(clearance)
+                assert read_path.admits(parsed, level) == privacy.admits(parsed, level)
+            checked += 1
+    assert checked == len(KEY_FIELDS) * 6 * 4 * len(KEY_FORMS) * len(LEGACIES)
+
+
+SENSITIVE_MARKER = "okapinox"
+SENSITIVE_ID = "m-sens-key"
+
+
+def _sensitive_vault(root: Path) -> Path:
+    """The MM0 corpus plus one ``privacy: public`` memory with ``sensitivity: private``."""
+
+    _vault(root)
+    text = (
+        f"---\nid: {SENSITIVE_ID}\ntitle: corpus {SENSITIVE_ID}\nprivacy: public\n"
+        "sensitivity: private\n"
+        "created_at: 2026-11-06T00:00:00Z\nupdated_at: 2026-11-06T00:00:00Z\n"
+        f"---\ncorpus keyword {SENSITIVE_MARKER}\n"
+    )
+    (root / "memories" / f"{SENSITIVE_ID}.md").write_text(text, encoding="utf-8")
+    repository = Repository(root)
+    MemoryIndex(repository.index_path).rebuild(repository)
+    assert repository.get(SENSITIVE_ID).top_level_sensitivity == "private"
+    return root
+
+
+def test_http_search_withholds_a_sensitivity_key_memory(tmp_path: Path) -> None:
+    root = _sensitive_vault(tmp_path / "vault")
+    for search in (search_vault, service.search_vault):
+        result = search(root, "corpus keyword", limit=50, clearance=REMOTE)
+        assert {item["id"] for item in result["results"]} == ADMITTED
+        assert SENSITIVE_MARKER not in json.dumps(result)
+        # Default (no clearance): served as before.
+        open_result = search(root, "corpus keyword", limit=50)
+        assert SENSITIVE_ID in {item["id"] for item in open_result["results"]}
+
+
+def test_okf_export_withholds_a_sensitivity_key_memory(tmp_path: Path) -> None:
+    root = _sensitive_vault(tmp_path / "vault")
+    result = export_okf(root, tmp_path / "bundle", clearance=REMOTE)
+    assert result.concepts == len(ADMITTED)
+    text = _bundle_text(tmp_path / "bundle")
+    assert SENSITIVE_MARKER not in text and SENSITIVE_ID not in text
+    open_result = export_okf(root, tmp_path / "open")
+    assert open_result.concepts == len(CASES) + 1
+    assert SENSITIVE_MARKER in _bundle_text(tmp_path / "open")
+
+
+@pytest.mark.parametrize("mode", ["fts", "hybrid", "multihop", "two_stage"])
+def test_memfw_mcp_withholds_a_sensitivity_key_memory(tmp_path: Path, mode: str) -> None:
+    root = _sensitive_vault(tmp_path / "vault")
+    gateway = Gateway(root, entity_enabled=False, clearance=REMOTE)
+    found = gateway.search("corpus keyword", limit=50, mode=mode)
+    assert found["results"]
+    assert SENSITIVE_ID not in {row["id"] for row in found["results"]}
+    assert SENSITIVE_MARKER not in json.dumps(found)
+    with pytest.raises(NotFoundError):
+        gateway.get(SENSITIVE_ID)
+    assert SENSITIVE_MARKER not in json.dumps(gateway.context(4000))
+    open_gateway = Gateway(root, entity_enabled=False)
+    assert open_gateway.get(SENSITIVE_ID)["id"] == SENSITIVE_ID
+
+
+def test_dream_reads_the_sensitivity_key_as_private() -> None:
+    from memfw.dream.questions import is_private, pair_privacy
+
+    text = _key_file("privacy: public\n", None, None, "sensitivity: private\n")
+    keyed = parse_memory_markdown(text, expected_id="m-key")
+    plain = parse_memory_markdown(
+        _key_file("privacy: public\n", None, None, ""), expected_id="m-key"
+    )
+    assert is_private(keyed) and not is_private(plain)
+    assert pair_privacy(keyed, plain) == "local-private"
+    assert pair_privacy(plain, plain) == "public"

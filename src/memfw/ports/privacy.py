@@ -16,7 +16,13 @@ The level a reader acts on is the strictest of:
   else → unknown;
 * every ``sensitivity:<value>`` tag, read like
   ``memfw.projection.tag_privacy_class``: ``private`` → local-private, any
-  other value → unknown.
+  other value → unknown;
+* a top-level ``sensitivity`` key (a hand edit; memfw never writes it), read
+  like the fail-closed reference reader (``memfw.ports.reference._vault``):
+  no value, ``null``, ``""`` or an empty list adds nothing; ``private`` (any
+  case, surrounding space ignored) → local-private; any other value,
+  including a non-string one, → unknown. A list adds one level per item, and
+  there an item that is not ``private`` (``null`` included) is unknown.
 
 Tags can only make a memory stricter, never looser. A clearance is the set of
 levels an exit may return. ``None`` means the exit has no clearance configured
@@ -24,7 +30,8 @@ and filters nothing (the behaviour before MM0).
 
 ``memfw/index/read_path.py`` holds a standard-library copy of these rules for
 the read-only HTTP service, which runs without ``memfw`` installed;
-``tests/test_mm0_privacy_clearance.py`` checks the two agree.
+``tests/test_mm0_privacy_clearance.py`` checks the two agree with each other
+and with the reference reader.
 """
 
 from __future__ import annotations
@@ -52,6 +59,9 @@ MALFORMED_CLEARANCE: Final[frozenset[str]] = frozenset({"public"})
 _TAG_NO_RESTRICTION: Final[frozenset[str]] = frozenset({"", "none", "null"})
 _TAG_SHARED: Final[frozenset[str]] = frozenset({"shared", "fleet"})
 
+
+#: Top-level front matter key read like a ``sensitivity:<value>`` tag.
+SENSITIVITY_KEY: Final[str] = "sensitivity"
 
 #: ``vault.yaml`` key: the level stamped on new writes that set none (unset: none stamped).
 NEW_PRIVACY_KEY: Final[str] = "new_privacy_default"
@@ -143,6 +153,26 @@ def tag_levels(tags: Iterable[Any]) -> list[PrivacyLevel]:
     return levels
 
 
+def _sensitivity_item(value: Any) -> PrivacyLevel:
+    if isinstance(value, str) and value.strip().lower() == "private":
+        return "local-private"
+    return "unknown"
+
+
+def sensitivity_key_levels(raw: Any) -> list[PrivacyLevel]:
+    """Levels a top-level ``sensitivity`` key imposes (see the module docstring).
+
+    ``raw`` is the parsed YAML value; ``None`` (absent, no value or ``null``),
+    ``""`` and an empty list or mapping impose nothing.
+    """
+
+    if raw is None or (isinstance(raw, (str, list, dict)) and len(raw) == 0):
+        return []
+    if isinstance(raw, list):
+        return [_sensitivity_item(item) for item in raw]
+    return [_sensitivity_item(raw)]
+
+
 def strictest(levels: Iterable[str]) -> PrivacyLevel:
     """The most restricted of ``levels``; an unrecognised entry is ``unknown``."""
 
@@ -160,25 +190,27 @@ def effective_level(
     *,
     present: bool | None = None,
     legacy: str = LEGACY_PRIVACY_FALLBACK,
+    sensitivity: Any = None,
 ) -> PrivacyLevel:
     """The level a reader acts on (strictest wins, see the module docstring).
 
     ``present`` says whether the source carried a ``privacy`` key; by default
     a ``None`` value means it did not. A present ``None`` (``privacy:`` with no
-    value) is ``unknown``.
+    value) is ``unknown``. ``sensitivity`` is the value of a top-level
+    ``sensitivity`` key (``None`` when there is none).
     """
 
     has_field = (privacy is not None) if present is None else present
     base = field_level(privacy) if has_field else legacy_default(legacy)
     if isinstance(tags, (str, bytes)) or not isinstance(tags, Iterable):
         tags = ()
-    return strictest([base, *tag_levels(tags)])
+    return strictest([base, *tag_levels(tags), *sensitivity_key_levels(sensitivity)])
 
 
 def metadata_level(
     metadata: Mapping[str, Any], legacy: str = LEGACY_PRIVACY_FALLBACK
 ) -> PrivacyLevel:
-    """Level of one parsed frontmatter mapping (its ``privacy`` field and ``tags`` list).
+    """Level of one parsed frontmatter mapping (``privacy``, ``tags``, ``sensitivity``).
 
     A ``privacy`` key with no value reads as absent, like ``MemoryDocument``.
     """
@@ -188,6 +220,7 @@ def metadata_level(
         metadata.get("privacy"),
         tags if isinstance(tags, list) else (),
         legacy=legacy,
+        sensitivity=metadata.get(SENSITIVITY_KEY),
     )
 
 
@@ -238,6 +271,7 @@ __all__ = [
     "NEW_PRIVACY_KEY",
     "PRIVACY_LEVELS",
     "REMOTE_CLEARANCE",
+    "SENSITIVITY_KEY",
     "PrivacyLevel",
     "admits",
     "clearance_is_valid",
@@ -250,6 +284,7 @@ __all__ = [
     "metadata_level",
     "parse_clearance",
     "privacy_value",
+    "sensitivity_key_levels",
     "strictest",
     "tag_levels",
 ]
