@@ -337,6 +337,31 @@ def test_legacy_default_is_read_exactly_as_memfw_reads_it(tmp_path: Path, text: 
     assert legacy_privacy(tmp_path) == vault_legacy_privacy(tmp_path), text
 
 
+def test_a_remote_collection_is_keyed_by_an_explicit_vault_id(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    root = str(repository.root)
+    remote = {"vault": root, "url": "https://qdrant.example:6333", "allow_remote": True}
+    with pytest.raises(ValueError, match="needs vault_id"):
+        factory(remote)
+    with pytest.raises(ValueError, match="vault_id must be"):
+        factory({**remote, "vault_id": "Not Valid"})
+    one = factory({**remote, "vault_id": "homelab-main"})
+    other_host = Repository(tmp_path / "elsewhere" / "vault")
+    other_host.init()
+    two = factory({**remote, "vault": str(other_host.root), "vault_id": "homelab-main"})
+    assert one.vault_key == two.vault_key  # the same vault on two hosts: one key
+    assert one.vault_key != factory({**remote, "vault_id": "other"}).vault_key
+    # vault.yaml's own vault_id (a lower-case UUID, written by attachments) is the default.
+    path = repository.root / "vault.yaml"
+    vault_id = "0b9d1c4e-2f3a-4b5c-8d6e-7f8091a2b3c4"
+    path.write_text(path.read_text(encoding="utf-8") + f"vault_id: {vault_id}\n", encoding="utf-8")
+    assert factory(remote).settings.vault_id == vault_id
+    local = factory({"vault": root, "url": "http://127.0.0.1:6333"})
+    assert local.settings.vault_id == vault_id
+    unset = factory({"vault": root, "url": "http://127.0.0.1:6333", "vault_id": ""})
+    assert unset.settings.vault_id == "" and unset.vault_key != local.vault_key
+
+
 def test_settings_are_checked(tmp_path: Path, fake: FakeQdrant) -> None:
     repository = _vault(tmp_path)
     root = str(repository.root)
@@ -356,7 +381,14 @@ def test_settings_are_checked(tmp_path: Path, fake: FakeQdrant) -> None:
     ):
         with pytest.raises(ValueError, match=message):
             factory(bad)
-    remote = factory({"vault": root, "url": "https://qdrant.example:6333", "allow_remote": True})
+    remote = factory(
+        {
+            "vault": root,
+            "url": "https://qdrant.example:6333",
+            "allow_remote": True,
+            "vault_id": "v1",
+        }
+    )
     assert remote.settings.url == "https://qdrant.example:6333"
     for loopback in ("http://localhost:6333", "http://[::1]:6333", "http://127.1.2.3:6333/"):
         assert factory({"vault": root, "url": loopback}).settings.url.startswith("http")

@@ -12,6 +12,8 @@ clearance (``public``/``shared``, never ``local-private``) are sent.
 from __future__ import annotations
 
 import hashlib
+import re
+import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,6 +45,43 @@ def read_config(vault: Path) -> Any:
         return yaml.safe_load((vault / "vault.yaml").read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, yaml.YAMLError):
         return None
+
+
+_VAULT_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+
+def check_vault_id(value: Any) -> str:
+    """An operator-chosen vault id: 1-64 of lower-case letters, digits, ``.``, ``_``, ``-``."""
+
+    if not isinstance(value, str) or not _VAULT_ID.fullmatch(value):
+        raise ValueError("vault_id must be 1-64 lower-case letters, digits, '.', '_' or '-'")
+    return value
+
+
+def configured_vault_id(vault: Path) -> str:
+    """``vault_id`` from ``vault.yaml`` (the attachments' lower-case UUID), or ``""``."""
+
+    config = read_config(vault)
+    value = config.get("vault_id") if isinstance(config, dict) else None
+    if not isinstance(value, str):
+        return ""
+    try:
+        return value if str(uuid.UUID(value)) == value else ""
+    except ValueError:
+        return ""
+
+
+def points_key(vault: Path | str, vault_id: str = "") -> str:
+    """The key every point of this vault carries (24 hex digits).
+
+    With a ``vault_id`` (required for a remote collection, which several hosts
+    may share) it is derived from that id, so the same vault path on two hosts
+    never collides; otherwise from the vault's resolved path on this host.
+    """
+
+    if vault_id:
+        return hashlib.sha256(f"vault_id:{vault_id}".encode()).hexdigest()[:24]
+    return vault_key(vault)
 
 
 def legacy_privacy(vault: Path) -> str:

@@ -32,6 +32,11 @@ adds ``vault`` and ``embedder``):
     Per-request timeout (default 2.0).
 ``name``
     Provider name (default ``qdrant``).
+``vault_id``
+    What the points of this vault are keyed by. Default: ``vault_id`` from
+    ``vault.yaml`` when it has one, else the vault's resolved path on this
+    host. **Required with** ``allow_remote``: a remote collection may be shared
+    by several hosts, and a path is only unique on one.
 """
 
 from __future__ import annotations
@@ -60,7 +65,7 @@ from ._ports import (
 )
 from .embed import EmbedderError, dimension_of, embedder_from_env, fingerprint_of
 from .http import QdrantClient, QdrantError, check_base_url, collection_path
-from .vault import vault_key
+from .vault import check_vault_id, configured_vault_id, points_key
 
 __version__ = "0.1.0"
 #: The Qdrant server line this adapter is pinned to (REST API, recorded fixtures).
@@ -88,6 +93,7 @@ KNOWN: Final = frozenset(
         "clearance",
         "timeout_seconds",
         "name",
+        "vault_id",
     }
 )
 _COLLECTION = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -106,6 +112,8 @@ class Settings:
     clearance: frozenset[str] = REMOTE_CLEARANCE
     timeout_seconds: float = 2.0
     name: str = NAME
+    #: Operator-chosen vault id; required with ``allow_remote`` (see ``points_key``).
+    vault_id: str = ""
 
     @classmethod
     def from_mapping(cls, settings: Mapping[str, Any]) -> Settings:
@@ -145,6 +153,15 @@ class Settings:
         name = settings.get("name", NAME)
         if not isinstance(name, str):
             raise ValueError("name must be a string")
+        vault_id = settings.get("vault_id")
+        if vault_id is None:
+            vault_id = configured_vault_id(Path(vault).expanduser())
+        elif vault_id != "":
+            vault_id = check_vault_id(vault_id)
+        if allow_remote and not vault_id:
+            raise ValueError(
+                "a remote Qdrant needs vault_id (several hosts may share the collection)"
+            )
         return cls(
             vault=Path(vault).expanduser(),
             url=url,
@@ -154,6 +171,7 @@ class Settings:
             clearance=levels,
             timeout_seconds=float(timeout),
             name=check_name(name, what="provider"),
+            vault_id=str(vault_id),
         )
 
 
@@ -185,7 +203,7 @@ class QdrantProvider:
         self.name = settings.name
         self.root = settings.vault
         self.embedder = embedder
-        self.vault_key = vault_key(self.root)
+        self.vault_key = points_key(self.root, settings.vault_id)
         self.projection_version = ""
         key = os.environ.get(settings.api_key_env) if settings.api_key_env else None
         self.client = QdrantClient(
