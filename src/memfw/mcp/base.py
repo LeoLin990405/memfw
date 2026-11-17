@@ -51,6 +51,8 @@ class GatewayBase:
             allowed_sources=settings.allowed_sources,
             embedder=settings.embedder,
             entity_enabled=settings.entity_enabled,
+            usage_signal=settings.usage_signal,
+            record_access=settings.record_access,
         )
         self.dream_clock: Callable[[], datetime] = lambda: datetime.now(UTC)
         self._last_staged: float | None = None

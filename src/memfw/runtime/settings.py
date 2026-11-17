@@ -13,6 +13,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from .usage import env_switch
+
 
 @dataclass(frozen=True, slots=True)
 class RuntimeSettings:
@@ -24,6 +26,10 @@ class RuntimeSettings:
     allowed_sources: tuple[str, ...]
     #: An embedding provider, or None (no vectors: hybrid falls back to FTS).
     embedder: Any
+    #: ``MEMFW_USAGE_SIGNAL`` (C5), or None: ``vault.yaml`` ``runtime.usage.enabled`` decides.
+    usage_signal: bool | None = None
+    #: ``MEMFW_RECORD_ACCESS`` (C6), or None: ``runtime.search.record_access`` decides.
+    record_access: bool | None = None
 
 
 def embedder_from_env(environ: Mapping[str, str]) -> Any:
@@ -49,10 +55,14 @@ def resolve_settings(
     entity_enabled: bool | None = None,
     allowed_sources: tuple[str, ...] | None = None,
     app: str | None = None,
+    usage_signal: bool | None = None,
+    record_access: bool | None = None,
     environ: Mapping[str, str] | None = None,
 ) -> RuntimeSettings:
     """Explicit values, else ``MEMFW_APP``, ``MEMFW_TENANT``, ``MEMFW_ENTITY_ENABLED``,
-    ``MEMFW_ALLOWED_SOURCES`` (comma separated) and ``MEMFW_EMBEDDING_*``."""
+    ``MEMFW_ALLOWED_SOURCES`` (comma separated), ``MEMFW_EMBEDDING_*``,
+    ``MEMFW_USAGE_SIGNAL`` and ``MEMFW_RECORD_ACCESS`` (booleans; unset or empty
+    leaves the choice to ``vault.yaml``, see ``memfw.runtime.usage``)."""
 
     env = os.environ if environ is None else environ
     resolved_app = (app if app is not None else env.get("MEMFW_APP", "")).strip()
@@ -70,12 +80,18 @@ def resolve_settings(
     )
     if embedder is None:
         embedder = embedder_from_env(env)
+    if usage_signal is None:
+        usage_signal = env_switch(env, "MEMFW_USAGE_SIGNAL")
+    if record_access is None:
+        record_access = env_switch(env, "MEMFW_RECORD_ACCESS")
     return RuntimeSettings(
         app=resolved_app,
         tenant=resolved_tenant,
         entity_enabled=resolved_entity,
         allowed_sources=resolved_sources,
         embedder=embedder,
+        usage_signal=usage_signal,
+        record_access=record_access,
     )
 
 

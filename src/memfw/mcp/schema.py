@@ -324,6 +324,38 @@ TOOLS: list[dict[str, Any]] = [
     },
 ]
 
+#: ``memory_used`` (C5). Not in ``TOOLS``: listed (and callable) only when the usage
+#: signal is enabled (``runtime.usage.enabled`` in vault.yaml or ``MEMFW_USAGE_SIGNAL``),
+#: so with it off ``tools/list`` is exactly ``TOOLS``.
+MEMORY_USED_TOOL: dict[str, Any] = {
+    "name": "memory_used",
+    "description": (
+        "Signal which memories this session actually used (ids from memory_context or "
+        "memory_search). Records only the ids, the time, the calling app and session_ref "
+        "in a disposable usage store outside the vault; never changes a memory or the vault. "
+        "Ids that are unknown or not visible are ignored, and the answer does not say which."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+                "maxItems": 100,
+            },
+            "session_ref": {
+                "type": "string",
+                "description": (
+                    "An opaque session token (letters, digits and _ . : @ + = -, at most "
+                    "200 characters, no spaces), e.g. the agent's session id. Not free text."
+                ),
+            },
+        },
+        "required": ["ids", "session_ref"],
+    },
+}
+
 #: The ``memory_context`` slots, also served as MCP resources (``memfw.context.SLOT_NAMES``).
 CONTEXT_SLOTS: tuple[str, ...] = ("core", "handoff", "topics")
 CONTEXT_RESOURCE_PREFIX = "memfw://context/"

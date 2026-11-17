@@ -22,9 +22,11 @@ A3b moves the rest of the MCP server's wiring here: ``resolve_settings``
 remember, related, status, conversation share, history and dream facades.
 The capability modules behind them are imported on first use.
 
-There is no ``runtime:`` section in ``vault.yaml`` yet; the default assembly
-is exactly what the MCP server built before (byte-identical output except
-timing fields).
+C5/C6 add the first ``runtime:`` switches in ``vault.yaml`` (``memfw.runtime.usage``):
+``usage.enabled`` registers ``memory_used`` (``Runtime.memory_used``, a
+``UsageSink``), ``search.record_access: false`` is the session-safe setting.
+Without the section the default assembly is exactly what the MCP server built
+before (byte-identical output except timing fields).
 
 Importing this package loads ``memfw.recall`` (the coordinator) but not the
 built-in providers; those are imported on the first ``recall`` call.

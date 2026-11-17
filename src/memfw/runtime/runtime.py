@@ -1,7 +1,8 @@
-"""``Runtime`` and ``build_runtime``: recall (A3a), context (C1-C3) and tool (A3b) wiring."""
+"""``Runtime`` and ``build_runtime``: recall, context (C1-C3), tool and usage (C5) wiring."""
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -29,11 +30,19 @@ from memfw.core.errors import MemfwError
 from memfw.core.models import EventKind, MemoryDocument, Tier
 from memfw.core.repository import Repository
 from memfw.ports.context import ContextPack, ContextSlotProvider, SlotRequest
+from memfw.ports.usage import UsageSignal, UsageSink
 from memfw.recall.coordinator import InflightRegistry
 
 from .context_cache import ContextCache, cached_core_candidates
 from .context_sources import concept_catalogue, share_feed
 from .index import ensure_search_index
+from .usage import (
+    RuntimeOptions,
+    checked_used_request,
+    read_options,
+    readable_ids,
+    signal_app,
+)
 
 if TYPE_CHECKING:
     from memfw.conversations import ConversationShare
@@ -138,6 +147,9 @@ class Runtime:
         provider_timeout: float = TWO_STAGE_PROVIDER_TIMEOUT,
         total_timeout: float = TWO_STAGE_TOTAL_TIMEOUT,
         context_cache: ContextCache | bool | None = True,
+        usage_signal: bool | None = None,
+        record_access: bool | None = None,
+        usage_sink: UsageSink | None = None,
     ) -> None:
         self.root = root
         self.tenant = tenant
@@ -152,6 +164,15 @@ class Runtime:
         self.context_slot_timeouts = dict(CONTEXT_SLOT_TIMEOUTS)
         #: The ``core`` slot's id cache (C3), or None when disabled.
         self.context_cache: ContextCache | None = _context_cache(context_cache)
+        # C5/C6 switches: an explicit value (MEMFW_*) wins; otherwise vault.yaml
+        # ``runtime:`` decides, read once on first use (``options``).
+        self._usage_signal = usage_signal
+        self._record_access = record_access
+        self._usage_sink = usage_sink
+        self._options: RuntimeOptions | None = None
+        self._options_lock = threading.Lock()
+        #: The time a usage signal is stamped with (a seam for tests).
+        self.usage_clock: Callable[[], datetime] = lambda: datetime.now(UTC)
 
     def ensure_index(self, repository: Repository | None = None) -> None:
         """Rebuild the memory index when it is stale (see ``ensure_search_index``).
@@ -185,6 +206,92 @@ class Runtime:
         """In the bound tenant and, when allowed sources are set, an allowed source."""
 
         return self._visible(document)
+
+    # --- runtime options and memory_used (C5, C6) ------------------------------
+
+    def options(self) -> RuntimeOptions:
+        """The usage and record-access switches (``memfw.runtime.usage``).
+
+        Explicit values (``build_runtime`` arguments, i.e. ``MEMFW_USAGE_SIGNAL``
+        and ``MEMFW_RECORD_ACCESS``) win; for one left ``None`` the vault's
+        ``runtime:`` section decides. A successful read is kept for the
+        Runtime's life; ``vault.yaml`` is not read when both are explicit. No
+        vault, or an unreadable ``vault.yaml``, fails closed (usage off, access
+        not recorded) and is not cached: the next use reads again.
+        """
+
+        with self._options_lock:
+            if self._options is not None:
+                return self._options
+            from_vault, cacheable = RuntimeOptions(), True
+            if self._usage_signal is None or self._record_access is None:
+                try:
+                    repository: Repository | None = self.open_repository()
+                except (MemfwError, OSError, ValueError):
+                    repository = None
+                from_vault, cacheable = read_options(repository)
+            options = RuntimeOptions(
+                usage_enabled=(
+                    from_vault.usage_enabled if self._usage_signal is None else self._usage_signal
+                ),
+                record_access=(
+                    from_vault.record_access if self._record_access is None else self._record_access
+                ),
+            )
+            if cacheable:
+                self._options = options
+            return options
+
+    def usage_enabled(self) -> bool:
+        """Whether ``memory_used`` is registered (default off)."""
+
+        return self.options().usage_enabled
+
+    def record_access(self) -> bool:
+        """Whether search modes append ``memory_access`` events and warm hits (default on)."""
+
+        return self.options().record_access
+
+    def usage_sink(self, repository: Repository) -> UsageSink:
+        """The sink for this vault: the injected one, else SQLite when enabled, else null."""
+
+        if self._usage_sink is not None:
+            return self._usage_sink
+        if not self.usage_enabled():
+            from memfw.ports.reference.usage import NullUsageSink
+
+            return NullUsageSink()
+        from memfw.usage import SqliteUsageSink, projection_path
+
+        return SqliteUsageSink(projection_path(repository.root))
+
+    def memory_used(self, ids: object, session_ref: object, *, app: str) -> dict[str, Any]:
+        """``memory_used``: record one usage signal; never touch a memory or the vault.
+
+        ``ids`` (1 to ``MAX_USAGE_IDS`` strings) and ``session_ref`` (an opaque
+        token) are checked by shape first (``ValueError``). Then the vault is
+        opened and each well-formed id read: an id that does not exist, is
+        unreadable, or is outside the caller's tenant or allowed sources (the
+        ``memory_get`` rule) is dropped. The rest, if any, become one
+        ``UsageSignal`` (ids, ``session_ref``, the calling app, the time) for
+        ``usage_sink``. A sink failure is swallowed: the signal is best effort.
+        The answer's content is the same whatever was dropped or recorded. That
+        is not a hiding guarantee: timing differs (a kept id costs a write), and
+        ``memory_get`` already tells a visible id from an unknown one.
+        """
+
+        wanted, ref = checked_used_request(ids, session_ref)
+        repository = self.open_repository()
+        kept = readable_ids(repository, wanted, self._visible)
+        if kept:
+            signal = UsageSignal(
+                memory_ids=kept, session_ref=ref, app=signal_app(app), at=self.usage_clock()
+            )
+            try:
+                self.usage_sink(repository).record(signal)
+            except (OSError, ValueError):
+                pass  # best effort; the answer must not depend on it
+        return {"ok": True}
 
     # --- memory_search (A3b) ----------------------------------------------------
 
@@ -453,7 +560,8 @@ class Runtime:
         ``ensure_index`` first: the coordinator's deadline starts here.
 
         Providers are read-only: none appends an event or warms a memory.
-        After the filter and fusion, each returned hit that is cold or a stub
+        After the filter and fusion, unless ``record_access()`` is off (the
+        session-safe setting, C6), each returned hit that is cold or a stub
         is warmed and gets one ``memory_access`` event (``operation:
         two_stage_retrieve``, the same shape the direct hybrid path writes),
         so a hit the policy dropped (privacy, tenant, source, validity) is
@@ -518,7 +626,9 @@ class Runtime:
         )
         result = coordinator.search(query, limit=limit, policy=filter_policy)
         result = _with_open_question_labels(repository, result, filter_policy, now=moment)
-        errors = _touch_returned(repository, [hit.memory_id for hit in result.hits])
+        errors: tuple[str, ...] = ()
+        if self.record_access():
+            errors = _touch_returned(repository, [hit.memory_id for hit in result.hits])
         answered = set(result.labels.providers)
         seen = {name: captured[name] for name in list(captured) if name in answered}
         return RecallOutcome(result=result, observed=seen, errors=errors)
@@ -786,12 +896,18 @@ def build_runtime(
     provider_timeout: float = TWO_STAGE_PROVIDER_TIMEOUT,
     total_timeout: float = TWO_STAGE_TOTAL_TIMEOUT,
     context_cache: ContextCache | bool | None = True,
+    usage_signal: bool | None = None,
+    record_access: bool | None = None,
+    usage_sink: UsageSink | None = None,
 ) -> Runtime:
-    """The default assembly: today's behaviour, no ``runtime:`` config yet.
+    """The default assembly: today's behaviour unless a switch is set.
 
     ``root`` is kept as configured (``expanduser`` only; see ``Runtime``).
     Other values are taken as given: ``resolve_settings`` turns explicit
     values or ``MEMFW_*`` into them (the MCP server passes its result).
+    ``usage_signal`` and ``record_access`` left ``None`` are read from the
+    vault's ``runtime:`` section (``memfw.runtime.usage``); ``usage_sink``
+    replaces the sink ``memory_used`` writes to (a seam for tests and adapters).
     """
 
     return Runtime(
@@ -803,6 +919,9 @@ def build_runtime(
         provider_timeout=provider_timeout,
         total_timeout=total_timeout,
         context_cache=context_cache,
+        usage_signal=usage_signal,
+        record_access=record_access,
+        usage_sink=usage_sink,
     )
 
 

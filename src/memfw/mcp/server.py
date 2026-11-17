@@ -14,6 +14,7 @@ Tools:
     conversations_handoff(session_id, for_agent) -> continuation pack for another agent
     dream_run(dry_run, focus, ...)   -> verify/curate/distill proposals (dry run by default)
     dream_list(limit)                -> staged dreams under _candidates/dream/ (read-only)
+    memory_used(ids, session_ref)    -> usage signal (only when enabled; off by default)
 
 memory_context(v=2, slots) also serves each slot as an MCP resource,
 memfw://context/<slot> (resources/list, resources/read).
@@ -61,6 +62,7 @@ from memfw.mcp.tools_search import (
     _policy_argument,
     _RawHashCache,
 )
+from memfw.mcp.tools_usage import UsageTools
 
 # Names that lived here before the A4a split stay importable from this module.
 # They are read-only re-exports: the code reads each name from its defining module
@@ -95,11 +97,20 @@ class Gateway(
     HistoryTools,
     ConversationTools,
     DreamTools,
+    UsageTools,
     ProtocolMixin,
 ):
     """MCP tool implementations bound to one local vault root."""
 
     def handlers(self) -> dict[str, Callable[[dict[str, Any]], Any]]:
+        table = self._handlers()
+        if self.usage_enabled():
+            table["memory_used"] = lambda args: self.memory_used(
+                args.get("ids"), args.get("session_ref")
+            )
+        return table
+
+    def _handlers(self) -> dict[str, Callable[[dict[str, Any]], Any]]:
         return {
             "conversations_search": lambda args: self._conversations().search(
                 str(args.get("query") or ""),

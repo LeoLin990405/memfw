@@ -110,6 +110,10 @@ class ProtocolMixin(GatewayBase):
         """``resources/read``; ``None`` for an unknown URI (``ContextTools``)."""
         raise NotImplementedError
 
+    def tools(self) -> list[dict[str, Any]]:
+        """``tools/list``: ``TOOLS`` (``memfw.mcp.tools_usage.UsageTools`` may add one)."""
+        return TOOLS
+
     def respond(self, payload: dict[str, Any]) -> None:
         sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
         sys.stdout.flush()
@@ -157,7 +161,7 @@ class ProtocolMixin(GatewayBase):
             self.respond({"jsonrpc": "2.0", "id": msg_id, "result": {}})
             return
         if method == "tools/list":
-            self.respond({"jsonrpc": "2.0", "id": msg_id, "result": {"tools": TOOLS}})
+            self.respond({"jsonrpc": "2.0", "id": msg_id, "result": {"tools": self.tools()}})
             return
         if method == "resources/list" and RESOURCES:
             self.respond(

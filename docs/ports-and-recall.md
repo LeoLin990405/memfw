@@ -72,11 +72,33 @@ do not contain `memfw/__init__.py`, so this does not affect them.
 - **memfw does not depend on the wheels.** It still ships `src/memfw/ports` and
   `src/memfw/recall` itself; `import memfw.ports` and every memfw output are unchanged. Making
   memfw depend on `memfw-ports` (and re-export it) is a later step (architecture section 6).
-- **Versions.** Both wheels carry `memfw.ports.PORTS_API_VERSION` (semver, `0.1.0`), and
+- **Versions.** Both wheels carry `memfw.ports.PORTS_API_VERSION` (semver, `0.2.0` since C5), and
   `memfw-recall` pins `memfw-ports` to it; a test keeps the three equal. Bump it with every
   change to the ports API (major for a breaking one). The members pin their build backend
   (`hatchling==1.33.0`) and ship memfw's `LICENSE` and `NOTICE` (symlinks in each package
   directory) under `.dist-info/licenses/`.
+- **Compatibility table.** Each package version and the contract version (`PORT_VERSION`,
+  `memfw.ports.PORT_VERSIONS`) of every port it ships or builds on. An adapter checked
+  against a port's version stays compatible while that number is unchanged.
+  `tests/test_port_versions.py` checks this table against `PORT_VERSIONS` and the package
+  metadata; update both together.
+
+<!-- port-versions:start -->
+| Package | Version | Port | PORT_VERSION |
+|---|---|---|---|
+| `memfw-ports` | 0.2.0 | `RecallProvider` | 1 |
+| `memfw-ports` | 0.2.0 | `Projector` | 1 |
+| `memfw-ports` | 0.2.0 | `Ingestor` | 1 |
+| `memfw-ports` | 0.2.0 | `Deriver` | 1 |
+| `memfw-ports` | 0.2.0 | `Clock` | 1 |
+| `memfw-ports` | 0.2.0 | `IdGen` | 1 |
+| `memfw-ports` | 0.2.0 | `ClaimVerifier` | 1 |
+| `memfw-ports` | 0.2.0 | `ClaimStager` | 1 |
+| `memfw-ports` | 0.2.0 | `ContextSlotProvider` | 1 |
+| `memfw-ports` | 0.2.0 | `UsageSink` | 1 |
+| `memfw-recall` | 0.2.0 | `RecallProvider` | 1 |
+<!-- port-versions:end -->
+
 - **Wheels only.** `uv build --wheel --package memfw-ports` (and `memfw-recall`). An sdist is
   not supported because the sources live outside the package directory. Editable installs of
   the members are not supported either; `uv sync` installs memfw alone, as before.
@@ -238,6 +260,30 @@ id_factory=...)` already accepts. Core does not use the ports yet; A3 (compositi
 them in. `check_clock(clock, *, samples=32)` and `check_id_gen(id_gen, *, samples=1000)` in
 `memfw.ports.testing` are the contract: aware and monotonic times; distinct `str` ids matching
 `^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`.
+
+### 2.6 UsageSink (C5)
+
+`memfw.ports.usage` is the first event kind of the architecture's `EventSink` port: the
+`memory_used` signal (§4.5). A `UsageSignal(memory_ids, session_ref, app, at)` holds 1 to
+`MAX_USAGE_IDS` (100) distinct memory ids, an opaque session token (`SESSION_REF_RULE`:
+letters, digits and `_ . : @ + = -`, at most 200 characters, no spaces), the calling app
+(`""` or a lower-case app name) and a timezone-aware time; anything else is refused at
+construction. There is no field for query or body text.
+
+```python
+class UsageSink(Protocol):
+    name: str
+    def record(self, signal: UsageSignal) -> None: ...   # TypeError for a non-signal
+```
+
+A sink writes only its own store, never a memory, `events.jsonl` or another vault file.
+Implementations: `memfw.usage.SqliteUsageSink` (persistent), `NullUsageSink` (drops; the
+wiring when the signal is off) and `MemoryUsageSink` (in memory) in `memfw.ports.reference`.
+`check_usage_sink(sink, *, signals, vault=None, vault_exclude=(), stored=None)` is the
+contract: `record` returns `None` (twice per signal), refuses non-signals with `TypeError`,
+leaves `vault` unchanged, and with `stored` (the sink's rows) keeps every id and no string
+that is not a signal's id, session ref, app or ISO time. `USAGE_PORT_VERSION = 1`; the ports
+API moves to `0.2.0`.
 
 ## 3. The coordinator pipeline
 
@@ -697,6 +743,71 @@ topics)` otherwise; the input is not echoed).
 - **Not cached.** `handoff` and `topics` are rebuilt on every call: re-reading and re-filtering
   them is their whole build (the conversation share applies `conversation_share` per call;
   topic counts need every visible memory). `v=1` never uses the cache.
+### 4.5 `memory_used` (C5) and no vault writes mid-session (C6)
+
+**`memory_used(ids, session_ref)`** leaves a signal that a session used some memories (from
+`memory_context` or `memory_search`). It is off by default and only an auxiliary signal:
+whether a caller sends it depends on its prompt, so the C4 eval never relies on it alone.
+
+- **Switch.** `vault.yaml` `runtime: {usage: {enabled: true}}`, or `MEMFW_USAGE_SIGNAL`
+  (`1`/`true`/`yes`/`on`, `0`/`false`/`no`/`off`; a set variable wins; any other value refuses
+  to start). The section is read on first use and kept once read; while the vault is missing
+  or `vault.yaml` is unreadable it is read again on every use and both switches are closed
+  (usage off, access not recorded), never cached. Off, or a value that is not a
+  boolean: the tool is not in `tools/list` (exactly `TOOLS`, byte for byte), calling it is
+  `-32601 unknown tool: memory_used`, and the Runtime's sink is `NullUsageSink`.
+- **Arguments.** `ids`: a list of 1 to 100 strings; `session_ref`: a token as above. Wrong
+  shapes are tool errors that depend only on the arguments.
+- **Filtering.** Each well-formed id is read from the vault (`Repository.get`, which warms
+  nothing). Ids that do not exist, cannot be read, are malformed, or fall outside the
+  caller's tenant or allowed sources (the `memory_get` rule) are dropped. The answer is
+  always `{"ok": true}`, also when the store cannot be written (best effort): its content
+  does not say which ids were kept. This is not a hiding guarantee: response timing differs
+  (a kept id costs a write), and `memory_get` already distinguishes a visible id from an
+  unknown one.
+- **Store.** Outside the vault, in memfw's local data directory and keyed by vault:
+  `~/.local/share/memfw/usage/<key>.sqlite3` (`<key>`: the first 24 hex digits of sha256 of
+  the vault's resolved path; `memfw.usage.projection_path`). So it never counts toward the
+  physical-size budget that budget enforcement acts on, nor the transaction fingerprint,
+  whatever the signal volume. The directory is 0700; the file is created 0600 with
+  `O_EXCL`/`O_NOFOLLOW` (a planted symlink or non-database is refused, and the signal
+  dropped) and kept 0600. One row per id: `memory_id`, `session_ref`, `app` (from
+  `--app`/`MEMFW_APP`, lower case; `""` when unnamed), `at`. No query text, no body text.
+- **Retention.** Each write prunes rows older than 90 days (`DEFAULT_MAX_AGE_DAYS`, from the
+  new signal's time) and then the oldest rows beyond 100000 (`DEFAULT_MAX_ROWS`);
+  `SqliteUsageSink(path, max_rows=, max_age_days=)` takes other limits. With the 100-id cap
+  per call the file stays at a few MB.
+  It is a projection in the sense that it is disposable and never authoritative: deleting it
+  (`SqliteUsageSink.reset()`) loses only signals, and memfw rebuilds it empty on the next one.
+  Nothing ranks or filters by it; `SqliteUsageSink.counts()` and `rows()` are for the C4
+  coverage/waste eval. Usage-weighted ranking needs its own eval and stays off.
+- **Wiring.** `memfw.runtime` (`Runtime.memory_used`, `Runtime.usage_sink`;
+  `build_runtime(usage_signal=..., usage_sink=...)` injects either); the MCP layer only
+  lists and routes the tool (`memfw.mcp.tools_usage`).
+
+**No vault writes mid-session (C6).** During a session the vault is read, never written.
+Session-end writes stay where they are: the M2 conversation worker runs afterwards and only
+stages candidates under `_candidates/`, and `memory_remember` only stages a candidate;
+neither appends to the event chain. Reads keep it as follows:
+
+| Call | Writes the vault? |
+|---|---|
+| `memory_context` (v1, v2, every slot) and `memfw://context/*` | never |
+| `memory_search` `fts`, `multihop` | never |
+| `memory_used` | never (writes only its store outside the vault) |
+| `memory_search` `hybrid`, `vector` | by default yes: one `memory_access` event per returned hit, and a cold or stub hit is warmed (autowarm: `tier_change`/`memory_restore` events, the memory file, history and archive change). Off with `record_access: false` |
+| `memory_search` `two_stage` | by default yes: the same, for each hit the coordinator returns after the filter (never for a hit the policy dropped; #55). Off with `record_access: false` |
+
+The exception is access recording, which feeds strength and tier signals and has always been
+part of those modes. The **session-safe setting** turns it off: `vault.yaml` `runtime:
+{search: {record_access: false}}` or `MEMFW_RECORD_ACCESS=0`. Then no `memory_search` mode
+appends an event or warms a memory (cold and stub hits are returned as they are), so every
+call above leaves the memory files, `events.jsonl`, `events.state.json`, `vault.yaml` and
+`_candidates/` byte-identical. A non-boolean value fails closed to `false`. Disposable
+projections may still be built or refreshed during a session: `index.sqlite3`,
+`.memory-hybrid.sqlite` (and its manifest), their SQLite side files and `.memfw.lock`. `tests/test_session_no_vault_writes.py` hashes the vault before and after a
+session of every call above (both settings) and checks that the default exception is only
+access and warming events.
 
 ## 5. Adapter rules
 

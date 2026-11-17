@@ -77,6 +77,33 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   0.2.0 keeps `broader` but lints it as `unknown_relation`; see
   [docs/ontology.md](docs/ontology.md#compatibility).
 
+### Added — `memory_used` usage signal (C5) and no vault writes mid-session (C6)
+
+- New MCP tool `memory_used(ids, session_ref)`, off by default: listed and callable only
+  with `vault.yaml` `runtime: {usage: {enabled: true}}` or `MEMFW_USAGE_SIGNAL=1`. Off,
+  `tools/list` is exactly the previous list. It records one row per visible id (id,
+  session_ref, calling app, time; no query text) in a disposable store outside the vault,
+  `~/.local/share/memfw/usage/<vault key>.sqlite3` (0600; so it never counts toward the
+  physical-size budget), pruned on every write to 90 days and 100000 rows. It never writes
+  the vault or its event chain. Unknown, other-tenant, disallowed-source and malformed ids
+  are dropped; the answer is always `{"ok": true}` (its content does not say which ids were
+  kept; timing can differ).
+- New port `memfw.ports.UsageSink` / `UsageSignal` (`memfw.ports.usage`) with
+  `check_usage_sink` in the contract kit; implementations `memfw.usage.SqliteUsageSink`,
+  `NullUsageSink` and `MemoryUsageSink` (`memfw.ports.reference`). Wiring in
+  `memfw.runtime` (`Runtime.memory_used`, `build_runtime(usage_signal=, usage_sink=)`).
+  `PORTS_API_VERSION` and both wheels move to `0.2.0`. New `memfw.ports.PORT_VERSIONS`
+  (every port's contract version) and a package ↔ `PORT_VERSION` compatibility table in
+  docs/ports-and-recall.md section 1.1, checked against the package metadata by a test.
+- New session-safe switch `runtime: {search: {record_access: false}}` /
+  `MEMFW_RECORD_ACCESS=0`: `memory_search` `hybrid`, `vector` and `two_stage` then append
+  no `memory_access` event and warm no cold or stub hit. Default unchanged (access
+  recorded). A missing vault or unreadable `vault.yaml` fails closed on both switches and
+  is not cached. Documented the "no vault writes mid-session" constraint and its one default
+  exception (docs/ports-and-recall.md section 4.5);
+  `tests/test_session_no_vault_writes.py` proves `memory_context`, every `memory_search`
+  mode and `memory_used` leave the vault byte-identical under the session-safe setting.
+
 ### Added — standalone `memfw-ports` and `memfw-recall` wheels (A5b)
 
 - New uv workspace members `packages/memfw-ports` and `packages/memfw-recall`

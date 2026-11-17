@@ -207,7 +207,9 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
     for package in ("memfw-ports", "memfw-recall"):
         _run(uv, "build", "--wheel", "--package", package, "-o", dist)
     wheels = sorted(p.name for p in dist.glob("*.whl"))
-    assert wheels == ["memfw_ports-0.1.0-py3-none-any.whl", "memfw_recall-0.1.0-py3-none-any.whl"]
+    from memfw.ports import PORTS_API_VERSION as v
+
+    assert wheels == [f"memfw_ports-{v}-py3-none-any.whl", f"memfw_recall-{v}-py3-none-any.whl"]
     venv = tmp_path / "venv"
     python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     _run(uv, "venv", "--quiet", "--python", f"{sys.version_info[0]}.{sys.version_info[1]}", venv)

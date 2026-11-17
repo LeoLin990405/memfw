@@ -108,6 +108,8 @@ UNITS: Final[dict[str, str]] = {
     "memfw.history": "L1-projection",
     # Rebuildable corroboration counts (U4); the share policy is injected.
     "memfw.corroboration": "L1-projection",
+    # Disposable usage signals (C5 ``memory_used``); never written to the vault.
+    "memfw.usage": "L1-projection",
     # --- L1 read paths over the projections.
     "memfw.retrieval": "L1-read",
     "memfw.memory_hybrid": "L1-read",
