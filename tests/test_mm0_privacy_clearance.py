@@ -1169,6 +1169,11 @@ KEY_FORMS: list[tuple[str, str | None]] = [
     ("sensitivity:\n- private\n- secret\n", "unknown"),
     ("sensitivity:\n- null\n", "unknown"),
     ("sensitivity:\n- 1\n", "unknown"),
+    # YAML's other null spellings (the reference reader follows SafeLoader).
+    ("sensitivity: Null\n", None),
+    ("sensitivity: NULL\n", None),
+    ("sensitivity:\n- Null\n", "unknown"),
+    ("sensitivity:\n- NULL\n- private\n", "unknown"),
 ]
 
 
@@ -1442,3 +1447,159 @@ def test_merge_keeps_the_key_and_refuses_a_stricter_duplicate(tmp_path: Path) ->
     assert merged.top_level_sensitivity == "Private"
     assert "dup body" in merged.body
     assert "sensitivity: Private" in _file(repository, "rep")
+
+
+# ---------------------------------------------------------------------------
+# Review fixes (PR #69): recall, OKF round trip, duplicate keys, merges, proposals
+# ---------------------------------------------------------------------------
+
+_TO_RECALL = {"public": "none", "shared": "none", "local-private": "local-private"}
+
+
+def _levels_seen(text: str) -> tuple[str, str, str]:
+    """(ports, read_path, reference) for one file, with legacy ``public``."""
+
+    metadata = yaml.safe_load(text.split("---\n")[1])
+    memory = reference.parse_memory("m-key", text.encode("utf-8"))
+    assert memory is not None, text
+    return (
+        _as_reference_class(privacy.metadata_level(metadata, "public")),
+        _as_reference_class(read_path.metadata_level(metadata, "public")),
+        memory.privacy_class(),
+    )
+
+
+def test_a_rewrite_never_loosens_what_any_reader_sees() -> None:
+    for form, _expected in KEY_FORMS:
+        text = _key_file("privacy: public\n", None, None, form)
+        document = parse_memory_markdown(text, expected_id="m-key")
+        rewritten = MarkdownStorageMixin.render(document)
+        before, after = _levels_seen(text), _levels_seen(rewritten)
+        assert before == after, (form, rewritten)
+        again = parse_memory_markdown(rewritten, expected_id="m-key")
+        assert MarkdownStorageMixin.render(again) == rewritten
+
+
+def test_recall_strict_reads_the_sensitivity_key(tmp_path: Path) -> None:
+    from memfw.recall.builtin import meta_from_document
+
+    for form, _expected in KEY_FORMS:
+        text = _key_file("privacy: public\n", None, None, form)
+        document = parse_memory_markdown(text, expected_id="m-key")
+        recall_class, _mismatch = meta_from_document(document).privacy_class()
+        level = privacy.effective_level(
+            document.privacy,
+            document.tags,
+            legacy="public",
+            sensitivity=document.top_level_sensitivity,
+        )
+        assert recall_class == _TO_RECALL.get(level, "unknown"), form
+    root = _sensitive_vault(tmp_path / "vault")
+    gateway = Gateway(root, entity_enabled=False)
+    found = gateway.search("corpus keyword", limit=50, mode="two_stage", policy="strict")
+    assert found["results"]
+    assert SENSITIVE_ID not in {row["id"] for row in found["results"]}
+    assert SENSITIVE_MARKER not in json.dumps(gateway.context(4000, v=2, policy="strict"))
+
+
+@pytest.mark.parametrize("clearance", [None, "public,shared,local-private"])
+def test_okf_round_trip_keeps_the_key_private(tmp_path: Path, clearance: str | None) -> None:
+    from memfw.okf.importer import import_okf
+
+    source = _private_vault(tmp_path / "s")
+    source.add("keyed", "okapinox round trip", memory_id="k", privacy="public")
+    _hand_add_key(source, "k")
+    source.add("open", "public round trip", memory_id="p", privacy="public")
+    export_okf(source.root, tmp_path / "bundle", clearance=clearance)
+    front = yaml.safe_load(
+        (tmp_path / "bundle" / "k.md").read_text(encoding="utf-8").split("---\n")[1]
+    )
+    assert front["memfw"]["privacy"] == "local-private"
+    target = tmp_path / "target"
+    Repository(target).init()
+    import_okf(tmp_path / "bundle", target, dry_run=False)
+    applied = {}
+    for candidate in sorted((target / "_candidates" / "remember").glob("*.md")):
+        document = Repository(target).get(_apply(target, candidate))
+        applied[document.body.strip()] = document.privacy
+    assert applied == {"okapinox round trip": "local-private", "public round trip": "public"}
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "privacy: local-private\nprivacy: public\n",
+        "privacy: public\nsensitivity: private\nsensitivity: ''\n",
+        "privacy: public\ntags:\n- sensitivity:private\ntags: []\n",
+    ],
+)
+def test_http_duplicate_keys_are_unknown(header: str) -> None:
+    from memfw.index import readonly
+
+    raw = f"---\nid: d\ntitle: d\n{header}---\nbody\n"
+    for library in (readonly, service._library):
+        assert not library.header_is_mapping(raw)
+        assert library.metadata_privacy(raw, library._metadata_from_text(raw), "public") == (
+            "unknown"
+        )
+    # Without duplicates the same reader still reads the file.
+    single = "---\nid: d\ntitle: d\nprivacy: public\n---\nbody\n"
+    assert readonly.metadata_privacy(single, readonly._metadata_from_text(single), "public") == (
+        "public"
+    )
+
+
+def test_merge_refuses_only_text_copies_from_a_stricter_duplicate(tmp_path: Path) -> None:
+    from memfw.curation.review import _validate_merge
+
+    repository = _private_vault(tmp_path)
+    repository.add("rep", "rep body", memory_id="rep", privacy="public")
+    repository.add("dup", "dup body", memory_id="dup", privacy="public")
+    _hand_add_key(repository, "dup")
+    base = {"representative_id": "rep", "duplicate_ids": ["dup"]}
+    _validate_merge(repository, _merge_proposal({**base, "disposition": "delete"}))  # type: ignore[arg-type]
+    for output in (
+        {**base, "disposition": "retain"},
+        {**base, "disposition": "delete", "merged_body": "dup body"},
+    ):
+        with pytest.raises(IntegrityError, match="more private"):
+            _validate_merge(repository, _merge_proposal(output))  # type: ignore[arg-type]
+
+
+def test_merge_candidates_keep_the_most_private_member() -> None:
+    from memfw.agents import DeterministicJudge, _privacy_oriented
+
+    public = _doc("a-public", "the same near duplicate body text", privacy_value="public")
+    keyed = public.model_copy(update={"id": "b-keyed"})
+    keyed._sensitivity_key = ("private",)
+    (pair,) = DeterministicJudge().find_near_duplicates([public, keyed])
+    assert pair.representative_id == "b-keyed" and pair.duplicate_ids == ("a-public",)
+    assert pair.proposal.target_ids == ("b-keyed", "a-public")
+    plain = _doc("c-public", "other", privacy_value="public")
+    known = {doc.id: doc for doc in (public, keyed, plain)}
+    assert _privacy_oriented("a-public", ["c-public", "b-keyed"], known) == (
+        "b-keyed",
+        ["a-public", "c-public"],
+    )
+    assert _privacy_oriented("a-public", ["c-public"], known) == ("a-public", ["c-public"])
+
+
+def test_an_approved_proposal_may_remove_the_key(tmp_path: Path) -> None:
+    repository = _private_vault(tmp_path)
+    repository.add("x", "body", memory_id="x", privacy="public")
+    _hand_add_key(repository, "x")
+    changes = {"sensitivity": None}
+    proposal = repository.record_proposal(
+        memory_id="x",
+        operation="update",
+        changes=changes,
+        rationale="the key was a mistake",
+        agent_id="planner",
+        signature="mock:planner",
+    )
+    result = repository.decide_proposal(
+        proposal.event_id,
+        payload={"memory_id": "x", "operation": "update", "changes": changes},
+    )
+    assert result is not None and not result.has_top_level_sensitivity
+    assert "sensitivity" not in _file(repository, "x")

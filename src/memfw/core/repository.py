@@ -83,6 +83,9 @@ _PROPOSAL_FIELDS = frozenset(
         # Only together: resolving an open question sets both (see below).
         "open_question",
         "valid_to",
+        # A hand-added top-level ``sensitivity`` key (``None`` removes it): an
+        # agent may propose a change; only the approval can loosen it.
+        "sensitivity",
     }
 )
 
@@ -856,7 +859,11 @@ class Repository(
             ) from exc
         try:
             values = self.get(memory_id).model_dump()
-            values.update(fold_temporal_aliases(dict(normalized)))
+            folded = fold_temporal_aliases(dict(normalized))
+            # A top-level ``sensitivity`` key is not a field: ``update`` takes it
+            # aside (set, remove or, when approved, loosen it), so do the same.
+            folded.pop("sensitivity", None)
+            values.update(folded)
             MemoryDocument.model_validate(values)
         except UnicodeDecodeError as exc:
             raise IntegrityError(f"Memory is not valid UTF-8: {memory_id}") from exc

@@ -68,8 +68,12 @@ A hand-added top-level `sensitivity:` key counts too (v0.3.0): `private` (any
 case) makes the memory `local-private`; any other non-empty value makes it
 `unknown`, which no clearance admits. The rule lives in `read_path.py`
 (`sensitivity_key_levels`), so this is another reason to deploy the three
-files together: an older `read_path.py` ignores the key and serves such a
-memory under `public,shared`. Without a clearance nothing changes.
+files together. To fail closed, `read_path.py` carries `READ_PATH_VERSION`
+(now `2`) and `readonly.py` refuses to load an older copy: the service exits
+at startup with an error naming the version instead of serving under the old
+rules. A file whose front matter repeats a key (two `privacy:` or
+`sensitivity:` lines) is `unknown` under a clearance, as core refuses it.
+Without a clearance nothing changes.
 
 ## Check a URL
 

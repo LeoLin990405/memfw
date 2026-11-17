@@ -30,6 +30,22 @@ from urllib.parse import quote
 
 import yaml
 
+#: The ``read_path.READ_PATH_VERSION`` this file needs.
+REQUIRED_READ_PATH_VERSION = 2
+
+
+def _check_read_path(module: Any, origin: str) -> Any:
+    """Refuse a ``read_path`` older than this file (fail closed on a partial deploy)."""
+
+    version = getattr(module, "READ_PATH_VERSION", 1)
+    if not isinstance(version, int) or version < REQUIRED_READ_PATH_VERSION:
+        raise ImportError(
+            f"read_path.py at {origin} is version {version}, older than the "
+            f"{REQUIRED_READ_PATH_VERSION} readonly.py needs (deploy the three files "
+            "together); see docs/READONLY-SERVICE-UPGRADE.md"
+        )
+    return module
+
 
 def _load_read_path() -> Any:
     """``memfw.index.read_path``, or the ``read_path.py`` beside this file.
@@ -42,7 +58,7 @@ def _load_read_path() -> Any:
     if __name__ == "memfw.index.readonly":
         from memfw.index import read_path as module
 
-        return module
+        return _check_read_path(module, str(module.__file__))
     path = Path(__file__).with_name("read_path.py")
     if not path.is_file():
         raise ImportError(
@@ -54,7 +70,7 @@ def _load_read_path() -> Any:
         raise ImportError(f"read_path.py cannot be loaded from {path}")
     loaded = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(loaded)
-    return loaded
+    return _check_read_path(loaded, str(path))
 
 
 read_path = _load_read_path()
@@ -161,19 +177,45 @@ def _metadata_from_text(raw: str) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+class _DuplicateKey(ValueError):
+    pass
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """``SafeLoader`` that refuses a duplicate key at any depth, as core does."""
+
+
+def _unique_mapping(
+    loader: yaml.SafeLoader, node: yaml.nodes.MappingNode, deep: bool = False
+) -> dict[Any, Any]:
+    loader.flatten_mapping(node)
+    mapping: dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise _DuplicateKey(f"duplicate frontmatter key: {key}")
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_UniqueKeyLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _unique_mapping)
+
+
 def header_is_mapping(raw: str) -> bool:
     """True when ``raw`` opens with a frontmatter block that parses to a mapping.
 
-    Anything else (no frontmatter, CRLF line ends, a YAML error, a list or a
-    scalar) means the privacy of the file cannot be read: an exit with a
-    clearance treats it as ``unknown`` and never returns it (MM0).
+    Anything else (no frontmatter, CRLF line ends, a YAML error, a duplicate
+    key, a list or a scalar) means the privacy of the file cannot be read: an
+    exit with a clearance treats it as ``unknown`` and never returns it (MM0).
+    A duplicate ``privacy:`` or ``sensitivity:`` would otherwise be read
+    last-wins by plain ``safe_load``; core refuses such a file outright.
     """
 
     if not raw.startswith("---\n"):
         return False
     try:
         _, header, _ = raw.split("---\n", 2)
-        parsed = yaml.safe_load(header)
+        parsed = yaml.load(header, Loader=_UniqueKeyLoader)  # noqa: S506 - SafeLoader subclass
     except (ValueError, yaml.YAMLError):
         return False
     return isinstance(parsed, dict)

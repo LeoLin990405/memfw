@@ -22,7 +22,12 @@ import yaml
 from memfw.core.epistemic import OPEN_QUESTION_TYPE
 from memfw.core.models import MemoryDocument
 from memfw.core.repository import Repository
-from memfw.ports.privacy import admits, effective_level, parse_clearance
+from memfw.ports.privacy import (
+    admits,
+    effective_level,
+    parse_clearance,
+    sensitivity_key_levels,
+)
 
 OKF_VERSION = "0.2"
 GENERATOR = "memfw-okf-export/1"
@@ -118,6 +123,12 @@ def _concept(document: MemoryDocument, generated_by: str) -> tuple[str, str, dic
     # Only when the memory sets it, so bundles of older memories are unchanged.
     if document.privacy is not None:
         memfw["privacy"] = document.privacy
+    # A hand-added top-level ``sensitivity`` key only restricts, and it is not
+    # part of the bundle: export its effect instead. Every level it imposes is
+    # ``local-private`` or ``unknown``, so the concept travels as
+    # ``local-private`` (an importer keeps that, never looser).
+    if sensitivity_key_levels(document.top_level_sensitivity):
+        memfw["privacy"] = "local-private"
     if document.experience is not None:
         memfw["experience"] = document.experience.model_dump(mode="json")
     # An open question says what is unknown; a consumer must not read it as a

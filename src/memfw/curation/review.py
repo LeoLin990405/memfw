@@ -441,8 +441,12 @@ def _validate_merge(repository: Repository, proposal: Proposal) -> tuple[Any, li
             sensitivity=document.top_level_sensitivity,
         )
 
+    # Only a merge that copies text can leak: ``retain`` appends the duplicate
+    # bodies and ``merged_body`` may quote them. A delete-only merge keeps the
+    # representative's own body.
+    copies_text = disposition == "retain" or isinstance(output.get("merged_body"), str)
     floor = level(representative)
-    if any(is_looser(floor, level(document)) for document in documents):
+    if copies_text and any(is_looser(floor, level(document)) for document in documents):
         raise IntegrityError(
             "Merge targets must not be more private than the representative; "
             "tighten the representative's privacy first"

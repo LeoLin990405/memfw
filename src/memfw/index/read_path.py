@@ -80,6 +80,11 @@ def annotate(
 # runs without ``memfw``; ``tests/test_mm0_privacy_clearance.py`` checks that
 # the two give the same answers. See that module for the rules.
 
+#: Bumped whenever the privacy rules here change; ``readonly.py`` refuses to
+#: load an older copy, so a partial deploy fails at startup instead of
+#: serving under the old rules. 2: the top-level ``sensitivity`` key.
+READ_PATH_VERSION = 2
+
 PRIVACY_LEVELS = ("public", "shared", "local-private")
 _PRIVACY_RANK = {"public": 0, "shared": 1, "local-private": 2, "unknown": 3}
 LEGACY_PRIVACY_FALLBACK = "local-private"

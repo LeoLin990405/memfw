@@ -34,7 +34,18 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   approved proposal may remove or loosen it, and a non-human rollback that
   would drop it is refused. It is no longer listed in `ignored_keys`. A
   reviewed merge now refuses a duplicate that is more private than its
-  representative (field, tags or key), since the merge copies its text.
+  representative (field, tags or key) only when it copies text (`retain`
+  or `merged_body`); a delete-only merge is allowed. Merge candidates (the
+  deterministic judge, live and local-MLX merge pairs, so consolidation
+  too) make the most private member the representative. Agent proposals
+  may carry `sensitivity`; approving one applies it, removal included.
+- Recall's strict policy (`two_stage`, context v2 `strict`, open-question
+  labels) reads the key too. OKF export writes `memfw.privacy:
+  local-private` for a memory whose key restricts it, so a round trip stays
+  private. The HTTP privacy check refuses front matter with a duplicate key
+  (`unknown` under a clearance). The reference reader treats `Null`/`NULL`
+  as null like YAML. `read_path.py` gains `READ_PATH_VERSION = 2`;
+  `readonly.py` refuses an older copy at startup.
 
 ### Added — CLI tidy-up: open questions, `--json`, grouped help
 

@@ -2016,6 +2016,20 @@ def test_missing_read_path_beside_readonly_is_named(tmp_path: Path) -> None:
     assert "docs/READONLY-SERVICE-UPGRADE.md" in completed.stderr
 
 
+def test_stale_read_path_beside_readonly_refuses_to_start(tmp_path: Path) -> None:
+    """A ``read_path.py`` from before the sensitivity key fails closed at startup."""
+
+    script = _deploy(tmp_path / "remote", "memfw_readonly_service.py", "readonly.py")
+    current = _DEPLOY_FILES["read_path.py"].read_text(encoding="utf-8")
+    stale = current.replace("READ_PATH_VERSION = 2\n", "")
+    assert stale != current
+    (script.parent / "read_path.py").write_text(stale, encoding="utf-8")
+    completed = _run_script(script, "", block=True)
+    assert completed.returncode != 0
+    assert "version 1, older than the 2" in completed.stderr
+    assert "docs/READONLY-SERVICE-UPGRADE.md" in completed.stderr
+
+
 def test_standalone_copy_searches_without_memfw(tmp_path: Path) -> None:
     """The deployed layout: script, ``readonly.py`` and ``read_path.py`` in one directory."""
 
