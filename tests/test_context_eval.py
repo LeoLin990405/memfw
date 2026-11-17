@@ -678,3 +678,16 @@ def test_cli_current_flag_simulates_the_slot(tmp_path: Path) -> None:
     assert on["settings"]["unavailable_slots"] == []
     assert on["settings"]["current_simulated"] is True
     assert _row(on, "current", 500)["items"] == 1
+
+
+def test_cli_an_unreadable_usage_store_is_a_bad_parameter(tmp_path: Path) -> None:
+    fixture = known_vault(tmp_path)
+    broken = tmp_path / "stores" / "broken.sqlite3"
+    broken.write_bytes(b"not a sqlite database at all" * 64)
+    result = CliRunner().invoke(
+        app,
+        ["eval", "context", str(fixture.vault), "--usage", str(broken), "--slots", "core"],
+    )
+    assert result.exit_code == 2, result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert "unreadable usage projection" in result.output

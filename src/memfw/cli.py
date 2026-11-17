@@ -2360,6 +2360,7 @@ def eval_context(
         evaluate_snapshot,
         render_markdown,
     )
+    from .usage import UsageStoreError
 
     names = (
         tuple(item.strip() for item in slots.split(",") if item.strip()) if slots else EVAL_SLOTS
@@ -2406,7 +2407,7 @@ def eval_context(
             state=state,
             outputs=[out, *outputs] if out else [],
         )
-    except (SnapshotRefused, SnapshotChanged, ValueError) as exc:
+    except (SnapshotRefused, SnapshotChanged, UsageStoreError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
     payload = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     markdown = render_markdown(report)
