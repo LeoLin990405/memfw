@@ -577,6 +577,49 @@ def test_redirects_are_refused(tmp_path: Path) -> None:
         server.server_close()
 
 
+def test_a_slow_drip_answer_is_cut_at_the_deadline() -> None:
+    """The deadline bounds the whole read, not each recv; the client lock is released."""
+
+    stop = threading.Event()
+
+    class Drip(http.server.BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", "100000")
+            self.end_headers()
+            for _ in range(100):  # one byte every 0.1 s: each recv is quick
+                if stop.is_set():
+                    return
+                try:
+                    self.wfile.write(b" ")
+                    self.wfile.flush()
+                except OSError:
+                    return
+                time.sleep(0.1)
+
+        def log_message(self, *args: Any) -> None:
+            del args
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Drip)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, args=(0.05,), daemon=True)
+    thread.start()
+    try:
+        client = McpHttpClient(f"http://127.0.0.1:{server.server_address[1]}/mcp")
+        for _ in range(2):  # the second call is not "busy": the first released the lock
+            started = time.monotonic()
+            with pytest.raises(ProviderUnavailable) as caught:
+                client.call_tool("query", {}, deadline=time.monotonic() + 1.0)
+            assert str(caught.value) == "timeout"
+            assert time.monotonic() - started < 1.6
+    finally:
+        stop.set()
+        server.shutdown()
+        server.server_close()
+
+
 def test_session_restart_reinitializes_once(fake: FakeQmd) -> None:
     provider = _notes(fake.url)
     first = _search(provider, NOTES_X["query"])

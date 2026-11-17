@@ -16,7 +16,9 @@ Network rules (memfw compat framework section 5):
   text meant for this machine never reaches a proxy.
 * Redirects are refused; a response body larger than ``MAX_RESPONSE_BYTES`` is
   an error; every request carries the time left of the caller's deadline as its
-  socket timeout.
+  socket timeout, and the body is read in chunks with that timeout shrunk to
+  the time left before each one, so the whole exchange (not each ``recv``)
+  ends by the deadline.
 
 Errors: anything that means "QMD cannot answer now" (refused connection,
 timeout, HTTP 5xx, a busy client) raises ``ProviderUnavailable``; an answer
@@ -113,11 +115,48 @@ class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
         raise urllib.error.HTTPError(req.full_url, code, "redirect refused", headers, fp)
 
 
-def _read_bounded(response: Any) -> bytes:
-    data = response.read(MAX_RESPONSE_BYTES + 1)
-    if len(data) > MAX_RESPONSE_BYTES:
-        raise QmdResponseError("response too large")
-    return bytes(data)
+_CHUNK = 64 * 1024
+
+
+def _socket_of(response: Any) -> Any:
+    """The socket under an ``http.client`` response, or ``None`` (best effort)."""
+
+    raw = getattr(getattr(response, "fp", None), "raw", None)
+    return getattr(raw, "_sock", None)
+
+
+def _read_bounded(response: Any, *, deadline: float) -> bytes:
+    """Read the body in chunks; the total, not each ``recv``, is bound by ``deadline``.
+
+    Before each chunk the socket timeout shrinks to the time left, so a server
+    that drips a byte at a time cannot hold the call (and the client lock)
+    past the caller's budget. More than ``MAX_RESPONSE_BYTES`` is an error.
+    """
+
+    sock = _socket_of(response)
+    reader = getattr(response, "read1", None) or response.read
+    chunks: list[bytes] = []
+    size = 0
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ProviderUnavailable("timeout")
+        if sock is not None:
+            try:
+                sock.settimeout(remaining)
+            except OSError:
+                pass
+        try:
+            chunk = reader(_CHUNK)
+        except TimeoutError:
+            raise ProviderUnavailable("timeout") from None
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > MAX_RESPONSE_BYTES:
+            raise QmdResponseError("response too large")
+        chunks.append(bytes(chunk))
+    return b"".join(chunks)
 
 
 def _decode_message(body: bytes, content_type: str, request_id: int) -> dict[str, Any]:
@@ -204,7 +243,7 @@ class McpHttpClient:
         )
         try:
             with self._opener.open(request, timeout=remaining) as response:
-                body = _read_bounded(response)
+                body = _read_bounded(response, deadline=deadline)
                 status = int(response.status)
                 content_type = str(response.headers.get("Content-Type") or "")
                 found = {key.lower(): value for key, value in response.headers.items()}
@@ -214,8 +253,8 @@ class McpHttpClient:
             if exc.code >= 500:
                 raise ProviderUnavailable("server_error") from None
             try:
-                body = _read_bounded(exc)
-            except (OSError, QmdResponseError):
+                body = _read_bounded(exc, deadline=deadline)
+            except (OSError, QmdResponseError, ProviderUnavailable):
                 body = b""
             return exc.code, {}, body, ""
         except TimeoutError:
