@@ -63,7 +63,10 @@ work tree, the vault or a synced folder).
 
 - Backend: `extractive` (no model) by default. `--backend module:factory`
   picks another; a backend that is not `local` also needs `--allow-cloud`.
-  `vault.yaml` cannot choose a backend.
+  Without `--backend`, `vault.yaml` may name one under `conversations`
+  (`backend`, `cloud`, `options`); see [DeepSeek tagging adapter](#deepseek-tagging-adapter).
+  A configured backend that cannot be used is refused: the run is `degraded`
+  and processes nothing; it never falls back to `extractive`.
 - Memory candidates: model-proposed claims are verified against the session
   first (the dream `classify` check, or `--judge module:function`), must not
   copy 40+ characters of the transcript, and are staged under
@@ -95,6 +98,95 @@ work tree, the vault or a synced folder).
   outcome). `memfw dream skills --from-queue` consumes them (`EpisodeQueue`
   claim, then ack after staging or release on failure; claims older than six
   hours are taken back).
+
+## DeepSeek tagging adapter
+
+`packages/adapters/memfw-adapter-deepseek` (import `memfw_adapter_deepseek`)
+is a separate distribution memfw never imports. It implements the
+`ModelBackend` port (`memfw.ports.models`) over DeepSeek's OpenAI-compatible
+chat completions API with the standard library only, and speaks prompt
+version `conv-v2`: for each chunk and each session it returns a summary of at
+most two sentences and tags. It does not extract facts or memory claims.
+
+```yaml
+conversations:
+  backend: "memfw_adapter_deepseek:factory"
+  cloud: true                 # required: the adapter is not local
+  options:                    # optional; every key has a default
+    model: deepseek-chat
+    max_run_tokens: 400000
+    max_run_cost_usd: 0.50
+```
+
+The tag schema (validated, lower-cased and length-capped by memfw, then
+redacted again; any value outside the vocabulary, an unknown key, or a
+secret-shaped value drops the whole reply, which is retried next run):
+
+```json
+{"summary": "<= 2 sentences",
+ "tags": {"project": ["..."], "task_type": "dev|review|debug|plan|ops|research|chat|other",
+          "components": ["..."], "intent": "<one sentence>",
+          "outcome": "done|blocked|abandoned|ongoing|unknown"}}
+```
+
+Tags are stored as JSON in the new `summaries.tags` column of the worker
+state, on `conv-v2` rows only. Session rows also fill `intent` and `outcome`
+(`done` -> `success`, `blocked`/`abandoned` -> `failed`, else `unknown`) so
+episodes keep their vocabulary.
+
+- **Gate.** The adapter runs only when `vault.yaml` names it, sets
+  `cloud: true`, and the worker process has `DEEPSEEK_API_KEY`. Missing any of
+  these, `memfw conversations worker` reports `status: degraded`,
+  `stopped: backend_refused` with a code (`cloud_not_allowed`,
+  `unavailable:missing_key`, ...), and `memfw conversations status` shows a
+  `backend` entry with `state: degraded`. Nothing is processed and nothing is
+  sent. `--backend` on the command line still overrides `vault.yaml`.
+- **What is sent.** One `POST https://api.deepseek.com/chat/completions` per
+  `chunk_summary` and per `session_summary` job:
+  `{"model", "messages": [{"role": "system", "content": <conv-v2
+  instructions>}, {"role": "user", "content": "<data>JSON</data>"}],
+  "response_format": {"type": "json_object"}, "max_tokens": <= 512,
+  "temperature": 0, "stream": false}`. The data is the worker's already
+  redacted input: chunk turns as `{"role", "text"}` (turns that would be
+  withheld are left out) or, for a session, the first request and the chunk
+  summaries. No session ids, paths or app names are added. Raw transcripts
+  never leave the machine.
+- **Privacy controls.** Apps with `conversation_share.apps.<app>.process:
+  false`, hidden apps and `conversation_optout` agents are never queued, so
+  never sent. `cloud` is off unless set. `memory_claims` never goes to the
+  adapter: it stays on the extractive backend (U4 corroboration depends on
+  it), and `episode` jobs make no model call.
+- **Key handling.** The key is read only from the `DEEPSEEK_API_KEY`
+  environment variable when the backend is built. It is never read from a
+  file, never accepted in `vault.yaml` (an `api_key` option is refused),
+  never logged, and never part of a report, `repr` or error (errors carry
+  codes such as `http_503` or `auth`). Redirects are refused, so the key is
+  sent to the configured host only. Under launchd, keep the key in a macOS
+  Keychain item and have the job's own wrapper script read it at run time
+  (for example with `security find-generic-password -w`) and export it for
+  the worker process only; do not put it in the plist.
+- **Budget and retries.** Each run (one backend instance) has a token budget
+  (`max_run_tokens`, default 400000) and a cost budget (`max_run_cost_usd`,
+  default 0.50 USD, priced with `price_in_per_mtok` 0.28 and
+  `price_out_per_mtok` 0.42 USD per million tokens; check the provider's
+  current prices, cache-hit discounts are ignored). A request whose worst
+  case (input estimate plus `max_tokens`) does not fit stops the run:
+  `stopped: backend_budget`, recorded in the run row, and the job waits for the
+  next run without spending an attempt. HTTP 429 and 5xx (and network errors)
+  are retried with exponential backoff (`max_retries` 3, `backoff` 1 s, at
+  most `max_backoff` 30 s, `Retry-After` honoured up to that cap); a rejected
+  key (401/403) stops the run as `degraded` (`backend_unavailable`). The
+  worker's own `conversation_worker.max_tokens` budget still applies.
+- **Re-runs.** Jobs carry the backend's prompt version (`jobs.prompt_version`,
+  existing rows are `conv-v1`). Switching to the adapter re-plans every session
+  once under `conv-v2`; `conv-v1` rows are kept. Switching back re-uses the
+  `conv-v1` work already done.
+- **Testing.** The adapter ships `memfw_adapter_deepseek.fake.FakeDeepSeek`, a
+  loopback-only fake of the endpoint. memfw's tests run the shared
+  `memfw.ports.testing.check_model_backend` contract against the extractive
+  backend and against the adapter over the fake, and inspect the fake's
+  request bodies to check that only redacted text is sent. No test uses the
+  network or a real key.
 
 ## Store adapter
 

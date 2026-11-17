@@ -14,7 +14,7 @@ from typing import Annotated, Any
 import typer
 
 from ..core.errors import MemfwError
-from .backends import load_backend
+from .backends import backend_status, load_backend
 from .policy import OPERATOR
 from .schedule import DEFAULT_INTERVAL, default_log_dir, render
 from .service import open_share, open_worker, read_config
@@ -184,7 +184,12 @@ def worker(
     store: StoreOption = None,
     state: Annotated[Path | None, typer.Option("--state", help="Worker state path")] = None,
     backend: Annotated[
-        str | None, typer.Option("--backend", help="'extractive' (default) or module:factory")
+        str | None,
+        typer.Option(
+            "--backend",
+            help="'extractive' or module:factory (default: vault.yaml conversations.backend,"
+            " else extractive)",
+        ),
     ] = None,
     allow_cloud: Annotated[
         bool, typer.Option("--allow-cloud", help="Permit a non-local backend")
@@ -210,7 +215,8 @@ def worker(
     from memfw.dream.run import load_judge
 
     try:
-        model = load_backend(backend, allow_cloud=allow_cloud)
+        # No --backend: the one vault.yaml names (gated on conversations.cloud).
+        model = load_backend(backend, allow_cloud=allow_cloud) if backend else None
         runner = open_worker(
             root,
             backend=model,
@@ -238,7 +244,11 @@ def status(root: RootOption = None) -> None:
 
     try:
         config, vault = read_config(root)
-        typer.echo(_dump(WorkState(state_path(config, vault=vault)).status()))
+        result = WorkState(state_path(config, vault=vault)).status()
+        configured = backend_status(config)
+        if configured is not None:  # only when vault.yaml names a backend
+            result["backend"] = configured
+        typer.echo(_dump(result))
     except (ConversationError, MemfwError) as exc:
         raise _fail(exc) from exc
 

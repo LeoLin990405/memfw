@@ -21,6 +21,14 @@ Job ids are content keys, so re-running never repeats finished work. All
 state is local (``~/.local/share/memfw/conversations-work.sqlite``, 0600) and
 holds only redacted text: summaries are validated and redacted again before
 they are written. The run report carries counts and codes, never text.
+
+Jobs and summaries carry the backend's prompt version. A ``conv-v2`` backend
+(summary plus tags, :mod:`memfw.ports.models`) re-queues every session once
+under its own version and writes the ``tags`` column; ``conv-v1`` rows stay.
+``memory_claims`` always runs on a ``conv-v1`` backend: the configured one
+when it accepts the task, else the extractive one. A configured backend that
+was refused (see :func:`memfw.conversations.backends.configured_backend`)
+gives a ``degraded`` run that processes nothing.
 """
 
 from __future__ import annotations
@@ -41,8 +49,17 @@ from urllib.parse import quote
 
 from ..history.injected import has_content, strip_structural
 from ..ports.claims import ClaimEvidence, ClaimStager, ClaimVerifier, StagedClaim
+from ..ports.models import BackendBudgetExhausted, BackendUnavailable
 from .adapter import Ingestor, checked_location, data_dir
-from .backends import PROMPT_VERSION, ModelBackend, estimate_tokens, parse_reply
+from .backends import (
+    PROMPT_VERSION,
+    ExtractiveBackend,
+    ModelBackend,
+    accepts,
+    estimate_tokens,
+    parse_reply,
+    prompt_version_of,
+)
 from .policy import SharePolicy
 from .store import (
     ConversationError,
@@ -66,6 +83,9 @@ MAX_ATTEMPTS = 3
 SCAN_PAGE = 200
 VERBATIM_CHARS = 40
 KIND_ORDER = {"chunk_summary": 0, "session_summary": 1, "memory_claims": 2, "episode": 3}
+#: Backend codes that stop the run and leave the job queued (``max_tokens`` is the
+#: worker's own budget): the backend's budget is spent, or it became unusable.
+BACKEND_STOPS = ("backend_budget", "backend_unavailable")
 
 Judge = Callable[[str, str], str]
 
@@ -230,6 +250,17 @@ class WorkState:
         job_columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(jobs)")}
         if "tried_run" not in job_columns:
             connection.execute("ALTER TABLE jobs ADD COLUMN tried_run TEXT NOT NULL DEFAULT ''")
+        if "prompt_version" not in job_columns:
+            # Every job queued before this column existed was a conv-v1 job.
+            connection.execute(
+                "ALTER TABLE jobs ADD COLUMN prompt_version TEXT NOT NULL DEFAULT 'conv-v1'"
+            )
+        summary_columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(summaries)")
+        }
+        if "tags" not in summary_columns:
+            # conv-v2 tags as JSON; NULL for conv-v1 rows (existing rows are not touched).
+            connection.execute("ALTER TABLE summaries ADD COLUMN tags TEXT")
         cursor_columns = {
             str(row[1]) for row in connection.execute("PRAGMA table_info(scan_cursor)")
         }
@@ -467,6 +498,7 @@ class ConversationWorker:
         lock_path: Path | None = None,
         now: Callable[[], datetime] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
+        claims_backend: ModelBackend | None = None,
     ) -> None:
         # Claims are verified and staged through ports (memfw.ports.claims); the
         # caller injects them (memfw conversations work: memfw.dream.claims).
@@ -477,6 +509,16 @@ class ConversationWorker:
         self.source = source
         self.state = state
         self.backend = backend
+        self.prompt_version = prompt_version_of(backend)
+        # memory_claims stays conv-v1 (U4 corroboration reads its claims): a backend
+        # that does not take the task, or speaks another version, hands it to the
+        # extractive backend.
+        if claims_backend is None:
+            usable = accepts(backend, "memory_claims") and self.prompt_version == PROMPT_VERSION
+            claims_backend = backend if usable else ExtractiveBackend()
+        if prompt_version_of(claims_backend) != PROMPT_VERSION:
+            raise ConversationError("the claims backend must speak conv-v1")
+        self.claims_backend = claims_backend
         self.policy = policy
         self.budgets = budgets or Budgets()
         self.ingestor = ingestor
@@ -499,6 +541,9 @@ class ConversationWorker:
             started = self.monotonic()
             stamp = self.now().isoformat()
             report.run_id = f"run-{_digest(stamp, os.getpid(), os.urandom(8).hex())[:12]}"
+            refused = str(getattr(self.backend, "refused", "") or "")
+            if refused:
+                return self._degraded(report, stamp, refused)
             with self.state.open() as connection:
                 connection.execute(
                     "INSERT INTO runs (run_id, started_at, status) VALUES (?, ?, 'running')",
@@ -531,6 +576,25 @@ class ConversationWorker:
                         report.run_id,
                     ),
                 )
+        return report
+
+    def _degraded(self, report: RunReport, stamp: str, code: str) -> RunReport:
+        """Record a run that did nothing because the configured backend was refused."""
+
+        report.status = "degraded"
+        report.stopped = "backend_refused"
+        report.bump(report.errors, code)
+        with self.state.open() as connection:
+            connection.execute(
+                "INSERT INTO runs (run_id, started_at, finished_at, status, report)"
+                " VALUES (?, ?, ?, 'degraded', ?)",
+                (
+                    report.run_id,
+                    stamp,
+                    self.now().isoformat(),
+                    json.dumps(report.as_dict(), sort_keys=True),
+                ),
+            )
         return report
 
     # -- opt-out ------------------------------------------------------------------
@@ -773,13 +837,17 @@ class ConversationWorker:
         """Queue jobs for ``info`` if its fingerprint is new. Returns whether it queued."""
 
         mark = fingerprint(info)
+        version = self.prompt_version
+        # Another prompt version re-plans an unchanged session once (conv-v1 keeps
+        # the plain fingerprint, as before).
+        planned = mark if version == PROMPT_VERSION else f"{mark}#{version}"
         stamp = self.now().isoformat()
         with self.state.open() as connection:
             row = connection.execute(
                 "SELECT fingerprint FROM session_state WHERE app = ? AND session_id = ?",
                 (info.app, info.session_id),
             ).fetchone()
-            if row is not None and row["fingerprint"] == mark:
+            if row is not None and row["fingerprint"] == planned:
                 return False
             turns = self.source.turns(info.app, info.session_id, start=0, limit=info.turns)
             jobs: list[tuple[str, int, int]] = [
@@ -793,14 +861,14 @@ class ConversationWorker:
             for kind, chunk_start, chunk_end in jobs:
                 # Chunk ids ignore the fingerprint: an unchanged chunk is never redone.
                 key = (
-                    _digest(kind, info.app, info.session_id, chunk_start, chunk_end, PROMPT_VERSION)
+                    _digest(kind, info.app, info.session_id, chunk_start, chunk_end, version)
                     if kind == "chunk_summary"
-                    else _digest(kind, info.app, info.session_id, mark, PROMPT_VERSION)
+                    else _digest(kind, info.app, info.session_id, mark, version)
                 )
                 connection.execute(
                     "INSERT OR IGNORE INTO jobs (job_id, kind, app, session_id, fingerprint,"
-                    " chunk_start, chunk_end, status, created_at, updated_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
+                    " chunk_start, chunk_end, status, created_at, updated_at, prompt_version)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
                     (
                         key,
                         kind,
@@ -811,6 +879,7 @@ class ConversationWorker:
                         chunk_end,
                         stamp,
                         stamp,
+                        version,
                     ),
                 )
                 # A chunk reused from an older fingerprint belongs to the newest one too.
@@ -825,13 +894,13 @@ class ConversationWorker:
             connection.execute(
                 "UPDATE jobs SET status = 'pending', attempts = 0, error = '', updated_at = ?"
                 " WHERE app = ? AND session_id = ? AND fingerprint = ? AND kind = 'chunk_summary'"
-                " AND status IN ('failed', 'superseded')",
-                (stamp, info.app, info.session_id, mark),
+                " AND status IN ('failed', 'superseded') AND prompt_version = ?",
+                (stamp, info.app, info.session_id, mark, version),
             )
             connection.execute(
                 "INSERT OR REPLACE INTO session_state (app, session_id, fingerprint, queued_at)"
                 " VALUES (?, ?, ?, ?)",
-                (info.app, info.session_id, mark, stamp),
+                (info.app, info.session_id, planned, stamp),
             )
         return True
 
@@ -845,12 +914,14 @@ class ConversationWorker:
                 return
             with self.state.open() as connection:
                 # A job that errored in this run waits for the next one.
+                # Only this backend's prompt version: jobs of another wait for theirs.
                 rows = connection.execute(
                     "SELECT * FROM jobs WHERE status = 'pending' AND tried_run != ?"
+                    " AND prompt_version = ?"
                     " ORDER BY created_at, app, session_id, CASE kind"
                     " WHEN 'chunk_summary' THEN 0 WHEN 'session_summary' THEN 1"
                     " WHEN 'memory_claims' THEN 2 ELSE 3 END, chunk_start LIMIT 50",
-                    (report.run_id,),
+                    (report.run_id, self.prompt_version),
                 ).fetchall()
             states = [(row, self._ready(row)) for row in rows]
             runnable = [row for row, state in states if state == "run"]
@@ -869,8 +940,10 @@ class ConversationWorker:
                     report.stopped = "max_seconds"
                     return
                 outcome = self._run_job(job, report)
-                if outcome == "budget":
-                    report.stopped = "max_tokens"
+                if outcome == "budget" or outcome in BACKEND_STOPS:
+                    report.stopped = "max_tokens" if outcome == "budget" else outcome
+                    if outcome == "backend_unavailable":
+                        report.status = "degraded"
                     return
                 sessions_done.add(key)
                 progressed = True
@@ -888,8 +961,8 @@ class ConversationWorker:
             needed = "chunk_summary" if kind == "session_summary" else "session_summary"
             blocking = connection.execute(
                 "SELECT status FROM jobs WHERE app = ? AND session_id = ? AND fingerprint = ?"
-                " AND kind = ?",
-                (job["app"], job["session_id"], job["fingerprint"], needed),
+                " AND kind = ? AND prompt_version = ?",
+                (job["app"], job["session_id"], job["fingerprint"], needed, self.prompt_version),
             ).fetchall()
             statuses = {str(row["status"]) for row in blocking}
             if not statuses:
@@ -935,7 +1008,7 @@ class ConversationWorker:
                     "UPDATE jobs SET status = 'pending', attempts = attempts - 1 WHERE job_id = ?",
                     (job["job_id"],),
                 )
-                return "budget"
+                return code if code in BACKEND_STOPS else "budget"
             if status == "too_large":
                 status = "failed"
                 report.bump(report.errors, code)
@@ -967,16 +1040,30 @@ class ConversationWorker:
             return None, 0, 0, "too_large"
         if report.tokens + estimate > self.budgets.max_tokens:
             return None, 0, 0, "budget"
-        reply = self.backend.run(task, data, max_tokens=1024)
+        claims = task == "memory_claims"
+        backend = self.claims_backend if claims else self.backend
+        version = PROMPT_VERSION if claims else self.prompt_version
+        try:
+            reply = backend.run(task, data, max_tokens=1024)
+        except BackendBudgetExhausted:
+            # The backend's own per-run token/cost budget: stop; the job waits.
+            return None, 0, 0, "backend_budget"
+        except BackendUnavailable:
+            # E.g. the key was rejected: stop (degraded); the job waits, its attempt
+            # not counted.
+            return None, 0, 0, "backend_unavailable"
         tokens_in = reply.tokens_in or estimate
         tokens_out = reply.tokens_out or estimate_tokens(reply.text)
         report.tokens += tokens_in + tokens_out
-        parsed = parse_reply(task, reply.text)
+        parsed = parse_reply(task, reply.text, prompt_version=version)
         return parsed, tokens_in, tokens_out, "" if parsed is not None else "bad_output"
 
     def _store_summary(
         self, job: sqlite3.Row, parsed: dict[str, Any], tokens_in: int, tokens_out: int
     ) -> None:
+        if "tags" in parsed:
+            self._store_tagged(job, parsed, tokens_in, tokens_out)
+            return
         with self.state.open() as connection:
             connection.execute(
                 "INSERT OR REPLACE INTO summaries (app, session_id, chunk_start, chunk_end,"
@@ -995,6 +1082,31 @@ class ConversationWorker:
                     self.now().isoformat(),
                     tokens_in,
                     tokens_out,
+                ),
+            )
+
+    def _store_tagged(
+        self, job: sqlite3.Row, parsed: dict[str, Any], tokens_in: int, tokens_out: int
+    ) -> None:
+        with self.state.open() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO summaries (app, session_id, chunk_start, chunk_end,"
+                " prompt_version, model, summary, intent, outcome, created_at, tokens_in,"
+                " tokens_out, tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    job["app"],
+                    job["session_id"],
+                    job["chunk_start"],
+                    job["chunk_end"],
+                    self.prompt_version,
+                    self.backend.name,
+                    parsed["summary"],
+                    parsed.get("intent", ""),
+                    parsed.get("outcome", ""),
+                    self.now().isoformat(),
+                    tokens_in,
+                    tokens_out,
+                    json.dumps(parsed["tags"], ensure_ascii=False, sort_keys=True),
                 ),
             )
 
@@ -1018,8 +1130,8 @@ class ConversationWorker:
         parsed, tokens_in, tokens_out, code = self._call(
             "chunk_summary", {"turns": data_turns}, report
         )
-        if code in {"budget", "too_large"}:
-            return code, code
+        if code in {"budget", "too_large", *BACKEND_STOPS}:
+            return ("budget" if code in BACKEND_STOPS else code), code
         if parsed is None:
             return "error", code
         self._store_summary(job, parsed, tokens_in, tokens_out)
@@ -1030,10 +1142,10 @@ class ConversationWorker:
             rows = connection.execute(
                 "SELECT s.summary FROM jobs j JOIN summaries s ON s.app = j.app"
                 " AND s.session_id = j.session_id AND s.chunk_start = j.chunk_start"
-                " AND s.chunk_end = j.chunk_end AND s.prompt_version = ?"
+                " AND s.chunk_end = j.chunk_end AND s.prompt_version = j.prompt_version"
                 " WHERE j.app = ? AND j.session_id = ? AND j.fingerprint = ?"
-                " AND j.kind = 'chunk_summary' ORDER BY j.chunk_start",
-                (PROMPT_VERSION, job["app"], job["session_id"], job["fingerprint"]),
+                " AND j.kind = 'chunk_summary' AND j.prompt_version = ? ORDER BY j.chunk_start",
+                (job["app"], job["session_id"], job["fingerprint"], self.prompt_version),
             ).fetchall()
         return [str(row["summary"]) for row in rows]
 
@@ -1042,7 +1154,7 @@ class ConversationWorker:
             row: sqlite3.Row | None = connection.execute(
                 "SELECT * FROM summaries WHERE app = ? AND session_id = ? AND chunk_start = -1"
                 " AND chunk_end = ? AND prompt_version = ?",
-                (job["app"], job["session_id"], job["chunk_end"], PROMPT_VERSION),
+                (job["app"], job["session_id"], job["chunk_end"], self.prompt_version),
             ).fetchone()
         return row
 
@@ -1064,8 +1176,8 @@ class ConversationWorker:
                 break
         data = {"first_user": first_text, "chunks": _bounded(self._chunk_summaries(job))}
         parsed, tokens_in, tokens_out, code = self._call("session_summary", data, report)
-        if code in {"budget", "too_large"}:
-            return code, code
+        if code in {"budget", "too_large", *BACKEND_STOPS}:
+            return ("budget" if code in BACKEND_STOPS else code), code
         if parsed is None:
             return "error", code
         self._store_summary(job, parsed, tokens_in, tokens_out)
@@ -1080,8 +1192,8 @@ class ConversationWorker:
         parsed, _tokens_in, _tokens_out, code = self._call(
             "memory_claims", {"summary": str(summary["summary"])}, report
         )
-        if code in {"budget", "too_large"}:
-            return code, code
+        if code in {"budget", "too_large", *BACKEND_STOPS}:
+            return ("budget" if code in BACKEND_STOPS else code), code
         if parsed is None:
             return "error", code
         turns = self._session_turns(job)
@@ -1152,7 +1264,7 @@ class ConversationWorker:
         ]
         report = {
             "kind": "conversation-memory-candidates",
-            "backend": self.backend.name,
+            "backend": self.claims_backend.name,
             "prompt_version": PROMPT_VERSION,
             "evidence_refs": "conv:APP:SESSION@OFFSET, read with memfw conversations get",
             "candidates": len(claims),

@@ -1,0 +1,28 @@
+# memfw-adapter-deepseek: a conversation-worker ModelBackend that labels
+# redacted conversation text through DeepSeek's OpenAI-compatible chat
+# completions API (prompt version conv-v2: a short summary plus tags).
+# Standard library only (urllib); it depends on memfw-ports for the
+# ModelBackend contract and nothing else. memfw itself never imports it: the
+# operator names it in vault.yaml (conversations.backend) and opts in to cloud.
+#
+# Build a wheel:  uv build --wheel --package memfw-adapter-deepseek
+[build-system]
+requires = ["hatchling==1.33.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "memfw-adapter-deepseek"
+version = "0.1.0"
+description = "DeepSeek conversation-tagging backend for the memfw conversation worker"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+# Symlinks to memfw's own LICENSE and NOTICE (one copy of the text).
+license-files = ["LICENSE", "NOTICE"]
+dependencies = ["memfw-ports==0.2.0"]
+
+[tool.uv.sources]
+memfw-ports = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/memfw_adapter_deepseek"]

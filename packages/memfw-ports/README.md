@@ -2,7 +2,7 @@
 
 The memfw port contracts as a standalone, standard-library-only wheel: the
 `RecallProvider`, `Projector`, `Ingestor`, `Deriver`, `Clock`, `IdGen`,
-`ClaimVerifier`, `ClaimStager` and `ContextSlotProvider` protocols, their value
+`ClaimVerifier`, `ClaimStager`, `ContextSlotProvider` and `ModelBackend` protocols, their value
 types, candidate staging, the adapter registry, the contract kit
 (`memfw_ports.testing`) and the reference implementations
 (`memfw_ports.reference`).

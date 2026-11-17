@@ -9,6 +9,7 @@ resolution-markers = [
 [manifest]
 members = [
     "memfw",
+    "memfw-adapter-deepseek",
     "memfw-ports",
     "memfw-recall",
 ]
@@ -306,6 +307,17 @@ requires-dist = [
     { name = "zstandard", specifier = ">=0.23" },
 ]
 provides-extras = ["dev", "notes"]
+
+[[package]]
+name = "memfw-adapter-deepseek"
+version = "0.1.0"
+source = { editable = "packages/adapters/memfw-adapter-deepseek" }
+dependencies = [
+    { name = "memfw-ports" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "memfw-ports", editable = "packages/memfw-ports" }]
 
 [[package]]
 name = "memfw-ports"

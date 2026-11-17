@@ -10,8 +10,10 @@ plugs in through one of four ports (see ``docs/ports-and-recall.md``):
 
 plus the ``Clock`` and ``IdGen`` ports the kernel takes time and ids from,
 the ``ClaimVerifier`` / ``ClaimStager`` ports the conversation worker
-verifies and stages claims through, and the ``UsageSink`` port the optional
-``memory_used`` signal goes through (``memfw.ports.usage``).
+verifies and stages claims through, the ``UsageSink`` port the optional
+``memory_used`` signal goes through (``memfw.ports.usage``), and the
+``ModelBackend`` port (``memfw.ports.models``) the worker summarises and tags
+through.
 
 ``ContextPack`` (``memfw.ports.context``) is the data contract for the
 session-start context that ``memory_context`` v2 returns.
@@ -40,6 +42,14 @@ from .context import (
     compute_pack_version,
     item_content_hash,
     pack_version_payload,
+)
+from .models import (
+    MODELS_PORT_VERSION,
+    TAG_PROMPT_VERSION,
+    BackendBudgetExhausted,
+    BackendUnavailable,
+    ModelBackend,
+    ModelReply,
 )
 from .protocols import Deriver, Ingestor, Projector, RecallProvider
 from .registry import (
@@ -101,6 +111,8 @@ __all__ = [
     "ADAPTER_KINDS",
     "CLAIMS_PORT_VERSION",
     "MAX_USAGE_IDS",
+    "MODELS_PORT_VERSION",
+    "TAG_PROMPT_VERSION",
     "PORTS_API_VERSION",
     "PORT_VERSIONS",
     "POLARITIES",
@@ -120,6 +132,8 @@ __all__ = [
     "AdapterSpec",
     "AdapterStatus",
     "AdaptersConfig",
+    "BackendBudgetExhausted",
+    "BackendUnavailable",
     "Availability",
     "Candidate",
     "Citation",
@@ -138,6 +152,8 @@ __all__ = [
     "IngestItem",
     "Ingestor",
     "Manifest",
+    "ModelBackend",
+    "ModelReply",
     "ProjectionPolicy",
     "Projector",
     "ProviderUnavailable",
