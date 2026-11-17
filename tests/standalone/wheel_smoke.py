@@ -528,6 +528,8 @@ def _lightrag(root: Path) -> None:
 
     from memfw_adapter_lightrag import LightRagDeriver, Settings, candidates
     from memfw_adapter_lightrag import _ports as seam
+    from memfw_adapter_lightrag.deriver import source_name
+    from memfw_ports.reference._vault import read_memory
     from memfw_ports.testing import check_deriver
     from memfw_ports.types import DeriveRequest
 
@@ -542,10 +544,19 @@ def _lightrag(root: Path) -> None:
             encoding="utf-8",
         )
     sent: list[str] = []
+    memory = read_memory(vault, "m-pub")
+    assert memory is not None
+    name = source_name(memory, Settings().max_chars)
+    local = "http://127.0.0.1:11434"
+    config = {"llm_binding_host": local, "embedding_binding_host": local}
+    health = {"status": "healthy", "core_version": "1.5.7", "configuration": config}
 
     def opener(request: object, timeout: float) -> io.BytesIO:
-        sent.append(request.full_url)  # type: ignore[attr-defined]
-        entity = {"entity_name": "Backup", "entity_type": "service", "file_path": "m-pub.v2.md"}
+        url = request.full_url  # type: ignore[attr-defined]
+        sent.append(url)
+        if url.endswith("/health"):
+            return io.BytesIO(json.dumps(health).encode("utf-8"))
+        entity = {"entity_name": "Backup", "entity_type": "service", "file_path": name}
         data = {"entities": [entity], "relationships": []}
         reply = {"status": "success", "message": "", "data": data, "metadata": {}}
         return io.BytesIO(json.dumps(reply).encode("utf-8"))
@@ -553,7 +564,8 @@ def _lightrag(root: Path) -> None:
     deriver = LightRagDeriver(Settings(), environ={"LIGHTRAG_API_KEY": "smoke"}, opener=opener)
     request = DeriveRequest("graph", ("m-pub", "m-priv"), {"query": "backup"})
     view = check_deriver(deriver, vault=vault, request=request)
-    assert view.cited_ids() == ("m-pub",) and sent == ["http://127.0.0.1:9621/query/data"], sent
+    assert view.cited_ids() == ("m-pub",), view
+    assert sent[-2:] == ["http://127.0.0.1:9621/health", "http://127.0.0.1:9621/query/data"], sent
     assert len(candidates(view)) == 1
     _ok("check_deriver LightRagDeriver (fake server)")
 

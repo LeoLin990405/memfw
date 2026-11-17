@@ -19,11 +19,13 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 - New workspace package `packages/adapters/memfw-adapter-lightrag` (0.1.0,
   `memfw_adapter_lightrag:SPEC`, entry point `memfw.adapters`): a `Deriver`
   (kinds `graph` and `answer`) over an operator-run `lightrag-server` 1.5.7
-  (MIT), loopback HTTP only (proxies ignored, redirects refused), API key read
-  from the environment variable the settings name. `sync()` sends only
-  `public`/`shared` memories as `<id>.v<version>.md`; a graph row is kept and
-  an answer accepted only when every source is a requested, still-shareable,
-  current memory. Caps `inference` / causal `association`; `candidates(view)`
+  (MIT), literal-loopback HTTP only (proxies ignored, redirects refused), API
+  key read from the environment variable the settings name. Before any sync or
+  query the server's `/health` must show release 1.5.7 and loopback LLM and
+  embedding hosts (unless `cloud: true`). `sync()` deletes stale server copies
+  and sends only `public`/`shared` memories as `<id>.v<version>.<hash>.md`; a
+  graph row is kept, and an answer (`naive` mode only) accepted, only when
+  every source is a requested, still-shareable, current memory. Caps `inference` / causal `association`; `candidates(view)`
   yields staging candidates (`causal: none`). Docs: `docs/adapter-lightrag.md`.
   memfw never imports it; default output is unchanged.
 
