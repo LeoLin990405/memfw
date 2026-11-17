@@ -37,7 +37,14 @@ from .store import (
     goal_text,
     safe_text,
 )
-from .two_stage import MODES, LabelLookup, tag_filters, two_stage_search
+from .two_stage import (
+    MODES,
+    LabelLookup,
+    parse_tags,
+    tag_filters,
+    tags_match,
+    two_stage_search,
+)
 
 MAX_LIMIT = 50
 SNIPPET_CHARS = 400
@@ -146,6 +153,7 @@ class ConversationShare:
         summaries: SummaryLookup | None = None,
         labels: LabelLookup | None = None,
         embedder: Any = None,
+        embed_cloud: bool = False,
     ) -> None:
         self.source = source
         self.policy = policy
@@ -155,6 +163,8 @@ class ConversationShare:
         self.labels = labels
         #: The runtime's embedding provider (two_stage semantic list); ``None``: none.
         self.embedder = embedder
+        #: ``conversations.cloud``: a non-loopback embedder may receive summaries.
+        self.embed_cloud = embed_cloud
 
     # -- helpers ----------------------------------------------------------------
 
@@ -322,7 +332,7 @@ class ConversationShare:
 
         tagged: dict[tuple[str, str], bool] = {}
 
-        def tags_match(key: tuple[str, str]) -> bool:
+        def session_matches(key: tuple[str, str]) -> bool:
             if key not in tagged:
                 rows = (
                     self.labels.session_labels(
@@ -331,14 +341,17 @@ class ConversationShare:
                     if self.labels is not None
                     else None
                 )
-                tagged[key] = bool(rows)
+                # Re-checked on the parsed, canonical tags (as two_stage does).
+                tagged[key] = bool(rows) and tags_match(
+                    parse_tags((rows or [{}])[0].get("tags")), filters
+                )
             return tagged[key]
 
         def keep(hit: Turn) -> bool:
             # A turn that would be withheld is not a hit: no probing for its content.
             if not self.policy.allowed(self.caller, hit.app) or safe_text(hit.text)[1]:
                 return False
-            if filters and not tags_match((hit.app, hit.session_id)):
+            if filters and not session_matches((hit.app, hit.session_id)):
                 return False
             return not archived_only or states.get((hit.app, hit.session_id), False)
 

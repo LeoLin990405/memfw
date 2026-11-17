@@ -94,3 +94,61 @@ def search_default(payload: dict[str, Any], workdir: Path) -> str:
             for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
         )
     return json.dumps(out, indent=1, sort_keys=True).replace(str(workdir), "WORKDIR")
+
+
+def mcp_archive_flags(payload: dict[str, Any], workdir: Path) -> str:
+    """MCP ``conversations_search`` with and without ``with_archive_state`` /
+    ``archived_only`` on a store where ``codex/s-alpha`` is archived.
+
+    The base ref ignores both arguments (all three answers equal the plain one);
+    M3c honours them. The test asserts exactly that difference.
+    """
+
+    from memfw.conversations.adapter import SqliteStoreSource
+    from memfw.conversations.store import session_fingerprint
+    from memfw.mcp.server import Gateway
+    from tests.conversation_fixtures import make_vault, standard_rows, write_store
+
+    store = write_store(workdir / "data" / "conversations.sqlite", standard_rows())
+    info = SqliteStoreSource(store).session("codex", "s-alpha")
+    assert info is not None
+    with sqlite3.connect(store) as connection:
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS conversation_archive (agent TEXT NOT NULL,"
+            " session_id TEXT NOT NULL, archived_at TEXT NOT NULL,"
+            " archived_fingerprint TEXT NOT NULL, PRIMARY KEY (agent, session_id))"
+        )
+        connection.execute(
+            "INSERT INTO conversation_archive VALUES"
+            " ('codex', 's-alpha', '2026-01-06T00:00:00Z', ?)",
+            (session_fingerprint(info.turns, info.last_offset, info.updated_at),),
+        )
+    config = {
+        "conversation_share": {"enabled": True},
+        "conversation_store": {"path": str(store)},
+        "conversation_worker": {"state_path": str(workdir / "data" / "work.sqlite")},
+    }
+    vault = make_vault(workdir / "vault", config)
+    gateway = Gateway(vault, app=payload.get("caller") or "kimi")
+    out: dict[str, Any] = {}
+    for name, extra in (
+        ("plain", {}),
+        ("with_archive_state", {"with_archive_state": True}),
+        ("archived_only", {"archived_only": True}),
+    ):
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            gateway.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "conversations_search",
+                        "arguments": {"query": "uploader", **extra},
+                    },
+                }
+            )
+        response = json.loads(buffer.getvalue())
+        out[name] = json.loads(response["result"]["content"][0]["text"])
+    return json.dumps(out, indent=1, sort_keys=True).replace(str(workdir), "WORKDIR")

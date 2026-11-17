@@ -22,13 +22,18 @@ Nothing here writes anywhere.
 
 from __future__ import annotations
 
+import copy
 import hashlib
+import ipaddress
 import json
 import math
 import threading
+import time
+from array import array
 from collections import OrderedDict
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Protocol
+from urllib.parse import urlsplit
 
 from memfw.ports.models import (
     TAG_INTENT_CHARS,
@@ -63,6 +68,8 @@ RRF_K = 60
 HITS_PER_SESSION = 20
 SCAN_TURNS = 1000
 """Turns read from a session without a store hit to find query terms for windows."""
+SCAN_BUDGET = 5000
+"""Turns read for that, across all sessions of one call."""
 DEFAULT_WINDOWS = 2
 MAX_WINDOWS = 5
 DEFAULT_WINDOW_TURNS = 1
@@ -171,11 +178,128 @@ def label_text(summary: str, tags: Mapping[str, Any] | None) -> str:
     return "\n".join(part for part in parts if part)
 
 
+def tags_match(tags: Mapping[str, Any] | None, filters: Mapping[str, str]) -> bool:
+    """Whether parsed ``tags`` (:func:`parse_tags`) pass every filter (none: True)."""
+
+    if not filters:
+        return True
+    if not tags:
+        return False
+    for name, value in filters.items():
+        if name in {"task_type", "outcome"} and tags.get(name) != value:
+            return False
+        if name == "project" and value not in tags.get("project", []):
+            return False
+        if name == "component" and value not in tags.get("components", []):
+            return False
+        if name == "intent_like" and value not in str(tags.get("intent", "")):
+            return False
+    return True
+
+
 # -- embeddings ----------------------------------------------------------------------
 
-_CACHE_SIZE = 4096
-_cache: OrderedDict[tuple[str, str], list[float]] = OrderedDict()
+CACHE_BYTES = 32 * 1024 * 1024
+"""Bound on the per-process document vector cache (packed float32)."""
+EMBED_BUDGET_SECONDS = 8.0
+"""Total time one call may spend in the embedder (query plus documents), no retries."""
+EMBED_BATCH = 64
+"""Most uncached summaries embedded in one call; the rest wait for a later call."""
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
+
+_cache: OrderedDict[tuple[str, str], bytes] = OrderedDict()
+_cache_bytes = 0
 _cache_lock = threading.Lock()
+
+
+class EmbedderTimeout(RuntimeError):
+    """The embedder did not answer within ``EMBED_BUDGET_SECONDS``."""
+
+
+def embedder_is_local(embedder: Any) -> bool:
+    """Whether ``embedder`` keeps text on this machine.
+
+    ``local is True`` on the provider, or an ``endpoint`` URL whose host is a
+    loopback name or address. Anything else (no endpoint attribute, another
+    host, an unparseable URL) is not local: the semantic list then needs
+    ``conversations.cloud: true``, the switch every non-local backend needs.
+    """
+
+    if getattr(embedder, "local", None) is True:
+        return True
+    endpoint = getattr(embedder, "endpoint", None)
+    if not isinstance(endpoint, str) or not endpoint:
+        return False
+    try:
+        host = (urlsplit(endpoint).hostname or "").lower()
+    except ValueError:
+        return False
+    if host in _LOOPBACK_HOSTS:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _bounded(embedder: Any) -> Any:
+    """``embedder`` without retries and with its own timeout cut to the budget."""
+
+    if not hasattr(embedder, "retries") and not hasattr(embedder, "timeout"):
+        return embedder
+    bounded = copy.copy(embedder)
+    if hasattr(bounded, "retries"):
+        bounded.retries = 0
+    timeout = getattr(bounded, "timeout", None)
+    if isinstance(timeout, (int, float)):
+        bounded.timeout = min(float(timeout), EMBED_BUDGET_SECONDS)
+    return bounded
+
+
+def _within(deadline: float, work: Callable[[], Any]) -> Any:
+    """``work()`` on a daemon thread; :class:`EmbedderTimeout` past ``deadline``."""
+
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise EmbedderTimeout("embedder budget spent")
+    box: dict[str, Any] = {}
+
+    def run() -> None:
+        try:
+            box["value"] = work()
+        except BaseException as exc:  # noqa: BLE001 - re-raised in the caller
+            box["error"] = exc
+
+    thread = threading.Thread(target=run, name="memfw-conv-embed", daemon=True)
+    thread.start()
+    thread.join(remaining)
+    if thread.is_alive():
+        raise EmbedderTimeout("embedder did not answer in time")
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
+
+
+def _pack(vector: Sequence[float]) -> bytes:
+    return array("f", [float(value) for value in vector]).tobytes()
+
+
+def _unpack(data: bytes) -> list[float]:
+    values = array("f")
+    values.frombytes(data)
+    return values.tolist()
+
+
+def _cache_put(key: tuple[str, str], data: bytes) -> None:
+    global _cache_bytes
+    old = _cache.pop(key, None)
+    if old is not None:
+        _cache_bytes -= len(old)
+    _cache[key] = data
+    _cache_bytes += len(data)
+    while _cache_bytes > CACHE_BYTES and _cache:
+        _, dropped = _cache.popitem(last=False)
+        _cache_bytes -= len(dropped)
 
 
 def _embedder_key(embedder: Any) -> str:
@@ -183,32 +307,38 @@ def _embedder_key(embedder: Any) -> str:
     return f"{type(embedder).__name__}:{marker or id(embedder)}"
 
 
-def _embed_documents(embedder: Any, texts: Sequence[str]) -> list[list[float] | None]:
-    """Document vectors, memoised per process (an MCP server answers many calls)."""
+def _embed_documents(
+    embedder: Any, texts: Sequence[str], *, deadline: float, owner: str | None = None
+) -> list[list[float] | None]:
+    """Document vectors, memoised per process (an MCP server answers many calls).
 
-    owner = _embedder_key(embedder)
+    Only uncached texts are sent, at most ``EMBED_BATCH`` per call; the rest
+    stay ``None`` this call (not scored) and are embedded by a later one.
+    """
+
+    owner = owner or _embedder_key(embedder)
     keys = [(owner, hashlib.sha256(text.encode()).hexdigest()) for text in texts]
     out: list[list[float] | None] = [None] * len(texts)
     missing: list[int] = []
     with _cache_lock:
         for position, key in enumerate(keys):
-            vector = _cache.get(key)
-            if vector is None:
+            data = _cache.get(key)
+            if data is None:
                 missing.append(position)
             else:
                 _cache.move_to_end(key)
-                out[position] = vector
+                out[position] = _unpack(data)
+    missing = missing[:EMBED_BATCH]
     if missing:
-        vectors = embedder.embed([texts[position] for position in missing], role="document")
+        batch = [texts[position] for position in missing]
+        vectors = _within(deadline, lambda: embedder.embed(batch, role="document"))
         if len(vectors) != len(missing):
             raise ValueError("embedder returned the wrong number of vectors")
         with _cache_lock:
             for position, vector in zip(missing, vectors, strict=True):
-                values = [float(value) for value in vector]
-                out[position] = values
-                _cache[keys[position]] = values
-                while len(_cache) > _CACHE_SIZE:
-                    _cache.popitem(last=False)
+                data = _pack(vector)
+                out[position] = _unpack(data)
+                _cache_put(keys[position], data)
     return out
 
 
@@ -256,7 +386,9 @@ class _Search:
         self.degraded: list[str] = []
         self.infos: dict[tuple[str, str], SessionInfo | None] = {}
         self.labels: dict[tuple[str, str], dict[str, Any] | None] = {}
-        self.archived: dict[tuple[str, str], bool] = {}
+        self.archived: dict[tuple[str, str], bool | None] = {}
+        #: Turns left for scanning sessions without a store hit (all sessions together).
+        self.scan_budget = SCAN_BUDGET
         self.hits: dict[tuple[str, str], list[int]] = {}
 
     # -- visibility and filters, applied to every candidate before ranking ----------
@@ -299,20 +431,7 @@ class _Search:
         return self.labels[key]
 
     def _tags_match(self, tags: Mapping[str, Any] | None) -> bool:
-        if not self.filters:
-            return True
-        if not tags:
-            return False
-        for name, value in self.filters.items():
-            if name in {"task_type", "outcome"} and tags.get(name) != value:
-                return False
-            if name == "project" and value not in tags.get("project", []):
-                return False
-            if name == "component" and value not in tags.get("components", []):
-                return False
-            if name == "intent_like" and value not in str(tags.get("intent", "")):
-                return False
-        return True
+        return tags_match(tags, self.filters)
 
     def _admit(self, key: tuple[str, str]) -> bool:
         """Visible, still in the store, and passing every filter."""
@@ -332,17 +451,19 @@ class _Search:
             return False
         return True
 
-    def _archived(self, key: tuple[str, str]) -> bool:
+    def _archived(self, key: tuple[str, str]) -> bool | None:
+        """The session's archive state; ``None`` when the store cannot tell."""
+
         if key not in self.archived:
             info = self._info(key)
             lookup = getattr(self.share.source, "archive_state", None)
             if info is None or not callable(lookup):
                 if self.archived_only:
                     raise ConversationError("this conversation store does not record archive state")
-                self.archived[key] = False
+                self.archived[key] = None
             else:
                 self.archived.update(lookup([info]))
-        return self.archived.get(key, False)
+        return self.archived.get(key)
 
     # -- the three lists ------------------------------------------------------------
 
@@ -385,9 +506,13 @@ class _Search:
                 out.append(key)
         return out
 
-    def semantic(self, embedder: Any) -> list[tuple[str, str]]:
+    def semantic(self, embedder: Any, *, cloud: bool) -> list[tuple[str, str]]:
         if embedder is None:
             self.degraded.append("no_embedder")
+            return []
+        if not cloud and not embedder_is_local(embedder):
+            # Summaries would leave the machine: same switch as a non-local backend.
+            self.degraded.append("semantic_off")
             return []
         if not self.terms:
             return []
@@ -406,9 +531,13 @@ class _Search:
                 texts.append(text)
         if not keys:
             return []
+        bounded = _bounded(embedder)
+        deadline = time.monotonic() + EMBED_BUDGET_SECONDS
         try:
-            (query_vector,) = embedder.embed([self.query], role="query")
-            vectors = _embed_documents(embedder, texts)
+            (query_vector,) = _within(deadline, lambda: bounded.embed([self.query], role="query"))
+            vectors = _embed_documents(
+                bounded, texts, deadline=deadline, owner=_embedder_key(embedder)
+            )
         except Exception:  # noqa: BLE001 - an embedder failure degrades, never fails
             self.degraded.append("embedder_error")
             return []
@@ -429,7 +558,12 @@ class _Search:
         if not self.terms:
             return []
         found: list[int] = []
-        for turn in self.share.source.turns(*key, start=0, limit=SCAN_TURNS):
+        allowance = min(SCAN_TURNS, self.scan_budget)
+        if allowance <= 0:
+            return found
+        turns = self.share.source.turns(*key, start=0, limit=allowance)
+        self.scan_budget -= len(turns)
+        for turn in turns:
             if turn.withheld or not turn.text:
                 continue
             text, withheld = safe_text(turn.text)
@@ -504,6 +638,32 @@ class _Search:
         }
 
 
+def _shrink(item: dict[str, Any], room: int) -> int:
+    """Cut ``item`` towards ``room`` bytes; returns its size afterwards.
+
+    In order: the model summary (cut), its tags (dropped), the model output
+    (dropped), then ``cwd`` and ``project`` (emptied). Ids, times and ranks stay.
+    """
+
+    model = item.get("model_output")
+    if isinstance(model, dict) and _size(item) > room:
+        summary = str(model.get("summary") or "")
+        over = _size(item) - room
+        if summary and over < len(summary.encode()):
+            data = summary.encode()[: max(0, len(summary.encode()) - over - 3)]
+            model["summary"] = data.decode(errors="ignore") + "…"
+        else:
+            model["summary"] = ""
+    if isinstance(model, dict) and _size(item) > room:
+        model["tags"] = None
+    if _size(item) > room:
+        item["model_output"] = None
+    for name in ("cwd", "project"):
+        if _size(item) > room and item.get(name):
+            item[name] = ""
+    return _size(item)
+
+
 def _fuse(lists: Mapping[str, Sequence[tuple[str, str]]]) -> list[tuple[tuple[str, str], float]]:
     scores: dict[tuple[str, str], float] = {}
     for items in lists.values():
@@ -551,7 +711,7 @@ def two_stage_search(
     )
     lists = {
         "fts": search.fts(),
-        "semantic": search.semantic(share.embedder),
+        "semantic": search.semantic(share.embedder, cloud=share.embed_cloud),
         "tags": search.tagged(),
     }
     fused = _fuse(lists)
@@ -571,7 +731,8 @@ def two_stage_search(
         "truncated": False,
         "next_offset": offset + limit if offset + limit < len(fused) else None,
     }
-    used = _size(response)
+    # Sized with the widest cursor and flag, so setting them later never overflows.
+    used = _size({**response, "truncated": True, "next_offset": 10**9})
     for position, (key, score) in enumerate(page):
         info = search._info(key)
         if info is None:  # admitted above, so only a store change in between
@@ -586,7 +747,15 @@ def two_stage_search(
             "windows": [],
         }
         size = _size(item) + 2
-        if used + size > cap:
+        if used + size > cap and not response["sessions"]:
+            # The first session alone is too big: shrink it rather than stall the cursor.
+            size = _shrink(item, cap - used - 2) + 2
+            response["truncated"] = True
+            if used + size > cap:
+                # Nothing fits even shrunk: skip it so a paging client moves on.
+                response["next_offset"] = offset + position + 1
+                break
+        elif used + size > cap:
             response["truncated"] = True
             response["next_offset"] = offset + position
             break
@@ -613,10 +782,13 @@ __all__ = [
     "MODES",
     "TAG_FILTERS",
     "TWO_STAGE_NOTICE",
+    "EmbedderTimeout",
     "LabelLookup",
+    "embedder_is_local",
     "label_text",
     "parse_tags",
     "since_key",
     "tag_filters",
+    "tags_match",
     "two_stage_search",
 ]

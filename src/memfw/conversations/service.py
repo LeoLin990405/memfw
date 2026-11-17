@@ -11,6 +11,7 @@ from memfw.ports.claims import ClaimStager, ClaimVerifier
 from .adapter import SqliteStoreSource, checked_location, store_ingestor, store_path
 from .backends import (
     ModelBackend,
+    cloud_enabled,
     configured_backend,
     configured_backfill_days,
     configured_replan_limit,
@@ -50,8 +51,23 @@ def open_share(
         source = SqliteStoreSource(db or store_path(config, vault=vault))
     state = WorkState(state_path(config, vault=vault))
     return ConversationShare(
-        source, policy, caller, summaries=state.session_summary, labels=state, embedder=embedder
+        source,
+        policy,
+        caller,
+        summaries=state.session_summary,
+        labels=state,
+        embedder=embedder,
+        embed_cloud=_cloud(config) if embedder is not None else False,
     )
+
+
+def _cloud(config: dict[str, Any]) -> bool:
+    """``conversations.cloud``; a malformed value counts as off (fail closed)."""
+
+    try:
+        return cloud_enabled(config)
+    except ConversationError:
+        return False
 
 
 def open_worker(

@@ -318,15 +318,17 @@ class WorkState:
         filters: Mapping[str, str] | None = None,
         limit: int = 500,
     ) -> list[dict[str, Any]] | None:
-        """Each session's label: its newest session summary, the newest tagged one first.
+        """Each session's label: its newest session summary (the one ``session_summary`` reads).
 
         Rows ``{"app", "session_id", "summary", "tags", "prompt_version"}``,
         ``tags`` the raw JSON text or ``None`` (a ``conv-v1`` row), newest first,
         at most ``limit``. ``keys`` restricts to those sessions; ``apps`` /
         ``exclude`` to the app scope. ``filters`` (``task_type``, ``outcome``,
         ``project``, ``component``, ``intent_like``; values already normalised)
-        keep only tagged sessions that match all of them. ``None`` when there is
-        no state file (nothing was ever processed); an unreadable one gives ``[]``.
+        keep only sessions whose newest summary is tagged and matches all of
+        them (an older tagged row behind a newer untagged one does not count).
+        ``None`` when there is no state file (nothing was ever processed); an
+        unreadable one gives ``[]``.
         """
 
         clauses = ["chunk_start = -1"]
@@ -362,7 +364,7 @@ class WorkState:
             outer_params.append(wanted["intent_like"])
         sql = (
             "WITH best AS (SELECT app, session_id, summary, tags, prompt_version, created_at,"
-            " ROW_NUMBER() OVER (PARTITION BY app, session_id ORDER BY (tags IS NOT NULL) DESC,"
+            " ROW_NUMBER() OVER (PARTITION BY app, session_id ORDER BY"
             " chunk_end DESC, created_at DESC) AS n FROM summaries"
             f" WHERE {' AND '.join(clauses)})"
             " SELECT app, session_id, summary, tags, prompt_version FROM best"

@@ -312,12 +312,14 @@ into filters.
 
 **Tag filters** (CLI `--task-type`, `--outcome`, `--project`, `--component`,
 `--intent-like`; MCP `task_type`, `outcome`, `project`, `component`,
-`intent_like`) match the newest session summary row of each session that has
-tags. Values are lower-cased like the tags; `task_type` and `outcome` must be
-in the tag vocabulary (`dev|review|debug|plan|ops|research|chat|other`,
+`intent_like`) match the session's tags. The session's newest summary
+decides: when it is untagged, an older tagged row does not count. Values are
+lower-cased like the tags; `task_type` and `outcome` must be in the tag
+vocabulary (`dev|review|debug|plan|ops|research|chat|other`,
 `done|blocked|abandoned|ongoing|unknown`), `project` and `component` match one
-list item exactly, `intent_like` is a substring of `intent`. A session without
-tags (never processed, or only `conv-v1` summaries) never matches a tag
+list item exactly, `intent_like` is a substring of `intent`; matches are
+re-checked on the parsed tags. A session without tags (never processed, or a
+`conv-v1` newest summary) never matches a tag
 filter. They work in the default mode too (they narrow the turn hits) and
 combine with `--app`, `--since` and `--archived-only`.
 
@@ -332,9 +334,18 @@ combine with `--app`, `--since` and `--archived-only`.
      embedded by the embedder the runtime already has (`MEMFW_EMBEDDING_URL`,
      `_MODEL`, `_DIMENSION`, the one `memory_search` hybrid uses; the CLI reads
      the same variables). The newest 200 summaries that pass the filters are
-     embedded per call (vectors are memoised per process). Without an embedder
-     this list is empty and the response says `degraded: ["no_embedder"]`; an
-     embedder error gives `embedder_error`;
+     candidates; only uncached ones are sent, at most 64 per call (the rest are
+     scored on a later call), and vectors are memoised per process as packed
+     float32, at most 32 MiB. The embedder gets 8 seconds in total per call
+     with no retries. Without an embedder this list is empty and the response
+     says `degraded: ["no_embedder"]`; a timeout or error gives
+     `embedder_error`.
+     **Gate:** summaries are sent only to an embedder that is local (its
+     endpoint host is `localhost`, `127.0.0.0/8` or `::1`, or the provider says
+     `local = True`) or when `vault.yaml` has `conversations: {cloud: true}`,
+     the same switch a non-local worker backend needs. Otherwise the list is
+     skipped with `degraded: ["semantic_off"]` and the endpoint is never
+     contacted (a malformed `cloud` value counts as off);
    - `tags`: sessions whose tags match the tag filters (up to 500, newest
      summaries first).
 
@@ -346,11 +357,15 @@ combine with `--app`, `--since` and `--archived-only`.
    `null` when the worker has nothing) and up to `windows` (default 2, max 5)
    redacted turn windows: `window_turns` (default 1, max 3) turns on each side
    of a hit, each turn cut to 1200 characters. Hits are the store's matches;
-   for a session found only by meaning, the first 1000 turns are scanned for
-   any query term; a tag-only call has no windows (read the session with
+   for a session found only by meaning, its first 1000 turns are scanned for
+   any query term (5000 turns at most across all sessions of a call); a tag-only call has no windows (read the session with
    `conversations_get`). The whole response stays within `max_bytes` (default
    16 KiB, 4–64 KiB): sessions first, then windows by rank; `truncated` says
-   something was left out and `next_offset` pages on.
+   something was left out and `next_offset` pages on. A first session too big
+   on its own is shrunk (model summary cut, then tags and model output
+   dropped, then `cwd` and `project` emptied); if it still does not fit it is
+   skipped and `next_offset` moves past it, so paging always advances.
+   `archived` is `null` when the store cannot tell.
 
 The query may be empty when a tag filter is given:
 

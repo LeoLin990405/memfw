@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -11,11 +12,13 @@ import pytest
 from typer.testing import CliRunner
 
 from memfw.cli import app as cli_app
-from memfw.conversations import ConversationError, open_share
-from memfw.conversations.two_stage import TWO_STAGE_NOTICE, tag_filters
+from memfw.conversations import ConversationError, open_share, two_stage
+from memfw.conversations.share import ConversationShare
+from memfw.conversations.two_stage import TWO_STAGE_NOTICE, embedder_is_local, tag_filters
 from memfw.conversations.worker import WorkState, state_path
 from memfw.mcp import schema
 from memfw.mcp.server import Gateway
+from memfw.notes import HttpEmbeddingProvider
 from memfw.ports.models import TAG_OUTCOMES, TASK_TYPES
 from tests.conversation_fixtures import (
     EMAIL,
@@ -85,9 +88,10 @@ class WordEmbedder:
 
     VOCAB = ("uploader", "retry", "migration", "schema", "cache", "private", "backoff")
 
-    def __init__(self) -> None:
+    def __init__(self, endpoint: str = "http://127.0.0.1:9/v1/embeddings") -> None:
         self.dimension = len(self.VOCAB)
-        self.fingerprint = "word-embedder"
+        self.fingerprint = f"word-embedder-{endpoint}"
+        self.endpoint = endpoint
         self.seen: list[str] = []
 
     def embed(self, texts: list[str], *, role: str = "document") -> list[list[float]]:
@@ -153,6 +157,15 @@ def _strings(value: Any) -> list[str]:
 @pytest.fixture(autouse=True)
 def _home(isolated_home: Path) -> Path:  # noqa: F811
     return isolated_home
+
+
+@pytest.fixture(autouse=True)
+def _fresh_cache() -> Any:
+    two_stage._cache.clear()
+    two_stage._cache_bytes = 0
+    yield
+    two_stage._cache.clear()
+    two_stage._cache_bytes = 0
 
 
 # -- filters ---------------------------------------------------------------------------
@@ -350,6 +363,211 @@ def test_two_stage_pages(tmp_path: Path) -> None:
     assert _keys(second) == _keys(full)[1:2] and second["sessions"][0]["rank"] == 2
 
 
+# -- review fixes ----------------------------------------------------------------------
+
+
+class RemoteEmbedder(WordEmbedder):
+    """A non-loopback endpoint: must never be called unless conversations.cloud is on."""
+
+    def __init__(self) -> None:
+        super().__init__("https://embeddings.example.invalid/v1/embeddings")
+        self.calls = 0
+
+    def embed(self, texts: list[str], *, role: str = "document") -> list[list[float]]:
+        self.calls += 1
+        return super().embed(texts, role=role)
+
+
+def test_embedder_locality() -> None:
+    assert embedder_is_local(WordEmbedder())
+    assert embedder_is_local(WordEmbedder("http://localhost:8080/v1/embeddings"))
+    assert embedder_is_local(WordEmbedder("http://[::1]:8080/v1"))
+    assert embedder_is_local(WordEmbedder("http://127.1.2.3/v1"))
+    assert not embedder_is_local(RemoteEmbedder())
+    assert not embedder_is_local(WordEmbedder("http://192.0.2.10/v1"))
+    assert not embedder_is_local(WordEmbedder("not a url"))
+    assert not embedder_is_local(object())
+
+    class Local:
+        local = True
+
+    assert embedder_is_local(Local())
+
+
+def test_semantic_list_needs_loopback_or_cloud(tmp_path: Path) -> None:
+    remote = RemoteEmbedder()
+    off = _share(tmp_path, embedder=remote).search("schema migration", mode="two_stage")
+    assert off["degraded"] == ["semantic_off"] and remote.calls == 0 and not remote.seen
+    assert off["sessions"] == []
+    vault, store = _setup(
+        tmp_path / "c", {**SHARE_ON, "conversations": {"cloud": True}}, labels=False
+    )
+    on = open_share(vault, "claude", store=store, embedder=remote)
+    found = on.search("schema migration", mode="two_stage")
+    assert found["degraded"] == [] and remote.calls >= 1
+    assert found["sessions"][0]["matched_by"] == ["semantic"]
+    # A malformed switch is off (fail closed).
+    vault, store = _setup(
+        tmp_path / "m", {**SHARE_ON, "conversations": {"cloud": "yes"}}, labels=False
+    )
+    calls = remote.calls
+    bad = open_share(vault, "claude", store=store, embedder=remote)
+    assert bad.search("schema migration", mode="two_stage")["degraded"] == ["semantic_off"]
+    assert remote.calls == calls
+
+
+def test_http_embedder_to_a_remote_host_is_never_contacted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from memfw.notes import http as notes_http
+
+    def refuse(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("the embedding endpoint was contacted")
+
+    monkeypatch.setattr(notes_http, "open_http", refuse)
+    embedder = HttpEmbeddingProvider("http://192.0.2.10/v1/embeddings", model="m", dimension=4)
+    result = _share(tmp_path, embedder=embedder).search("uploader", mode="two_stage")
+    assert result["degraded"] == ["semantic_off"] and result["sessions"]
+
+
+def test_embedder_budget_and_batch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    class Slow(WordEmbedder):
+        def embed(self, texts: list[str], *, role: str = "document") -> list[list[float]]:
+            time.sleep(1.0)
+            return super().embed(texts, role=role)
+
+    monkeypatch.setattr(two_stage, "EMBED_BUDGET_SECONDS", 0.2)
+    started = time.monotonic()
+    slow = _share(tmp_path, embedder=Slow()).search("uploader", mode="two_stage")
+    assert time.monotonic() - started < 0.9
+    assert slow["degraded"] == ["embedder_error"] and slow["sessions"]
+
+    bounded = two_stage._bounded(
+        HttpEmbeddingProvider("http://127.0.0.1:9/v1", model="m", dimension=4, timeout=120)
+    )
+    assert bounded.retries == 0 and bounded.timeout <= 8.0
+
+    monkeypatch.setattr(two_stage, "EMBED_BUDGET_SECONDS", 8.0)
+    monkeypatch.setattr(two_stage, "EMBED_BATCH", 1)
+    embedder = WordEmbedder()
+    share = _share(tmp_path / "b", embedder=embedder)
+    share.search("schema migration", mode="two_stage")
+    first = [text for text in embedder.seen if text != "schema migration"]
+    assert len(first) == 1  # one uncached document per call
+    share.search("schema migration", mode="two_stage")
+    second = [text for text in embedder.seen if text != "schema migration"]
+    assert len(second) == 2 and second[0] != second[1]  # cached ones are not re-sent
+
+
+def test_vector_cache_is_packed_and_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(two_stage, "CACHE_BYTES", 3 * 7 * 4)
+    embedder = WordEmbedder()
+    texts = [f"uploader retry {index}" for index in range(10)]
+    vectors = two_stage._embed_documents(embedder, texts, deadline=time.monotonic() + 60)
+    assert vectors[0] == [1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    assert len(two_stage._cache) == 3 and two_stage._cache_bytes <= 3 * 7 * 4
+    assert all(isinstance(value, bytes) for value in two_stage._cache.values())
+
+
+def test_window_scan_is_bounded_across_sessions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(two_stage, "SCAN_BUDGET", 3)
+    share = _share(tmp_path, embedder=WordEmbedder())
+    read: list[int] = []
+    original = share.source.turns
+
+    def counted(*args: Any, **kwargs: Any) -> Any:
+        rows = original(*args, **kwargs)
+        if kwargs.get("start") == 0 and kwargs.get("limit", 0) <= 3:
+            read.append(len(rows))
+        return rows
+
+    monkeypatch.setattr(share.source, "turns", counted)
+    share.search("schema migration cache", mode="two_stage", limit=50)
+    assert read and sum(read) <= 3
+
+
+def test_first_session_too_big_still_pages(tmp_path: Path) -> None:
+    wide = "长" * 400
+    rows = [
+        {**turn("codex", f"s-wide-{index}", 0, "user", "uploader", DAY + "7:00Z"), "cwd": wide}
+        for index in range(3)
+    ]
+    vault = make_vault(tmp_path / "vault", SHARE_ON)
+    store = write_store(tmp_path / "data" / "conversations.sqlite", rows)
+    big = _tags(
+        project=["项目" * 20 for _ in range(8)],
+        components=["组件" * 20 for _ in range(8)],
+        intent="意图" * 90,
+        task_type="dev",
+        outcome="done",
+    )
+    _write_labels(state_path({}), [("codex", f"s-wide-{i}", "总结" * 500, big) for i in range(3)])
+    share = open_share(vault, "claude", store=store)
+    offset: int | None = 0
+    seen: list[str] = []
+    for _ in range(10):
+        assert offset is not None
+        page = share.search("uploader", mode="two_stage", limit=1, offset=offset, max_bytes=4096)
+        assert len(json.dumps(page, ensure_ascii=False).encode()) <= 4096
+        assert page["next_offset"] is None or page["next_offset"] > offset
+        seen += [item["session_id"] for item in page["sessions"]]
+        offset = page["next_offset"]
+        if offset is None:
+            break
+    assert offset is None and len(seen) == 3
+    assert page["truncated"] is True
+
+
+def test_labels_use_the_newest_summary(tmp_path: Path) -> None:
+    share = _share(tmp_path)
+    with WorkState(state_path({})).open() as connection:
+        connection.execute(
+            "INSERT INTO summaries (app, session_id, chunk_start, chunk_end, prompt_version,"
+            " model, summary, intent, outcome, created_at) VALUES ('codex', 's-delta', -1, 12,"
+            " 'conv-v1', 'fake', 'Newer untagged summary.', '', '', '2026-01-08T00:00:00+00:00')"
+        )
+    # The newest row is untagged: the older tagged one no longer matches.
+    assert share.search("", mode="two_stage", outcome="blocked")["sessions"] == []
+    assert share.search("uploader", outcome="blocked")["results"] == []
+    plain = share.search("database", mode="two_stage")
+    assert plain["sessions"][0]["model_output"]["summary"] == "Newer untagged summary."
+    assert plain["sessions"][0]["model_output"]["tags"] is None
+
+
+def test_default_filters_recheck_parsed_tags(tmp_path: Path) -> None:
+    share = _share(tmp_path)
+    broken = json.loads(_tags(task_type="debug", project=["memfw"], outcome="blocked"))
+    broken["unexpected"] = "x"  # not the tag schema: parse_tags rejects it
+    _write_labels(state_path({}), [("codex", "s-delta", "Odd row.", json.dumps(broken))])
+    assert share.search("uploader", task_type="debug", project="memfw")["results"] == [
+        item
+        for item in share.search("uploader", task_type="debug", project="memfw")["results"]
+        if item["session_id"] != "s-delta"
+    ]
+    assert "s-delta" not in json.dumps(share.search("uploader", outcome="blocked"))
+
+
+def test_archived_is_null_when_unknown(tmp_path: Path) -> None:
+    share = _share(tmp_path)
+
+    class NoArchive:
+        def __init__(self, inner: Any) -> None:
+            self.inner = inner
+
+        def __getattr__(self, name: str) -> Any:
+            if name == "archive_state":
+                raise AttributeError(name)
+            return getattr(self.inner, name)
+
+    blind = ConversationShare(NoArchive(share.source), share.policy, "claude", labels=share.labels)
+    result = blind.search("uploader", mode="two_stage")
+    assert result["sessions"] and all(item["archived"] is None for item in result["sessions"])
+    with pytest.raises(ConversationError, match="archive state"):
+        blind.search("uploader", mode="two_stage", archived_only=True)
+
+
 # -- CLI and MCP ------------------------------------------------------------------------
 
 
@@ -444,3 +662,34 @@ def test_default_search_is_byte_identical_to_base_ref() -> None:
     for result in results:
         assert result.identical, f"{result.payload}:\n{result.diff[:4000]}"
     assert "results" in results[0].new and "Retry wrapper" not in results[0].new
+
+
+@pytest.mark.skipif(
+    not os.environ.get("MEMFW_ARCH_BASE_REF"),
+    reason="opt-in (slow): set MEMFW_ARCH_BASE_REF to compare against that ref",
+)
+def test_mcp_archive_flags_are_the_one_accepted_difference() -> None:
+    """Before M3c the MCP tool ignored ``with_archive_state`` and ``archived_only``."""
+
+    from tests.harness import byte_identical
+
+    if not byte_identical.git_available():
+        pytest.skip("git is not available")
+    (result,) = byte_identical.compare(
+        "tests.harness.conversations_search_probe:mcp_archive_flags",
+        [{}],
+        old_ref=os.environ["MEMFW_ARCH_BASE_REF"],
+    )
+    old, new = json.loads(result.old), json.loads(result.new)
+    assert new["plain"] == old["plain"]
+    if old["with_archive_state"] == old["plain"]:  # a base ref before M3c
+        assert old["archived_only"] == old["plain"]
+    plain = new["plain"]["results"]
+    assert {item["session_id"] for item in plain} >= {"s-alpha", "s-beta"}
+    flagged = new["with_archive_state"]["results"]
+    assert [{k: v for k, v in item.items() if k != "archived"} for item in flagged] == plain
+    assert {(item["session_id"], item["archived"]) for item in flagged} == {
+        (item["session_id"], item["session_id"] == "s-alpha") for item in plain
+    }
+    only = new["archived_only"]["results"]
+    assert only and {item["session_id"] for item in only} == {"s-alpha"}
