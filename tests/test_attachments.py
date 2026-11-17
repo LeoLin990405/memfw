@@ -813,6 +813,75 @@ def test_concurrent_first_adds_agree_on_one_vault_id(tmp_path: Path, private_hom
     )
 
 
+_VAULT_ID = "0b6f2c8e-6b1d-4a52-9d8e-3f1a2b3c4d5e"
+
+
+def _race_on_first_check(
+    monkeypatch: pytest.MonkeyPatch, leaf: Path, racer: str, elsewhere: Path
+) -> None:
+    """``_private_dir``'s first look at ``leaf`` finds nothing; another process then makes it."""
+
+    import sys
+
+    real_lstat = os.lstat
+    fired: list[bool] = []
+
+    def lstat(path: Any, *args: Any, **kwargs: Any) -> os.stat_result:
+        caller = sys._getframe(1).f_code.co_name
+        if not fired and caller == "_private_dir" and Path(path) == leaf:
+            fired.append(True)
+            # The concurrent creator wins between the check and our mkdir.
+            leaf.parent.mkdir(parents=True, exist_ok=True)
+            if racer == "dir":
+                os.mkdir(leaf, 0o700)
+            elif racer == "loose":
+                os.mkdir(leaf)
+                os.chmod(leaf, 0o755)
+            elif racer == "symlink":
+                elsewhere.mkdir()
+                leaf.symlink_to(elsewhere, target_is_directory=True)
+            else:
+                leaf.write_bytes(b"not a directory")
+            raise FileNotFoundError(2, "No such file or directory", str(path))
+        return real_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "lstat", lstat)
+
+
+@pytest.mark.parametrize("which", ["root", "staging", "vault"])
+@pytest.mark.parametrize("racer", ["dir", "loose", "symlink", "file"])
+def test_first_use_directories_survive_a_concurrent_mkdir(
+    tmp_path: Path, private_home: Path, monkeypatch: pytest.MonkeyPatch, which: str, racer: str
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    root = (tmp_path / "data" / "blobs").resolve()
+    if which != "root":
+        root.mkdir(parents=True, mode=0o700)
+    leaf = {"root": root, "staging": root / ".staging", "vault": root / _VAULT_ID}[which]
+    elsewhere = tmp_path / "elsewhere"
+    _race_on_first_check(monkeypatch, leaf, racer, elsewhere)
+
+    def first_use() -> None:
+        if which == "vault":
+            BlobStore.open(root, _VAULT_ID, vault=vault, create=True)
+        else:
+            source = _file(tmp_path, "a.txt", b"a")
+            with source.open("rb") as stream:
+                blobs_module.stage_blob(root, stream, vault=vault, max_bytes=1024).discard()
+
+    if racer in ("symlink", "file"):
+        with pytest.raises(BlobLocationError):
+            first_use()
+        # Nothing was written through the planted symlink.
+        assert not elsewhere.exists() or not any(elsewhere.iterdir())
+        return
+    first_use()
+    info = os.lstat(leaf)
+    assert stat.S_ISDIR(info.st_mode)
+    assert stat.S_IMODE(info.st_mode) == 0o700
+
+
 def test_a_refused_blob_root_writes_nothing(tmp_path: Path) -> None:
     repository = _repo(tmp_path)
     source = _file(tmp_path, "a.txt", b"a")
