@@ -148,6 +148,62 @@ def test_handoff_without_a_store_is_unavailable(tmp_path: Path) -> None:
     assert row["resident"] == ["core", "topics"]
 
 
+def _record_state_reads(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+    from memfw.conversations.worker import WorkState
+
+    paths: list[Path] = []
+    real = WorkState.session_summary
+
+    def recording(self: WorkState, app_name: str, session_id: str) -> str | None:
+        paths.append(Path(self.path))
+        return real(self, app_name, session_id)
+
+    monkeypatch.setattr(WorkState, "session_summary", recording)
+    return paths
+
+
+def test_handoff_reads_no_worker_state_without_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reads = _record_state_reads(monkeypatch)
+    fixture = known_vault(tmp_path)
+    report = evaluate_snapshot(fixture.vault, options=CLEARED, conversations=fixture.conversations)
+    assert _row(report, "handoff", 500)["items"] == 3
+    assert reads == [] and report["settings"]["state_store"] is False
+
+
+def test_an_explicit_state_file_is_read_from_a_private_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from memfw.conversations.worker import WorkState
+
+    reads = _record_state_reads(monkeypatch)
+    fixture = known_vault(tmp_path)
+    state = tmp_path / "stores" / "state.sqlite3"
+    with WorkState(state).open():
+        pass
+    before = _files(state.parent)
+    report = evaluate_snapshot(
+        fixture.vault, options=CLEARED, conversations=fixture.conversations, state=state
+    )
+    assert report["settings"]["state_store"] is True
+    assert reads and all(path != state and path.name == "state.sqlite3" for path in reads)
+    assert _files(state.parent) == before
+
+    real = ce._evaluate_copy
+
+    def touching(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        out = real(*args, **kwargs)
+        state.touch()
+        return out
+
+    monkeypatch.setattr(ce, "_evaluate_copy", touching)
+    with pytest.raises(SnapshotChanged):
+        evaluate_snapshot(
+            fixture.vault, options=CLEARED, conversations=fixture.conversations, state=state
+        )
+
+
 CURRENT = EvalOptions(
     clearance="public,shared",
     slots=("core", "current"),

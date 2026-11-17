@@ -233,6 +233,9 @@ with no report.
 `--clearance` and `--app` (else `MEMFW_TENANT`, `MEMFW_ALLOWED_SOURCES`,
 `MEMFW_MCP_CLEARANCE`, `MEMFW_APP`; no embedder is ever loaded), the
 `--policy` (`compat_fts` or `strict`), and `conversation_share` for `handoff`.
+`handoff` reads model summaries only from an explicit `--state FILE` (a copy of
+the conversation worker state, copied and fingerprinted like the stores);
+without it, none: the worker state `vault.yaml` names is never read.
 A hit the caller may not see is not counted (only `hits_dropped`). The report
 holds counts, ratios, token estimates, timings, slot names and caps: no body,
 title, query, memory or session id, path or tenant name.

@@ -59,7 +59,9 @@ slot names and cap values only: no memory body, title, query text, session
 id, path or tenant name. The slots apply the same visibility as
 ``memory_context``: tenant, allowed sources, privacy clearance and the
 ``compat_fts``/``strict`` policy; ``handoff`` applies ``conversation_share``
-for ``app``. Memories the caller may not see are never counted as hits
+for ``app`` and reads model summaries only from an explicit ``--state`` file
+(copied and fingerprinted like the stores), never from the worker state
+``vault.yaml`` names. Memories the caller may not see are never counted as hits
 (only their number is reported, as ``hits_dropped``).
 
 **Deterministic.** The same snapshot, stores, arguments and seed give the
@@ -585,13 +587,16 @@ def _provider(
     app: str,
     policy: str,
     conversations: Path | None,
+    state: Path | None = None,
 ) -> Any:
     """The real provider of slot ``name``; ``None`` when this build has no such slot.
 
     ``current`` is ``None`` (unavailable) unless the runtime enables it, as
     ``memory_context`` refuses it then. ``handoff`` reads the given conversation store (read-only) through the
     conversation share, never the store ``vault.yaml`` names: without
-    ``conversations`` it is ``unavailable``.
+    ``conversations`` it is ``unavailable``. Model summaries come from
+    ``state`` (a private copy of ``--state``) or, without it, from nowhere:
+    the worker state ``vault.yaml`` names is never read.
     """
 
     if name == HANDOFF_SLOT:
@@ -606,7 +611,12 @@ def _provider(
         from .context_sources import share_feed
 
         return HandoffSlotProvider(
-            share_feed(repository.root, app, source=SqliteStoreSource(conversations))
+            share_feed(
+                repository.root,
+                app,
+                source=SqliteStoreSource(conversations),
+                state=state if state is not None else False,
+            )
         )
     if name == CURRENT_SLOT and not runtime.context_current_enabled():
         return None
@@ -631,6 +641,7 @@ def build_slot(
     conversations: Path | None,
     marks: Pointers,
     repeats: int,
+    state: Path | None = None,
 ) -> SlotBuild:
     """Build slot ``name`` at ``cap`` ``repeats`` times with a fresh real provider; time each."""
 
@@ -648,6 +659,7 @@ def build_slot(
             app=app,
             policy=policy,
             conversations=conversations,
+            state=state,
         )
         if provider is None:
             return SlotBuild(name, cap, False, None, (), direct, 0, 0, ())
@@ -758,11 +770,14 @@ def evaluate_snapshot(
     usage: Path | None = None,
     outputs: Sequence[Path] = (),
     workdir: Path | None = None,
+    state: Path | None = None,
 ) -> dict[str, Any]:
     """The C4 report (a JSON-ready mapping) for the read-only snapshot ``vault``.
 
     ``conversations`` is a conversation store file for ``handoff`` and
-    ``usage`` a C5 usage projection file, both optional and read-only.
+    ``usage`` a C5 usage projection file, ``state`` a conversation worker
+    state file for ``handoff``'s model summaries (without it none are read),
+    all optional and read-only.
     ``outputs`` are paths the caller will write the report to: one inside
     the snapshot is refused. ``workdir`` (default: a new private temporary
     directory, deleted afterwards) holds the copy. See the module docstring.
@@ -771,7 +786,7 @@ def evaluate_snapshot(
     options = options or EvalOptions()
     options.check()
     snapshot = check_snapshot(vault, outputs=outputs)
-    stores = [Path(path).expanduser().resolve() for path in (conversations, usage) if path]
+    stores = [Path(path).expanduser().resolve() for path in (conversations, usage, state) if path]
     for store in stores:
         if not store.is_file():
             raise SnapshotRefused("a store path is not a file")
@@ -796,6 +811,11 @@ def evaluate_snapshot(
                 else None
             ),
             usage=private_store(usage_path, base, "usage.sqlite3") if usage_path else None,
+            state=(
+                private_store(Path(state).expanduser().resolve(), base, "state.sqlite3")
+                if state
+                else None
+            ),
         )
     finally:
         if own_workdir:
@@ -806,7 +826,12 @@ def evaluate_snapshot(
 
 
 def _evaluate_copy(
-    root: Path, options: EvalOptions, *, conversations: Path | None, usage: Path | None
+    root: Path,
+    options: EvalOptions,
+    *,
+    conversations: Path | None,
+    usage: Path | None,
+    state: Path | None = None,
 ) -> dict[str, Any]:
     environ = os.environ if options.environ is None else options.environ
     settings = resolve_settings(
@@ -891,6 +916,7 @@ def _evaluate_copy(
                 conversations=conversations,
                 marks=marks,
                 repeats=options.repeats,
+                state=state,
             )
             builds[(name, cap)] = build
             if not build.available:
@@ -927,6 +953,7 @@ def _evaluate_copy(
             "now": now.astimezone(UTC).isoformat(),
             "conversation_store": conversations is not None,
             "usage_store": usage is not None,
+            "state_store": state is not None,
         },
         "defaults": {
             "limit_tokens": DEFAULT_LIMIT_TOKENS,

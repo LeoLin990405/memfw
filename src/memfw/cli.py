@@ -2284,6 +2284,13 @@ def eval_context(
         Path | None,
         typer.Option("--usage", help="C5 usage projection file (memory_used; read-only)"),
     ] = None,
+    state: Annotated[
+        Path | None,
+        typer.Option(
+            "--state",
+            help="Conversation worker state file for handoff summaries (read-only; default none)",
+        ),
+    ] = None,
     policy: Annotated[str, typer.Option("--policy", help="compat_fts or strict")] = "compat_fts",
     tenant: Annotated[
         str | None, typer.Option("--tenant", help="Tenant (default MEMFW_TENANT)")
@@ -2396,6 +2403,7 @@ def eval_context(
             options=options,
             conversations=conversations,
             usage=usage,
+            state=state,
             outputs=[out, *outputs] if out else [],
         )
     except (SnapshotRefused, SnapshotChanged, ValueError) as exc:
