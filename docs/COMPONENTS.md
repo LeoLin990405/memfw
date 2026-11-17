@@ -61,6 +61,78 @@ For semantic code search, add `--embedding-url`, `--embedding-model`, and `--dim
 remain authoritative.
 
 
+## Read-only HTTP service
+
+`scripts/memfw_readonly_service.py` serves the `memfw-http/2` contract (read and write tokens,
+`/search`, `/related`, `/stage`, `/health`). Its read path is library code,
+`memfw.index.readonly`, so a deployment copies three files from the same revision:
+
+1. `scripts/memfw_readonly_service.py` (the HTTP entry point);
+2. `src/memfw/index/readonly.py` (query rules, `search_vault`);
+3. `src/memfw/index/read_path.py` (shared read-path fields).
+
+The two library files need only the standard library and PyYAML. The script loads its read
+path from `readonly.py` beside it, else the checkout's `src/memfw/index/`, else an installed
+`memfw`, and logs which one it chose; with none of them it exits with an error naming the
+missing files. It never writes, so run `memfw index rebuild` once after an upgrade. See
+[`READONLY-SERVICE-UPGRADE.md`](READONLY-SERVICE-UPGRADE.md).
+
+
+## Standalone wheels: `memfw-ports` and `memfw-recall`
+
+Two uv workspace members build wheels from memfw's own `src/memfw/ports` and
+`src/memfw/recall` (no copied sources):
+
+| Distribution | Import name | Contents |
+|---|---|---|
+| `memfw-ports` (`packages/memfw-ports`) | `memfw_ports` | port protocols, value types, the contract kit `memfw_ports.testing`, the stdlib-only reference implementations |
+| `memfw-recall` (`packages/memfw-recall`) | `memfw_recall` | the recall coordinator, without memfw's built-in vault providers |
+
+An adapter author can install them and run the contract checks without installing memfw. Both
+carry `memfw.ports.PORTS_API_VERSION` (currently `0.1.0`). They are wheels only (no sdist, no
+editable install) and are **not published to PyPI**:
+
+```bash
+uv build --wheel --package memfw-ports
+uv build --wheel --package memfw-recall
+```
+
+The CI job `standalone-wheels` builds both, installs them into a fresh venv without memfw and
+runs `tests/standalone/wheel_smoke.py`. memfw itself does not depend on them. Inside a memfw
+process use `memfw.ports`; `memfw_ports` is a separate copy whose classes never match memfw's.
+See [`ports-and-recall.md`](ports-and-recall.md#11-packaging-boundaries).
+
+
+## Corroboration projection
+
+`memfw corroboration rebuild` writes `corroboration.sqlite3` at the vault root: per memory, the
+independent (app, session) pairs that mention it, from its own `conv:` evidence, staged
+conversation-worker claims and accepted experience points. One count per app and session;
+carriers that cite the memory itself, generated provenance and hidden or opted-out apps do
+not count. Ids, names,
+counts and times only; the file is `0600`, rebuilds are byte-identical and the vault is only
+read.
+
+```bash
+memfw corroboration rebuild --root ./vault
+memfw corroboration show MEMORY_ID --as-app codex --root ./vault
+```
+
+`show` trims the answer to the apps `--as-app` may read. It is off by default: nothing else
+reads the projection, and it is not on MCP yet. See
+[`epistemic-and-experience.md`](epistemic-and-experience.md#corroboration-derived).
+
+
+## Concept taxonomy and relation types
+
+Concept files may carry `broader` (parent oids); `narrower` is derived and never written.
+Lint reports invalid, dangling, merged or cyclic parents. The versioned relation-type table
+`src/memfw/ontology/relations.yaml` lists every typed relation memfw already stores, with its
+allowed node kinds and privacy/tenant rules; `memfw concepts relations` prints it and
+`memfw concepts lint-relations` (read-only) checks a vault against it. Nothing on the read
+path follows `broader`. See [`ontology.md`](ontology.md).
+
+
 ## V1 integration status
 
 See [`docs/v1-integration.md`](v1-integration.md) for the read-only MemFW V1
@@ -129,6 +201,6 @@ remote service's non-authoritative `/stage` endpoint; it writes only
 Semantic edges are opt-in: add `--embedding-url`/`--embedding-model` to the
 rebuild command and `sqlite-vec` is used for KNN. All indexed sources in one
 build share the same embedder/fingerprint. The current QMD coverage uses the
-local 4,979-note memfw notes index; remote-only QMD hits are not included until
-they have a local vector projection. Semantic scores remain a separate method
+local memfw notes index; remote-only QMD hits are not included until they have a
+local vector projection. Semantic scores remain a separate method
 and never replace explicit links.

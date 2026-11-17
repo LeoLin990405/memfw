@@ -6,13 +6,13 @@
 
 **给 AI agent 一份你看得懂、能 diff、信得过的长期记忆。**
 
-Markdown 即真相 · 哈希链 JSONL 事件 · 可重建 FTS5 索引 · 先核对再整理 · 所有 agent 共用一个脱敏会话库 · 本地 MCP 服务。
+Markdown 即真相 · 哈希链 JSONL 事件 · 可重建 FTS5 索引 · 先核对再整理 · 所有 agent 共用一个脱敏会话库 · 本地 MCP 服务 · 分层、可替换的端口。
 
 **简体中文** · [**English**](README.md)
 
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="License"></a>
 <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.11+"></a>
-<a href="#-mcp-工具"><img src="https://img.shields.io/badge/MCP-16_tools-8B5CF6?style=flat-square" alt="MCP tools"></a>
+<a href="#-mcp-工具"><img src="https://img.shields.io/badge/MCP-15_tools,_3_resources-8B5CF6?style=flat-square" alt="15 MCP tools, 3 resources"></a>
 <a href="#-会话库所有-agent-汇到一处"><img src="https://img.shields.io/badge/agent_readers-14-10B981?style=flat-square" alt="14 agent readers"></a>
 <a href="#-评估结果摘要"><img src="https://img.shields.io/badge/evaluation-bounded-D97706?style=flat-square" alt="Bounded evaluation"></a>
 
@@ -26,7 +26,7 @@ memfw 是一个跑在本机的 AI agent 记忆引擎，主要做三件事：
 2. **把 agent 说过的话收拢起来。** 它读取 14 种 agent CLI 和应用各自的会话文件，汇入一个本地、已脱敏的会话库。任何一个 agent 都能搜索、阅读并接手另一个 agent 的工作。
 3. **小心地把这些变成更好的记忆。** “做梦”（dream）会拿会话记录去核对记忆，提出确认、改正、合并、经验总结和技能草稿。它只会暂存候选，进不进 vault 由人决定。
 
-agent 通过本地 **MCP 服务**（`memfw-mcp`）使用它，人通过 `memfw` 命令行使用它。
+agent 通过本地 **MCP 服务**（`memfw-mcp`）使用它，人通过 `memfw` 命令行使用它。内部是一个小内核加一组端口契约：检索后端、投影器、导入器都通过端口接入，从不直接碰 vault（见[架构](#-架构分层与端口)）。
 
 ```
 agent CLI / 应用 ──reader──► 会话库（本地、已脱敏）
@@ -112,13 +112,24 @@ Claude Code 可以直接运行 `claude mcp add memfw -- memfw-mcp --root /path/t
 |---|---|
 | 读写 | `add`、`list`、`show`、`update [--dry-run]`、`delete`（只留哈希墓碑）、`rollback`、`supersede` |
 | 完整性 | `fsck`、`recover`、`log verify`、`stats` |
-| 搜索 | `index rebuild`、`index search`；`concepts`（一个事物一个规范概念，别名可以限定作用域） |
+| 搜索 | `index rebuild`、`index search`；`resolve`（批量、只读地核对召回结果的生命周期、有效期和隐私） |
+| 概念 | `concepts`（一个事物一个规范概念，别名可以限定作用域；可选的上位概念 `broader`，下位 `narrower` 自动推导）、`concepts relations`（带版本号的关系类型表）、`concepts lint-relations` |
+| 不确定性 | `type: open-question` 记忆（用 `add` / `update` 写入）、`corroboration rebuild`、`corroboration show ID --as-app APP` |
 | 审核关口 | `candidates`、`candidate-apply [--apply]`、`candidates-expire`（30 天过期，从不删文件）、`record-proposal`、`approve-proposal`、`review` |
 | 保留策略 | `budget`、`forget`（`fifo`、`lru`、`decay`、`salience`、`consolidate_then_forget`）、`tiers` / `tier`（冷热层）、`cold-archive`、`cold-restore`、`layer` / `layer-set`、`consolidate` |
 | 关联记忆 | `memory-related-build`、`memory-related` |
 | 投影 | `okf export` / `okf validate`（[OKF v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format) 包）、`notes`（Markdown 笔记索引）、`code`（本地代码检索） |
 
 搜索时每个查询词单独匹配、按 bm25 排序，所以直接输入一整句话也能找到相关记忆。`memory_search` 默认走 FTS5；配置了本地 OpenAI 兼容的 embedding 服务时，可以转交给可选的混合检索器。每个命令都有 `--help`；全局的 `--now` 和 `--id-seed` 可以让运行结果完全确定，方便测试。
+
+### 知道自己不知道什么
+
+- **待解问题。** `type: open-question` 记忆记下的是*还不知道*的事：问题本身、互相矛盾的记忆、缺了什么，以及日后解答它的那条记忆（`resolved_by`）。新建或解决一个待解问题，需要人来做，或者走已批准的提案。
+- **召回标签。** 如果某条命中正是一个未解决、且调用方可见的待解问题所关心的，`memory_search` 会给它标上 `open_question:<id>`；被问题列为互相矛盾的命中则标 `conflicted`（`mode=two_stage` 总会带上，其他模式要加 `labels: true`）。工具说明会提醒 agent：遇到这种情况就说“不知道”，别去猜。
+- **佐证。** `memfw corroboration rebuild` 生成一份可重建的 `corroboration.sqlite3`：每条记忆被哪些相互独立的（应用、会话）提到过。只存 id 和计数，并按提问应用的可读范围裁剪；目前没有别的功能会读它。
+- **概念层级。** 概念文件可以写上位概念 `broader`；`narrower` 由它推导，从不写入，读路径也不会顺着它走（不做查询扩展）。关系类型表列出了 memfw 已经存下的每一种带类型的关系。见 [`docs/ontology.md`](docs/ontology.md)。
+
+详见 [`docs/epistemic-and-experience.md`](docs/epistemic-and-experience.md)。
 
 ## 💬 会话库：所有 agent 汇到一处
 
@@ -237,17 +248,19 @@ memfw dream skills --root /path/to/vault --from-queue          # 用 worker 排�
 
 | 工具 | 用途 |
 |---|---|
-| `memory_search` | 搜索 vault（FTS5，可选混合检索）；支持 `mode`、`source`、`include_history`、`as_of` |
+| `memory_search` | 搜索 vault；`mode` 可选 `hybrid`（默认）、`fts`、`vector`、`multihop`，以及需显式开启的 `two_stage`（召回协调器，`policy` 为 `compat_fts` 或 `strict`）；另有 `source`、`include_history`、`as_of`、`labels` |
 | `memory_get` | 按 id 读取一条记忆 |
 | `memory_remember` | 把候选暂存到 `_candidates/remember/`，附标签、关联 id 和建议 |
 | `memory_related` | 派生的记忆关联边（按租户隔离） |
-| `memory_context` | 按 token 预算给出常驻上下文，锚点和流程类记忆优先；`v=2` 返回带版本键的 `ContextPack`，标出溢出条目，可选 `strict` 策略 |
+| `memory_context` | 按 token 预算给出常驻上下文，锚点和流程类记忆优先；`v=2` 返回带版本键的 `ContextPack`，包含 `core`、`handoff`、`topics` 三个槽位，标出溢出条目，可选 `strict` 策略和 `if_version`（内容没变时只回 `unchanged: true`） |
 | `memory_status` | vault 大小、层与层级计数、日志摘要 |
 | `history_list`、`history_search`、`history_read` | 会话记录索引：带谱系的会话、带引用的脱敏片段、限长窗口 |
 | `conversations_list`、`conversations_search`、`conversations_get` | 共享会话库，按调用方应用的可见性过滤 |
 | `conversations_handoff` | 给 agent 应用的轻量交接视图，受共享策略约束 |
 | `dream_run` | 跑一次 dream；默认只演练，只用确定性规则，每个租户最多 50 个待审 dream，每分钟最多一次 |
 | `dream_list` | 当前租户已暂存的 dream，按时间倒序 |
+
+它还提供三个 **MCP 资源**：`memfw://context/core`、`memfw://context/handoff` 和 `memfw://context/topics`（可带 `?policy=` 和 `?if_version=`），内容就是调用方应用在该槽位上的 v=2 上下文包。某个槽位出错或超时，会返回空槽位并注明 `degraded` 原因，不影响其他槽位。`pack_version` 只由 id、版本号和哈希算出，从不包含正文。详见 [`docs/ports-and-recall.md`](docs/ports-and-recall.md) 第 4 节。
 
 ## 🔒 隐私与权限
 
@@ -257,6 +270,7 @@ memfw dream skills --root /path/to/vault --from-queue          # 用 worker 排�
 - **退出与可见性。** `conversation_optout` 让某个 agent 处处被排除并删掉它的数据；`conversation_share.apps` 决定谁能读谁、worker 处理哪些应用。
 - **不偷偷调用模型。** 所有模型钩子（`--backend`、`--summarize`、`--judge`、`--drafter`）默认关闭，非本地的还要加 `--allow-cloud`。MCP 的 `dream_run` 不能指定任何要运行的代码。
 - **人工关口。** vault 默认 `permissions: propose_then_confirm`：agent 提议，人来落地（`candidate-apply`、`update`、`supersede`）。
+- **出错即收紧。** 在 `strict` 策略下，隐私标签（`privacy:`、`sensitivity:`）和 `lifecycle:` 标签不分大小写，多个标签时取最严的那个，标签的顺序或写法都不会放宽访问；不认识的策略名直接报错。`supersede` 写出的新记忆沿用前一条的租户和作用域（旧数据里不一致的，`fsck` 报 `supersede_scope_mismatch`）。按预算强制硬删除时，绝不删掉仍然有效的取代链。
 
 ## ⬆️ reader 升级顺序
 
@@ -268,13 +282,35 @@ memfw dream skills --root /path/to/vault --from-queue          # 用 worker 排�
 
 候选文件、报告和 worker 状态只会新增键或表，旧的 reader 和 worker 照常工作（旧 worker 只是忽略扫描游标）。细节见 [`docs/dream.md`](docs/dream.md#memory-fields)。
 
+0.2.0 之后 `main` 上还有两处改动需要同样小心：memfw 0.2.0 能读 `open_question` 块，但写回时会把它丢掉；当前 `main` 一旦压缩过某个 vault 的事件日志，memfw 0.2.0 就再也读不了这份日志（见 [`CHANGELOG.md`](CHANGELOG.md#compatibility)）。
+
 ## 🌐 集成与联邦
 
 memfw 是引擎，编排系统和它保持一定距离地集成：
 
-- **只读 HTTP 服务**（`memfw-http/2` 契约：读写令牌分开、候选走 `/stage`、只开放根路径端点）让其他系统可以联邦检索 memfw，而不必复制或挂载 vault（[`docs/v1-integration.md`](docs/v1-integration.md)、[`docs/READONLY-SERVICE-UPGRADE.md`](docs/READONLY-SERVICE-UPGRADE.md)）；
+- **只读 HTTP 服务**（`memfw-http/2` 契约：读写令牌分开、候选走 `/stage`、只开放根路径端点）让其他系统可以联邦检索 memfw，而不必复制或挂载 vault。部署时要把 `scripts/memfw_readonly_service.py` 和同一版本的 `src/memfw/index/readonly.py`、`src/memfw/index/read_path.py` 放在一起（或者装好 memfw）；只拷脚本会直接报错退出，并指出缺了哪些文件（[`docs/v1-integration.md`](docs/v1-integration.md)、[`docs/READONLY-SERVICE-UPGRADE.md`](docs/READONLY-SERVICE-UPGRADE.md)）；
 - Conductor 编排器在额度耗尽自动交接时调用 `memfw handoff … --format json`，它的 worker 通过 MCP 服务使用 memfw（[`docs/handoff.md`](docs/handoff.md)）；
 - 共用 vault 的外部记忆 reader 遵循上面的升级顺序。
+
+## 🧱 架构：分层与端口
+
+memfw 分成若干层，只允许向下依赖，并由 CI 强制检查：
+
+| 层 | 内容 |
+|---|---|
+| `L0-ports` | `memfw.ports`：端口协议、值类型和契约测试套件；只用标准库 |
+| `L1` 投影与读路径 | `index`、`notes`、`history`、`related`、`retrieval` 等（都从 vault 重建） |
+| `L2` 内核 | 模型、存储、事件日志、策略、本体，以及 vault 门面 `Repository` |
+| `L3` 能力 | `recall`、`context`、`capture`、`conversations`、`dream`、`handoff`、`okf` 等 |
+| `L4-runtime` | `memfw.runtime`，组装根：配置、召回、搜索和上下文的接线 |
+| `L5-interface` | 命令行和 MCP 服务，只负责解析参数、调用 Runtime、序列化结果 |
+
+- **架构守卫。** `tests/test_architecture_layers.py` 会解析每个模块，遇到向上导入、未登记的同层导入、循环依赖、库代码引用 `scripts/` 或未归类的模块，构建直接失败。守卫上线时已有的违规记在一份只减不增的白名单里：从 25 条减到了 1 条。
+- **端口与替换演练。** 九个端口（`RecallProvider`、`Projector`、`Ingestor`、`Deriver`、`Clock`、`IdGen`、`ClaimVerifier`、`ClaimStager`、`ContextSlotProvider`）各自至少有两个实现，并通过同一套 `memfw.ports.testing` 检查（`tests/test_swap_drills.py`）。只依赖标准库的参考实现在 `memfw.ports.reference`。
+- **召回协调器。** `memory_search mode=two_stage`（需显式开启）把查询分发给各个召回提供方，逐条回到 vault 核对命中，再按策略过滤（`compat_fts`，或加上隐私、状态、生命周期和归档检查的 `strict`），最后融合并打标签；每个提供方和整体都有超时。提供方从不写 vault，只有最终返回的命中才会被升温和记访问日志。其他模式不变。
+- **独立 wheel。** `packages/memfw-ports` 和 `packages/memfw-recall` 直接用 memfw 自己的源码构建出 `memfw_ports` 和 `memfw_recall` 两个 wheel，写适配器的人不装 memfw 也能跑契约测试。CI 会构建它们并在干净的 venv 里做冒烟测试。它们**没有发布到 PyPI**，需要时在本地用 `uv build --wheel --package memfw-ports`（以及 `memfw-recall`）构建。
+
+详见 [`docs/architecture.md`](docs/architecture.md) 和 [`docs/ports-and-recall.md`](docs/ports-and-recall.md)。
 
 ## 📊 评估结果摘要
 
@@ -300,8 +336,11 @@ memfw 是引擎，编排系统和它保持一定距离地集成：
 | [`docs/okf.md`](docs/okf.md) | OKF v0.2 导出与校验 |
 | [`docs/epistemic-and-experience.md`](docs/epistemic-and-experience.md) | 认知类型、因果分级、写入闸门与检索标签 |
 | [`docs/experience-points.md`](docs/experience-points.md) | 经验点：draft 的 JSON schema、`from-github`、失效提案 |
-| [`docs/COMPONENTS.zh-CN.md`](docs/COMPONENTS.zh-CN.md) | 笔记索引、代码检索、只读 HTTP 服务、关联投影 |
+| [`docs/ontology.md`](docs/ontology.md) | 概念层级（`broader` / `narrower`）与关系类型表 |
+| [`docs/COMPONENTS.zh-CN.md`](docs/COMPONENTS.zh-CN.md) | 笔记索引、代码检索、只读 HTTP 服务、独立 wheel、佐证投影、关联投影 |
 | [`docs/retrieval-architecture.md`](docs/retrieval-architecture.md) | 检索架构 |
+| [`docs/architecture.md`](docs/architecture.md) | 包的分层、导入守卫、只减不增的白名单、组装根、逐字节一致性测试工具 |
+| [`docs/ports-and-recall.md`](docs/ports-and-recall.md) | 端口契约、召回协调器、`two_stage`、上下文包及其槽位与缓存、独立 wheel、如何写适配器 |
 | [`docs/v1-integration.md`](docs/v1-integration.md)、[`docs/READONLY-SERVICE-UPGRADE.md`](docs/READONLY-SERVICE-UPGRADE.md) | 联邦接口与服务升级 |
 | [`docs/evaluation.md`](docs/evaluation.md)、[`reports/`](reports)、[`results/`](results) | 评估证据 |
 | [`docs/RELEASE-READINESS.md`](docs/RELEASE-READINESS.md) | 实测检查结果与已知局限 |
@@ -313,9 +352,11 @@ memfw 是引擎，编排系统和它保持一定距离地集成：
 
 memfw 当前版本 **0.2.0**（2026-11-15），Apache-2.0 许可，在单机上离线运行。已经实现：vault 与哈希链事件日志、保留策略与 `10MB` 预算、可重建的 FTS5 索引与读路径（按词匹配、概念别名、多跳）、MCP 服务、章节级 notes 索引与代码检索、只读转录索引、带 14 个 reader 的会话库、共享与 worker、交接包、dream（核对、整理、提炼、预算、技能）、OKF v0.2 导出，以及只读 HTTP 服务（`memfw-http/2`）。逐条变更见 [`CHANGELOG.md`](CHANGELOG.md)。
 
+**已合入 `main`、尚未发版。** [`CHANGELOG.md` 的 Unreleased 部分](CHANGELOG.md#unreleased)列出的全部内容：分层架构与 `memfw.runtime` 组装根、替换演练、独立的 `memfw-ports` / `memfw-recall` wheel（CI 构建，未发布到 PyPI）、`memory_search mode=two_stage` 与召回标签、带槽位、资源和 `if_version` 的上下文包 v2、待解问题、佐证投影、概念层级，以及上文列出的安全修复。`memfw --version` 仍打印 `0.2.0`。
+
 **升级边界。** `0.2.0` 没有改动 vault 格式：`vault.yaml` 仍是 `schema_version: 1`，`0.1.x` 写出的文件保持原字节——解析再渲染两个方向都逐字节一致，普通写入也不会再补默认字段；2026-11-06 之后写出、已经显式带上这些字段的文件同样保持原样，升级不会改动它的 content hash。FTS5 索引是可丢弃的投影，**不会就地迁移**：MCP 服务（`memfw-mcp`）和 `memfw index search` 会在使用前重建过期索引；只读 HTTP 服务从不写盘，升级后要先跑一次 `memfw index rebuild` 再指向它。
 
-**边界。** 匹配是基于词面的（没有共同用词的改写会漏掉）；dream 只暂存候选（没有 `dream apply`，需要用 `update` / `supersede` 落地）；notes、转录和会话索引都是派生索引，与 vault 分开；只读 HTTP 服务用读写 token 鉴权，未配置写路径时一律拒绝；定时运行只提供打印出来的 launchd plist；评估规模较小。详见 [`docs/dream.md`](docs/dream.md#limitations) 和 [`docs/RELEASE-READINESS.md`](docs/RELEASE-READINESS.md)。
+**边界。** 匹配是基于词面的（没有共同用词的改写会漏掉）；dream 只暂存候选（没有 `dream apply`，需要用 `update` / `supersede` 落地）；notes、转录和会话索引都是派生索引，与 vault 分开；`two_stage` 和上下文 v2 只在 MCP 里提供（只读 HTTP 服务和命令行里没有）；只读 HTTP 服务用读写 token 鉴权，未配置写路径时一律拒绝；定时运行只提供打印出来的 launchd plist；评估规模较小。详见 [`docs/dream.md`](docs/dream.md#limitations) 和 [`docs/RELEASE-READINESS.md`](docs/RELEASE-READINESS.md)。
 
 ## 🛠️ 开发
 
@@ -328,7 +369,9 @@ uv sync --frozen --extra dev
 .venv/bin/python -m ruff check src/memfw tests
 ```
 
-[`src/memfw`](src/memfw) 下的结构：`core`、`storage`、`log`（vault 状态与事件），`index`、`retrieval`、`notes`、`code_retrieval`（搜索），`policies`、`budget`、`curation`、`capture`（保留与审核），`history`（会话记录索引、会话库、各 reader），`conversations`（共享与 worker），`handoff`、`dream`、`okf`、`mcp`。
+测试里包括架构守卫（`tests/test_architecture_layers.py`）、替换演练（`tests/test_swap_drills.py`）和独立 wheel 的静态检查（`tests/test_standalone_ports_wheel.py`；设置 `MEMFW_STANDALONE_WHEELS=1` 后还会实际构建、安装并冒烟测试，需要 `uv`）。
+
+[`src/memfw`](src/memfw) 下的结构：`ports`（契约），`core`、`storage`、`log`、`ontology`（vault 状态、事件、概念），`index`、`retrieval`、`notes`、`code_retrieval`（搜索），`policies`、`budget`、`curation`、`capture`（保留与审核），`history`（会话记录索引、会话库、各 reader），`recall`、`context`、`conversations`、`handoff`、`dream`、`okf`（能力），`runtime`（组装根），`mcp` 和命令行（接口）。独立 wheel 从 `packages/` 构建。
 
 ## 🤝 参与贡献
 

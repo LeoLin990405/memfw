@@ -55,6 +55,53 @@ memfw code map --db /tmp/memfw-code.sqlite
 要进行语义代码检索，请在 `index` 和 `search` 命令中添加 `--embedding-url`、`--embedding-model` 和 `--dimension`。代码块、符号和向量都是可丢弃的投影；源文件仍是权威。
 
 
+## 只读 HTTP 服务
+
+`scripts/memfw_readonly_service.py` 提供 `memfw-http/2` 契约（读写分离的 token、`/search`、`/related`、`/stage`、`/health`）。它的读路径是库代码 `memfw.index.readonly`，所以部署时要从同一版本拷三个文件：
+
+1. `scripts/memfw_readonly_service.py`（HTTP 入口）；
+2. `src/memfw/index/readonly.py`（查询规则、`search_vault`）；
+3. `src/memfw/index/read_path.py`（读路径共用字段）。
+
+两个库文件只依赖标准库和 PyYAML。脚本按顺序加载读路径：先找旁边的 `readonly.py`，再找仓库里的 `src/memfw/index/`，最后找已安装的 `memfw`，并在日志里写明用了哪一个；三者都没有就报错退出，并指出缺了哪些文件。它从不写盘，所以升级后要先跑一次 `memfw index rebuild`。见 [`READONLY-SERVICE-UPGRADE.md`](READONLY-SERVICE-UPGRADE.md)。
+
+
+## 独立 wheel：`memfw-ports` 与 `memfw-recall`
+
+两个 uv workspace 成员直接用 memfw 自己的 `src/memfw/ports` 和 `src/memfw/recall` 构建 wheel（不复制源码）：
+
+| 分发包 | 导入名 | 内容 |
+|---|---|---|
+| `memfw-ports`（`packages/memfw-ports`） | `memfw_ports` | 端口协议、值类型、契约测试套件 `memfw_ports.testing`、只依赖标准库的参考实现 |
+| `memfw-recall`（`packages/memfw-recall`） | `memfw_recall` | 召回协调器，不含 memfw 内置的 vault 提供方 |
+
+写适配器的人装上它们就能跑契约检查，不必安装 memfw。两者的版本都跟随 `memfw.ports.PORTS_API_VERSION`（目前是 `0.1.0`）。只提供 wheel（没有 sdist，也不支持 editable 安装），并且**没有发布到 PyPI**：
+
+```bash
+uv build --wheel --package memfw-ports
+uv build --wheel --package memfw-recall
+```
+
+CI 的 `standalone-wheels` 任务会构建两者，装进一个没有 memfw 的全新 venv，再跑 `tests/standalone/wheel_smoke.py`。memfw 本身不依赖它们。在 memfw 进程里请用 `memfw.ports`；`memfw_ports` 是另一份拷贝，它的类和 memfw 的类永远不相等。见 [`ports-and-recall.md`](ports-and-recall.md#11-packaging-boundaries)。
+
+
+## 佐证投影
+
+`memfw corroboration rebuild` 在 vault 根目录生成 `corroboration.sqlite3`：每条记忆被哪些相互独立的（应用、会话）提到过，来源是记忆自己的 `conv:` 证据、会话 worker 暂存的论断，以及已接受的经验点。每个应用的每个会话只算一次；本身就引用了这条记忆 id 的来源、模型或 agent 生成的来源，以及被隐藏或已退出共享的应用都不算。只存 id、名称、计数和时间；文件权限 `0600`，每次重建逐字节一致，对 vault 只读不写。
+
+```bash
+memfw corroboration rebuild --root ./vault
+memfw corroboration show MEMORY_ID --as-app codex --root ./vault
+```
+
+`show` 会把结果裁剪到 `--as-app` 可读的应用范围内。默认不启用：没有别的功能读这份投影，MCP 上也还没有。见 [`epistemic-and-experience.md`](epistemic-and-experience.md#corroboration-derived)。
+
+
+## 概念层级与关系类型
+
+概念文件可以写 `broader`（上位概念的 oid）；`narrower` 由它推导，从不写入。lint 会报告无效、悬空、已合并或成环的上位概念。带版本号的关系类型表 `src/memfw/ontology/relations.yaml` 列出了 memfw 已经存下的每一种带类型的关系，以及允许的节点类型和隐私/租户规则；`memfw concepts relations` 打印这张表，`memfw concepts lint-relations`（只读）拿它检查 vault。读路径不会顺着 `broader` 走。见 [`ontology.md`](ontology.md)。
+
+
 ## V1 集成状态
 
 只读 MemFW V1 接口与 Conductor 联邦适配器见 [`docs/v1-integration.md`](v1-integration.md)。V1 不替代 Conductor 的提议/批准生命周期，也不会自动写入 MemFW。
@@ -110,4 +157,4 @@ MCP 工具 `memory_related` 暴露记忆关联边；配置 related DB 后，可�
 
 可选的 Conductor 写入桥接会把人工批准的提议暂存到远程服务的非权威 `/stage` 端点；它只写入 `_candidates/`，并且仍需 MemFW 人工确认。
 
-语义边是可选能力：在重建命令中添加 `--embedding-url`/`--embedding-model` 即可使用 `sqlite-vec` 进行 KNN。同一次构建中的所有索引源共享同一个 embedder/fingerprint。当前 QMD 覆盖使用本地 4,979 篇笔记的 memfw notes 索引；纯远程 QMD 命中在建立本地向量投影前不会纳入。语义分始终是独立方法，绝不替代显式链接。
+语义边是可选能力：在重建命令中添加 `--embedding-url`/`--embedding-model` 即可使用 `sqlite-vec` 进行 KNN。同一次构建中的所有索引源共享同一个 embedder/fingerprint。当前 QMD 覆盖使用本地的 memfw notes 索引；纯远程 QMD 命中在建立本地向量投影前不会纳入。语义分始终是独立方法，绝不替代显式链接。
