@@ -388,16 +388,44 @@ def test_a_remote_api_key_needs_https_and_the_embedder_is_bounded(
     for bad in ("file:///etc/passwd", "ftp://127.0.0.1/x", "127.0.0.1:9/v1"):
         with pytest.raises(ValueError, match="http"):
             EnvEmbedder(bad, model="m", dimension=4)
-    big = _serve(200, {"data": [{"index": 0, "embedding": [0.0] * 4, "pad": "x" * (9 << 20)}]})
+
+
+@pytest.mark.parametrize("chunked", [False, True], ids=["content-length", "chunked"])
+def test_an_oversized_embedding_response_is_refused_as_too_large(chunked: bool) -> None:
+    """Deterministic: refused by Content-Length up front, or by the running total."""
+
+    from memfw_adapter_qdrant.embed import EmbedderError
+    from memfw_adapter_qdrant.http import MAX_RESPONSE_BYTES
+
+    big = _serve_big(MAX_RESPONSE_BYTES + (1 << 20), chunked=chunked)
     try:
         client = EnvEmbedder(
             f"http://127.0.0.1:{big.server_address[1]}/v1/embeddings", model="m", dimension=4
         )
-        with pytest.raises(Exception, match="too_large"):
+        with pytest.raises(EmbedderError) as caught:
             client.embed(["q"])
+        assert caught.value.code == "embedding_response_too_large"
     finally:
         big.shutdown()
         big.server_close()
+
+
+def test_read_capped_is_exact_at_the_cap() -> None:
+    import io
+
+    from memfw_adapter_qdrant.http import ResponseTooLarge, read_capped
+
+    class Body(io.BytesIO):
+        def __init__(self, data: bytes, length: str | None) -> None:
+            super().__init__(data)
+            self.headers = {} if length is None else {"Content-Length": length}
+
+    assert read_capped(Body(b"x" * 10, None), cap=10) == b"x" * 10
+    assert read_capped(Body(b"x" * 10, "10"), cap=10) == b"x" * 10
+    for data, length in ((b"x" * 11, None), (b"x" * 11, "5"), (b"", "11"), (b"x" * 11, "junk")):
+        with pytest.raises(ResponseTooLarge):
+            read_capped(Body(data, length), cap=10)
+    assert not issubclass(ResponseTooLarge, OSError)  # never mapped to "unreachable"
 
 
 def test_settings_are_checked(tmp_path: Path, fake: FakeQdrant) -> None:
@@ -458,23 +486,78 @@ def test_loopback_bypasses_env_proxies_and_remote_keeps_them(
     assert any(isinstance(item, urllib.request.ProxyHandler) for item in handlers[-1])
 
 
+class _QuietServer(ThreadingHTTPServer):
+    """A test server that does not print a client hanging up early."""
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        del request, client_address
+
+
+def _serve_big(size: int, *, chunked: bool) -> ThreadingHTTPServer:
+    """An embeddings endpoint whose answer is ``size`` bytes, with or without Content-Length."""
+
+    payload = b'{"data": [{"index": 0, "embedding": [0, 0, 0, 0], "pad": "'
+    tail = b'"}]}'
+    pad = max(0, size - len(payload) - len(tail))
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+            del format, args
+
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Connection", "close")
+                if chunked:
+                    self.send_header("Transfer-Encoding", "chunked")
+                else:
+                    self.send_header("Content-Length", str(len(payload) + pad + len(tail)))
+                self.end_headers()
+                pieces = [payload] + [b"x" * 65536] * (pad // 65536) + [b"x" * (pad % 65536), tail]
+                for piece in pieces:
+                    if not piece:
+                        continue
+                    if chunked:
+                        self.wfile.write(f"{len(piece):x}\r\n".encode() + piece + b"\r\n")
+                    else:
+                        self.wfile.write(piece)
+                if chunked:
+                    self.wfile.write(b"0\r\n\r\n")
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # the client refused the body part-way: expected
+
+    server = _QuietServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
 def _serve(status: int, body: Any, headers: dict[str, str] | None = None) -> ThreadingHTTPServer:
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
             del format, args
 
         def _reply(self) -> None:
+            # Read the request body first: closing with unread input makes the
+            # kernel send a reset, which the client would see as "unreachable".
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
             data = json.dumps(body).encode()
-            self.send_response(status)
-            for key, value in (headers or {}).items():
-                self.send_header(key, value)
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
+            try:
+                self.send_response(status)
+                for key, value in (headers or {}).items():
+                    self.send_header(key, value)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # the client stopped reading (a refused body): expected
 
         do_GET = do_POST = do_PUT = _reply  # noqa: N815
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server = _QuietServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
 

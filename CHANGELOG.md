@@ -14,6 +14,16 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 
 ## [Unreleased]
 
+### Fixed — Qdrant adapter response cap is deterministic (memfw-adapter-qdrant 0.1.1)
+
+- Embedding and Qdrant responses are read through one bounded reader: a
+  `Content-Length` above the 8 MiB cap is refused before reading, otherwise
+  the body is read in chunks and refused as soon as the running total passes
+  the cap. A cap breach is always `embedding_response_too_large` /
+  `response_too_large`, never `embedding_unreachable`; a malformed embedding
+  body is `embedding_bad_response`. The test fakes read the request body and
+  ignore an early client close, which made the size test fail on Linux CI.
+
 ### Added — attachment proxies: import format, locators, storage (MM2a)
 
 - `memfw attach proxy import ATT-ID FILE` stores a text proxy (OCR,
