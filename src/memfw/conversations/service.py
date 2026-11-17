@@ -9,7 +9,7 @@ from memfw.core.repository import Repository
 from memfw.ports.claims import ClaimStager, ClaimVerifier
 
 from .adapter import SqliteStoreSource, checked_location, store_ingestor, store_path
-from .backends import ModelBackend, configured_backend
+from .backends import ModelBackend, configured_backend, configured_backfill_days
 from .policy import SharePolicy
 from .share import ConversationShare
 from .store import ConversationError, ConversationSource
@@ -54,6 +54,7 @@ def open_worker(
     verifier: ClaimVerifier | None = None,
     stager: ClaimStager | None = None,
     settled_minutes: float | None = None,
+    backfill_days: float | None = None,
     **budgets: Any,
 ) -> ConversationWorker:
     """The worker for ``root``; a vault root needs ``stager`` and ``verifier`` (or
@@ -83,4 +84,7 @@ def open_worker(
         judge=judge,
         verifier=verifier,
         stager=stager,
+        backfill_days=(
+            configured_backfill_days(config) if backfill_days is None else backfill_days
+        ),
     )

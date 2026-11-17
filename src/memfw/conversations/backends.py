@@ -8,14 +8,16 @@ A backend turns one task's *redacted* input into a JSON reply. Three tasks:
 * ``memory_claims``   ``{"summary"}`` -> ``{"claims": [str]}``
 
 The default :class:`ExtractiveBackend` calls no model at all. Anything else
-is chosen by the operator: on the command line (``--backend module:factory``;
-a backend that is not ``local`` is refused unless the operator also passes
-``--allow-cloud``), or in ``vault.yaml``::
+is chosen by the operator: on the command line (``--backend module:factory``),
+or in ``vault.yaml``. A backend that is not ``local`` always needs
+``conversations.cloud: true`` in ``vault.yaml``; on the command line it also
+needs ``--allow-cloud`` (a flag can only narrow the vault's switch)::
 
     conversations:
       backend: "some_adapter:factory"
       cloud: true          # required for a backend that is not local
       options: {}          # optional, handed to the factory as one mapping
+      backfill_days: 30    # optional: how far back a new prompt version re-plans
 
 A configured backend that cannot be used (not importable, not local without
 ``cloud: true``, or unavailable, e.g. no API key) is never replaced by the
@@ -85,7 +87,9 @@ __all__ = [
     "RefusedBackend",
     "accepts",
     "backend_status",
+    "cloud_enabled",
     "configured_backend",
+    "configured_backfill_days",
     "estimate_tokens",
     "load_backend",
     "parse_reply",
@@ -158,13 +162,41 @@ def _string(value: Any, limit: int) -> str | None:
     return None if withheld else text
 
 
-def _tagged(task: str, value: dict[str, Any]) -> dict[str, Any] | None:
-    """A ``conv-v2`` reply: schema-checked by the port, then redacted again here.
+_SECRET = object()
 
-    A summary or tag value that still looks like a secret drops the whole reply.
+
+def _redacted_raw(value: Any) -> Any:
+    """``value`` with every string redacted (``_SECRET`` if any is secret-shaped)."""
+
+    if isinstance(value, str):
+        text, withheld = safe_text(value)
+        return _SECRET if withheld else text
+    if isinstance(value, list):
+        items = [_redacted_raw(item) for item in value]
+        return _SECRET if any(item is _SECRET for item in items) else items
+    if isinstance(value, dict):
+        out = {}
+        for key, item in value.items():
+            cleaned = _redacted_raw(item)
+            if cleaned is _SECRET:
+                return _SECRET
+            out[key] = cleaned
+        return out
+    return value
+
+
+def _tagged(task: str, value: dict[str, Any]) -> dict[str, Any] | None:
+    """A ``conv-v2`` reply: redacted raw, schema-checked by the port, redacted again.
+
+    Every string is redacted *before* the port lower-cases and truncates it (a
+    lower-cased key or a cut-off PEM header no longer looks like a secret); a
+    summary or tag value that looks like a secret drops the whole reply.
     """
 
-    parsed = parse_tagged(value)
+    raw = _redacted_raw(value)
+    if raw is _SECRET:
+        return None
+    parsed = parse_tagged(raw)
     if parsed is None:
         return None
     summary = _string(parsed["summary"], TAG_SUMMARY_CHARS)
@@ -378,6 +410,32 @@ def _section(config: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
     return section
 
 
+def cloud_enabled(config: Mapping[str, Any] | None) -> bool:
+    """``conversations.cloud`` (default false): the one switch for any non-local backend.
+
+    The command line may narrow it (no ``--allow-cloud``), never widen it.
+    """
+
+    section = _section(config)
+    cloud = False if section is None else section.get("cloud", False)
+    if not isinstance(cloud, bool):
+        raise ConversationError("conversations.cloud must be true or false")
+    return cloud
+
+
+def configured_backfill_days(config: Mapping[str, Any] | None) -> float | None:
+    """``conversations.backfill_days``: how far back a new prompt version re-plans
+    unchanged sessions (``None``: the worker's default lookback)."""
+
+    section = _section(config)
+    raw = None if section is None else section.get("backfill_days")
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw < 0:
+        raise ConversationError("conversations.backfill_days must be a number >= 0")
+    return float(raw)
+
+
 def configured_backend(config: Mapping[str, Any] | None) -> ModelBackend:
     """The backend ``vault.yaml`` names under ``conversations`` (extractive when none).
 
@@ -393,9 +451,7 @@ def configured_backend(config: Mapping[str, Any] | None) -> ModelBackend:
     assert section is not None
     if not isinstance(spec, str):
         raise ConversationError("conversations.backend must be a string")
-    cloud = section.get("cloud", False)
-    if not isinstance(cloud, bool):
-        raise ConversationError("conversations.cloud must be true or false")
+    cloud = cloud_enabled(config)
     options = section.get("options")
     if options is not None and not isinstance(options, Mapping):
         raise ConversationError("conversations.options must be a mapping")

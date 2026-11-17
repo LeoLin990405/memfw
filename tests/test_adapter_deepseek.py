@@ -14,7 +14,7 @@ import pickle
 import socket
 import sqlite3
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -150,6 +150,8 @@ def _worker(
     *,
     config: dict[str, Any] | None = None,
     vault: Path | None = None,
+    now: datetime = NOW,
+    backfill_days: float | None = None,
     **budgets: Any,
 ) -> ConversationWorker:
     store = tmp_path / "data" / "conversations.sqlite"
@@ -164,7 +166,8 @@ def _worker(
         vault=vault,
         verifier=DreamClaimVerifier(),
         stager=DreamClaimStager(),
-        now=lambda: NOW,
+        now=lambda: now,
+        backfill_days=backfill_days,
     )
 
 
@@ -260,6 +263,9 @@ def test_factory_reads_the_key_from_the_environment_only(
         ({"API_KEY": TEST_KEY}, "key_in_config"),
         ({"token": TEST_KEY}, "key_in_config"),
         ({"base_url": "http://api.example.com"}, "bad_base_url"),
+        ({"base_url": "https://api.example.com"}, "bad_base_url"),
+        ({"base_url": "https://api.deepseek.com.example.com"}, "bad_base_url"),
+        ({"base_url": "http://api.deepseek.com"}, "bad_base_url"),
         ({"base_url": "https://user:pw@api.example.com"}, "bad_base_url"),
         ({"base_url": "https://api.example.com/?k=1"}, "bad_base_url"),
         ({"nonsense": 1}, "bad_option"),
@@ -287,7 +293,7 @@ def test_key_never_in_repr_errors_or_logs(
     with pytest.raises(TypeError):
         pickle.dumps(backend)
     fake.script = [(500, {"error": TEST_KEY[:3]}), (500, {})]
-    with pytest.raises(DeepSeekError) as failed:
+    with pytest.raises(BackendUnavailable) as failed:
         backend.run("chunk_summary", {"turns": []}, max_tokens=10)
     texts += [str(failed.value), repr(failed.value), repr(failed.value.__cause__)]
     assert failed.value.__cause__ is None and failed.value.__context__ is None
@@ -313,8 +319,9 @@ def test_retries_429_and_5xx_with_backoff(fake: FakeDeepSeek) -> None:
 def test_retries_give_up_and_other_4xx_are_not_retried(fake: FakeDeepSeek) -> None:
     fake.script = [(502, {})] * 4
     backend = _backend(fake, max_retries=3, max_backoff=3.0)
-    with pytest.raises(DeepSeekError, match="http_502"):
+    with pytest.raises(BackendUnavailable) as exhausted:  # a stop, not a job failure
         backend.run("chunk_summary", {"turns": []}, max_tokens=64)
+    assert exhausted.value.code == "transient"
     assert len(fake.requests) == 4 and backend.sleeps == [1.0, 2.0, 3.0]  # type: ignore[attr-defined]
     fake.script = [(400, {})]
     with pytest.raises(DeepSeekError, match="http_400"):
@@ -411,6 +418,57 @@ def test_parse_conv_v2_normalises_and_redacts() -> None:
 )
 def test_parse_conv_v2_drops_invalid_replies(reply: str) -> None:
     assert parse_reply("session_summary", reply, prompt_version=TAG_PROMPT_VERSION) is None
+
+
+AWS = "AKIA" + "IOSFODNN7EXAMPLE"
+PEM = "-----BEGIN RSA " + "PRIVATE KEY-----"
+JWT = (
+    "eyJhbGciOiJIUzI1NiJ9."
+    + "eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
+)
+
+
+@pytest.mark.parametrize("secret", [AWS, PEM, JWT, SECRET])
+@pytest.mark.parametrize("where", ["summary", "project", "components", "intent"])
+def test_secrets_are_caught_before_tags_are_lowercased(secret: str, where: str) -> None:
+    value = f"see {secret}"
+    if where == "summary":
+        reply = _v2(value)
+    elif where == "intent":
+        reply = _v2(intent=value)
+    else:
+        reply = _v2(**{where: [value]})
+    assert parse_reply("session_summary", reply, prompt_version=TAG_PROMPT_VERSION) is None
+
+
+def test_home_paths_are_redacted_before_lowercasing() -> None:
+    path = "/Users/" + "someone/proj/x.py"
+    parsed = parse_reply(
+        "session_summary", _v2(f"Edited {path}.", intent=f"edit {path}"), prompt_version="conv-v2"
+    )
+    assert parsed is not None and "someone" not in json.dumps(parsed)
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        "https://evil.example.com/x",
+        "ftp://host/x",
+        "www.example.com",
+        "/etc/passwd",
+        "~/notes",
+        "C:\\work",
+        "\\\\share\\x",
+    ],
+)
+def test_urls_and_absolute_paths_are_not_tag_names(item: str) -> None:
+    for key in ("project", "components"):
+        reply = _v2(**{key: ["memfw", item]})
+        assert parse_reply("chunk_summary", reply, prompt_version="conv-v2") is None, (key, item)
+    ok = parse_reply(
+        "chunk_summary", _v2(components=["src/memfw", "a.b"]), prompt_version="conv-v2"
+    )
+    assert ok is not None and ok["tags"]["components"] == ["src/memfw", "a.b"]
 
 
 def test_conv_v1_parsing_is_unchanged() -> None:
@@ -523,15 +581,25 @@ def test_rejected_key_degrades_the_run(tmp_path: Path, fake: FakeDeepSeek) -> No
     assert TEST_KEY not in json.dumps(_rows_of(tmp_path, "SELECT * FROM runs"))
 
 
-def test_switching_backends_requeues_once_and_keeps_conv_v1_rows(
+def test_new_prompt_version_does_not_backfill_history_by_default(
     tmp_path: Path, fake: FakeDeepSeek
 ) -> None:
     first = _worker(tmp_path, ExtractiveBackend()).run()
     assert first.sessions_queued == 3
-    second = _worker(tmp_path, _backend(fake)).run()
-    assert second.sessions_queued == 3 and second.jobs["session_summary:done"] == 3
-    third = _worker(tmp_path, _backend(fake)).run()
-    assert third.sessions_queued == 0 and len(fake.requests) == 6
+    later = NOW + timedelta(days=60)  # the three sessions are now 61 days old
+    store = tmp_path / "data" / "conversations.sqlite"
+    fresh = [
+        turn("codex", "s-new", 0, "user", "Tag the new session first.", "2026-03-06T10:00:00Z"),
+        turn("codex", "s-new", 1, "assistant", "Tagged.", "2026-03-06T10:01:00Z"),
+    ]
+    write_store(store, [*_rows(), *fresh])
+    second = _worker(tmp_path, _backend(fake), now=later).run()
+    # Only the new session is planned: unchanged history is not re-processed.
+    assert second.sessions_queued == 1 and second.jobs["session_summary:done"] == 1
+    assert len(fake.requests) == 2
+    assert "tag the new session" in fake.requests[0]["raw"].lower()
+    third = _worker(tmp_path, _backend(fake), now=later).run()
+    assert third.sessions_queued == 0 and len(fake.requests) == 2
     versions = _rows_of(
         tmp_path,
         "SELECT prompt_version, COUNT(*) AS n, COUNT(tags) AS tagged FROM summaries"
@@ -539,10 +607,128 @@ def test_switching_backends_requeues_once_and_keeps_conv_v1_rows(
     )
     assert versions == [
         {"prompt_version": "conv-v1", "n": 6, "tagged": 0},
-        {"prompt_version": "conv-v2", "n": 6, "tagged": 6},
+        {"prompt_version": "conv-v2", "n": 2, "tagged": 2},
     ]
-    back = _worker(tmp_path, ExtractiveBackend()).run()  # back to v1: nothing redone
+
+
+def test_backfill_is_opt_in_and_runs_newest_sessions_first(
+    tmp_path: Path, fake: FakeDeepSeek
+) -> None:
+    _worker(tmp_path, ExtractiveBackend()).run()
+    later = NOW + timedelta(days=60)
+    report = _worker(tmp_path, _backend(fake), now=later, backfill_days=90).run()
+    assert report.sessions_queued == 3 and report.jobs["session_summary:done"] == 3
+    # Newest session first: cursor s-gamma (10:06), claude s-beta (10:05), codex s-alpha.
+    order = [json.loads(item["body"]["messages"][1]["content"][7:-9]) for item in fake.requests]
+    texts = [json.dumps(item) for item in order if "turns" in item]
+    assert "for cursor" in texts[0] and "REDACTED:email" in texts[1]
+    assert "retry wrapper" in texts[-1]
+    back = _worker(tmp_path, ExtractiveBackend(), now=later).run()  # back to v1: nothing redone
     assert back.sessions_queued == 3 and back.jobs.get("chunk_summary:done", 0) == 0
+    with pytest.raises(Exception, match="backfill_days"):
+        _worker(tmp_path, _backend(fake), backfill_days=-1)
+
+
+def test_backfill_days_from_vault_yaml(tmp_path: Path) -> None:
+    from memfw.conversations.backends import configured_backfill_days
+
+    assert configured_backfill_days({}) is None
+    assert configured_backfill_days({"conversations": {"backfill_days": 365}}) == 365.0
+    with pytest.raises(Exception, match="backfill_days"):
+        configured_backfill_days({"conversations": {"backfill_days": "all"}})
+
+
+def test_transient_outage_stops_the_run_without_burning_attempts(
+    tmp_path: Path, fake: FakeDeepSeek
+) -> None:
+    fake.default_status, fake.default = 503, {"error": "overloaded"}
+    for _ in range(5):  # more runs than MAX_ATTEMPTS: an outage never fails a job
+        report = _worker(tmp_path, _backend(fake, max_retries=1)).run()
+        assert report.status == "degraded" and report.stopped == "backend_unavailable"
+        assert report.errors == {"backend_transient": 1}
+    jobs = _rows_of(tmp_path, "SELECT status, attempts FROM jobs WHERE kind = 'chunk_summary'")
+    assert {row["status"] for row in jobs} == {"pending"}
+    assert {row["attempts"] for row in jobs} == {0}
+    fake.default_status, fake.default = 200, tag_reply()  # the provider recovers
+    report = _worker(tmp_path, _backend(fake)).run()
+    assert report.status == "ok" and report.jobs["session_summary:done"] == 3
+    assert report.jobs["episode:done"] == 3
+
+
+def test_deadline_bounds_attempts_and_backoff(fake: FakeDeepSeek) -> None:
+    now = [100.0]
+    backend = DeepSeekBackend(
+        Settings(base_url=fake.url), key=TEST_KEY, sleep=lambda s: None, clock=lambda: now[0]
+    )
+    backend.limit_time(0)
+    with pytest.raises(BackendUnavailable) as stopped:
+        backend.run("chunk_summary", {"turns": []}, max_tokens=64)
+    assert stopped.value.code == "deadline" and fake.requests == []
+    fake.script = [(503, {})]
+    backend.limit_time(0.5)  # the first backoff (1 s) would overrun it
+    with pytest.raises(BackendUnavailable) as stopped:
+        backend.run("chunk_summary", {"turns": []}, max_tokens=64)
+    assert stopped.value.code == "deadline" and len(fake.requests) == 1
+
+
+def test_worker_hands_the_backend_its_remaining_time(tmp_path: Path, fake: FakeDeepSeek) -> None:
+    backend = _backend(fake)
+    seen: list[float] = []
+    original = backend.limit_time
+    backend.limit_time = lambda seconds: (seen.append(seconds), original(seconds))[1]  # type: ignore[method-assign]
+    _worker(tmp_path, backend, max_seconds=50.0).run()
+    assert seen and all(0 < value <= 50.0 for value in seen)
+
+
+class _Broken:
+    """An opener whose every request times out (or breaks off)."""
+
+    def __init__(self, error: BaseException) -> None:
+        self.error = error
+        self.calls = 0
+
+    def __call__(self, request: Any, timeout: float) -> Any:
+        self.calls += 1
+        raise self.error
+
+
+def test_timeouts_are_charged_their_worst_case_and_budgeted() -> None:
+    opener = _Broken(TimeoutError())
+    backend = DeepSeekBackend(
+        Settings(max_retries=5), key=TEST_KEY, opener=opener, sleep=lambda s: None
+    )
+    system, user = render_tag_prompt("chunk_summary", {"turns": []})
+    worst = estimate_tokens(system + user) + 64
+    backend.settings = Settings(max_retries=5, max_run_tokens=worst * 2 + 1)
+    with pytest.raises(BackendBudgetExhausted):
+        backend.run("chunk_summary", {"turns": []}, max_tokens=64)
+    assert opener.calls == 2  # the third attempt no longer fits the budget
+    assert backend.tokens_in + backend.tokens_out == worst * 2
+
+
+def test_http_exceptions_and_overflowing_usage_are_mapped() -> None:
+    import http.client
+
+    opener = _Broken(http.client.RemoteDisconnected("closed"))
+    backend = DeepSeekBackend(
+        Settings(max_retries=1), key=TEST_KEY, opener=opener, sleep=lambda s: None
+    )
+    with pytest.raises(BackendUnavailable, match="transient"):
+        backend.run("chunk_summary", {"turns": []}, max_tokens=64)
+    assert opener.calls == 2
+    with FakeDeepSeek() as fake:
+        content = json.dumps(json.dumps({"summary": "s", "tags": {}}))
+        fake.script = [
+            (
+                200,
+                (
+                    '{"choices": [{"message": {"content": ' + content + "}}],"
+                    ' "usage": {"prompt_tokens": 1e999, "completion_tokens": 1}}'
+                ).encode(),
+            )
+        ]
+        with pytest.raises(DeepSeekError, match="bad_response"):
+            _backend(fake).run("chunk_summary", {"turns": []}, max_tokens=64)
 
 
 # -- migration -----------------------------------------------------------------------------
@@ -600,6 +786,7 @@ def test_migration_adds_columns_and_leaves_old_rows_untouched(tmp_path: Path) ->
     ]
     (job,) = _rows_of(tmp_path, "SELECT * FROM jobs")
     assert job["prompt_version"] == "conv-v1" and job["status"] == "done"
+    assert job["session_ts"] == ""
     assert state.session_summary("codex", "s") == "old summary"
 
 
@@ -642,7 +829,7 @@ def test_gate_needs_config_cloud_and_key(monkeypatch: pytest.MonkeyPatch, fake: 
     assert fake.requests == []  # checking the gate never calls the model
 
 
-def test_cli_flag_path_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_backend_function_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(KEY_ENV, TEST_KEY)
     with pytest.raises(Exception, match="--allow-cloud"):
         load_backend(SPEC)
@@ -650,6 +837,26 @@ def test_cli_flag_path_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(KEY_ENV)
     with pytest.raises(Exception, match="unavailable: missing_key"):
         load_backend(SPEC, allow_cloud=True)
+
+
+def test_cli_allow_cloud_cannot_widen_vault_cloud(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake: FakeDeepSeek
+) -> None:
+    monkeypatch.setenv(KEY_ENV, TEST_KEY)
+    vault = make_vault(tmp_path / "vault")
+    write_store(tmp_path / "data" / "conversations.sqlite", _rows())
+    flags = ("--backend", SPEC, "--max-sessions", "0")
+    result = _cli(vault, tmp_path, *flags, "--allow-cloud")  # vault.yaml has no cloud: true
+    assert result.exit_code == 2 and "conversations.cloud: true" in result.output
+    set_config(vault, {"conversations": {"cloud": False}})
+    assert _cli(vault, tmp_path, *flags, "--allow-cloud").exit_code == 2
+    set_config(vault, {"conversations": {"cloud": True}})
+    result = _cli(vault, tmp_path, *flags)  # the flag may narrow: still refused without it
+    assert result.exit_code == 2 and "--allow-cloud" in result.output
+    result = _cli(vault, tmp_path, *flags, "--allow-cloud")
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["backend"] == "deepseek:deepseek-chat"
+    assert TEST_KEY not in result.output and fake.requests == []
 
 
 def test_refused_backend_gives_a_degraded_run_never_extractive(

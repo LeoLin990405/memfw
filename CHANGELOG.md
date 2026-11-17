@@ -129,14 +129,20 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 - New workspace package `packages/adapters/memfw-adapter-deepseek`
   (`memfw_adapter_deepseek:factory`): a standard-library `conv-v2` backend over
   DeepSeek's chat completions API with JSON mode, retries with backoff on
-  429/5xx, and a per-run token and cost budget. The key comes only from
-  `DEEPSEEK_API_KEY`. Built and smoke-tested as a standalone wheel in CI.
+  429/5xx (an outage stops the run without failing jobs), and a per-run token
+  and cost budget (price defaults are placeholders). The key comes only from
+  `DEEPSEEK_API_KEY` and is sent only to `https://api.deepseek.com`. Built and
+  smoke-tested as a standalone wheel in CI.
 - The conversation worker may take its backend from `vault.yaml`
   (`conversations: {backend, cloud, options}`), gated on `cloud: true` and the
-  adapter being available; otherwise the run is `degraded` (no fallback).
+  adapter being available; otherwise the run is `degraded` (no fallback). A
+  non-local `--backend` also needs `conversations.cloud: true`. A new prompt
+  version re-plans only new, changed or last-30-days sessions (wider only with
+  `conversations.backfill_days` / `--backfill-days`), newest first.
   `memfw conversations status` shows the configured backend's state.
-  `memory_claims` stays extractive. Worker state gains `summaries.tags` and
-  `jobs.prompt_version` (additive migration; existing rows untouched). With no
+  `memory_claims` stays extractive. Worker state gains `summaries.tags`,
+  `jobs.prompt_version` and `jobs.session_ts` (additive migration; existing
+  rows untouched). With no
   `conversations` backend configured the worker's output is unchanged.
   See `docs/conversations-share.md`.
 

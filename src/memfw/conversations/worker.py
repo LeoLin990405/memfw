@@ -23,8 +23,12 @@ holds only redacted text: summaries are validated and redacted again before
 they are written. The run report carries counts and codes, never text.
 
 Jobs and summaries carry the backend's prompt version. A ``conv-v2`` backend
-(summary plus tags, :mod:`memfw.ports.models`) re-queues every session once
-under its own version and writes the ``tags`` column; ``conv-v1`` rows stay.
+(summary plus tags, :mod:`memfw.ports.models`) writes the ``tags`` column;
+``conv-v1`` rows stay. Under a version other than ``conv-v1`` it plans
+sessions it never planned, sessions that changed, and unchanged sessions
+updated within the lookback window (``DEFAULT_LOOKBACK_DAYS``, or
+``backfill_days``); older history is not re-processed unless asked for, and
+its jobs run newest session first.
 ``memory_claims`` always runs on a ``conv-v1`` backend: the configured one
 when it accepts the task, else the extractive one. A configured backend that
 was refused (see :func:`memfw.conversations.backends.configured_backend`)
@@ -85,7 +89,10 @@ VERBATIM_CHARS = 40
 KIND_ORDER = {"chunk_summary": 0, "session_summary": 1, "memory_claims": 2, "episode": 3}
 #: Backend codes that stop the run and leave the job queued (``max_tokens`` is the
 #: worker's own budget): the backend's budget is spent, or it became unusable.
-BACKEND_STOPS = ("backend_budget", "backend_unavailable")
+BACKEND_STOPS = ("backend_budget", "backend_unavailable", "backend_deadline")
+DEFAULT_LOOKBACK_DAYS = 30.0
+"""Under a new prompt version, unchanged sessions older than this are not re-planned
+(a backfill needs ``conversations.backfill_days`` or ``--backfill-days``)."""
 
 Judge = Callable[[str, str], str]
 
@@ -255,6 +262,9 @@ class WorkState:
             connection.execute(
                 "ALTER TABLE jobs ADD COLUMN prompt_version TEXT NOT NULL DEFAULT 'conv-v1'"
             )
+        if "session_ts" not in job_columns:
+            # The session's last activity (UTC key) when queued: newest-first order.
+            connection.execute("ALTER TABLE jobs ADD COLUMN session_ts TEXT NOT NULL DEFAULT ''")
         summary_columns = {
             str(row[1]) for row in connection.execute("PRAGMA table_info(summaries)")
         }
@@ -499,6 +509,7 @@ class ConversationWorker:
         now: Callable[[], datetime] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         claims_backend: ModelBackend | None = None,
+        backfill_days: float | None = None,
     ) -> None:
         # Claims are verified and staged through ports (memfw.ports.claims); the
         # caller injects them (memfw conversations work: memfw.dream.claims).
@@ -519,6 +530,16 @@ class ConversationWorker:
         if prompt_version_of(claims_backend) != PROMPT_VERSION:
             raise ConversationError("the claims backend must speak conv-v1")
         self.claims_backend = claims_backend
+        if backfill_days is not None and (
+            isinstance(backfill_days, bool)
+            or not isinstance(backfill_days, (int, float))
+            or backfill_days < 0
+        ):
+            raise ConversationError("backfill_days must be a number >= 0")
+        self.lookback_days = (
+            DEFAULT_LOOKBACK_DAYS if backfill_days is None else float(backfill_days)
+        )
+        self._started = 0.0
         self.policy = policy
         self.budgets = budgets or Budgets()
         self.ingestor = ingestor
@@ -849,6 +870,15 @@ class ConversationWorker:
             ).fetchone()
             if row is not None and row["fingerprint"] == planned:
                 return False
+            if (
+                row is not None
+                and version != PROMPT_VERSION
+                and str(row["fingerprint"]).split("#", 1)[0] == mark
+                and not self._within_lookback(info)
+            ):
+                # Planned before under another version and unchanged since: old
+                # history is not re-processed by a new version (that is a backfill).
+                return False
             turns = self.source.turns(info.app, info.session_id, start=0, limit=info.turns)
             jobs: list[tuple[str, int, int]] = [
                 ("chunk_summary", chunk[0].offset, chunk[-1].offset) for chunk in _chunks(turns)
@@ -867,8 +897,8 @@ class ConversationWorker:
                 )
                 connection.execute(
                     "INSERT OR IGNORE INTO jobs (job_id, kind, app, session_id, fingerprint,"
-                    " chunk_start, chunk_end, status, created_at, updated_at, prompt_version)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
+                    " chunk_start, chunk_end, status, created_at, updated_at, prompt_version,"
+                    " session_ts) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)",
                     (
                         key,
                         kind,
@@ -880,6 +910,7 @@ class ConversationWorker:
                         stamp,
                         stamp,
                         version,
+                        ts_key(info.updated_at) or "",
                     ),
                 )
                 # A chunk reused from an older fingerprint belongs to the newest one too.
@@ -904,9 +935,16 @@ class ConversationWorker:
             )
         return True
 
+    def _within_lookback(self, info: SessionInfo) -> bool:
+        updated = _parse_ts(info.updated_at)
+        if updated is None:
+            return False  # unknown activity: not recent
+        return updated >= self.now() - timedelta(days=self.lookback_days)
+
     # -- execute ------------------------------------------------------------------------
 
     def _execute(self, report: RunReport, started: float) -> None:
+        self._started = started
         sessions_done: set[tuple[str, str]] = set()
         while True:
             if self.monotonic() - started > self.budgets.max_seconds:
@@ -915,11 +953,13 @@ class ConversationWorker:
             with self.state.open() as connection:
                 # A job that errored in this run waits for the next one.
                 # Only this backend's prompt version: jobs of another wait for theirs.
+                # conv-v1 keeps its queue order; another version runs the newest
+                # sessions first, so new work never waits behind a backfill.
+                first = "" if self.prompt_version == PROMPT_VERSION else "session_ts DESC, "
                 rows = connection.execute(
                     "SELECT * FROM jobs WHERE status = 'pending' AND tried_run != ?"
-                    " AND prompt_version = ?"
-                    " ORDER BY created_at, app, session_id, CASE kind"
-                    " WHEN 'chunk_summary' THEN 0 WHEN 'session_summary' THEN 1"
+                    f" AND prompt_version = ? ORDER BY {first}created_at, app, session_id,"
+                    " CASE kind WHEN 'chunk_summary' THEN 0 WHEN 'session_summary' THEN 1"
                     " WHEN 'memory_claims' THEN 2 ELSE 3 END, chunk_start LIMIT 50",
                     (report.run_id, self.prompt_version),
                 ).fetchall()
@@ -941,7 +981,10 @@ class ConversationWorker:
                     return
                 outcome = self._run_job(job, report)
                 if outcome == "budget" or outcome in BACKEND_STOPS:
-                    report.stopped = "max_tokens" if outcome == "budget" else outcome
+                    report.stopped = {
+                        "budget": "max_tokens",
+                        "backend_deadline": "max_seconds",
+                    }.get(outcome, outcome)
                     if outcome == "backend_unavailable":
                         report.status = "degraded"
                     return
@@ -1043,14 +1086,22 @@ class ConversationWorker:
         claims = task == "memory_claims"
         backend = self.claims_backend if claims else self.backend
         version = PROMPT_VERSION if claims else self.prompt_version
+        limit = getattr(backend, "limit_time", None)
+        if callable(limit):
+            # A backend that can bound its own wall time (retries, backoff) gets
+            # what is left of this run's max_seconds.
+            limit(max(0.0, self.budgets.max_seconds - (self.monotonic() - self._started)))
         try:
             reply = backend.run(task, data, max_tokens=1024)
         except BackendBudgetExhausted:
             # The backend's own per-run token/cost budget: stop; the job waits.
             return None, 0, 0, "backend_budget"
-        except BackendUnavailable:
-            # E.g. the key was rejected: stop (degraded); the job waits, its attempt
-            # not counted.
+        except BackendUnavailable as exc:
+            # The key was rejected, the provider stayed down after its retries, or
+            # the run's time is up: stop; the job waits, its attempt not counted.
+            if exc.code == "deadline":
+                return None, 0, 0, "backend_deadline"
+            report.bump(report.errors, f"backend_{exc.code}"[:64])
             return None, 0, 0, "backend_unavailable"
         tokens_in = reply.tokens_in or estimate
         tokens_out = reply.tokens_out or estimate_tokens(reply.text)

@@ -18,14 +18,31 @@ must fit both; afterwards the reported usage is charged. When a request would
 not fit, :class:`BackendBudgetExhausted` stops the run and the worker leaves
 the job queued for the next one.
 
+A request that timed out or broke off may still have been billed, so each such
+attempt is charged its worst case (estimated input plus ``max_tokens``), and
+every retry must fit the budget again.
+
 Retries: HTTP 429 and 5xx (and network errors or timeouts) are retried with
-exponential backoff (``Retry-After`` is honoured up to the cap); other 4xx are
-not. 401/403 raise :class:`BackendUnavailable` (``auth``). Redirects are
-refused, so the key is never sent to another host.
+exponential backoff (``Retry-After`` is honoured up to the cap). When the
+retries are used up the run stops with :class:`BackendUnavailable`
+(``transient``): the worker re-queues the job without spending one of its
+attempts. Other 4xx are not retried (:class:`DeepSeekError`). 401/403 raise
+:class:`BackendUnavailable` (``auth``). The worker may call
+:meth:`DeepSeekBackend.limit_time` with the seconds left in its run; a request
+or backoff that would overrun it stops the run (``deadline``).
+
+Host: only ``https://api.deepseek.com`` (:data:`ALLOWED_BASE_URLS`), or plain
+http to a loopback address for local tests. Redirects are refused, so the key
+is never sent to another host.
+
+Prices: the per-million-token defaults are placeholders, not the provider's
+current prices; the operator must set ``price_in_per_mtok`` and
+``price_out_per_mtok`` for the cost budget to mean anything.
 """
 
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import json
 import math
@@ -51,6 +68,9 @@ __version__ = "0.1.0"
 
 KEY_ENV = "DEEPSEEK_API_KEY"
 DEFAULT_BASE_URL = "https://api.deepseek.com"
+#: The only remote endpoints the key may be sent to (anything else is refused, so
+#: editing vault.yaml cannot redirect the key to another host).
+ALLOWED_BASE_URLS = frozenset({DEFAULT_BASE_URL})
 DEFAULT_MODEL = "deepseek-chat"
 USER_AGENT = f"memfw-adapter-deepseek/{__version__}"
 RESPONSE_BYTES = 1 << 20
@@ -68,8 +88,9 @@ class DeepSeekError(RuntimeError):
 
 @dataclass(frozen=True)
 class Settings:
-    """Everything but the key. Prices are USD per million tokens (check the provider's
-    current price list; cache-hit discounts are ignored, so cost is over-estimated)."""
+    """Everything but the key. Prices are USD per million tokens. The defaults are
+    PLACEHOLDERS, not verified current prices: set both from the provider's price
+    list (cache-hit discounts are ignored, so cost is over-estimated)."""
 
     model: str = DEFAULT_MODEL
     base_url: str = DEFAULT_BASE_URL
@@ -117,15 +138,15 @@ class Settings:
 
 
 def _check_base_url(url: Any) -> None:
-    """``https://host[:port][/path]``; plain http only to a loopback host (local tests)."""
+    """One of :data:`ALLOWED_BASE_URLS`, or plain http to a loopback host (local tests)."""
 
     if not isinstance(url, str) or len(url) > 200:
         raise BackendUnavailable("bad_base_url")
+    if url.rstrip("/") in ALLOWED_BASE_URLS:
+        return
     parts = urlsplit(url)
     if parts.username or parts.password or parts.query or parts.fragment or not parts.hostname:
         raise BackendUnavailable("bad_base_url")
-    if parts.scheme == "https":
-        return
     if parts.scheme == "http" and _loopback(parts.hostname):
         return
     raise BackendUnavailable("bad_base_url")
@@ -196,6 +217,7 @@ class DeepSeekBackend:
         key: str,
         opener: Opener | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if not isinstance(key, str) or not key.strip():
             raise BackendUnavailable("missing_key")
@@ -203,6 +225,8 @@ class DeepSeekBackend:
         self.name = f"deepseek:{settings.model}"
         self._key = _Key(key.strip())
         self._sleep = sleep
+        self._clock = clock
+        self._deadline: float | None = None
         self._opener = opener or self._default_opener(settings.base_url)
         self.requests = 0
         self.tokens_in = 0
@@ -221,6 +245,14 @@ class DeepSeekBackend:
             handlers.append(urllib.request.ProxyHandler({}))  # never proxy a local test server
         built = urllib.request.build_opener(*handlers)
         return lambda request, timeout: built.open(request, timeout=timeout)
+
+    def limit_time(self, seconds: float) -> None:
+        """Bound the next :meth:`run` (attempts, backoff) to ``seconds`` from now."""
+
+        self._deadline = self._clock() + max(0.0, float(seconds))
+
+    def _time_left(self) -> float | None:
+        return None if self._deadline is None else self._deadline - self._clock()
 
     # -- budget ---------------------------------------------------------------------
 
@@ -273,15 +305,15 @@ class DeepSeekBackend:
     def run(self, task: str, data: dict[str, Any], *, max_tokens: int) -> ModelReply:
         body = self.request_body(task, data, max_tokens=max_tokens)
         prompt_text = "".join(str(message["content"]) for message in body["messages"])
-        self._reserve(estimate_tokens(prompt_text), int(body["max_tokens"]))
+        worst = (estimate_tokens(prompt_text), int(body["max_tokens"]))
         payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
-        reply = self._post(payload)
+        reply = self._post(payload, worst)
         try:
             content = reply["choices"][0]["message"]["content"]
             usage = reply.get("usage") or {}
             tokens_in = int(usage.get("prompt_tokens") or 0)
             tokens_out = int(usage.get("completion_tokens") or 0)
-        except (KeyError, IndexError, TypeError, ValueError, AttributeError):
+        except (KeyError, IndexError, TypeError, ValueError, AttributeError, OverflowError):
             raise DeepSeekError("bad_response") from None
         if not isinstance(content, str):
             raise DeepSeekError("bad_response")
@@ -292,10 +324,20 @@ class DeepSeekBackend:
         self.cost_usd += self._cost(tokens_in, tokens_out)
         return ModelReply(text=content, tokens_in=tokens_in, tokens_out=tokens_out)
 
-    def _post(self, payload: bytes) -> dict[str, Any]:
+    def _charge(self, tokens_in: int, tokens_out: int) -> None:
+        self.tokens_in += tokens_in
+        self.tokens_out += tokens_out
+        self.cost_usd += self._cost(tokens_in, tokens_out)
+
+    def _post(self, payload: bytes, worst: tuple[int, int]) -> dict[str, Any]:
         url = self.settings.base_url.rstrip("/") + "/chat/completions"
         attempt = 0
         while True:
+            # Every attempt (retries too) must fit the budget in its worst case.
+            self._reserve(*worst)
+            left = self._time_left()
+            if left is not None and left <= 0:
+                raise BackendUnavailable("deadline")
             request = urllib.request.Request(
                 url,
                 data=payload,
@@ -307,22 +349,33 @@ class DeepSeekBackend:
                     "Authorization": self._key.header(),
                 },
             )
-            code, delay = self._attempt(request)
+            timeout = self.settings.timeout if left is None else min(self.settings.timeout, left)
+            code, delay = self._attempt(request, timeout)
             del request
             if isinstance(code, dict):
                 return code
-            if delay is None or attempt >= self.settings.max_retries:
+            if code == "network":
+                # It may have reached the model and been billed: charge the worst case.
+                self._charge(*worst)
+            if delay is None:
                 raise DeepSeekError(code)
+            if attempt >= self.settings.max_retries:
+                # Retryable, but the retries are used up: stop the run, keep the job.
+                raise BackendUnavailable("transient")
             wait = min(self.settings.max_backoff, self.settings.backoff * (2**attempt))
-            self._sleep(max(wait, min(delay, self.settings.max_backoff)))
+            wait = max(wait, min(delay, self.settings.max_backoff))
+            left = self._time_left()
+            if left is not None and wait >= left:
+                raise BackendUnavailable("deadline")
+            self._sleep(wait)
             attempt += 1
 
-    def _attempt(self, request: urllib.request.Request) -> tuple[Any, float | None]:
+    def _attempt(self, request: urllib.request.Request, timeout: float) -> tuple[Any, float | None]:
         """``(reply, None)``, or ``(code, retry delay or None when not retryable)``."""
 
         self.requests += 1
         try:
-            with self._opener(request, self.settings.timeout) as response:
+            with self._opener(request, timeout) as response:
                 raw = response.read(RESPONSE_BYTES + 1)
         except urllib.error.HTTPError as exc:
             status = int(exc.code)
@@ -333,7 +386,7 @@ class DeepSeekBackend:
             if status == 429 or 500 <= status < 600:
                 return f"http_{status}", retry_after
             return f"http_{status}", None
-        except (urllib.error.URLError, TimeoutError, OSError):
+        except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException):
             return "network", 0.0
         if len(raw) > RESPONSE_BYTES:
             return "response_too_large", None

@@ -62,6 +62,7 @@ class FakeDeepSeek:
         self.script: list[tuple[int, Any]] = list(script or [])
         self.requests: list[dict[str, Any]] = []
         self.default: Any = tag_reply()
+        self.default_status = 200
         self._lock = threading.Lock()
         fake = self
 
@@ -82,7 +83,9 @@ class FakeDeepSeek:
                             "body": body,
                         }
                     )
-                    status, reply = fake.script.pop(0) if fake.script else (200, fake.default)
+                    status, reply = (
+                        fake.script.pop(0) if fake.script else (fake.default_status, fake.default)
+                    )
                 data = reply if isinstance(reply, bytes) else json.dumps(reply).encode("utf-8")
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")

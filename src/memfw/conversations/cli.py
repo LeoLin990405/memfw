@@ -14,7 +14,7 @@ from typing import Annotated, Any
 import typer
 
 from ..core.errors import MemfwError
-from .backends import backend_status, load_backend
+from .backends import BackendRefused, backend_status, cloud_enabled, load_backend
 from .policy import OPERATOR
 from .schedule import DEFAULT_INTERVAL, default_log_dir, render
 from .service import open_share, open_worker, read_config
@@ -192,8 +192,20 @@ def worker(
         ),
     ] = None,
     allow_cloud: Annotated[
-        bool, typer.Option("--allow-cloud", help="Permit a non-local backend")
+        bool,
+        typer.Option(
+            "--allow-cloud",
+            help="Permit a non-local --backend (also needs conversations.cloud: true)",
+        ),
     ] = False,
+    backfill_days: Annotated[
+        float | None,
+        typer.Option(
+            "--backfill-days",
+            help="Under a new prompt version, re-plan unchanged sessions this many days back"
+            " (default: vault.yaml conversations.backfill_days, else 30)",
+        ),
+    ] = None,
     judge: Annotated[
         str | None, typer.Option("--judge", help="Claim judge module:function (verify-first)")
     ] = None,
@@ -216,7 +228,19 @@ def worker(
 
     try:
         # No --backend: the one vault.yaml names (gated on conversations.cloud).
-        model = load_backend(backend, allow_cloud=allow_cloud) if backend else None
+        # With --backend, a non-local one needs --allow-cloud AND conversations.cloud.
+        model = None
+        if backend:
+            config, _vault = read_config(root)
+            try:
+                model = load_backend(backend, allow_cloud=allow_cloud and cloud_enabled(config))
+            except BackendRefused as exc:
+                if exc.code != "cloud_not_allowed":
+                    raise
+                raise ConversationError(
+                    f"backend {backend} is not local; it needs conversations.cloud: true in"
+                    " vault.yaml and --allow-cloud"
+                ) from None
         runner = open_worker(
             root,
             backend=model,
@@ -231,6 +255,7 @@ def worker(
             max_seconds=max_seconds,
             idle_minutes=idle_minutes,
             settled_minutes=settled_minutes,
+            backfill_days=backfill_days,
         )
         report = runner.run()
     except (ConversationError, MemfwError, ValueError) as exc:
