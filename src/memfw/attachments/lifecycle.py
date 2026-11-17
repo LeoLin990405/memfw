@@ -31,7 +31,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from memfw.core.errors import IntegrityError, MemfwError, NotFoundError
-from memfw.core.models import Event, EventKind
+from memfw.core.models import (
+    NON_MEMORY_MARKER_KEY,
+    NON_MEMORY_MARKER_VALUE,
+    Event,
+    EventKind,
+)
 from memfw.storage.transactions import _serialized
 
 from .blobs import REOWN_HINT, BlobLocationError, BlobOwnerError, hash_stream, stage_blob
@@ -69,7 +74,7 @@ IRRECOVERABLE_COPIES: Final = (
 #: ``details`` of every event kind MM1b writes: the forward-compat marker that
 #: tells a reader which does not know the kind that it projects onto nothing
 #: (harmless for readers that know it; see the event-log forward-compat scheme).
-NO_PROJECTION: Final = {"projection": "none"}
+NO_PROJECTION: Final = {NON_MEMORY_MARKER_KEY: NON_MEMORY_MARKER_VALUE}
 
 
 @dataclass(frozen=True)
