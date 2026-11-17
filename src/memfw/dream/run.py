@@ -281,14 +281,11 @@ def run_dream(
                     current = None
                 merged = dict(current or {})
                 merged.update(proposed)
-                # MM3: classes only when some pointer names an attachment.
+                # MM3: the keyword only when some pointer names an attachment,
+                # so the default call is unchanged.
                 classes = gate_evidence_classes(repository, merged, current)
-                if classes:
-                    validate_proposed_write(
-                        current, proposed, actor="mechanism", evidence_classes=classes
-                    )
-                else:
-                    validate_proposed_write(current, proposed, actor="mechanism")
+                extra: dict[str, Any] = {"evidence_classes": classes} if classes else {}
+                validate_proposed_write(current, proposed, actor="mechanism", **extra)
                 validate_proposed_open_question(
                     current,
                     proposed,
