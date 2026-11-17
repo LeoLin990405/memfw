@@ -111,6 +111,11 @@ def ensure_private_dir(path: Path) -> None:
 IDENTITY_KEYS: Final = ("vault_path", "vault_id", "vault_genesis")
 #: The message (and ``rebuild`` hint) for a projection built from another vault.
 OTHER_VAULT: Final = "projection belongs to another vault: rebuild"
+#: The message for a file built while the vault's event log was still empty
+#: (an empty vault deleted and re-created looks the same, so both are named).
+BEFORE_FIRST_EVENT: Final = (
+    "projection was built from another vault, or before this vault's first event: rebuild"
+)
 
 
 class VaultHost(Protocol):
@@ -149,12 +154,20 @@ class VaultIdentity:
     def matches(self, meta: Mapping[str, str]) -> bool:
         """Whether a projection whose meta is ``meta`` was built from this vault."""
 
+        return self.mismatch(meta) is None
+
+    def mismatch(self, meta: Mapping[str, str]) -> str | None:
+        """``None`` when ``meta`` matches, else the message to show (``rebuild``)."""
+
         if meta.get("vault_path") != self.path:
-            return False
+            return OTHER_VAULT
         stored_id = meta.get("vault_id") or ""
         if stored_id and self.vault_id:
-            return stored_id == self.vault_id
-        return meta.get("vault_genesis") == self.genesis
+            return None if stored_id == self.vault_id else OTHER_VAULT
+        stored = meta.get("vault_genesis")
+        if stored == self.genesis:
+            return None
+        return BEFORE_FIRST_EVENT if stored == "" else OTHER_VAULT
 
 
 def _first_line_hash(path: Path) -> str | None:
@@ -270,6 +283,7 @@ def vault_identity(host: VaultHost) -> VaultIdentity:
 
 __all__ = [
     "DATA_ROOT",
+    "BEFORE_FIRST_EVENT",
     "IDENTITY_KEYS",
     "OTHER_VAULT",
     "UNLOCKED_ATTEMPTS",

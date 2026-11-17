@@ -93,7 +93,6 @@ import yaml
 
 from .core.epistemic import _GENERATED_PROVENANCES, EXPERIENCE_POINT_TYPE
 from .core.local_data import (
-    OTHER_VAULT,
     VaultIdentity,
     ensure_private_dir,
     projection_file,
@@ -565,8 +564,9 @@ def _check_meta(connection: sqlite3.Connection, identity: VaultIdentity) -> None
     meta = dict(connection.execute("SELECT key, value FROM meta").fetchall())
     if meta.get("schema_version") != str(SCHEMA_VERSION):
         raise CorroborationError("corroboration projection has another schema version: rebuild it")
-    if not identity.matches(meta):
-        raise OtherVaultError(f"corroboration {OTHER_VAULT} it (`memfw corroboration rebuild`)")
+    reason = identity.mismatch(meta)
+    if reason is not None:
+        raise OtherVaultError(f"corroboration {reason} it (`memfw corroboration rebuild`)")
 
 
 def check_projection(path: Path, identity: VaultIdentity) -> None:

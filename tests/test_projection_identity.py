@@ -542,3 +542,19 @@ def test_an_unlocked_read_retries_while_the_vault_changes(tmp_path: Path) -> Non
 
     with pytest.raises(OSError, match="I/O error"):
         read_vault(Broken([]), lambda: 1)
+
+
+def test_a_projection_built_before_the_first_event_says_so(tmp_path: Path) -> None:
+    """L3: an empty log at build time, events since: the message names both causes."""
+
+    from memfw.core.local_data import BEFORE_FIRST_EVENT
+
+    repository = _vault(tmp_path / "vault")
+    assert vault_identity(repository).genesis == ""
+    rebuild_edge_projection(repository)
+    repository.add("m-1", "a", memory_id="m-1", privacy="public")
+    with pytest.raises(GraphError, match="before this vault's first event"):
+        graph_match(repository, start="m-1", path="about>")
+    assert vault_identity(repository).mismatch({"vault_path": "/x"}) == OTHER_VAULT
+    built_empty = VaultIdentity(vault_identity(repository).path).meta()
+    assert vault_identity(repository).mismatch(built_empty) == BEFORE_FIRST_EVENT

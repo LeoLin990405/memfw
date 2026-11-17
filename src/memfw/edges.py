@@ -86,7 +86,6 @@ from typing import Any, Final
 
 from .core.errors import MemfwError
 from .core.local_data import (
-    OTHER_VAULT,
     VaultIdentity,
     ensure_private_dir,
     projection_file,
@@ -474,8 +473,9 @@ class SqliteProjectionStore:
         meta = dict(connection.execute("SELECT key, value FROM meta").fetchall())
         if meta.get("schema_version") != str(SCHEMA_VERSION):
             raise EdgeError("edge projection has another schema version: rebuild it")
-        if self.identity is not None and not self.identity.matches(meta):
-            raise EdgeError(f"edge {OTHER_VAULT} it (`memfw graph rebuild`)")
+        reason = self.identity.mismatch(meta) if self.identity is not None else None
+        if reason is not None:
+            raise EdgeError(f"edge {reason} it (`memfw graph rebuild`)")
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
