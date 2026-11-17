@@ -516,7 +516,8 @@ class Runtime:
 
         check_conversation_app(app)
         self.open_repository()
-        return open_share(self.root, app)
+        # The embedder serves only ``conversations_search(mode=two_stage)``.
+        return open_share(self.root, app, embedder=self.embedder)
 
     def history_scoped(
         self, repository: Repository, app: str, *, refresh_seconds: float

@@ -38,14 +38,20 @@ def open_share(
     *,
     source: ConversationSource | None = None,
     store: Path | None = None,
+    embedder: Any = None,
 ) -> ConversationShare:
+    """The share as ``caller`` sees it. ``embedder`` (an embedding provider, the
+    runtime's one) serves only the ``two_stage`` search's semantic list."""
+
     config, vault = read_config(root)
     policy = SharePolicy.from_config(config)
     if source is None:
         db = checked_location(store, config, vault=vault) if store else None
         source = SqliteStoreSource(db or store_path(config, vault=vault))
     state = WorkState(state_path(config, vault=vault))
-    return ConversationShare(source, policy, caller, summaries=state.session_summary)
+    return ConversationShare(
+        source, policy, caller, summaries=state.session_summary, labels=state, embedder=embedder
+    )
 
 
 def open_worker(
