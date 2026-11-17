@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 import yaml
 from filelock import FileLock
 
+from ..attachments.lifecycle import AttachmentLifecycleMixin
 from ..attachments.proxies import ProxyStoreMixin, validate_proxy_config
 from ..attachments.store import AttachmentStoreMixin, validate_attachment_config
 from ..budget import BudgetProfile
@@ -101,6 +102,7 @@ class Repository(
     KnowledgeStoreMixin,
     AttachmentStoreMixin,
     ProxyStoreMixin,
+    AttachmentLifecycleMixin,
 ):
     """A local vault. Markdown and events are authoritative; SQLite is disposable."""
 

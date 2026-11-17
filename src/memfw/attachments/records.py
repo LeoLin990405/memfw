@@ -31,10 +31,12 @@ from memfw.ports.privacy import (
     metadata_level,
 )
 
+from .locations import Location, LocationError
+
 ATTACHMENTS_DIR: Final = "attachments"
 RECORD_TYPE: Final = "attachment"
-#: Storage kinds. MM1a writes only ``embedded`` (a blob in the blob store);
-#: ``referenced`` (a location relative to a configured root) arrives in MM1b.
+#: Storage kinds: ``embedded`` (a blob in the blob store) or ``referenced``
+#: (a ``location`` under a configured root, ``memfw.attachments.locations``).
 STORAGE_KINDS: Final = ("embedded", "referenced")
 #: The level of a new attachment that sets none (design v2.1: not the legacy default).
 DEFAULT_ATTACHMENT_PRIVACY: Final = LEGACY_PRIVACY_FALLBACK
@@ -54,6 +56,7 @@ _KNOWN_KEYS: Final = frozenset(
         "size",
         "media_type",
         "storage",
+        "location",
         "original_name",
         "origin",
         "captured_at",
@@ -135,6 +138,8 @@ class AttachmentRecord:
     media_type: str
     recorded_at: str
     storage: str = "embedded"
+    #: ``<root>:<relative path>``; set exactly when ``storage`` is ``referenced``.
+    location: str | None = None
     privacy: str | None = DEFAULT_ATTACHMENT_PRIVACY
     original_name: str | None = None
     origin: str | None = None
@@ -156,6 +161,15 @@ class AttachmentRecord:
             raise ValueError("size must be a non-negative integer")
         if self.storage not in STORAGE_KINDS:
             raise ValueError("storage must be embedded or referenced")
+        if self.storage == "referenced":
+            if self.location is None:
+                raise ValueError("a referenced attachment needs a location")
+            try:
+                Location.parse(self.location)
+            except LocationError as exc:
+                raise ValueError(f"invalid location: {exc}") from None
+        elif self.location is not None:
+            raise ValueError("only a referenced attachment has a location")
         check_media_type(self.media_type)
         check_retention(self.retention)
         _iso(self.recorded_at)
@@ -184,6 +198,8 @@ class AttachmentRecord:
             "media_type": self.media_type,
             "storage": self.storage,
         }
+        if self.location is not None:
+            data["location"] = self.location
         if self.original_name:
             data["original_name"] = self.original_name
         if self.origin:
@@ -272,6 +288,7 @@ def parse_record(raw: bytes, expected_id: str) -> AttachmentRecord:
             media_type=str(meta["media_type"]),
             recorded_at=_iso(meta["recorded_at"]),
             storage=str(meta["storage"]),
+            location=None if meta.get("location") is None else str(meta["location"]),
             # A present but unrecognised value stays as is (read as unknown).
             privacy=None if privacy is None else str(privacy),
             original_name=None if meta.get("original_name") is None else str(meta["original_name"]),

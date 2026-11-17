@@ -435,7 +435,15 @@ class TransactionMixin:
             self.pending_path.unlink(missing_ok=True)
             if self.recover_log_compaction():
                 changed.append("events.jsonl")
-            if manifest.get("operation") == "add_attachment_record":
+            if manifest.get("operation") in {
+                "add_attachment_record",
+                "add_reference_record",
+                "detach_attachment",
+                "record_missing_attachments",
+                "relink_attachment",
+                "purge_attachment",
+                "purge_orphan_blobs",
+            }:
                 changed.extend(cast(Any, self)._reconcile_attachment_records(event_list))
             if manifest.get("operation") == "add_proxy_record":
                 changed.extend(cast(Any, self)._reconcile_proxy_records(event_list))

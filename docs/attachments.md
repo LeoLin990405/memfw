@@ -1,11 +1,13 @@
-# Attachments (MM1a)
+# Attachments (MM1a, MM1b)
 
 An attachment is an original file (a scan, a PDF, an image, a recording) that
-memories can point at. memfw keeps the original's bytes as a **blob outside the
-vault** and a small **record** inside it. This page covers what MM1a ships:
-the blob store, the records, the events and `memfw attach add/list/show/verify`.
-Proxies (OCR text, transcripts), search over them, `att:` evidence rules,
-detach, purge and referenced (external) originals come later; see
+memories can point at. memfw keeps a small **record** inside the vault and the
+original either as a **blob outside the vault** (embedded) or where it already
+is, under a configured root (**referenced**: no copy). This page covers MM1a
+(blob store, records, events, `memfw attach add/list/show/verify`) and MM1b
+(referenced originals and their path safety, `detach`, `relink` and the
+missing state, `purge`, `scan`). Proxies (OCR text, transcripts), search over
+them and `att:` evidence rules come later; see
 [What comes next](#what-comes-next).
 
 Nothing here uses the network, runs a model or changes what any existing
@@ -82,7 +84,10 @@ Optional human note.
   registered more than once (two records, one blob).
 * `original_name` is the base name only. A record never holds an absolute
   path or any of the original's bytes.
-* `storage` is always `embedded` in MM1a (`referenced` is MM1b).
+* `storage` is `embedded` (a blob) or `referenced`; a referenced record also
+  has `location: <root>:<relative path>` (see
+  [Referenced originals](#referenced-originals-mm1b)) and never an absolute
+  path.
 * Unknown keys written by a newer version are ignored on read.
 * The frontmatter opens and closes with lines that are exactly `---`, so
   `---` inside a value (a name, origin, rights or tag) never ends it. Each
@@ -119,9 +124,15 @@ memfw attach add FILE [--root VAULT] [--embed] [--privacy LEVEL]
                  [--media-type TYPE] [--origin TEXT] [--note TEXT]
                  [--captured-at ISO] [--retention keep|review|until:DATE]
                  [--rights TEXT] [--tag TAG]...
-memfw attach list [--root VAULT] [--json]
+memfw attach add FILE|ROOT:PATH --reference [--root VAULT] [...same options]
+memfw attach list [--root VAULT] [--json] [--all]
 memfw attach show ID [--root VAULT]
-memfw attach verify [ID]... [--root VAULT]
+memfw attach verify [ID]... [--root VAULT] [--record-missing] [--no-candidates]
+memfw attach detach ID [--root VAULT]
+memfw attach relink ID FILE|ROOT:PATH [--root VAULT]
+memfw attach purge ID [--yes] [--root VAULT]
+memfw attach purge --orphans [--yes] [--root VAULT]
+memfw attach scan ROOT:[DIR]|DIR [--hash] [--root VAULT]
 ```
 
 * `add` hashes and copies FILE in 1 MiB chunks, links the blob to its sha256,
@@ -130,10 +141,15 @@ memfw attach verify [ID]... [--root VAULT]
   `deduplicated`). `deduplicated: true` means the blob was already stored.
   FILE must be a regular file; a symlink is refused (attach its target).
   The media type is guessed from the name unless `--media-type` is given.
-  Audio and video default to a referenced attachment, which MM1a does not
-  support, so they need `--embed`.
+  With `--reference` nothing is copied and the JSON line also has
+  `location`. Audio and video default to a reference: inside a configured
+  root they are referenced without the flag; outside every root they need
+  `--embed`. `--embed` and `--reference` exclude each other.
 * `list` prints `id`, media type, size, privacy level and name, tab-separated
   (`--json`: one array). A damaged record is a warning on stderr and exit 1.
+  Detached attachments are hidden unless `--all`; JSON rows gain `storage` and
+  `location` for a referenced attachment and `state` (`detached`, `missing`)
+  when it is not active. `show` gains `state` the same way.
 * `show` prints the record as JSON plus `cited_by`: the memories whose
   `evidence` names the attachment — `att:ID` (optionally with a `#locator`, in
   any spelling) and, since MM3, the other pointers the gate treats as naming
@@ -151,8 +167,9 @@ memfw attach verify [ID]... [--root VAULT]
 | `attachments_blob_root` | `~/.local/share/memfw/blobs` | blob root |
 | `vault_id` | generated on first attach | names the vault's blob directory (a UUID) |
 
-Over a limit, `add` fails and says so; it never switches to a reference on
-its own. A duplicate original adds nothing to the total. The keys are checked
+Over a limit, `add` fails and says so (pointing at `--reference`); it never
+switches to a reference on its own. The limits apply to embedded originals
+only. A duplicate original adds nothing to the total. The keys are checked
 whenever `vault.yaml` is read or written.
 
 The total is summed from the event log: each `attach` event records the
@@ -167,8 +184,12 @@ later add of the same bytes reuses is not counted.
 
 MM1a adds eight event kinds: `attach`, `attach_update`, `detach`,
 `attach_purge`, `attach_missing`, `attach_relink`, `proxy_add`,
-`proxy_supersede`. Only `attach` is written now; the others are reserved for
-MM1b and MM2 so their classification is fixed today.
+`proxy_supersede`. MM1a writes `attach`; MM1b writes `detach`,
+`attach_missing`, `attach_relink` and `attach_purge`; `attach_update` and the
+proxy kinds are reserved for MM2. All are known, non-memory kinds. The four
+MM1b writes also carry `details.projection: "none"`, the event-log
+forward-compat marker that lets a reader which does not know a kind skip it
+(harmless for readers that know it).
 
 `memfw.core.models` holds the one event manifest: every `EventKind` is in
 exactly one of `MEMORY_EVENT_KINDS` (projected by `replay` onto `memories/`)
@@ -179,7 +200,13 @@ else, which for the known kinds is exactly `NON_MEMORY_EVENT_KINDS`.
 
 An `attach` event names the attachment id (`memory_id`), the record's hash
 (`after_hash`) and `details: {"storage": "embedded", "size": N, "blob":
-"new"|"shared"}` (events written before `size` carry only `storage`). It never
+"new"|"shared"}` (events written before `size` carry only `storage`; a
+referenced one is `{"storage": "referenced", "size": N}`). `detach` and
+`attach_missing` repeat the committed record hash, `attach_relink` has the
+old and new record hashes, `attach_purge` has `details.blob` (`deleted`,
+`kept`, `absent`, `none`) and, when a kept shared blob changes owner for the
+quota, `details.heir` (another attachment id). No event carries a location
+or a name. It never
 carries the original's sha256, name or content, so a later purge has nothing to scrub
 from the hash-chained log. The first attach also records one `config_change`
 for `vault_id` (`vault.yaml` is rewritten by `configure`, like
@@ -251,6 +278,10 @@ explicit marker that it never changes memory state:
 | `blob_orphan` (warning) | a blob no readable record names |
 | `blob_mode_loose` (warning) | a blob readable by group or others |
 | `blob_stage_stale` (warning) | one of this vault's `.stage-*.tmp` older than an hour under the blob root (an interrupted `add`); never deleted |
+| `referenced_missing` | the referenced original is not at its location (the root is there); lists `candidates` |
+| `referenced_modified` | the referenced original's bytes or size differ from the record |
+| `referenced_unsafe` | a component of the location is now a symlink (never followed) |
+| `referenced_unavailable` (warning) | the root is not configured on this host or not mounted |
 | `blob_stage_foreign` (warning) | how many stale staging files under the root belong to other vaults (or carry no tag); not named, never deleted |
 
 * `fsck` only reports attachment problems. It never registers an
@@ -261,8 +292,8 @@ explicit marker that it never changes memory state:
   `vault.yaml` has a `vault_id` it checks the blob directory even when
   `attachments/` does not exist (an `add` may have stopped before its record).
 * Orphan blobs come from an interrupted `add` (the blob is linked before the
-  record commits) or from a record removed by hand. MM1a reports them and
-  deletes nothing.
+  record commits) or from a record removed by hand. `verify` and `fsck`
+  report them and delete nothing; `attach purge --orphans --yes` reclaims them.
 * A stored blob that no longer matches its address is never reused: a new
   `add` of the same bytes fails and points at `attach verify`.
 * `memfw recover` after an interrupted `add` removes a record no event
@@ -300,18 +331,128 @@ count toward the vault's physical budget (as `other`); blobs do not.
 * So: **no downgrade to 0.3.0 after the first `attach add`; upgrade all hosts
   that read the vault before first use.**
 
+## Referenced originals (MM1b)
+
+A referenced attachment keeps no copy. Its record holds `location:
+<root>:<relative path>` plus the original's sha256 and size; `verify`
+re-hashes the file in place. Roots are named in `vault.yaml`, so each host maps
+a name to wherever it mounts the tree:
+
+```yaml
+attachments_roots:
+  kh: /mnt/notes                        # on one host
+# kh: /srv/notes   (the same name on another host)
+```
+
+* A root name is `[a-z][a-z0-9_-]*` (at most 32), not a reserved word (`att`,
+  `file`, `http`, `https`, `sha256`, `mem`, `memory`, `data`, `ftp`, `urn`).
+  A directory is absolute or `~`-prefixed, without `..`, and not inside the
+  vault. Changing the mapping is a `config_change`.
+* A reference needs no `vault_id` and no blob store.
+
+### Path safety
+
+Every add, verify, relink and scan applies the same rules; a refusal writes
+nothing.
+
+* A location's path is POSIX: relative, `/`-separated, no empty, `.` or `..`
+  component, no backslash, NUL or control character. Records written on a Mac
+  read the same on Linux.
+* A file given by its filesystem path must lie **lexically** inside a root:
+  the path is made absolute but never resolved, so `..` (refused outright) or
+  a symlink cannot carry it in or out. A root matches as configured and as
+  resolved (`/tmp` is `/private/tmp` on macOS); the most specific root wins.
+  A path outside every root is refused.
+* Opening walks from the root one component at a time (`dir_fd`,
+  `O_NOFOLLOW`): a symlink anywhere in the path is refused, whether it points
+  out of the root or inside it, and the last component must be a regular file
+  (a FIFO or a directory is refused).
+* Each component must match a directory entry **exactly**, case and Unicode
+  normalization included. On a case-insensitive filesystem `kh:report.pdf`
+  would open `Report.pdf`; memfw refuses it ("no such file"), so a location
+  means one file on macOS and on a case-sensitive Linux host.
+
+### Detach, missing, relink
+
+* `detach ID` is a soft delete: one `detach` event. The record and the blob
+  stay (a blob still counts toward the total); `list` hides it, `verify` no
+  longer checks a detached referenced original. Purge removes it for good.
+* `verify` reports a referenced original that is gone as `referenced_missing`
+  and lists `candidates`: files under the same root with the same size and
+  sha256 (one bounded walk per root, symlinks never followed, at most five).
+  It never relinks. A root that is not mounted (or not configured on this
+  host) is `referenced_unavailable`, a warning, not "missing". `fsck` reports
+  the same statuses without searching for candidates.
+* `verify --record-missing` appends one `attach_missing` per newly missing
+  original; `show` and `list` then say `state: missing`.
+* `relink ID FILE|ROOT:PATH` (a human command) points the record at the new
+  location after checking that the file there has the record's sha256 and
+  size; anything else is a different original and is refused. One
+  `attach_relink` event; the record's old bytes stay as `<id>.md.prev` until
+  the event commits, so `memfw recover` can put them back.
+
+### Purge
+
+`purge ID` is the hard delete and needs `--yes`. Without it the plan is
+printed and nothing is written:
+
+* `cited_by` (memories whose `evidence` cites `att:ID`) and `mentioned_by`
+  (memories whose title or body mention `att:ID`). Purge never changes a
+  memory: a human decides what to do with them. (There are no proxies yet;
+  proxy text quoted in memory bodies is listed once MM2 adds proxies.)
+* `blob`: `delete`, `keep_shared` (the notice says how many other
+  attachments still use the same blob: **the original is not deleted**),
+  `keep_unverified` (another committed record cannot be read, so no blob is
+  treated as unreferenced), `absent`, or `none` for a referenced attachment,
+  whose original is **never touched** (it is not memfw's copy).
+* `stores`: the SQLite stores in the vault, and `irrecoverable_copies`.
+
+With `--yes` one `attach_purge` event commits the purge (only the id and what
+happened to the blob), then the blob is removed when no other record names
+it, the record (and any `.prev`) is removed, this vault's stale staging files
+are reclaimed, the memory index is dropped (rebuilt on next use, as after a
+hard memory delete) and every other SQLite store in the vault that still
+holds the record's name, note, origin, rights or location is VACUUMed and
+checked again (`vacuumed`, `still_containing`). An interrupted purge is
+finished by `memfw recover`. Attachments never go into the cold archive, so
+no archive is rewritten. After a purge a full-text search of the vault, the
+blob root and the decompressed archives finds nothing of the attachment
+(`tests/test_attachments_mm1b.py::test_purge_leaves_nothing_behind`); the
+event log keeps only its id.
+
+`purge --orphans [--yes]` removes blobs that no committed record names and
+this vault's stale staging files. It removes no orphan while any committed
+record is missing or unreadable (records are the only place a blob's sha256
+is kept) and says so in `blocked`.
+
+**What a purge cannot reach:** external backups (Time Machine, rsync, cloud
+backup) of the vault or the blob root; filesystem or NAS snapshots (for
+example NAS snapshots); federation replicas and other hosts' copies of the
+vault; test or snapshot vaults copied from this one; OKF bundles and other
+exports already written; conversation transcripts or notes that quote the
+original. Those copies are irrecoverable by memfw and have to be removed
+where they live.
+
+### Scan
+
+`scan ROOT:[DIR]` (or a directory inside a root) is a dry-run inventory for a
+bulk registration (design section 8): `files`, `bytes`, `by_media_type`,
+`likely_private` (by path words only, such as `private`, `bank`, `invoice`,
+`身份证`; a hint for the report, never a privacy decision),
+`over_embed_limit`, `already_registered`, `refused_symlinks`,
+`refused_names` (names a location cannot hold), `other_entries`,
+`unreadable_dirs`, `truncated`; with `--hash` also `duplicates` (groups and
+files with the same sha256, hashing only files whose size repeats). It reads
+no file content without `--hash` and writes nothing: no record, no event, no
+blob, no `vault_id`.
+
 ## What comes next
 
 MM1a is the base the later steps build on:
 
-* **MM1b** (roots, path policy, detach, purge, missing/relink): `storage:
-  referenced` with a `location` (a `<root-name>:<relative path>` under configured
-  roots, `lstat` on every component), `--reference` on `add`, `detach`
-  (soft, `detach` event), `purge` (hard, needs human consent; blob refcount
-  is derived from records, so a blob is removed only when no record names it;
-  an orphan must not be reclaimed while any committed record is missing or
-  unreadable, because records are the only place a blob's sha256 is kept),
-  `attach_missing` / `attach_relink` written by `verify` and `relink`.
+* **Knowledge-Hub registration** (design section 8, steps 2 and 3): a pilot
+  in a snapshot vault, then batches in the live vault after each `attach
+  scan` report is reviewed. No command does it on its own.
 * **MM2a/MM2b** (proxies): MM2a stores them in `attachments/proxies/`
   with `proxy_add` / `proxy_supersede` events (see
   [attachment-proxies.md](attachment-proxies.md)); the record checks only
