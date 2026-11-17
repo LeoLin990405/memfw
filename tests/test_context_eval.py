@@ -478,6 +478,37 @@ def test_synthetic_queries_depend_on_the_seed_only() -> None:
     assert synthetic_queries([], seed=1, sessions=3, queries=2) == []
 
 
+def test_hidden_synthetic_hits_do_not_take_the_page(tmp_path: Path) -> None:
+    from memfw.core.models import MemoryDocument
+
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    documents = [
+        MemoryDocument(
+            id="v-0", title="Title", body="alpha beta gamma", created_at=now, updated_at=now
+        )
+    ]
+    ranked = [f"h-{index:02d}" for index in range(12)] + [f"v-{index:02d}" for index in range(30)]
+    asked: list[int] = []
+
+    class Search:
+        def search(self, _query: str, limit: int, *, mode: str) -> dict[str, Any]:
+            asked.append(limit)
+            return {"results": [{"id": memory_id} for memory_id in ranked[:limit]]}
+
+    sessions, dropped = ce.synthetic_sessions(
+        Search(),  # type: ignore[arg-type]
+        documents,
+        lambda memory_id: memory_id.startswith("v-"),
+        seed=1,
+        sessions=1,
+        queries=1,
+    )
+    assert asked == [ce.SYNTHETIC_LIMIT * ce.SYNTHETIC_OVERFETCH]
+    # Twelve hidden hits rank first: the page still holds ten visible ones.
+    assert sessions == [frozenset(f"v-{index:02d}" for index in range(10))]
+    assert dropped == 12
+
+
 def test_generated_vault_invariants(tmp_path: Path) -> None:
     root = random_vault(tmp_path)
     options = EvalOptions(

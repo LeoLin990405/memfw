@@ -202,7 +202,9 @@ events of search operations (grouped by `details.session_id` when present,
 otherwise split after `--session-gap-minutes` of silence, default 30); the
 usage store's `memory_used` signals (one session per `session_ref`); or a
 synthetic query set (`--sessions` x `--queries` queries drawn with `--seed`
-from the visible memories and run through `memory_search(mode=fts)`). The
+from the visible memories and run through `memory_search(mode=fts)`; each
+query fetches four pages and keeps the first 10 visible hits, so hits the
+caller may not see do not take their place). The
 report's `basis` names the source. The pack is built from the snapshot as it
 is now, not as it was when each session started: read old sessions as an
 approximation.

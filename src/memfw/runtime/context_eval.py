@@ -125,6 +125,9 @@ DEFAULT_REPEATS = 5
 DEFAULT_SESSION_GAP_MINUTES = 30.0
 #: Hits per synthetic query (the ``memory_search`` default page).
 SYNTHETIC_LIMIT = 10
+#: A synthetic query fetches this many pages, so hits the caller may not see
+#: (dropped after the search) do not take the place of visible ones.
+SYNTHETIC_OVERFETCH = 4
 #: At most this many sweep rows (slot-cap combinations x resident caps).
 MAX_SWEEP_ROWS = 5000
 #: ``memory_access`` operations written by a search (not by a get or a curation step).
@@ -419,18 +422,35 @@ def synthetic_sessions(
 ) -> tuple[list[frozenset[str]], int]:
     """Sessions of hits of the synthetic queries through ``memory_search(mode=fts)``.
 
-    The runtime's vault is the private copy, with access recording off: the
-    search writes nothing (its index is built in the copy).
+    Each query asks for ``SYNTHETIC_OVERFETCH`` pages and keeps, in rank
+    order, the first ``SYNTHETIC_LIMIT`` hits the caller may see; the hidden
+    ones ranked before them are dropped and counted, so they do not take the
+    place of visible hits (a page of hidden hits would otherwise read as no
+    hits). The runtime's vault is the private copy, with access recording
+    off: the search writes nothing (its index is built in the copy).
     """
 
-    raw: list[set[str]] = []
+    out: list[frozenset[str]] = []
+    dropped = 0
     for session in synthetic_queries(documents, seed=seed, sessions=sessions, queries=queries):
         hits: set[str] = set()
+        hidden: set[str] = set()
         for query in session:
-            payload = runtime.search(query, SYNTHETIC_LIMIT, mode="fts")
-            hits.update(str(row["id"]) for row in payload.get("results", []))
-        raw.append(hits)
-    return _visible_sets(raw, visible)
+            payload = runtime.search(query, SYNTHETIC_LIMIT * SYNTHETIC_OVERFETCH, mode="fts")
+            kept = 0
+            for row in payload.get("results", []):
+                memory_id = str(row["id"])
+                if not visible(memory_id):
+                    hidden.add(memory_id)
+                    continue
+                hits.add(memory_id)
+                kept += 1
+                if kept == SYNTHETIC_LIMIT:
+                    break
+        dropped += len(hidden)
+        if hits:
+            out.append(frozenset(hits))
+    return out, dropped
 
 
 # --- metrics (pure) --------------------------------------------------------------
