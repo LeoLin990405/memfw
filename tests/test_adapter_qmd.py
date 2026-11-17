@@ -1018,11 +1018,10 @@ def test_factories_accept_the_runtime_loader_injected_keys(
 def test_two_stage_loader_builds_the_qmd_provider(
     projected: tuple[Path, Path], fake: FakeQmd
 ) -> None:
-    """Wiring through the runtime loader (lands with the bm25s adapter PR)."""
+    """Wiring through the runtime loader (``vault.yaml`` ``runtime.recall.adapters``)."""
 
-    loader = pytest.importorskip(
-        "memfw.runtime.recall_adapters", reason="runtime recall loader not on this branch yet"
-    )
+    from memfw.runtime import recall_adapters as loader
+
     root, tree = projected
     entries = loader.parse_entries(
         {
@@ -1064,3 +1063,45 @@ def test_note_refs_resolve_through_the_kernel_notes_resolver(
         parse_note_ref(ref) for ref in NOTES_X["expected_refs"]
     }
     assert result.ids == []  # sections are not memories
+
+
+@pytest.mark.parametrize("qmd_up", [True, False])
+def test_two_stage_runs_qmd_from_vault_yaml(
+    fake: FakeQmd, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, qmd_up: bool
+) -> None:
+    """``runtime.recall.adapters`` → ``memory_search mode=two_stage`` end to end (T7 when down)."""
+
+    from memfw.runtime import build_runtime
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    root, meta = build_vault(
+        tmp_path, {name: spec for name, spec in DOCS.items() if name != "stub"}
+    )
+    tree = Path(export_projection(root, tmp_path / "out", lifecycle_source=meta, now=NOW)["tree"])
+    endpoint = fake.url if qmd_up else f"http://127.0.0.1:{_closed_port()}/mcp"
+    entry = {
+        "factory": "memfw_adapter_qmd:memory_factory",
+        "options": {"endpoint": endpoint, "manifest": str(tree)},
+        "timeout_seconds": 3,
+    }
+    config = root / "vault.yaml"
+    config.write_text(
+        config.read_text(encoding="utf-8")
+        + "runtime:\n  recall:\n    adapters: "
+        + json.dumps([entry])
+        + "\n",
+        encoding="utf-8",
+    )
+    payload = build_runtime(root, record_access=False).search(
+        _exchange("memory:cron")["query"], limit=10, mode="two_stage"
+    )
+    ids = [row["id"] for row in payload["results"]]
+    assert ID["active"] in ids  # FTS finds it either way
+    if qmd_up:
+        assert payload["recall"]["providers"] == ["fts", "qmd"] and not payload["degraded"]
+        row = next(r for r in payload["results"] if r["id"] == ID["active"])
+        assert row["providers"] == ["fts", "qmd"]
+    else:
+        assert payload["recall"]["providers"] == ["fts"]
+        assert payload["degraded"] and "qmd" in payload["recall"]["degraded"]
+        assert payload["recall"]["fail_closed"] is False

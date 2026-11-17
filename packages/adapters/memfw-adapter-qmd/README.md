@@ -64,7 +64,7 @@ Settings come only from operator config (never from a request): either the
 `AdaptersConfig` entry-point route (`enabled: ["qmd"]`, `"qmd": {...}`), or
 memfw's runtime recall loader for `two_stage` (`vault.yaml`
 `runtime.recall.adapters: [{factory: "memfw_adapter_qmd:memory_factory",
-options: {...}}]`, landing with the bm25s adapter PR). The loader adds
+options: {...}}]`, `memfw.runtime.recall_adapters`). The loader adds
 `vault` and `embedder` to the settings; both are accepted and ignored. Any
 other unknown key is refused. `qmd-notes` returns `kh:` refs; a coordinator
 resolves them only through `memfw.recall.builtin.NotesSegmentResolver` (note

@@ -729,7 +729,9 @@ runtime:
 - **Access events and clearance.** With a server clearance (`MEMFW_MCP_CLEARANCE`), a hit the
   clearance withholds is neither warmed nor given a `memory_access` event, for any provider,
   since its row is never shown. Without a clearance nothing changes.
-- **Adapters.** [`memfw-adapter-bm25s`](adapter-bm25s.md) (in-process BM25 over memories).
+- **Adapters.** [`memfw-adapter-bm25s`](adapter-bm25s.md) (in-process BM25 over memories);
+  `memfw-adapter-qmd` (`memfw_adapter_qmd:memory_factory`, QMD over a memory projection;
+  see [`qmd-projection.md`](qmd-projection.md#qmd-recall-adapter)).
 
 ### 4.2 MCP `memory_context` `v=2` (ContextPack)
 
