@@ -41,6 +41,7 @@ import yaml  # noqa: F401
 
 from memfw.mcp.protocol import ProtocolMixin, _flag, _rpc_error, client_endpoint_fields
 from memfw.mcp.schema import INSTRUCTIONS, PROTOCOL, SEARCH_POLICIES, SERVER_INFO, TOOLS
+from memfw.mcp.tools_attachments import ATTACHMENT_TOOLS, AttachmentTools
 from memfw.mcp.tools_context import ContextTools
 from memfw.mcp.tools_conversations import ConversationTools, conversation_search_options
 from memfw.mcp.tools_dream import (
@@ -99,9 +100,18 @@ class Gateway(
     ConversationTools,
     DreamTools,
     UsageTools,
+    AttachmentTools,
     ProtocolMixin,
 ):
     """MCP tool implementations bound to one local vault root."""
+
+    def tools(self) -> list[dict[str, Any]]:
+        """``tools/list``: the mixins' list, plus the attachment tools when enabled."""
+
+        listed: list[dict[str, Any]] = super().tools()
+        if self.attachment_tools_enabled():
+            listed = [*listed, *ATTACHMENT_TOOLS]
+        return listed
 
     def handlers(self) -> dict[str, Callable[[dict[str, Any]], Any]]:
         table = self._handlers()
@@ -109,6 +119,8 @@ class Gateway(
             table["memory_used"] = lambda args: self.memory_used(
                 args.get("ids"), args.get("session_ref")
             )
+        if self.attachment_tools_enabled():
+            table.update(self.attachment_handlers())
         return table
 
     def _handlers(self) -> dict[str, Callable[[dict[str, Any]], Any]]:

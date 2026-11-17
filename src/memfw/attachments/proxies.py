@@ -118,8 +118,21 @@ def check_proxy_id(value: str) -> str:
     return value
 
 
+#: ``vault.yaml`` ``mcp:`` switches (MM2b, ``memfw.runtime.attachments``); both default off.
+MCP_KEY: Final = "mcp"
+MCP_SWITCHES: Final = ("attachments", "local_originals")
+
+
 def validate_proxy_config(raw: dict[str, Any]) -> None:
-    """Check the proxy keys of a ``vault.yaml`` mapping (absent keys are fine)."""
+    """Check the proxy keys and the ``mcp:`` switches of a ``vault.yaml`` mapping."""
+
+    if MCP_KEY in raw:
+        section = raw[MCP_KEY]
+        if not isinstance(section, dict):
+            raise IntegrityError("mcp must be a mapping")
+        for key in MCP_SWITCHES:
+            if key in section and not isinstance(section[key], bool):
+                raise IntegrityError(f"mcp.{key} must be true or false")
 
     value = raw.get(PROXY_MAX_BYTES_KEY)
     if PROXY_MAX_BYTES_KEY in raw and (

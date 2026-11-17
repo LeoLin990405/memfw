@@ -86,6 +86,22 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   body is `embedding_bad_response`. The test fakes read the request body and
   ignore an early client close, which made the size test fail on Linux CI.
 
+### Added — attachment search: proxy_segments, ProxyProvider, MCP tools (MM2b)
+
+- Active proxies are searchable through their own index,
+  `proxy_index.sqlite3` (`proxy_segments`, same tokenizer and two-character
+  fallback as memory search), filtered by tenant and privacy (strictest of
+  proxy and attachment), without superseded proxies or attachments past
+  their retention. Memory search, HTTP, OKF and projections never read it.
+- Built-in recall provider `ProxyProvider` (`ref_kind="attachment_segment"`,
+  locator in `extra`, never text); not part of memory recall.
+- MCP `attachment_search` and `attachment_get`, listed only with
+  `mcp.attachments: true` in `vault.yaml` (default off: `tools/list`
+  unchanged). Results are re-checked against the proxy file, the attachment
+  record and the MCP clearance. Originals only with
+  `mcp.local_originals: true` (default off), after re-hashing the blob; the
+  HTTP service never serves attachments.
+
 ### Added — attachment proxies: import format, locators, storage (MM2a)
 
 - `memfw attach proxy import ATT-ID FILE` stores a text proxy (OCR,

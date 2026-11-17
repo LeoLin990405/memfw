@@ -911,6 +911,100 @@ class MultihopProvider:
         return _candidates(self.name, result["results"], why="lexical")
 
 
+class ProxyProvider:
+    """Lexical recall over attachment proxies (``proxy_segments``, MM2b).
+
+    Returns ``attachment_segment`` candidates (``<prx-id>:<n>``) with the
+    segment's canonical locator and the proxy kind in ``extra``; never text.
+    The index filters by tenant and by ``clearance`` (MM0 levels; ``None``
+    admits every level). It is never part of the memory recall assembly: only
+    ``memfw.runtime.attachments`` builds a coordinator with it, so memory
+    search output does not change.
+    """
+
+    lexical = True
+
+    def __init__(
+        self,
+        root: Path | str,
+        *,
+        name: str = "proxy",
+        clearance: frozenset[str] | None = None,
+    ) -> None:
+        self.name = name
+        self.root = Path(root).expanduser()
+        self.clearance = clearance
+        self.projection_version = ""
+
+    def available(self) -> Availability:
+        from memfw.index.proxies import PROXY_INDEX_NAME
+
+        if not _vault_ok(self.root):
+            return Availability.missing("no_vault")
+        if not (self.root / PROXY_INDEX_NAME).is_file():
+            return Availability.missing("no_proxy_index")
+        return Availability.ok()
+
+    def search(
+        self,
+        query: str,
+        *,
+        limit: int,
+        budget: RecallBudget,
+        tenant: str,
+        as_of: datetime | None,
+    ) -> Sequence[Candidate]:
+        del budget, as_of  # one bounded SQLite read; proxies have no validity window
+        from memfw.index.proxies import PROXY_INDEX_NAME, ProxyIndex
+
+        hits = ProxyIndex(self.root / PROXY_INDEX_NAME).search(
+            query, tenant=tenant, clearance=self.clearance, limit=_page(limit)
+        )
+        out: list[Candidate] = []
+        for rank, hit in enumerate(hits, start=1):
+            extra: dict[str, Any] = {"kind": hit.kind, "why": "lexical"}
+            if hit.locator and len(hit.locator) <= 64:
+                extra["locator"] = hit.locator
+            out.append(
+                Candidate(
+                    ref=hit.ref,
+                    ref_kind="attachment_segment",
+                    score=float(hit.score),
+                    provider=self.name,
+                    rank=rank,
+                    extra=extra,
+                )
+            )
+        return out
+
+
+class ProxySegmentResolver:
+    """``attachment_segment`` refs → a filter record in the default tenant.
+
+    The coordinator keys hits by an id of the memory-id shape, so the
+    segment ``<prx-id>:<n>`` resolves to the key ``<prx-id>_<n>``
+    (:func:`segment_key`). Attachments carry no tenant (``""``), source,
+    status or validity; privacy is filtered by the index and re-checked by the
+    caller against the files.
+    """
+
+    def resolve(self, refs: Sequence[str]) -> Mapping[str, Resolution]:
+        from memfw.ports.proxies import SEGMENT_REF_RE
+
+        out: dict[str, Resolution] = {}
+        for ref in refs:
+            if isinstance(ref, str) and SEGMENT_REF_RE.fullmatch(ref):
+                key = segment_key(ref)
+                out[ref] = Resolution(key, MemoryMeta(memory_id=key, tenant=""))
+        return out
+
+
+def segment_key(ref: str) -> str:
+    """``<prx-id>:<n>`` → ``<prx-id>_<n>`` (the coordinator's hit id for a segment)."""
+
+    return ref.replace(":", "_", 1)
+
+
 __all__ = [
     "DEFAULT_LIFECYCLE_SOURCE",
     "NOTES_SOURCE",
@@ -922,6 +1016,9 @@ __all__ = [
     "NotesSegmentResolver",
     "Observe",
     "Prepare",
+    "ProxyProvider",
+    "ProxySegmentResolver",
+    "segment_key",
     "VaultIdResolver",
     "default_resolvers",
     "join_lifecycle",

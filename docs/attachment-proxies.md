@@ -218,11 +218,93 @@ event never deactivates another proxy). It never registers an `external_delete` 
 changes a proxy. On a vault without proxies it adds nothing. `memfw recover`
 after an interrupted import removes the uncommitted proxy file.
 
+## Search and MCP (MM2b)
+
+### `proxy_segments`
+
+Active proxies are searchable through their own disposable index,
+`<vault>/proxy_index.sqlite3` (table `proxy_segments`), never through the
+memory index: `memory_search`, the HTTP read-only service, OKF and every
+projection keep reading `index.sqlite3` and `memories/` only.
+
+* Same tokenizer choice and query terms as the memory index (FTS5 trigram,
+  else jieba + unicode61), including the two-character `instr` fallback
+  (`备份`, `AI`).
+* One row per segment of an **active** proxy (superseded ones are left out)
+  of a committed, readable attachment whose sha256 still matches the proxy's
+  `source_sha256` and whose retention has not ended (`until:<date>` is
+  searchable through that day).
+* Each row carries the tenant and the effective privacy level (strictest of
+  proxy and attachment). Attachments belong to the default tenant `""`, so a
+  caller bound to another tenant (or to a source allow-list: attachments have
+  no source) sees none. Search filters both in SQL.
+* The index stores a fingerprint of the attachment and proxy events (and the
+  day, for retention); it is rebuilt on first use when stale, under the vault
+  lock. A vault without a `proxy_add` event never gets the file. It is part of
+  the proxies' own budget, not the vault's physical size.
+
+### `ProxyProvider`
+
+`memfw.recall.builtin.ProxyProvider` (name `proxy`) is a built-in
+`RecallProvider` over that index. It returns `Candidate`s with
+`ref_kind="attachment_segment"`, `ref="<prx-id>:<n>"` and
+`extra={"locator": "<fragment>", "kind": "<proxy kind>", "why": "lexical"}`
+— never text. `ProxySegmentResolver` resolves a segment for the coordinator
+(hit id `<prx-id>_<n>`). It is not part of the memory recall assembly and has
+no configuration key of its own (it is not loaded through
+`runtime.recall.adapters`); only the attachment tools below build a
+coordinator with it, so memory search output is unchanged.
+
+### MCP tools
+
+Listed (and callable) only when `vault.yaml` has:
+
+```yaml
+mcp:
+  attachments: true        # attachment_search / attachment_get (default off)
+  local_originals: false   # originals through attachment_get (default off)
+```
+
+With `mcp.attachments` unset `tools/list` is exactly as before. Both values
+must be booleans.
+
+* `attachment_search {query, limit≤50}` → `results[]` of
+  `{ref, attachment_id, media_type, proxy_id, kind, coverage, partial,
+  status, privacy, producer?, speaker_labels?, segment: {n, text, locator,
+  fragment, speaker?, confidence?}, score}` plus the coordinator's `recall`
+  labels. Every hit is re-checked against the proxy file (hash), its
+  attachment record and the caller's clearance before its text is returned.
+* `attachment_get {id, locator?, original?, offset?, length?}` → the
+  attachment's metadata (`media_type`, `size`, `sha256`, `storage`,
+  `privacy`, `recorded_at`, `retention`, `original_name`, `captured_at`,
+  `rights` when set; never the note or tags), and the segments of its active
+  proxies, optionally only those within `locator` (`page=3`, `t=10,20`, a
+  `bbox` overlap), at most 200 (`truncated`). A withheld or retention-ended
+  attachment raises the same "not found" as a missing one.
+* Clearance is the MCP server's `MEMFW_MCP_CLEARANCE` (MM0): unset admits
+  every level, `public,shared` never returns a `local-private` proxy or
+  attachment.
+
+### Originals
+
+* **HTTP and every remote surface never return originals**: the read-only
+  service has no attachment route at all.
+* `attachment_get` returns an original only with `original=path` or
+  `original=bytes` **and** `mcp.local_originals: true`. The switch is the
+  operator's statement that this MCP server is a local stdio process for a
+  local client; memfw does not try to detect it. Without it the call is
+  refused.
+* Before anything is returned the blob is re-hashed in one pass over one open
+  file (no symlink followed); `bytes` (at most 1 MiB per call, `offset`,
+  `length`) are the very bytes that were hashed. A mismatch or a missing blob
+  refuses the call and points at `memfw attach verify`.
+* Only embedded originals are served (referenced ones arrive with MM1b).
+
 ## Not yet
 
-* Search over proxies (`proxy_segments`), the `ProxyProvider` recall provider
-  and the MCP `attachment_search` / `attachment_get` tools are MM2b.
 * Attachment records do not carry `pages`/`width`/`height`/`duration`; once
   they do, imports are bounded by them as well (`known=`).
-* Marking a proxy `reviewed`, and purging proxies with their attachment
-  (MM1b `purge`), are not implemented here.
+* Marking a proxy `reviewed`; purging proxies with their attachment (MM1b
+  `purge` must also delete `proxy_index.sqlite3`).
+* A refused original does not yet append an `attach_missing` event (design
+  H5); that event's writer belongs to MM1b's `verify`/`relink`.

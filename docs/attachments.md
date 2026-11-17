@@ -516,14 +516,14 @@ MM1a is the base the later steps build on:
 * **Knowledge-Hub registration** (design section 8, steps 2 and 3): a pilot
   in a snapshot vault, then batches in the live vault after each `attach
   scan` report is reviewed. No command does it on its own.
-* **MM2a/MM2b** (proxies): MM2a stores them in `attachments/proxies/`
-  with `proxy_add` / `proxy_supersede` events (see
-  [attachment-proxies.md](attachment-proxies.md)); the record checks only
-  read `attachments/*.md`, so a proxy is never taken for a record. Locator
-  bounds will also use `pages`, `width`, `height`, `duration` once the record
-  carries them. `attachment_search` / `attachment_get` go through
-  `memfw.runtime` and must filter by `AttachmentRecord.privacy_level` with the
-  exit's clearance.
+* **MM2a/MM2b** (proxies): stored in `attachments/proxies/` with
+  `proxy_add` / `proxy_supersede` events; the record checks only read
+  `attachments/*.md`, so a proxy is never taken for a record. MM2b adds the
+  `proxy_segments` index (outside the vault) and the MCP `attachment_search` /
+  `attachment_get` tools (off by default); `attach purge` removes a purged
+  attachment's proxy files and drops the proxy index. See
+  [attachment-proxies.md](attachment-proxies.md). Locator bounds will also use
+  `pages`, `width`, `height`, `duration` once the record carries them.
 * **MM3** (`observation` evidence class) is in: see "What counts as evidence"
   in `docs/epistemic-and-experience.md`. Locators resolve at attachment level;
   once MM2 has proxy segments, a segment index can be passed to
