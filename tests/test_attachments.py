@@ -806,3 +806,21 @@ def test_concurrent_first_adds_agree_on_one_vault_id(tmp_path: Path, private_hom
     assert sorted(path.name for path in blob_root.iterdir()) == sorted(
         [".staging", repository.read_config()["vault_id"]]
     )
+
+
+def test_a_refused_blob_root_writes_nothing(tmp_path: Path) -> None:
+    repository = _repo(tmp_path)
+    source = _file(tmp_path, "a.txt", b"a")
+    work = tmp_path / "work"
+    (work / ".git").mkdir(parents=True)
+    for refused in (repository.root / "blobs", work / "blobs", Path.home() / "Dropbox" / "b"):
+        _set_root(repository, refused)
+        before = (repository.events_path.read_bytes(), repository.config_path.read_bytes())
+        with pytest.raises(BlobLocationError):
+            repository.add_attachment(source)
+        after = (repository.events_path.read_bytes(), repository.config_path.read_bytes())
+        assert after == before, refused
+        assert "vault_id" not in repository.read_config()
+        assert not refused.exists()
+    assert not repository.pending_path.exists()
+    assert not (repository.root / ATTACHMENTS_DIR).exists()

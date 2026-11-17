@@ -268,16 +268,17 @@ class AttachmentStoreMixin:
             )
             # A value that would not read back is refused before anything is written.
             render_record(draft)
-            AttachmentStoreMixin.ensure_vault_id(self)
             # Staged under the blob root, independent of the vault id; the
-            # vault's blob directory is resolved under the lock below.
+            # vault's blob directory is resolved under the lock below. Staging
+            # checks the location first, so a refused root writes nothing.
             with os.fdopen(handle, "rb", closefd=False) as stream:
                 staged = stage_blob(
-                    _blob_root(self.read_config()), stream, vault=self.root, max_bytes=max_bytes
+                    _blob_root(config), stream, vault=self.root, max_bytes=max_bytes
                 )
         finally:
             os.close(handle)
         try:
+            AttachmentStoreMixin.ensure_vault_id(self)
             result: AttachResult = cast(Any, self).add_attachment_record(draft, staged)
             return result
         finally:
