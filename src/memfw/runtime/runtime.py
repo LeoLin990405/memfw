@@ -246,6 +246,11 @@ class Runtime:
         self._legacy_privacy_cache = (key, value)
         return value
 
+    def _question_keep(self) -> Callable[[MemoryDocument], bool] | None:
+        """Which open questions may label a hit: ``None`` (all) without a clearance."""
+
+        return None if self.clearance is None else self.privacy_admits
+
     def privacy_admits(self, document: MemoryDocument) -> bool:
         """Whether the clearance admits ``document`` (always, without a clearance)."""
 
@@ -690,7 +695,9 @@ class Runtime:
             clock=lambda: moment,
         )
         result = coordinator.search(query, limit=limit, policy=filter_policy)
-        result = _with_open_question_labels(repository, result, filter_policy, now=moment)
+        result = _with_open_question_labels(
+            repository, result, filter_policy, now=moment, keep=self._question_keep()
+        )
         errors: tuple[str, ...] = ()
         if self.record_access():
             errors = _touch_returned(repository, [hit.memory_id for hit in result.hits])
@@ -767,7 +774,9 @@ class Runtime:
         )
         self.ensure_index(repository)
         moment = now if now is not None else datetime.now(UTC)
-        return open_question_labels_for(repository, memory_ids, policy, now=moment)
+        return open_question_labels_for(
+            repository, memory_ids, policy, now=moment, keep=self._question_keep()
+        )
 
     def open_question_queue(
         self,
@@ -807,13 +816,30 @@ class Runtime:
                 return False
             return evaluate(meta_from_document(document), policy, now=moment).kept
 
-        return open_question_queue(
+        queue = open_question_queue(
             repository,
             [item for item in open_questions(repository, policy, now=moment) if keep(item)],
             app=app,
             visible=keep,
             allow_operator=allow_operator,
         )
+        if self.clearance is not None:
+            # MM0: a listed question may still name a memory the clearance
+            # withholds; such an id is not shown.
+            for row in queue["questions"]:
+                row["conflicts"] = [
+                    memory_id
+                    for memory_id in row["conflicts"]
+                    if self._conflict_shown(repository, memory_id)
+                ]
+        return queue
+
+    def _conflict_shown(self, repository: Repository, memory_id: str) -> bool:
+        try:
+            document = repository.get(memory_id)
+        except (MemfwError, OSError, UnicodeDecodeError, ValueError):
+            return False
+        return self.privacy_admits(document)
 
     # --- memory_context (C1) ---------------------------------------------------
 
@@ -979,7 +1005,12 @@ def _plain_message(message: str, root: Path) -> str:
 
 
 def _with_open_question_labels(
-    repository: Repository, result: RecallResult, policy: Any, *, now: datetime
+    repository: Repository,
+    result: RecallResult,
+    policy: Any,
+    *,
+    now: datetime,
+    keep: Callable[[MemoryDocument], bool] | None = None,
 ) -> RecallResult:
     """``result`` with each hit's open-question labels appended to its ``labels``."""
 
@@ -990,7 +1021,7 @@ def _with_open_question_labels(
     from memfw.recall.builtin import open_question_labels_for
 
     extra = open_question_labels_for(
-        repository, [hit.memory_id for hit in result.hits], policy, now=now
+        repository, [hit.memory_id for hit in result.hits], policy, now=now, keep=keep
     )
     if not extra:
         return result

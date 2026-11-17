@@ -63,6 +63,12 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   `privacy: local-private`, and confirmed session captures are written
   `local-private`. A non-human, unapproved write may not clear an explicit
   `privacy` field.
+- Under `MEMFW_MCP_CLEARANCE`, recall labels (`labels: true` in every mode and
+  `two_stage`) count only open questions the clearance admits: a withheld
+  question gives neither `open_question:<id>` nor `conflicted`. The U5
+  review queue (`memfw corroboration queue`) reads the field through the
+  strict policy, and under a clearance lists only admitted questions and
+  conflict ids. Corroboration is computed on rows that passed the clearance.
 - `docs/READONLY-SERVICE-UPGRADE.md`: deploy the three service files together
   and pair `MEMFW_READONLY_CLEARANCE` with the vault's privacy defaults.
 

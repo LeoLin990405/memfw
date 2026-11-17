@@ -1021,3 +1021,92 @@ def test_session_capture_is_local_private(tmp_path: Path) -> None:
     candidate_id = session.items()[0].candidate_id
     confirm_candidates(repository, [f"{candidate_id}=keep"])
     assert repository.get("captured").privacy == "local-private"
+
+
+# ---------------------------------------------------------------------------
+# Review fixes (PR #62 round 4): recall labels and the review queue
+# ---------------------------------------------------------------------------
+
+LABEL_CONCEPT = "concept:svc:retry"
+
+
+def _question_vault(tmp_path: Path) -> Repository:
+    repository = _private_vault(tmp_path)
+    for memory_id, level in (("hit", "public"), ("peer", "public"), ("other", "public")):
+        repository.add(
+            "Retry policy",
+            f"corpus keyword retry {memory_id}",
+            memory_id=memory_id,
+            about=[LABEL_CONCEPT],
+            privacy=level,
+        )
+    for question_id, level, conflicts in (
+        ("q-private", "local-private", ["hit", "peer"]),
+        ("q-shared", "shared", ["peer", "other"]),
+    ):
+        repository.add(
+            f"Open question {question_id}",
+            "which retry count holds",
+            memory_id=question_id,
+            memory_type="open-question",
+            about=[LABEL_CONCEPT],
+            open_question={
+                "question": "Which retry count holds?",
+                "conflicts": conflicts,
+                "missing": "a measurement",
+                "resolved_by": None,
+            },
+            privacy=level,
+        )
+    MemoryIndex(repository.index_path).rebuild(repository)
+    return repository
+
+
+def _labels(found: dict) -> dict[str, list[str]]:
+    return {row["id"]: list(row.get("recall_labels") or []) for row in found["results"]}
+
+
+@pytest.mark.parametrize(
+    ("clearance", "visible_questions"),
+    [(None, {"q-private", "q-shared"}), (REMOTE, {"q-shared"}), ("public", set())],
+)
+@pytest.mark.parametrize("mode", ["fts", "two_stage"])
+def test_open_question_labels_follow_the_clearance(
+    tmp_path: Path, clearance: str | None, visible_questions: set[str], mode: str
+) -> None:
+    repository = _question_vault(tmp_path)
+    gateway = Gateway(repository.root, entity_enabled=False, clearance=clearance)
+    found = gateway.search("corpus keyword retry", limit=50, mode=mode, labels=True)
+    labels = _labels(found)
+    assert {"hit", "peer", "other"} <= set(labels)
+    named = {
+        label.split(":", 1)[1]
+        for row_labels in labels.values()
+        for label in row_labels
+        if label.startswith("open_question:")
+    }
+    assert named == visible_questions
+    # ``conflicted`` only from a question the caller may see.
+    assert ("conflicted" in labels["hit"]) == ("q-private" in visible_questions)
+    assert ("conflicted" in labels["other"]) == ("q-shared" in visible_questions)
+    if clearance is not None:
+        assert not set(labels) & {"q-private"}
+
+
+def test_review_queue_honours_field_and_clearance(tmp_path: Path) -> None:
+    repository = _question_vault(tmp_path)
+    repository.update("peer", privacy="local-private")
+    plain = Gateway(repository.root, entity_enabled=False).runtime.open_question_queue(
+        repository, app=None, allow_operator=True
+    )
+    # Strict reads the field: the local-private question is never queued.
+    assert [row["id"] for row in plain["questions"]] == ["q-shared"]
+    cleared = Gateway(repository.root, entity_enabled=False, clearance=REMOTE)
+    queue = cleared.runtime.open_question_queue(repository, app=None, allow_operator=True)
+    assert [row["id"] for row in queue["questions"]] == ["q-shared"]
+    assert queue["questions"][0]["conflicts"] == ["other"]
+    public = Gateway(repository.root, entity_enabled=False, clearance="public")
+    assert (
+        public.runtime.open_question_queue(repository, app=None, allow_operator=True)["questions"]
+        == []
+    )
