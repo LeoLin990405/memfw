@@ -107,6 +107,16 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   downgrade to 0.3.0 after the first `attach add`; upgrade all hosts that read
   the vault before first use.** See [`docs/attachments.md`](docs/attachments.md).
 
+### Fixed — concurrent first attachment adds no longer fail on directory creation
+
+- Two processes adding the first attachment at the same time could both
+  find the blob root (or `<root>/.staging`, `<root>/<vault_id>`, a shard
+  directory) missing; the one that lost the `mkdir` race failed with
+  `FileExistsError` and its add was lost. The loser now re-checks what the
+  winner made: a plain directory is used (tightened to 0700 if looser), a
+  symlink or a non-directory is still refused (`BlobLocationError`).
+  Missing parents are made as before.
+
 ## [0.3.0] — 2026-11-17
 
 The second numbered release: a layered core behind swappable ports, recall and

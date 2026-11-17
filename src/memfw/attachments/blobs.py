@@ -94,12 +94,22 @@ def check_blob_location(path: Path, *, vault: Path, extra_synced: Sequence[Path]
 
 
 def _private_dir(directory: Path) -> None:
-    """Create ``directory`` 0700 (parents too); refuse a symlink or a non-directory."""
+    """Create ``directory`` 0700 (parents too); refuse a symlink or a non-directory.
+
+    Safe when several processes make the same directory at once (concurrent
+    first adds): whoever loses the ``mkdir`` race re-checks what the winner
+    made, so a symlink or a file planted there is still refused. Missing
+    parents are made as ``Path.mkdir(parents=True)`` makes them.
+    """
 
     try:
         info = os.lstat(directory)
     except FileNotFoundError:
-        directory.mkdir(parents=True, mode=0o700)
+        directory.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.mkdir(directory, 0o700)
+        except FileExistsError:
+            pass  # made concurrently; the lstat below checks what is there now
         info = os.lstat(directory)
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
         raise BlobLocationError(f"blob directory is not a plain directory: {directory.name}")
