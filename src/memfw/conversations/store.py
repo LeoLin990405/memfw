@@ -33,6 +33,7 @@ from memfw.history.transcripts import (
     ensure_private_file,
     goal_text,
     safe_text,
+    session_fingerprint,
     ts_display,
     ts_key,
 )
@@ -53,6 +54,7 @@ __all__ = [
     "ensure_private_file",
     "goal_text",
     "safe_text",
+    "session_fingerprint",
     "ts_display",
     "ts_key",
 ]

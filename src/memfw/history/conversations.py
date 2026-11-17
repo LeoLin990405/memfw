@@ -41,6 +41,26 @@ is not retried until the file changes (``sessions_too_large``).
 Text is scrubbed before it is written: lone UTF-16 surrogates (a JavaScript
 writer that cut a pair) become U+FFFD, which SQLite can encode. Timestamps
 with a UTC offset are stored as UTC ``...Z`` so text comparison orders them.
+
+Settled ingest (``settled_minutes``; absent means every change is ingested as
+before). A locator whose last activity is within ``settled_minutes`` of now is
+skipped this round (``sessions_unsettled``): no turn is written and its cursor
+is left as it was, so the next round reads it again (an archived session that
+became active again loses its archive row). Last activity is the
+newest timestamp among the turns read this round, else the file's mtime. A
+locator holding several sessions settles once all of them are quiet. The
+cwd opt-out still applies to an unsettled locator (its stored rows are dropped).
+
+When a settled locator's content is in the store (just written, or unchanged
+since an earlier ingest), each of its sessions is archived:
+``conversation_archive`` records ``archived_at`` and ``archived_fingerprint``
+(:func:`memfw.history.transcripts.session_fingerprint`, the same value the
+conversation worker keys its jobs by). A session is archived while that
+fingerprint matches its stored turns; new turns change the fingerprint, so it
+reads as not archived until the next settled ingest archives it again. The
+table and the cursor's ``settled_fingerprint`` column are added on open
+(additive, no cursor reset): rows written before them are not archived until
+the next settled ingest.
 """
 
 from __future__ import annotations
@@ -54,6 +74,7 @@ import sqlite3
 from collections.abc import Iterable, Iterator
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -70,6 +91,7 @@ from .sources.base import (
 )
 from .sources.labels import merge_origin, prompt_origin
 from .store_location import prepare_store_path
+from .transcripts import session_fingerprint, ts_display, ts_key
 
 SCHEMA_VERSION = "2"
 """2: ``conversation_turn_locators`` (turn ownership per locator) was added."""
@@ -85,6 +107,8 @@ LABELS_VERSION = "2"
 """Bumped when session labelling (origin, parent) changes: the next ingest of
 each agent re-reads every session once, so existing stores are re-labelled."""
 BUSY_RETRIES = 3
+ARCHIVE_TABLE = "conversation_archive"
+TS_FUNCTION = "memfw_ts_key"
 """Consecutive empty re-reads of one unchanged fingerprint before ingest gives up."""
 _SURROGATES = re.compile("[\ud800-\udfff]")
 
@@ -118,6 +142,19 @@ class OptOut:
             return (Path(cwd) / OPTOUT_MARKER).exists()
         except OSError:
             return False
+
+
+def _parse_ts(value: str | None) -> datetime | None:
+    """A stored timestamp as an aware datetime (naive values are taken as UTC)."""
+
+    key = ts_key(value) if value else None
+    if not key:
+        return None
+    try:
+        parsed = datetime.fromisoformat(key.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 def _scrub(value: str) -> str:
@@ -184,6 +221,8 @@ class ConversationStore:
         self.db = Path(db)
         self.optout = optout or OptOut()
         self._force = False
+        self._settled: datetime | None = None
+        self._now = datetime.now(UTC)
 
     @contextmanager
     def _open(self) -> Iterator[sqlite3.Connection]:
@@ -230,8 +269,16 @@ class ConversationStore:
                 parser_version TEXT NOT NULL,
                 PRIMARY KEY (agent, locator)
             );
+            CREATE TABLE IF NOT EXISTS conversation_archive (
+                agent TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                archived_at TEXT NOT NULL,
+                archived_fingerprint TEXT NOT NULL,
+                PRIMARY KEY (agent, session_id)
+            );
             """
         )
+        connection.create_function(TS_FUNCTION, 1, ts_key, deterministic=True)
         self._migrate(connection)
         columns = {
             str(row[1]) for row in connection.execute("PRAGMA table_info(conversation_turns)")
@@ -240,6 +287,15 @@ class ConversationStore:
             # Additive: stores written before parent links existed get the column.
             connection.execute(
                 "ALTER TABLE conversation_turns ADD COLUMN parent_session TEXT NOT NULL DEFAULT ''"
+            )
+        cursor_columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(conversation_cursors)")
+        }
+        if "settled_fingerprint" not in cursor_columns:
+            # Additive: the locator fingerprint at which settled ingest last archived it.
+            connection.execute(
+                "ALTER TABLE conversation_cursors"
+                " ADD COLUMN settled_fingerprint TEXT NOT NULL DEFAULT ''"
             )
         self._repair_owners(connection)
         return connection
@@ -413,10 +469,34 @@ class ConversationStore:
             parent,
         )
 
-    def ingest(self, reader: Reader, roots: Iterable[StoreRoot | Path]) -> IngestCounts:
-        """Ingest every session of ``reader`` under ``roots`` incrementally."""
+    def ingest(
+        self,
+        reader: Reader,
+        roots: Iterable[StoreRoot | Path],
+        *,
+        settled_minutes: float | None = None,
+        now: datetime | None = None,
+    ) -> IngestCounts:
+        """Ingest every session of ``reader`` under ``roots`` incrementally.
 
+        With ``settled_minutes`` only locators quiet for that long are ingested,
+        and their sessions are archived (see the module docstring). ``now``
+        defaults to the current UTC time.
+        """
+
+        if settled_minutes is not None and (
+            isinstance(settled_minutes, bool)
+            or not isinstance(settled_minutes, (int, float))
+            or settled_minutes < 0
+        ):
+            raise HistoryError("settled_minutes must be a number >= 0")
         counts = IngestCounts()
+        self._settled = None
+        self._now = now or datetime.now(UTC)
+        if settled_minutes is not None:
+            self._settled = self._now - timedelta(minutes=float(settled_minutes))
+            counts.extra["sessions_unsettled"] = 0
+            counts.extra["sessions_archived"] = 0
         with self._open() as connection:
             if reader.agent in self.optout.agents:
                 # Opting out also forgets what was stored before.
@@ -429,6 +509,7 @@ class ConversationStore:
                 connection.execute(
                     "DELETE FROM conversation_cursors WHERE agent = ?", (reader.agent,)
                 )
+                connection.execute(f"DELETE FROM {ARCHIVE_TABLE} WHERE agent = ?", (reader.agent,))
                 counts.extra["opted_out"] = True
                 return counts
             self._force = self._optout_changed(connection, reader.agent)
@@ -447,7 +528,12 @@ class ConversationStore:
                 except Exception:
                     connection.rollback()
                     counts.roots_failed += 1
-            done = not (counts.roots_failed or counts.sessions_failed or counts.sessions_busy)
+            done = not (
+                counts.roots_failed
+                or counts.sessions_failed
+                or counts.sessions_busy
+                or counts.extra.get("sessions_unsettled")
+            )
             if relabel and done:
                 # Recorded only once every session was re-read (none failed or was
                 # skipped as busy), so an interrupted pass runs again next ingest.
@@ -489,8 +575,8 @@ class ConversationStore:
         append_only = bool(getattr(reader, "append_only", True))
         fingerprint = _session_fingerprint(locator)
         cursor = connection.execute(
-            "SELECT fingerprint, last_offset, parser_version FROM conversation_cursors"
-            " WHERE agent = ? AND locator = ?",
+            "SELECT fingerprint, last_offset, parser_version, settled_fingerprint"
+            " FROM conversation_cursors WHERE agent = ? AND locator = ?",
             (agent, key),
         ).fetchone()
         after = -1
@@ -499,6 +585,15 @@ class ConversationStore:
             same_version = cursor["parser_version"] == version and not self._force
             if previous == fingerprint and same_version:
                 counts.sessions_unchanged += 1
+                if (
+                    self._settled is not None
+                    and int(cursor["last_offset"]) >= 0
+                    and cursor["settled_fingerprint"] != cursor["fingerprint"]
+                    and self._is_settled(self._stored_activity(connection, agent, key), locator)
+                ):
+                    # Stored earlier (by a plain ingest, or before it was quiet): archive now.
+                    self._archive(connection, agent, key, counts)
+                    self._mark_settled(connection, agent, key, cursor["fingerprint"])
                 return
             grew = (
                 append_only
@@ -571,8 +666,29 @@ class ConversationStore:
                 (agent, key),
             )
             counts.records_dropped += dropped
+            for session in {item["session_id"] for item in owned}:
+                connection.execute(
+                    f"DELETE FROM {ARCHIVE_TABLE} WHERE agent = ? AND session_id = ?",
+                    (agent, session),
+                )
             self._clear_busy(connection, agent, key)
             self._save_cursor(connection, agent, key, fingerprint, -1, version)
+            return
+        if self._settled is not None and not self._is_settled(
+            max((stamp for stamp in (_parse_ts(row[5]) for row in rows) if stamp), default=None),
+            locator,
+        ):
+            # Still active: no turn is written and the cursor stays, so the next
+            # round reads it again. A session resumed after it was archived is
+            # no longer archived (its stored turns are not its final form).
+            counts.sessions_read -= 1
+            counts.extra["sessions_unsettled"] += 1
+            connection.execute(
+                f"DELETE FROM {ARCHIVE_TABLE} WHERE agent = ? AND session_id IN"
+                " (SELECT session_id FROM conversation_turn_locators"
+                " WHERE agent = ? AND locator = ?)",
+                (agent, agent, key),
+            )
             return
         if after < 0 and not rows:
             had = connection.execute(
@@ -669,6 +785,106 @@ class ConversationStore:
                         (other["locator"], *item, key),
                     )
         self._save_cursor(connection, agent, key, fingerprint, last, version)
+        if self._settled is not None and last >= 0:
+            self._archive(connection, agent, key, counts)
+            self._mark_settled(connection, agent, key, json.dumps(fingerprint, sort_keys=True))
+
+    # -- settled ingest and archive state --------------------------------------------
+
+    def _is_settled(self, activity: datetime | None, locator: SessionLocator) -> bool:
+        """Whether the last activity (else the file's mtime) is before the settled cutoff."""
+
+        assert self._settled is not None
+        if activity is None:
+            try:
+                mtime = os.stat(locator.path, follow_symlinks=False).st_mtime
+            except OSError:
+                return False  # unknown activity is never taken as settled
+            activity = datetime.fromtimestamp(mtime, UTC)
+        return activity <= self._settled
+
+    @staticmethod
+    def _stored_activity(connection: sqlite3.Connection, agent: str, key: str) -> datetime | None:
+        """The newest stored timestamp among the turns this locator holds."""
+
+        row = connection.execute(
+            f"SELECT MAX({TS_FUNCTION}(NULLIF(t.ts, ''))) FROM conversation_turns t"
+            " JOIN conversation_turn_locators o ON o.agent = t.agent"
+            " AND o.session_id = t.session_id AND o.offset = t.offset"
+            " WHERE o.agent = ? AND o.locator = ?",
+            (agent, key),
+        ).fetchone()
+        return _parse_ts(row[0]) if row is not None and row[0] else None
+
+    def _archive(
+        self, connection: sqlite3.Connection, agent: str, key: str, counts: IngestCounts
+    ) -> None:
+        """Record every session this locator holds as archived in its current shape."""
+
+        stamp = self._now.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        sessions = [
+            str(row[0])
+            for row in connection.execute(
+                "SELECT DISTINCT session_id FROM conversation_turn_locators"
+                " WHERE agent = ? AND locator = ?",
+                (agent, key),
+            )
+        ]
+        for session in sessions:
+            mark = self.session_fingerprint(connection, agent, session)
+            if mark is None:
+                continue
+            existing = connection.execute(
+                f"SELECT archived_fingerprint FROM {ARCHIVE_TABLE}"
+                " WHERE agent = ? AND session_id = ?",
+                (agent, session),
+            ).fetchone()
+            if existing is not None and existing[0] == mark:
+                continue  # already archived in this shape: keep its archived_at
+            connection.execute(
+                f"INSERT OR REPLACE INTO {ARCHIVE_TABLE}"
+                " (agent, session_id, archived_at, archived_fingerprint) VALUES (?, ?, ?, ?)",
+                (agent, session, stamp, mark),
+            )
+            counts.extra["sessions_archived"] += 1
+
+    @staticmethod
+    def session_fingerprint(
+        connection: sqlite3.Connection, agent: str, session_id: str
+    ) -> str | None:
+        """:func:`~memfw.history.transcripts.session_fingerprint` of the stored turns."""
+
+        row = connection.execute(
+            f"SELECT COUNT(*), MAX(offset), MAX({TS_FUNCTION}(NULLIF(ts, '')))"
+            " FROM conversation_turns WHERE agent = ? AND session_id = ?",
+            (agent, session_id),
+        ).fetchone()
+        if row is None or not row[0]:
+            return None
+        return session_fingerprint(int(row[0]), int(row[1]), ts_display(row[2]))
+
+    @staticmethod
+    def _mark_settled(
+        connection: sqlite3.Connection, agent: str, key: str, fingerprint: str
+    ) -> None:
+        connection.execute(
+            "UPDATE conversation_cursors SET settled_fingerprint = ?"
+            " WHERE agent = ? AND locator = ?",
+            (fingerprint, agent, key),
+        )
+
+    def archive_state(self, agent: str, session_id: str) -> dict[str, Any]:
+        """``{"archived": bool, "archived_at": str}`` of one stored session."""
+
+        with self._open() as connection:
+            mark = self.session_fingerprint(connection, agent, session_id)
+            row = connection.execute(
+                f"SELECT archived_at, archived_fingerprint FROM {ARCHIVE_TABLE}"
+                " WHERE agent = ? AND session_id = ?",
+                (agent, session_id),
+            ).fetchone()
+        archived = mark is not None and row is not None and row[1] == mark
+        return {"archived": archived, "archived_at": str(row[0]) if archived else ""}
 
     @staticmethod
     def _session_origin(

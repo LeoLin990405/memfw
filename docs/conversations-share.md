@@ -109,6 +109,49 @@ opted out there is skipped and its stored rows are deleted, the same as with
 location rules of both modules apply (`conversation_store.synced_dirs` adds
 folders to refuse).
 
+## Settled ingest and archive state
+
+By default every ingest writes whatever the transcripts hold, so a session that
+is still in progress shows up in the store turn by turn. A settled ingest keeps
+active sessions out and records when a session was stored in its final form:
+
+```sh
+memfw history ingest --settled-minutes 30          # then run the worker
+memfw conversations worker --root VAULT --settled-minutes 30   # or both in one run
+```
+
+- **Settled.** A transcript (one locator: a file, or a session in a database
+  store) whose last activity is within `N` minutes is skipped for this round
+  (`sessions_unsettled`): no turn is written and its cursor is not moved, so the
+  next round reads it again. Last activity is the newest timestamp among the
+  turns read this round; a transcript without timestamps uses the file's
+  mtime. A locator holding several sessions is settled once all of them are
+  quiet. The cwd opt-out still applies to a skipped transcript.
+- **Archived.** When a settled transcript's content is in the store (written
+  now, or unchanged since an earlier ingest), each of its sessions gets a row in
+  `conversation_archive`: `archived_at` and `archived_fingerprint`
+  (`turns:last_offset:updated_at`, the same value the worker keys its jobs by).
+  `sessions_archived` counts sessions archived in a new shape this round.
+- **Resumed.** A session is archived only while its fingerprint matches its
+  stored turns. When it becomes active again, the settled ingest drops its
+  archive row; new turns written by a plain ingest change the fingerprint. Either
+  way it reads as not archived until it has been idle again and the next settled
+  ingest re-archives it.
+- **Worker.** The worker still waits `idle_minutes` before it processes a
+  session. Since its job key is the archive fingerprint, a session archived once
+  is processed once; a resumed session is queued once more with its new
+  fingerprint, and chunk jobs are content-keyed, so unchanged chunks are not
+  redone. Run the worker with `--settled-minutes` too (or `--no-ingest`),
+  otherwise its own ingest writes active sessions again.
+- **Queries.** `memfw conversations list`, `search` and `get` accept
+  `--with-archive-state` (adds `archived: true/false` to each session or
+  result) and `--archived-only` (only archived sessions; `get` refuses a session
+  that is not archived). Without these flags the output is unchanged.
+- **Upgrade.** The table and the cursor column `settled_fingerprint` are added
+  when the store is opened; cursors are kept, so nothing is re-read. Sessions
+  stored before are not archived until the next settled ingest sees them quiet.
+  Without `--settled-minutes`, `history ingest` behaves and reports as before.
+
 ## Scheduling
 
 `memfw conversations schedule --print --root VAULT` prints a launchd plist

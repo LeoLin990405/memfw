@@ -53,11 +53,13 @@ def open_worker(
     judge: Judge | None = None,
     verifier: ClaimVerifier | None = None,
     stager: ClaimStager | None = None,
+    settled_minutes: float | None = None,
     **budgets: Any,
 ) -> ConversationWorker:
     """The worker for ``root``; a vault root needs ``stager`` and ``verifier`` (or
     ``judge``), injected by the caller (``memfw conversations work`` passes
-    :mod:`memfw.dream.claims`)."""
+    :mod:`memfw.dream.claims`). ``settled_minutes`` makes the run's ingest a
+    settled one (``history ingest --settled-minutes``)."""
 
     config, vault = read_config(root)
     policy = SharePolicy.from_config(config)
@@ -67,7 +69,7 @@ def open_worker(
     )
     # The store's own ``conversation_optout`` applies inside its ingest (and the
     # share policy reads the same list), so nothing is skipped here.
-    ingestor = store_ingestor(config, db) if ingest else None
+    ingestor = store_ingestor(config, db, settled_minutes=settled_minutes) if ingest else None
     return ConversationWorker(
         SqliteStoreSource(db),
         work,

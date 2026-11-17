@@ -11,6 +11,11 @@ role, ts, text, tool_calls, cwd, project, model, origin, withheld, ...)``.
 ``withheld = 1`` marks a turn the store refused to keep (secret-shaped): its
 text and tool calls are empty and it is reported as withheld, never as text.
 
+Archive state (settled ingest) is read from ``conversation_archive(agent,
+session_id, archived_at, archived_fingerprint)``: a session is archived while
+its ``archived_fingerprint`` equals :func:`~.store.session_fingerprint` of its
+current turns. A store without that table holds no archived session.
+
 Store location: ``conversation_store.path`` in ``vault.yaml``, else
 ``~/.local/share/memfw/conversations.sqlite`` (the store module's own
 default). It is refused inside a git work tree, the vault or a synced folder:
@@ -43,6 +48,7 @@ from .store import (
     SessionInfo,
     Turn,
     check_private_location,
+    session_fingerprint,
     ts_display,
     ts_key,
 )
@@ -50,6 +56,7 @@ from .store import (
 DATA_DIR = DEFAULT_RELATIVE.parent
 STORE_NAME = DEFAULT_RELATIVE.name
 TURNS_TABLE = "conversation_turns"
+ARCHIVE_TABLE = "conversation_archive"
 REQUIRED_COLUMNS = frozenset(
     {"agent", "session_id", "offset", "turn", "role", "ts", "text", "tool_calls"}
     | {"cwd", "project", "origin", "withheld"}
@@ -214,6 +221,28 @@ class SqliteStoreSource:
             params = [*params, since_value]
         return self._session_rows(where, params, having, limit, offset)
 
+    def archive_state(self, sessions: Sequence[SessionInfo]) -> dict[tuple[str, str], bool]:
+        """Per ``(app, session_id)``: archived in the shape ``sessions`` reports."""
+
+        out = {(item.app, item.session_id): False for item in sessions}
+        if not out:
+            return out
+        with self._open() as connection:
+            table = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (ARCHIVE_TABLE,)
+            ).fetchone()
+            if table is None:
+                return out
+            for item in sessions:
+                row = connection.execute(
+                    f"SELECT archived_fingerprint FROM {ARCHIVE_TABLE}"
+                    " WHERE agent = ? AND session_id = ?",
+                    (item.app, item.session_id),
+                ).fetchone()
+                mark = session_fingerprint(item.turns, item.last_offset, item.updated_at)
+                out[(item.app, item.session_id)] = row is not None and str(row[0]) == mark
+        return out
+
     def session(self, app: str, session_id: str) -> SessionInfo | None:
         rows = self._session_rows("agent = ? AND session_id = ?", [app, session_id], "", 1, 0)
         return rows[0] if rows else None
@@ -319,7 +348,11 @@ SOURCES_MODULE = "memfw.history.sources"
 
 
 def store_ingestor(
-    config: Mapping[str, Any] | None, db: Path, *, skip_apps: Sequence[str] = ()
+    config: Mapping[str, Any] | None,
+    db: Path,
+    *,
+    skip_apps: Sequence[str] = (),
+    settled_minutes: float | None = None,
 ) -> Ingestor:
     """An ingestor that drives the store module the way ``memfw history ingest`` does.
 
@@ -330,6 +363,8 @@ def store_ingestor(
     ``skip_apps`` are added to that opt-out: the store then also forgets what
     it held for them, exactly as for a configured opt-out. Names are compared
     with each reader's canonical name, so an alias cannot bypass them.
+    ``settled_minutes`` runs a settled ingest (``history ingest
+    --settled-minutes``): active sessions stay out of the store.
     """
 
     def run() -> dict[str, Any]:
@@ -364,7 +399,10 @@ def store_ingestor(
                 continue
             try:
                 roots = [] if agent in optout.agents else list(store_roots(reader))
-                counts = store.ingest(reader, roots)
+                if settled_minutes is None:
+                    counts = store.ingest(reader, roots)
+                else:
+                    counts = store.ingest(reader, roots, settled_minutes=settled_minutes)
             except Exception as exc:  # report the kind only: messages may hold paths
                 report["agents"][agent] = {"status": "error", "error": type(exc).__name__}
                 continue
