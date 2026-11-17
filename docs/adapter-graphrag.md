@@ -76,9 +76,14 @@ refuses when the file or its hash differs from what the current settings would w
 (`settings_changed`), when `${` appears in it (`settings_placeholder`), or when `<root>/.env`
 exists (`dotenv_present`; GraphRAG would read it). `pass_env` may not name a variable ending in
 `_BASE`, `_BASE_URL`, `_ENDPOINT` or `_HOST`. It also refuses when `stage_input` has not run
-(`no_input`) or the command does not resolve (`missing_dependency`).
+(`no_input`), when the command does not resolve (`missing_dependency`), or when the GraphRAG
+installed in the command's environment is not 3.3.0 (`version_mismatch`) or cannot be told
+(`version_unknown`). The version is read from that environment's
+`graphrag-<version>.dist-info` (beside the script, or beside the interpreter its `#!` line
+names); nothing is executed to find it.
 
-A non-zero exit is `index_failed`; a timeout is `index_timeout`. Point the models at a local
+The run gets its own session; on timeout the whole process group is killed
+(`index_timeout`). A non-zero exit is `index_failed`. Point the models at a local
 OpenAI-compatible endpoint (for example Ollama's `/v1`); smaller local models give a weaker
 graph.
 

@@ -148,7 +148,9 @@ class Runner:
 
 def make(project: Path, runner: Runner | None = None, **settings: Any) -> GraphRagDeriver:
     parsed = Settings.from_mapping({"root": str(project), **MODELS, **settings})
-    return GraphRagDeriver(parsed, runner=runner or Runner(), environ=ENVIRON)
+    return GraphRagDeriver(
+        parsed, runner=runner or Runner(), environ=ENVIRON, version_probe=lambda path: "3.3.0"
+    )
 
 
 ENVIRON = {
@@ -403,6 +405,71 @@ def test_run_index_missing_command_is_missing_dependency(project: Path) -> None:
     with pytest.raises(GraphRagError, match="missing_dependency"):
         make(project, runner, command="no-such-graphrag-binary-xyz").run_index()
     assert runner.calls == []
+
+
+@pytest.mark.parametrize(
+    ("version", "code"), [(None, "version_unknown"), ("3.4.0", "version_mismatch")]
+)
+def test_run_index_checks_the_installed_graphrag_version(
+    project: Path, version: str | None, code: str
+) -> None:
+    _staged(project)
+    runner = Runner()
+    deriver = make(project, runner, command="/opt/graphrag")
+    deriver._version_probe = lambda path: version
+    with pytest.raises(GraphRagError, match=code):
+        deriver.run_index()
+    assert runner.calls == []
+
+
+def test_installed_version_reads_dist_info_without_running_anything(tmp_path: Path) -> None:
+    from memfw_adapter_graphrag.deriver import installed_version
+
+    venv = tmp_path / "venv"
+    script = venv / "bin" / "graphrag"
+    script.parent.mkdir(parents=True)
+    script.write_text("#!/nonexistent/python\nraise SystemExit('must not run')\n")
+    assert installed_version(script) is None
+    info = venv / "lib" / "python3.12" / "site-packages" / "graphrag-3.3.0.dist-info"
+    info.mkdir(parents=True)
+    (info / "METADATA").write_text("Metadata-Version: 2.4\nName: graphrag\nVersion: 3.3.0\n")
+    other = info.parent / "graphrag_llm-3.3.0.dist-info"  # a sibling package, not graphrag
+    other.mkdir()
+    (other / "METADATA").write_text("Name: graphrag-llm\nVersion: 9.9.9\n")
+    assert installed_version(script) == "3.3.0"
+    second = info.parent / "graphrag-3.2.0.dist-info"
+    second.mkdir()
+    (second / "METADATA").write_text("Name: graphrag\nVersion: 3.2.0\n")
+    assert installed_version(script) is None  # two installs: unknown
+
+
+def test_run_process_returns_the_status_and_kills_the_group_on_timeout(tmp_path: Path) -> None:
+    import time
+
+    from memfw_adapter_graphrag.deriver import run_process
+
+    log = tmp_path / "run.log"
+    env = {"PATH": "/usr/bin:/bin"}
+    code = "import sys; print('hello'); sys.exit(3)"
+    assert run_process([sys.executable, "-c", code], env, tmp_path, 30, log) == 3
+    assert "hello" in log.read_text()
+    marker = tmp_path / "child-alive"
+    grandchild = tmp_path / "grandchild.py"
+    grandchild.write_text(
+        f"import pathlib, time\ntime.sleep(1.5)\npathlib.Path({str(marker)!r}).touch()\n"
+    )
+    parent = tmp_path / "parent.py"
+    parent.write_text(
+        "import subprocess, sys, time\n"
+        f"subprocess.Popen([sys.executable, {str(grandchild)!r}])\n"
+        "time.sleep(30)\n"
+    )
+    child = str(parent)
+    started = time.monotonic()
+    assert run_process([sys.executable, child], env, tmp_path, 0.5, log) == -1
+    assert time.monotonic() - started < 10
+    time.sleep(2.0)
+    assert not marker.exists()  # the grandchild died with the group
 
 
 def test_the_adapter_writes_settings_with_explicit_loopback_endpoints(project: Path) -> None:

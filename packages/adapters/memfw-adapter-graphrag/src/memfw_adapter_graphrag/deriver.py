@@ -41,6 +41,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, fields, replace
@@ -567,21 +568,75 @@ def _write_new(directory: Path, name: str, data: bytes) -> None:
 def run_process(
     argv: Sequence[str], env: Mapping[str, str], cwd: Path, timeout: float, log: Path
 ) -> int:
+    """Run ``argv`` in its own session; on timeout kill the whole process group (``-1``)."""
+
     with log.open("ab") as out:
+        process = subprocess.Popen(  # noqa: S603 - argv from operator settings, no shell
+            list(argv),
+            cwd=cwd,
+            env=dict(env),
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
         try:
-            done = subprocess.run(  # noqa: S603 - argv from operator settings, no shell
-                list(argv),
-                cwd=cwd,
-                env=dict(env),
-                stdin=subprocess.DEVNULL,
-                stdout=out,
-                stderr=subprocess.STDOUT,
-                timeout=timeout,
-                check=False,
-            )
+            return process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
+            _kill_group(process)
             return -1
-    return done.returncode
+        except BaseException:
+            _kill_group(process)
+            raise
+
+
+def _kill_group(process: subprocess.Popen[bytes]) -> None:
+    killpg = getattr(os, "killpg", None)
+    try:
+        if killpg is not None:
+            killpg(process.pid, signal.SIGKILL)
+        else:  # pragma: no cover - Windows has no process groups here
+            process.kill()
+    except ProcessLookupError:
+        pass
+    process.wait()
+
+
+VersionProbe = Callable[[Path], "str | None"]
+
+
+def installed_version(executable: Path) -> str | None:
+    """GraphRAG's version in the environment that ``executable`` belongs to, or ``None``.
+
+    Read from that environment's ``graphrag-<version>.dist-info`` (next to the
+    script's ``bin``/``Scripts`` directory, or next to the interpreter its
+    ``#!`` line names); nothing is executed. More than one install is ``None``.
+    """
+
+    prefixes = [executable.resolve().parent.parent]
+    try:
+        with executable.open("rb") as handle:
+            first = handle.readline(512)
+    except OSError:
+        first = b""
+    if first.startswith(b"#!"):
+        interpreter = first[2:].strip().split(b" ")[0].decode("utf-8", "replace")
+        if interpreter:
+            prefixes.append(Path(interpreter).parent.parent)
+    found: set[str] = set()
+    for prefix in prefixes:
+        patterns = ("lib/python*/site-packages", "Lib/site-packages")
+        for pattern in patterns:
+            for site in prefix.glob(pattern):
+                for info in site.glob("graphrag-*.dist-info"):
+                    try:
+                        metadata = (info / "METADATA").read_text(encoding="utf-8")
+                    except (OSError, UnicodeDecodeError):
+                        continue
+                    match = re.search(r"^Version: *(\S+)$", metadata, re.M)
+                    if match:
+                        found.add(match.group(1))
+    return found.pop() if len(found) == 1 else None
 
 
 @dataclass(frozen=True)
@@ -602,8 +657,10 @@ class GraphRagDeriver:
         refused: str = "",
         runner: ProcessRunner | None = None,
         environ: Mapping[str, str] | None = None,
+        version_probe: VersionProbe | None = None,
     ) -> None:
         self.name = NAME
+        self._version_probe = version_probe or installed_version
         self.settings = settings
         self.refused = refused
         if not refused:
@@ -747,10 +804,16 @@ class GraphRagDeriver:
         self.check_settings()
         if not (self.root / INPUT_DIR / INPUT_INDEX).is_file():
             raise GraphRagError("no_input")
+        argv = self.command()
+        version = self._version_probe(Path(argv[0]))
+        if version is None:
+            raise GraphRagError("version_unknown")
+        if version != EXTERNAL_VERSION:
+            raise GraphRagError("version_mismatch")
         logs = self.root / LOG_DIR
         logs.mkdir(mode=0o700, exist_ok=True)
         status = self._runner(
-            self.command(), self.run_env(), self.root, float(self.settings.timeout),
+            argv, self.run_env(), self.root, float(self.settings.timeout),
             logs / "memfw-graphrag-index.log",
         )  # fmt: skip
         if status != 0:
@@ -852,6 +915,7 @@ __all__ = [
     "factory",
     "graph_rows",
     "input_name",
+    "installed_version",
     "parse_list",
     "read_output",
     "read_table",
