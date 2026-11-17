@@ -56,6 +56,7 @@ class Settings:
     text_layer_min_words: int = 10
     sync_max_pages: int = 5
     poll_seconds: float = 2.0
+    allow_async_jobs: bool = False
     pdftotext: str = ""
     backend_options: Mapping[str, Any] = field(default_factory=dict)
     source_roots: Sequence[str] = ()
@@ -66,6 +67,8 @@ class Settings:
     def __post_init__(self) -> None:
         if self.backend not in ("mcp", "pdftotext") and not _SPEC.fullmatch(str(self.backend)):
             raise OcrError("bad_backend")
+        if not isinstance(self.allow_async_jobs, bool):
+            raise OcrError("bad_allow_async_jobs")
         if not isinstance(self.mcp_env, Mapping) or any(
             _SECRETISH.search(str(k)) for k in self.mcp_env
         ):
@@ -113,6 +116,7 @@ def build_backend(settings: Settings) -> OcrBackend:
             text_layer_min_words=settings.text_layer_min_words,
             sync_max_pages=settings.sync_max_pages,
             poll_seconds=settings.poll_seconds,
+            allow_async_jobs=settings.allow_async_jobs,
         )
     if settings.backend == "pdftotext":
         return PdftotextBackend(settings.pdftotext)

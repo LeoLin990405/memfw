@@ -70,11 +70,15 @@ It discovers the server's tools with `tools/list` and uses:
 * image: `ocr_image(path, lang)`: texts with per-line confidence (and boxes,
   when the server returns `boxes` with `width`/`height`);
 * PDF: `pdf_info(path)` for the page count and text-layer size; then
-  `pdf_text(path, out_dir)` for a text layer, `ocr_pdf(path, out_dir, …)` for a
-  short scan, or `ocr_submit` / `ocr_job_status` / `ocr_job_result` (polled)
-  for more than `sync_max_pages` pages. Every call gets an `out_dir` inside the
-  run's private work directory, and a file the server names is read only if it
-  is inside that directory.
+  `pdf_text(path, out_dir)` for a text layer, or `ocr_pdf(path, out_dir, …)`
+  with the page budget (synchronous; the default for every scan). Every call
+  gets an `out_dir` inside the run's private work directory, and a file the
+  server names is read only if it is inside that directory.
+* `allow_async_jobs: true` (off by default) sends scans longer than
+  `sync_max_pages` pages to `ocr_submit` / `ocr_job_status` /
+  `ocr_job_result` instead. **An async job leaves records in the server's own
+  job store** (a job file and a log naming the input), outside memfw's
+  control and not removed by it; leave it off for `local-private` originals.
 
 The engine (PaddleOCR, MinerU, …) is the server's choice (`engine` is passed
 through when set). The server's PDF answers have no boxes, so PDF segments
@@ -122,7 +126,7 @@ options={"source": "<path under a source root>", "root": 0, "sha256": …,
   "mcp_command": ["/absolute/path/to/ocr-server"],
   "mcp_env": {},
   "lang": "en", "engine": "", "dpi": 200,
-  "text_layer_min_words": 10, "sync_max_pages": 5,
+  "text_layer_min_words": 10, "sync_max_pages": 5, "allow_async_jobs": false,
   "pdftotext": "/absolute/path/to/pdftotext",
   "source_roots": ["/absolute/dir"],
   "clearance": ["public", "shared"],

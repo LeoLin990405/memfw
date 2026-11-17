@@ -22,10 +22,12 @@ unavailable, never a guess):
 * PDF: ``pdf_info(path)`` → ``{"pages", "text_layer_words"}``; then a text
   layer (``words_per_page >= text_layer_min_words``) is read with
   ``pdf_text(path, out_dir)``, which writes a text file whose pages are
-  separated by form feeds; otherwise ``ocr_pdf(path, out_dir, ...)``, or for
-  more than ``sync_max_pages`` pages the async trio ``ocr_submit`` /
-  ``ocr_job_status`` / ``ocr_job_result`` with polling. Both write a Markdown
-  file with one ``## Page N`` section per page.
+  separated by form feeds; otherwise ``ocr_pdf(path, out_dir, ...)`` with the
+  page budget (synchronous, the default). Only with ``allow_async_jobs`` (off
+  by default: an async job leaves its records, job file and log, in the
+  server's own job store) are more than ``sync_max_pages`` pages sent to the
+  async trio ``ocr_submit`` / ``ocr_job_status`` / ``ocr_job_result``. Both
+  write a Markdown file with one ``## Page N`` section per page.
 
 Every ``out_dir`` is a fresh directory inside the run's private work
 directory, and a file the server names is read only if it resolves inside
@@ -418,6 +420,7 @@ class McpOcrBackend:
         text_layer_min_words: int = 10,
         sync_max_pages: int = 5,
         poll_seconds: float = 2.0,
+        allow_async_jobs: bool = False,
     ) -> None:
         if (
             not isinstance(command, Sequence)
@@ -436,6 +439,7 @@ class McpOcrBackend:
         self.text_layer_min_words = text_layer_min_words
         self.sync_max_pages = sync_max_pages
         self.poll_seconds = poll_seconds
+        self.allow_async_jobs = allow_async_jobs is True
         self.version = "unknown"
 
     def __repr__(self) -> str:
@@ -573,8 +577,10 @@ class McpOcrBackend:
         }
         if self.engine:
             args["engine"] = self.engine
-        asynchronous = {"ocr_submit", "ocr_job_status"} <= names
-        if reading > self.sync_max_pages and asynchronous or "ocr_pdf" not in names:
+        # Async jobs leave records (job files, logs) in the server's own job store,
+        # so they are used only when the operator allows it.
+        asynchronous = self.allow_async_jobs and {"ocr_submit", "ocr_job_status"} <= names
+        if asynchronous and (reading > self.sync_max_pages or "ocr_pdf" not in names):
             named = self._submit_and_wait(session, names, args)
         else:
             left = max(1, int(session.deadline - time.monotonic()))

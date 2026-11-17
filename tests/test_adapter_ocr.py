@@ -257,9 +257,21 @@ def test_scanned_pdf_short_uses_ocr_pdf(tmp_path: Path, pdf: tuple[Path, str]) -
     assert args["timeout"] >= 1
 
 
-def test_long_scanned_pdf_uses_the_async_tools(tmp_path: Path, pdf: tuple[Path, str]) -> None:
+def test_long_scans_stay_synchronous_unless_async_jobs_are_allowed(
+    tmp_path: Path, pdf: tuple[Path, str]
+) -> None:
     path, sha = pdf
-    candidate = _run(_mcp(tmp_path, "scan", sync_max_pages=1), path, sha)
+    _run(_mcp(tmp_path, "scan", sync_max_pages=1), path, sha)
+    tools = [c["tool"] for c in _calls(tmp_path) if "tool" in c]
+    assert tools == ["pdf_info", "ocr_pdf"]  # no job store records by default
+    assert Settings.from_mapping({}).allow_async_jobs is False
+
+
+def test_long_scanned_pdf_uses_the_async_tools_when_allowed(
+    tmp_path: Path, pdf: tuple[Path, str]
+) -> None:
+    path, sha = pdf
+    candidate = _run(_mcp(tmp_path, "scan", sync_max_pages=1, allow_async_jobs=True), path, sha)
     tools = [c["tool"] for c in _calls(tmp_path) if "tool" in c]
     assert tools == ["pdf_info", "ocr_submit", "ocr_job_status", "ocr_job_status"]
     assert candidate["coverage"] == {"status": "full", "detail": "pages 1-2/2"}
