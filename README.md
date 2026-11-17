@@ -143,15 +143,15 @@ rebuild: it detects the missing tables and degrades instead (no temporal filteri
 | Integrity | `fsck`, `recover`, `log verify`, `stats` |
 | Search | `index rebuild`, `index search`; `resolve` (batch, read-only lifecycle/validity/privacy check of recall hits) |
 | Concepts | `concepts` (one canonical concept per thing, with aliases that may be scoped; optional `broader` parents, `narrower` derived), `concepts relations` (the versioned relation-type table), `concepts lint-relations` |
-| Uncertainty | `type: open-question` memories (`add` / `update`), `corroboration rebuild`, `corroboration show ID --as-app APP` |
+| Uncertainty | `type: open-question` memories (Repository API and approved proposals; `add`/`update` have no `open_question` option yet), `corroboration rebuild`, `corroboration show ID --as-app APP` |
 | Review gate | `candidates`, `candidate-apply [--apply]`, `candidates-expire` (30-day TTL, never deletes), `record-proposal`, `approve-proposal`, `review` |
 | Retention | `budget`, `forget` (`fifo`, `lru`, `decay`, `salience`, `consolidate_then_forget`), `tiers` / `tier` (hot and cold), `cold-archive`, `cold-restore`, `layer` / `layer-set`, `consolidate` |
 | Related memories | `memory-related-build`, `memory-related` |
 | Projections | `okf export` / `okf validate` ([OKF v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format) bundles), `notes` (a Markdown notes index), `code` (local code retrieval) |
 
 Search matches each query word on its own and ranks by bm25, so a whole sentence finds relevant
-memories. `memory_search` uses FTS5 by default and can delegate to an optional hybrid retriever
-when a local OpenAI-compatible embedding endpoint is configured. Every command prints
+memories. `memory_search` `mode` defaults to `hybrid`, which is FTS5 unless a local OpenAI-compatible
+embedding endpoint is configured. Every command prints
 `--help`; global `--now` and `--id-seed` make runs deterministic for tests.
 
 ### Knowing what is not known
@@ -165,7 +165,7 @@ when a local OpenAI-compatible embedding endpoint is configured. Every command p
   "unknown" rather than guess.
 - **Corroboration.** `memfw corroboration rebuild` writes a rebuildable
   `corroboration.sqlite3`: per memory, the independent (app, session) pairs that mention it.
-  Ids and counts only, trimmed to what the asking app may read; nothing else reads it yet.
+  Ids, names, counts and times only, trimmed to what the asking app may read; nothing else reads it yet.
 - **Concept taxonomy.** Concept files may name `broader` parents; `narrower` is derived, never
   written, and nothing on the read path follows it (no query expansion). The relation-type
   table lists every typed relation memfw already stores. See [`docs/ontology.md`](docs/ontology.md).
@@ -347,8 +347,8 @@ vault itself.
 It also serves three **MCP resources**, `memfw://context/core`, `memfw://context/handoff` and
 `memfw://context/topics` (`?policy=` and `?if_version=` accepted): each is that slot's v=2
 pack for the calling app. A slot that fails or times out comes back empty with a `degraded`
-reason; the others are not affected. Packs carry ids, versions and hashes in `pack_version`,
-never body text. Details: [`docs/ports-and-recall.md`](docs/ports-and-recall.md) §4.
+reason; the others are not affected. `pack_version` is computed from ids, versions and hashes
+only, never body text. Details: [`docs/ports-and-recall.md`](docs/ports-and-recall.md) §4.
 
 ## 🔒 Privacy and permissions
 
@@ -416,11 +416,15 @@ memfw is split into layers that may only depend downward, and CI enforces it:
 | Layer | What lives there |
 |---|---|
 | `L0-ports` | `memfw.ports`: port protocols, value types and the contract kit; standard library only |
-| `L1` projections and read path | `index`, `notes`, `history`, `related`, `retrieval`, … (rebuilt from the vault) |
 | `L2` kernel | models, storage, the event log, policies, ontology, and the vault facade `Repository` |
+| `L1` projections and read path | `index`, `notes`, `history`, `related`, `retrieval`, … (rebuilt from the vault) |
 | `L3` capabilities | `recall`, `context`, `capture`, `conversations`, `dream`, `handoff`, `okf`, … |
 | `L4-runtime` | `memfw.runtime`, the composition root: settings, recall, search and context wiring |
 | `L5-interface` | the CLI and the MCP server, which only parse, call the Runtime and serialise |
+
+Rows are in dependency order, lowest first. The L-numbers are kept from the design spec;
+projections (L1) rank above the kernel (L2) because every projection is rebuilt from the vault
+and imports the kernel.
 
 - **Architecture guards.** `tests/test_architecture_layers.py` parses every module and fails the
   build on an upward import, an unlisted same-layer import, a cycle, a library reference to

@@ -114,19 +114,19 @@ Claude Code 可以直接运行 `claude mcp add memfw -- memfw-mcp --root /path/t
 | 完整性 | `fsck`、`recover`、`log verify`、`stats` |
 | 搜索 | `index rebuild`、`index search`；`resolve`（批量、只读地核对召回结果的生命周期、有效期和隐私） |
 | 概念 | `concepts`（一个事物一个规范概念，别名可以限定作用域；可选的上位概念 `broader`，下位 `narrower` 自动推导）、`concepts relations`（带版本号的关系类型表）、`concepts lint-relations` |
-| 不确定性 | `type: open-question` 记忆（用 `add` / `update` 写入）、`corroboration rebuild`、`corroboration show ID --as-app APP` |
+| 不确定性 | `type: open-question` 记忆（通过 Repository API 或已批准的提案写入；`add` / `update` 目前没有 `open_question` 选项）、`corroboration rebuild`、`corroboration show ID --as-app APP` |
 | 审核关口 | `candidates`、`candidate-apply [--apply]`、`candidates-expire`（30 天过期，从不删文件）、`record-proposal`、`approve-proposal`、`review` |
 | 保留策略 | `budget`、`forget`（`fifo`、`lru`、`decay`、`salience`、`consolidate_then_forget`）、`tiers` / `tier`（冷热层）、`cold-archive`、`cold-restore`、`layer` / `layer-set`、`consolidate` |
 | 关联记忆 | `memory-related-build`、`memory-related` |
 | 投影 | `okf export` / `okf validate`（[OKF v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format) 包）、`notes`（Markdown 笔记索引）、`code`（本地代码检索） |
 
-搜索时每个查询词单独匹配、按 bm25 排序，所以直接输入一整句话也能找到相关记忆。`memory_search` 默认走 FTS5；配置了本地 OpenAI 兼容的 embedding 服务时，可以转交给可选的混合检索器。每个命令都有 `--help`；全局的 `--now` 和 `--id-seed` 可以让运行结果完全确定，方便测试。
+搜索时每个查询词单独匹配、按 bm25 排序，所以直接输入一整句话也能找到相关记忆。`memory_search` 的 `mode` 默认是 `hybrid`：没有配置本地 OpenAI 兼容的 embedding 服务时，它就是 FTS5。每个命令都有 `--help`；全局的 `--now` 和 `--id-seed` 可以让运行结果完全确定，方便测试。
 
 ### 知道自己不知道什么
 
 - **待解问题。** `type: open-question` 记忆记下的是*还不知道*的事：问题本身、互相矛盾的记忆、缺了什么，以及日后解答它的那条记忆（`resolved_by`）。新建或解决一个待解问题，需要人来做，或者走已批准的提案。
 - **召回标签。** 如果某条命中正是一个未解决、且调用方可见的待解问题所关心的，`memory_search` 会给它标上 `open_question:<id>`；被问题列为互相矛盾的命中则标 `conflicted`（`mode=two_stage` 总会带上，其他模式要加 `labels: true`）。工具说明会提醒 agent：遇到这种情况就说“不知道”，别去猜。
-- **佐证。** `memfw corroboration rebuild` 生成一份可重建的 `corroboration.sqlite3`：每条记忆被哪些相互独立的（应用、会话）提到过。只存 id 和计数，并按提问应用的可读范围裁剪；目前没有别的功能会读它。
+- **佐证。** `memfw corroboration rebuild` 生成一份可重建的 `corroboration.sqlite3`：每条记忆被哪些相互独立的（应用、会话）提到过。只存 id、名称、计数和时间，并按提问应用的可读范围裁剪；目前没有别的功能会读它。
 - **概念层级。** 概念文件可以写上位概念 `broader`；`narrower` 由它推导，从不写入，读路径也不会顺着它走（不做查询扩展）。关系类型表列出了 memfw 已经存下的每一种带类型的关系。见 [`docs/ontology.md`](docs/ontology.md)。
 
 详见 [`docs/epistemic-and-experience.md`](docs/epistemic-and-experience.md)。
@@ -299,11 +299,13 @@ memfw 分成若干层，只允许向下依赖，并由 CI 强制检查：
 | 层 | 内容 |
 |---|---|
 | `L0-ports` | `memfw.ports`：端口协议、值类型和契约测试套件；只用标准库 |
-| `L1` 投影与读路径 | `index`、`notes`、`history`、`related`、`retrieval` 等（都从 vault 重建） |
 | `L2` 内核 | 模型、存储、事件日志、策略、本体，以及 vault 门面 `Repository` |
+| `L1` 投影与读路径 | `index`、`notes`、`history`、`related`、`retrieval` 等（都从 vault 重建） |
 | `L3` 能力 | `recall`、`context`、`capture`、`conversations`、`dream`、`handoff`、`okf` 等 |
 | `L4-runtime` | `memfw.runtime`，组装根：配置、召回、搜索和上下文的接线 |
 | `L5-interface` | 命令行和 MCP 服务，只负责解析参数、调用 Runtime、序列化结果 |
+
+表格按依赖顺序排列，最底层在最上面。L 编号沿用设计规范里的叫法；投影（L1）排在内核（L2）之上，因为每个投影都从 vault 重建，并且要导入内核。
 
 - **架构守卫。** `tests/test_architecture_layers.py` 会解析每个模块，遇到向上导入、未登记的同层导入、循环依赖、库代码引用 `scripts/` 或未归类的模块，构建直接失败。守卫上线时已有的违规记在一份只减不增的白名单里：从 25 条减到了 1 条。
 - **端口与替换演练。** 九个端口（`RecallProvider`、`Projector`、`Ingestor`、`Deriver`、`Clock`、`IdGen`、`ClaimVerifier`、`ClaimStager`、`ContextSlotProvider`）各自至少有两个实现，并通过同一套 `memfw.ports.testing` 检查（`tests/test_swap_drills.py`）。只依赖标准库的参考实现在 `memfw.ports.reference`。
