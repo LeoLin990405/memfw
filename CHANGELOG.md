@@ -88,11 +88,14 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 
 ### Added — attachment search: proxy_segments, ProxyProvider, MCP tools (MM2b)
 
-- Active proxies are searchable through their own index,
-  `proxy_index.sqlite3` (`proxy_segments`, same tokenizer and two-character
-  fallback as memory search), filtered by tenant and privacy (strictest of
-  proxy and attachment), without superseded proxies or attachments past
-  their retention. Memory search, HTTP, OKF and projections never read it.
+- Active proxies are searchable through their own index (`proxy_segments`,
+  same tokenizer and two-character fallback as memory search), stored
+  outside the vault (`~/.local/share/memfw/proxy_index/<key>.sqlite3`, 0600)
+  and rebuildable from a read-only vault, filtered by tenant and privacy
+  (strictest of proxy and attachment), without superseded proxies, inactive
+  attachments or attachments past their retention. Memory search, HTTP, OKF
+  and projections never read it. `drop_proxy_index` / `proxy_index_residue`
+  are the hooks `attach purge` uses.
 - Built-in recall provider `ProxyProvider` (`ref_kind="attachment_segment"`,
   locator in `extra`, never text); not part of memory recall.
 - MCP `attachment_search` and `attachment_get`, listed only with

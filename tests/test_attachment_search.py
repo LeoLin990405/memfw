@@ -5,6 +5,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
+import stat
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -15,10 +18,13 @@ from typer.testing import CliRunner
 from memfw.cli import app
 from memfw.core.errors import IntegrityError, NotFoundError
 from memfw.core.repository import Repository
+from memfw.index import proxies as proxy_index_module
 from memfw.index.proxies import (
-    PROXY_INDEX_NAME,
+    LEGACY_PROXY_INDEX_NAME,
+    drop_proxy_index,
     ensure_proxy_index,
     proxy_index_path,
+    proxy_index_residue,
 )
 from memfw.mcp.schema import TOOLS
 from memfw.mcp.server import Gateway
@@ -131,7 +137,7 @@ def test_no_proxy_index_without_proxies(tmp_path: Path) -> None:
 def test_index_is_separate_tenant_and_privacy_filtered(tmp_path: Path) -> None:
     repository, ids = _corpus(tmp_path)
     index = ensure_proxy_index(repository, now=NOW)
-    assert index is not None and index.path.name == PROXY_INDEX_NAME
+    assert index is not None and index.path == proxy_index_path(repository)
     everything = index.search("backup schedule", tenant="", clearance=None, limit=50)
     assert {hit.attachment_id for hit in everything} == set(ids.values())
     remote = index.search(
@@ -179,12 +185,131 @@ def test_retention_ended_attachments_leave_search(tmp_path: Path) -> None:
     assert index.search("expired scan", tenant="", clearance=None, limit=5) == []
 
 
-def test_proxy_index_is_outside_the_vault_budget(tmp_path: Path) -> None:
+def test_proxy_index_lives_outside_the_vault_and_is_private(
+    tmp_path: Path, private_home: Path
+) -> None:
     repository, _ids = _corpus(tmp_path)
+    fingerprint = repository._tree_fingerprint()
     before = measure_physical_disk_bytes(repository.root)
-    ensure_proxy_index(repository, now=NOW)
-    assert proxy_index_path(repository).stat().st_size > 0
+    index = ensure_proxy_index(repository, now=NOW)
+    assert index is not None
+    path = index.path
+    assert path.is_relative_to(private_home / ".local" / "share" / "memfw" / "proxy_index")
+    assert not path.is_relative_to(repository.root)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    # Nothing in the vault changed: memory writes never hash the index, the
+    # vault's size and snapshots never include it.
+    assert repository._tree_fingerprint() == fingerprint
     assert measure_physical_disk_bytes(repository.root) == before
+    assert not (repository.root / LEGACY_PROXY_INDEX_NAME).exists()
+
+
+def test_legacy_in_vault_index_is_ignored(tmp_path: Path) -> None:
+    repository, ids = _corpus(tmp_path)
+    legacy = repository.root / LEGACY_PROXY_INDEX_NAME
+    legacy.write_bytes(b"not sqlite")
+    index = ensure_proxy_index(repository, now=NOW)
+    assert index is not None and index.path != legacy
+    assert legacy.read_bytes() == b"not sqlite"
+    assert index.search("backup schedule", tenant="", clearance=None, limit=50)
+
+
+def test_rebuild_works_on_a_read_only_vault(tmp_path: Path) -> None:
+    repository, _ids = _corpus(tmp_path)
+    directories = [repository.root, *[p for p in repository.root.rglob("*") if p.is_dir()]]
+    modes = {path: stat.S_IMODE(path.stat().st_mode) for path in directories}
+    try:
+        for path in directories:
+            os.chmod(path, 0o500)
+        index = ensure_proxy_index(Repository(repository.root), now=NOW)
+        assert index is not None
+        assert index.search("backup schedule", tenant="", clearance=None, limit=50)
+    finally:
+        for path, mode in modes.items():
+            os.chmod(path, mode)
+
+
+def test_a_write_during_rebuild_leaves_the_index_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository, ids = _corpus(tmp_path)
+    original = proxy_index_module.active_proxies
+
+    def racing(repo: Repository, *, today: Any) -> Any:
+        rows = original(repo, today=today)
+        data = b"%PDF public original"
+        _proxy(repository, tmp_path, ids["public"], data, ["late arrival text", "y", "z"])
+        return rows
+
+    monkeypatch.setattr(proxy_index_module, "active_proxies", racing)
+    index = ensure_proxy_index(repository, now=NOW)
+    monkeypatch.setattr(proxy_index_module, "active_proxies", original)
+    assert index is not None
+    assert not index.is_current(
+        repository.events(), today=NOW.date(), vault_id=repository.read_config()["vault_id"]
+    )
+    index = ensure_proxy_index(repository, now=NOW)
+    assert index is not None
+    assert index.search("late arrival", tenant="", clearance=None, limit=5)
+
+
+def test_drop_and_residue_for_purge(tmp_path: Path) -> None:
+    repository, ids = _corpus(tmp_path)
+    assert proxy_index_residue(repository, ids["public"]) == 0  # no index yet
+    ensure_proxy_index(repository, now=NOW)
+    assert proxy_index_residue(repository, ids["public"]) == 4  # 2 rows + 2 FTS rows
+    assert drop_proxy_index(repository) is True
+    assert not proxy_index_path(repository).exists()
+    assert proxy_index_residue(repository, ids["public"]) == 0
+    assert drop_proxy_index(repository) is False
+
+
+@dataclass
+class _State:
+    label: str
+
+
+def test_detached_or_missing_attachments_leave_search_and_get(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository, ids = _corpus(tmp_path)
+    _enable(repository, originals=True)
+    gateway = Gateway(repository.root, entity_enabled=False)
+    assert len(gateway.attachment_search("backup schedule")["results"]) == 3
+    states = {attachment: _State("active") for attachment in ids.values()}
+    states[ids["public"]] = _State("detached")
+    states[ids["shared"]] = _State("missing")
+    # MM1b's state map (feature-detected); without it every attachment is active.
+    monkeypatch.setattr(Repository, "attachment_state_map", lambda self: states, raising=False)
+    found = gateway.attachment_search("backup schedule")["results"]
+    assert {row["attachment_id"] for row in found} == {ids["local-private"]}
+    index = ensure_proxy_index(repository, now=NOW)
+    assert index is not None
+    rebuilt = proxy_index_module.active_proxies(repository, today=NOW.date())
+    assert {attachment.id for _record, attachment in rebuilt} == {ids["local-private"]}
+    for gone in (ids["public"], ids["shared"]):
+        with pytest.raises(NotFoundError):
+            gateway.attachment_get(gone)
+        with pytest.raises(NotFoundError):
+            gateway.attachment_get(gone, original="bytes")
+
+
+def test_damaged_record_reads_as_missing_under_a_clearance(tmp_path: Path) -> None:
+    repository, ids = _corpus(tmp_path)
+    _enable(repository)
+    record = repository.root / "attachments" / f"{ids['local-private']}.md"
+    record.write_bytes(record.read_bytes() + b"\nedited\n")
+    remote = Gateway(repository.root, entity_enabled=False, clearance=REMOTE)
+    with pytest.raises(NotFoundError) as damaged:
+        remote.attachment_get(ids["local-private"])
+    with pytest.raises(NotFoundError) as missing:
+        remote.attachment_get("att-01a1e931-1818-772b-8713-76e6bea4a716")
+    assert str(damaged.value).replace(ids["local-private"], "X") == str(missing.value).replace(
+        "att-01a1e931-1818-772b-8713-76e6bea4a716", "X"
+    )
+    with pytest.raises(IntegrityError):
+        Gateway(repository.root, entity_enabled=False).attachment_get(ids["local-private"])
 
 
 # --- ProxyProvider ---------------------------------------------------------------------
@@ -303,6 +428,7 @@ def test_local_originals_are_returned_only_after_a_sha_recheck(tmp_path: Path) -
     data = b"%PDF public original"
     by_path = gateway.attachment_get(ids["public"], original="path")["original"]
     assert by_path["verified"] is True
+    assert by_path["verified_at_call_only"] is True
     assert Path(by_path["path"]).read_bytes() == data
     by_bytes = gateway.attachment_get(ids["public"], original="bytes", offset=5, length=6)
     assert base64.b64decode(by_bytes["original"]["bytes_b64"]) == data[5:11]
@@ -313,9 +439,37 @@ def test_local_originals_are_returned_only_after_a_sha_recheck(tmp_path: Path) -
     for mode in ("path", "bytes"):
         with pytest.raises(IntegrityError, match="no longer matches"):
             gateway.attachment_get(ids["public"], original=mode)
+    # Same size, different bytes: caught by the hash; other size: refused before reading.
+    blob.write_bytes(b"%PDF public origXnal")
+    with pytest.raises(IntegrityError, match="no longer matches"):
+        gateway.attachment_get(ids["public"], original="bytes")
     blob.unlink()
     with pytest.raises(IntegrityError, match="missing"):
         gateway.attachment_get(ids["public"], original="path")
+    # A symlink (or FIFO) in the blob's place is never followed or read.
+    target = tmp_path / "elsewhere.pdf"
+    target.write_bytes(data)
+    blob.symlink_to(target)
+    with pytest.raises(IntegrityError, match="not a regular file"):
+        gateway.attachment_get(ids["public"], original="bytes")
+    blob.unlink()
+    os.mkfifo(blob)
+    with pytest.raises(IntegrityError, match="not a regular file"):
+        gateway.attachment_get(ids["public"], original="bytes")
+
+
+def test_bytes_mode_is_capped_by_original_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from memfw.runtime import attachments as runtime_attachments
+
+    repository, ids = _corpus(tmp_path)
+    _enable(repository, originals=True)
+    monkeypatch.setattr(runtime_attachments, "MAX_BYTES_MODE_ORIGINAL", 4)
+    gateway = Gateway(repository.root, entity_enabled=False)
+    with pytest.raises(ValueError, match="served by path"):
+        gateway.attachment_get(ids["public"], original="bytes", length=2)
+    assert gateway.attachment_get(ids["public"], original="path")["original"]["verified"]
 
 
 def test_withheld_attachments_never_return_originals(tmp_path: Path) -> None:

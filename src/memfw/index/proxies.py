@@ -1,24 +1,38 @@
 """``proxy_segments``: the disposable full-text index over attachment proxies (MM2b).
 
-A separate SQLite file, ``<vault>/proxy_index.sqlite3``, never the memory
-index: memory search, the HTTP read-only service and every memory export keep
-reading ``index.sqlite3`` alone, so they can never return proxy text. The
+A separate SQLite file **outside the vault**,
+``~/.local/share/memfw/proxy_index/<vault key>.sqlite3``
+(``memfw.core.local_data.projection_file``, directory 0700, file 0600), never
+the memory index: memory search, the HTTP read-only service and every memory
+export keep reading ``index.sqlite3`` alone, so they can never return proxy
+text. Being outside the vault, it is not hashed by the transaction
+fingerprint, not counted in the vault's size, not copied by vault snapshots
+(``memfw eval context``), and it can be rebuilt from a read-only vault without
+the vault's write lock. A ``proxy_index.sqlite3`` an earlier build left in the
+vault root is never read, written or deleted (it can be removed by hand). The
 table uses the memory index's tokenizer choice (FTS5 trigram when SQLite has
 it, else jieba segments in unicode61) and the same query terms, including the
 two-character ``instr`` fallback on a trigram index.
 
 Each row is one segment of an **active** proxy (not superseded) of a
-committed, readable attachment whose retention has not ended, with the
+committed, readable, **active** attachment (not detached, missing or purged,
+when the vault's log says so) whose retention has not ended, with the
 segment's canonical locator, the proxy's kind and coverage, the tenant
 (attachments belong to the vault's default tenant ``""``) and the effective
 privacy level (the strictest of the proxy's and the attachment's). Search
 filters by tenant and clearance in SQL; callers re-check every hit against the
 proxy file and the attachment record before returning text.
 
-The index records a fingerprint of the attachment and proxy events it was
-built from; :meth:`ProxyIndex.is_current` compares it with the log, and
-:func:`ensure_proxy_index` rebuilds when they differ. It is never built on a
-vault without proxies.
+The index records a fingerprint of the vault id and the attachment and proxy
+events it was built from; :meth:`ProxyIndex.is_current` compares it with the
+log, and :func:`ensure_proxy_index` rebuilds when they differ. The fingerprint
+is taken *before* the vault is read, so a write that lands during a rebuild
+leaves the new file stale and the next call rebuilds again; no lock is
+needed. It is never built on a vault without proxies.
+
+:func:`drop_proxy_index` deletes the file (``attach purge`` must call it, so
+purged text leaves no copy), and :func:`proxy_index_residue` counts what it
+still holds for one attachment (for the purge residue check).
 """
 
 from __future__ import annotations
@@ -26,6 +40,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
 import sqlite3
 from collections.abc import Callable, Iterable
 from contextlib import closing
@@ -36,7 +51,8 @@ from typing import Any, Final
 
 from ..attachments.proxies import ProxyRecord, proxy_log
 from ..attachments.records import AttachmentRecord
-from ..core.errors import IntegrityError, NotFoundError
+from ..core.errors import IntegrityError, MemfwError, NotFoundError
+from ..core.local_data import ensure_private_dir, projection_file
 from ..core.models import ATTACHMENT_EVENT_KINDS, Event, EventKind
 from ..core.repository import Repository
 from .fts_terms import (
@@ -47,19 +63,109 @@ from .fts_terms import (
     split_short_terms,
 )
 
-PROXY_INDEX_NAME: Final = "proxy_index.sqlite3"
-PROXY_INDEX_SCHEMA_VERSION: Final = 1
+#: The ``memfw.core.local_data`` kind: ``~/.local/share/memfw/proxy_index/<key>.sqlite3``.
+PROXY_INDEX_KIND: Final = "proxy_index"
+#: Where MM2b's first draft put the index (the vault root). Never read or deleted.
+LEGACY_PROXY_INDEX_NAME: Final = "proxy_index.sqlite3"
+PROXY_INDEX_SCHEMA_VERSION: Final = 2
 _PROXY_KINDS: Final = frozenset({EventKind.PROXY_ADD, EventKind.PROXY_SUPERSEDE})
 
 
-def proxy_index_path(repository: Repository) -> Path:
-    return repository.root / PROXY_INDEX_NAME
+def proxy_index_path(repository: Repository | Path, *, home: Path | None = None) -> Path:
+    """The vault's proxy index: outside it, under the home directory."""
+
+    root = repository if isinstance(repository, Path) else repository.root
+    return projection_file(root, PROXY_INDEX_KIND, home=home)
 
 
-def proxy_fingerprint(events: Iterable[Event]) -> str:
-    """Hash of every attachment and proxy event (kind, id, hashes, supersession)."""
+def drop_proxy_index(repository: Repository | Path, *, home: Path | None = None) -> bool:
+    """Delete the vault's proxy index (and SQLite side files); ``True`` when one existed.
+
+    ``attach purge`` calls this so no index page keeps purged text; the next
+    search rebuilds from the remaining proxies.
+    """
+
+    path = proxy_index_path(repository, home=home)
+    existed = path.exists()
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        Path(f"{path}{suffix}").unlink(missing_ok=True)
+    return existed
+
+
+def proxy_index_residue(
+    repository: Repository | Path, attachment_id: str, *, home: Path | None = None
+) -> int:
+    """Rows the proxy index holds for ``attachment_id`` (0 without an index).
+
+    Counts both tables, so a residue check after a purge sees a stale row in
+    either. An unreadable index counts as one row (it must be dropped).
+    """
+
+    path = proxy_index_path(repository, home=home)
+    if not path.is_file():
+        return 0
+    try:
+        with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as connection:
+            rows = connection.execute(
+                "SELECT COUNT(*) FROM segment_rows WHERE attachment_id = ?", (attachment_id,)
+            ).fetchone()[0]
+            prefixes = [
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT DISTINCT proxy_id FROM segment_rows WHERE attachment_id = ?",
+                    (attachment_id,),
+                )
+            ]
+            fts = 0
+            for proxy_id in prefixes:
+                prefix = f"{proxy_id}:"
+                fts += connection.execute(
+                    "SELECT COUNT(*) FROM proxy_segments WHERE substr(ref, 1, ?) = ?",
+                    (len(prefix), prefix),
+                ).fetchone()[0]
+    except sqlite3.DatabaseError:
+        return 1
+    return int(rows) + int(fts)
+
+
+def _active_attachments(repository: Repository) -> Callable[[str], bool]:
+    """Which attachments are active (not detached, missing or purged).
+
+    Uses the vault's attachment state map when this memfw has one (MM1b);
+    without it every committed attachment is active.
+    """
+
+    state_map = getattr(repository, "attachment_state_map", None)
+    if state_map is None:
+        return lambda _attachment_id: True
+    states = state_map()
+
+    def active(attachment_id: str) -> bool:
+        state = states.get(attachment_id)
+        return state is not None and getattr(state, "label", "active") == "active"
+
+    return active
+
+
+def attachment_active(repository: Repository, attachment_id: str) -> bool:
+    """One attachment's state (see :func:`_active_attachments`)."""
+
+    return _active_attachments(repository)(attachment_id)
+
+
+def _vault_id(repository: Repository) -> str:
+    try:
+        value = repository.read_config().get("vault_id")
+    except (MemfwError, OSError, ValueError):
+        return ""
+    return value if isinstance(value, str) else ""
+
+
+def proxy_fingerprint(events: Iterable[Event], *, vault_id: str = "") -> str:
+    """Hash of the vault id and every attachment and proxy event (kind, id, hashes, by)."""
 
     digest = hashlib.sha256()
+    digest.update(vault_id.encode() + b"\n")
     for event in events:
         if event.kind in ATTACHMENT_EVENT_KINDS or event.kind in _PROXY_KINDS:
             item = [
@@ -119,10 +225,13 @@ def active_proxies(
 
     attachments: dict[str, AttachmentRecord | None] = {}
     rows: list[tuple[ProxyRecord, AttachmentRecord]] = []
+    active = _active_attachments(repository)
     for _proxy_id, record, _by in repository.proxy_records():
         if not isinstance(record, ProxyRecord):
             continue
         owner = record.attachment_id
+        if not active(owner):
+            continue
         if owner not in attachments:
             try:
                 attachments[owner] = repository.get_attachment(owner)
@@ -158,81 +267,91 @@ class ProxyIndex:
             return None
         return None if row is None else str(row[0])
 
-    def is_current(self, events: Iterable[Event], *, today: date) -> bool:
+    def is_current(self, events: Iterable[Event], *, today: date, vault_id: str = "") -> bool:
         stored = self.fingerprint()
-        return stored is not None and stored == _built_for(proxy_fingerprint(events), today)
+        expected = _built_for(proxy_fingerprint(events, vault_id=vault_id), today)
+        return stored is not None and stored == expected
 
     def rebuild(self, repository: Repository, *, today: date) -> int:
-        """Write a complete replacement under the vault lock; returns the segment count."""
+        """Write a complete replacement (no vault lock); returns the segment count.
 
-        temporary = self.path.with_name(self.path.name + ".tmp")
-        with repository._locked():
-            temporary.unlink(missing_ok=True)
-            fingerprint = _built_for(proxy_fingerprint(repository.events()), today)
-            rows = active_proxies(repository, today=today)
-            tokenizer = "trigram" if _supports_trigram() else "unicode61"
-            segment: Callable[[str], list[str]] | None = (
-                None if tokenizer == "trigram" else jieba_segmenter()
+        The fingerprint is read before the proxies: a write that lands while
+        this runs makes the stored fingerprint stale, so the next call
+        rebuilds again. The file is created 0600 in a 0700 directory and
+        replaces the old one atomically; the vault is only read.
+        """
+
+        ensure_private_dir(self.path.parent)
+        temporary = self.path.with_name(f".{self.path.name}.{secrets.token_hex(8)}.tmp")
+        fingerprint = _built_for(
+            proxy_fingerprint(repository.events(), vault_id=_vault_id(repository)), today
+        )
+        rows = active_proxies(repository, today=today)
+        tokenizer = "trigram" if _supports_trigram() else "unicode61"
+        segment: Callable[[str], list[str]] | None = (
+            None if tokenizer == "trigram" else jieba_segmenter()
+        )
+        connection: sqlite3.Connection | None = None
+        try:
+            os.close(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+            connection = sqlite3.connect(temporary)
+            connection.execute("PRAGMA journal_mode=DELETE")
+            connection.execute(
+                "CREATE TABLE proxy_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
             )
-            connection: sqlite3.Connection | None = None
-            try:
-                connection = sqlite3.connect(temporary)
-                connection.execute("PRAGMA journal_mode=DELETE")
-                connection.execute(
-                    "CREATE TABLE proxy_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
-                )
-                connection.execute(
-                    "CREATE TABLE segment_rows (ref TEXT PRIMARY KEY, proxy_id TEXT NOT NULL, "
-                    "n INTEGER NOT NULL, attachment_id TEXT NOT NULL, kind TEXT NOT NULL, "
-                    "locator TEXT NOT NULL, coverage TEXT NOT NULL, tenant TEXT NOT NULL, "
-                    "privacy TEXT NOT NULL, text TEXT NOT NULL)"
-                )
-                connection.execute(
-                    "CREATE VIRTUAL TABLE proxy_segments USING "
-                    f"fts5(ref UNINDEXED, text, tokenize='{tokenizer}')"
-                )
-                count = 0
-                for record, attachment in rows:
-                    level = record.effective_level(attachment)
-                    for index, item in enumerate(record.segments, start=1):
-                        ref = f"{record.id}:{index}"
-                        connection.execute(
-                            "INSERT INTO segment_rows VALUES (?,?,?,?,?,?,?,?,?,?)",
-                            (
-                                ref,
-                                record.id,
-                                index,
-                                record.attachment_id,
-                                record.kind,
-                                item.locator.fragment(),
-                                record.coverage.status,
-                                "",
-                                level,
-                                item.text,
-                            ),
-                        )
-                        searchable = item.text if segment is None else " ".join(segment(item.text))
-                        connection.execute(
-                            "INSERT INTO proxy_segments (ref, text) VALUES (?,?)", (ref, searchable)
-                        )
-                        count += 1
-                connection.executemany(
-                    "INSERT INTO proxy_meta VALUES (?,?)",
-                    [("fingerprint", fingerprint), ("tokenizer", tokenizer)],
-                )
-                connection.execute(f"PRAGMA user_version = {PROXY_INDEX_SCHEMA_VERSION}")
-                connection.commit()
+            connection.execute(
+                "CREATE TABLE segment_rows (ref TEXT PRIMARY KEY, proxy_id TEXT NOT NULL, "
+                "n INTEGER NOT NULL, attachment_id TEXT NOT NULL, kind TEXT NOT NULL, "
+                "locator TEXT NOT NULL, coverage TEXT NOT NULL, tenant TEXT NOT NULL, "
+                "privacy TEXT NOT NULL, text TEXT NOT NULL)"
+            )
+            connection.execute(
+                "CREATE VIRTUAL TABLE proxy_segments USING "
+                f"fts5(ref UNINDEXED, text, tokenize='{tokenizer}')"
+            )
+            count = 0
+            for record, attachment in rows:
+                level = record.effective_level(attachment)
+                for index, item in enumerate(record.segments, start=1):
+                    ref = f"{record.id}:{index}"
+                    connection.execute(
+                        "INSERT INTO segment_rows VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        (
+                            ref,
+                            record.id,
+                            index,
+                            record.attachment_id,
+                            record.kind,
+                            item.locator.fragment(),
+                            record.coverage.status,
+                            "",
+                            level,
+                            item.text,
+                        ),
+                    )
+                    searchable = item.text if segment is None else " ".join(segment(item.text))
+                    connection.execute(
+                        "INSERT INTO proxy_segments (ref, text) VALUES (?,?)", (ref, searchable)
+                    )
+                    count += 1
+            connection.executemany(
+                "INSERT INTO proxy_meta VALUES (?,?)",
+                [("fingerprint", fingerprint), ("tokenizer", tokenizer)],
+            )
+            connection.execute(f"PRAGMA user_version = {PROXY_INDEX_SCHEMA_VERSION}")
+            connection.commit()
+            connection.close()
+            connection = None
+            os.chmod(temporary, 0o600)
+            with temporary.open("rb") as stream:
+                os.fsync(stream.fileno())
+            os.replace(temporary, self.path)
+            return count
+        except BaseException:
+            if connection is not None:
                 connection.close()
-                connection = None
-                with temporary.open("rb") as stream:
-                    os.fsync(stream.fileno())
-                os.replace(temporary, self.path)
-                return count
-            except BaseException:
-                if connection is not None:
-                    connection.close()
-                temporary.unlink(missing_ok=True)
-                raise
+            temporary.unlink(missing_ok=True)
+            raise
 
     def search(
         self,
@@ -320,30 +439,37 @@ def _built_for(fingerprint: str, today: date) -> str:
     return f"{fingerprint}:{today.isoformat()}"
 
 
-def ensure_proxy_index(repository: Repository, *, now: datetime) -> ProxyIndex | None:
+def ensure_proxy_index(
+    repository: Repository, *, now: datetime, home: Path | None = None
+) -> ProxyIndex | None:
     """The vault's proxy index, rebuilt when stale; ``None`` when the vault has no proxies.
 
-    A vault without a ``proxy_add`` event never gets a ``proxy_index.sqlite3``.
+    A vault without a ``proxy_add`` event never gets an index file. Works on a
+    read-only vault (the index lives under the home directory).
     """
 
     events = repository.events()
     if not proxy_log(events).committed:
         return None
-    index = ProxyIndex(proxy_index_path(repository))
+    index = ProxyIndex(proxy_index_path(repository, home=home))
     today = now.date()
-    if not index.is_current(events, today=today):
+    if not index.is_current(events, today=today, vault_id=_vault_id(repository)):
         index.rebuild(repository, today=today)
     return index
 
 
 __all__ = [
-    "PROXY_INDEX_NAME",
+    "LEGACY_PROXY_INDEX_NAME",
+    "PROXY_INDEX_KIND",
     "PROXY_INDEX_SCHEMA_VERSION",
     "ProxyIndex",
     "SegmentHit",
     "active_proxies",
+    "attachment_active",
+    "drop_proxy_index",
     "ensure_proxy_index",
     "proxy_fingerprint",
     "proxy_index_path",
+    "proxy_index_residue",
     "retention_ended",
 ]

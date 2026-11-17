@@ -10,14 +10,18 @@ the text of its active proxies, and, only on request, the original:
   off). That switch is the operator's statement that this MCP server runs as a
   local stdio process for a local client; memfw does not guess it. The HTTP
   read-only service has no attachment route at all.
-* the original's sha256 is re-computed from the same open file the bytes (or
-  path) come from; a mismatch refuses it.
+* the original's sha256 is re-computed from the same open file the bytes come
+  from (opened without following a symlink or blocking, and checked to be the
+  regular file ``lstat`` saw); a size or hash mismatch refuses it. A ``path``
+  is verified at call time only: what a client reads from it later is not.
 
 Both tools exist only with ``mcp.attachments: true``. Every result passes the
 caller's tenant (attachments belong to the default tenant ``""``), source
 allow-list (attachments have no source, so an allow-list hides them) and
 privacy clearance (``memfw.ports.privacy``; the level is the strictest of the
-proxy's and the attachment's). A withheld attachment reads as missing.
+proxy's and the attachment's), and the attachment must be active (not
+detached, missing or purged, where this memfw tracks that). A withheld
+attachment, or a damaged one asked for under a clearance, reads as missing.
 """
 
 from __future__ import annotations
@@ -50,6 +54,9 @@ MAX_SEARCH_LIMIT: Final = 50
 MAX_GET_SEGMENTS: Final = 200
 #: Largest byte range ``attachment_get`` returns inline.
 MAX_ORIGINAL_BYTES: Final = 1024 * 1024
+#: Largest original ``original=bytes`` serves: every call re-hashes the whole
+#: file, so paging through a bigger one would hash it again and again.
+MAX_BYTES_MODE_ORIGINAL: Final = 32 * 1024 * 1024
 ORIGINAL_MODES: Final = ("path", "bytes")
 
 
@@ -129,7 +136,7 @@ def attachment_search(
 ) -> dict[str, Any]:
     """Proxy segments matching ``query`` that the caller may see, best first."""
 
-    from memfw.index.proxies import ensure_proxy_index, retention_ended
+    from memfw.index.proxies import attachment_active, ensure_proxy_index, retention_ended
     from memfw.recall import Coordinator, FilterPolicy
     from memfw.recall.builtin import ProxyProvider, ProxySegmentResolver
 
@@ -143,10 +150,11 @@ def attachment_search(
     empty: dict[str, Any] = {"results": [], "recall": {}}
     if not _visible_scope(runtime):
         return empty
-    if ensure_proxy_index(repository, now=moment) is None:
+    built = ensure_proxy_index(repository, now=moment)
+    if built is None:
         return empty
     coordinator = Coordinator(
-        [ProxyProvider(runtime.root, clearance=runtime.clearance)],
+        [ProxyProvider(runtime.root, clearance=runtime.clearance, index_path=built.path)],
         resolvers={"attachment_segment": ProxySegmentResolver()},
         inflight=runtime.recall_inflight,
         total_timeout=runtime.total_timeout,
@@ -182,7 +190,11 @@ def attachment_search(
         owner = record.attachment_id
         if owner not in attachments:
             try:
-                attachments[owner] = repository.get_attachment(owner)
+                attachments[owner] = (
+                    repository.get_attachment(owner)
+                    if attachment_active(repository, owner)
+                    else None
+                )
             except (IntegrityError, NotFoundError):
                 attachments[owner] = None
         attachment = attachments[owner]
@@ -246,7 +258,7 @@ def attachment_get(
     """One attachment's metadata, its active proxies' segments, and the original on request."""
 
     from memfw.attachments.records import check_attachment_id
-    from memfw.index.proxies import retention_ended
+    from memfw.index.proxies import attachment_active, retention_ended
 
     identifier = check_attachment_id(attachment_id)
     moment = now or datetime.now(UTC)
@@ -266,7 +278,17 @@ def attachment_get(
         attachment = repository.get_attachment(identifier)
     except NotFoundError:
         raise missing from None
-    if not _admitted(runtime, None, attachment) or retention_ended(attachment, moment.date()):
+    except IntegrityError:
+        # A damaged record cannot say its level: only an unfiltered (local
+        # operator) caller learns it is damaged; any clearance sees "not found".
+        if runtime.clearance is None:
+            raise
+        raise missing from None
+    if (
+        not _admitted(runtime, None, attachment)
+        or retention_ended(attachment, moment.date())
+        or not attachment_active(repository, identifier)
+    ):
         raise missing
     payload: dict[str, Any] = {
         "id": attachment.id,
@@ -332,6 +354,10 @@ def _original(
         raise ValueError("length must be a non-negative integer")
     if mode == "bytes" and length > MAX_ORIGINAL_BYTES:
         raise ValueError(f"at most {MAX_ORIGINAL_BYTES} bytes per call")
+    if mode == "bytes" and attachment.size > MAX_BYTES_MODE_ORIGINAL:
+        raise ValueError(
+            f"originals over {MAX_BYTES_MODE_ORIGINAL} bytes are served by path, not bytes"
+        )
     store = repository.attachment_blob_store()
     if store is None:
         raise IntegrityError("the vault has no blob store")
@@ -342,25 +368,43 @@ def _original(
         raise IntegrityError("the original is missing; run memfw attach verify") from None
     if not stat.S_ISREG(info.st_mode):
         raise IntegrityError("the original is not a regular file; run memfw attach verify")
+    changed = IntegrityError(
+        "the original no longer matches its sha256; refused (run memfw attach verify)"
+    )
+    if info.st_size != attachment.size:
+        raise changed
     digest = hashlib.sha256()
     captured = bytearray()
     position = 0
     end = offset + length
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    # Never follow a symlink, never block on a FIFO swapped in after lstat.
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        handle = os.open(path, flags)
+    except OSError:
+        raise IntegrityError("the original cannot be opened; run memfw attach verify") from None
+    opened = os.fstat(handle)
+    if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (
+        info.st_dev,
+        info.st_ino,
+    ):
+        os.close(handle)
+        raise IntegrityError("the original changed while it was opened; refused")
     # One pass over one open file: the bytes returned are the bytes hashed.
-    with os.fdopen(os.open(path, flags), "rb") as stream:
+    with os.fdopen(handle, "rb") as stream:
         while chunk := stream.read(1024 * 1024):
             digest.update(chunk)
             if mode == "bytes" and position < end and position + len(chunk) > offset:
                 captured += chunk[max(0, offset - position) : max(0, end - position)]
             position += len(chunk)
     if digest.hexdigest() != attachment.sha256 or position != attachment.size:
-        raise IntegrityError(
-            "the original no longer matches its sha256; refused (run memfw attach verify)"
-        )
+        raise changed
     result: dict[str, Any] = {"sha256": attachment.sha256, "size": position, "verified": True}
     if mode == "path":
+        # Verified at this call only: a client that opens the path later reads
+        # whatever is there then (use ``bytes`` for bytes that were hashed).
         result["path"] = str(path)
+        result["verified_at_call_only"] = True
     else:
         result.update(
             offset=offset, length=len(captured), bytes_b64=base64.b64encode(captured).decode()

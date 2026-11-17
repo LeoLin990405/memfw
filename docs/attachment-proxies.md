@@ -222,26 +222,42 @@ after an interrupted import removes the uncommitted proxy file.
 
 ### `proxy_segments`
 
-Active proxies are searchable through their own disposable index,
-`<vault>/proxy_index.sqlite3` (table `proxy_segments`), never through the
-memory index: `memory_search`, the HTTP read-only service, OKF and every
-projection keep reading `index.sqlite3` and `memories/` only.
+Active proxies are searchable through their own disposable index (table
+`proxy_segments`), never through the memory index: `memory_search`, the HTTP
+read-only service, OKF and every projection keep reading `index.sqlite3` and
+`memories/` only.
+
+* The file lives **outside the vault**, like the usage and edge projections:
+  `~/.local/share/memfw/proxy_index/<vault key>.sqlite3`
+  (`memfw.core.local_data.projection_file`, directory 0700, file 0600). So
+  memory writes never hash it (`_tree_fingerprint`), the vault's size never
+  counts it, `memfw eval context` snapshots never copy it, and it is rebuilt
+  from a read-only vault without taking the vault's write lock (the
+  fingerprint is read before the proxies, so a write during a rebuild only
+  makes the next call rebuild again). A `proxy_index.sqlite3` left in the
+  vault root by an early MM2b build is never read or deleted; remove it by
+  hand.
 
 * Same tokenizer choice and query terms as the memory index (FTS5 trigram,
   else jieba + unicode61), including the two-character `instr` fallback
   (`备份`, `AI`).
 * One row per segment of an **active** proxy (superseded ones are left out)
-  of a committed, readable attachment whose sha256 still matches the proxy's
+  of a committed, readable, active attachment (not detached, missing or
+  purged once the log records those, MM1b) whose sha256 still matches the proxy's
   `source_sha256` and whose retention has not ended (`until:<date>` is
   searchable through that day).
 * Each row carries the tenant and the effective privacy level (strictest of
   proxy and attachment). Attachments belong to the default tenant `""`, so a
   caller bound to another tenant (or to a source allow-list: attachments have
   no source) sees none. Search filters both in SQL.
-* The index stores a fingerprint of the attachment and proxy events (and the
-  day, for retention); it is rebuilt on first use when stale, under the vault
-  lock. A vault without a `proxy_add` event never gets the file. It is part of
-  the proxies' own budget, not the vault's physical size.
+* The index stores a fingerprint of the vault id and the attachment and proxy
+  events (and the day, for retention); it is rebuilt on first use when stale.
+  A vault without a `proxy_add` event never gets the file.
+* **Purge:** `memfw.index.proxies.drop_proxy_index(repository)` deletes the
+  file (and SQLite side files); `attach purge` must call it so no index page
+  keeps purged text, and `proxy_index_residue(repository, attachment_id)`
+  (rows in both tables, 0 without a file) is what the purge residue check
+  counts. Wiring both into MM1b's purge follows once MM1b has merged.
 
 ### `ProxyProvider`
 
@@ -295,9 +311,19 @@ must be booleans.
   local client; memfw does not try to detect it. Without it the call is
   refused.
 * Before anything is returned the blob is re-hashed in one pass over one open
-  file (no symlink followed); `bytes` (at most 1 MiB per call, `offset`,
-  `length`) are the very bytes that were hashed. A mismatch or a missing blob
-  refuses the call and points at `memfw attach verify`.
+  file: opened with `O_NOFOLLOW | O_NONBLOCK`, checked to be the regular file
+  `lstat` saw (same device and inode) and of the recorded size (a different
+  size is refused before reading). `bytes` (at most 1 MiB per call, `offset`,
+  `length`) are the very bytes that were hashed; originals over 32 MiB are
+  served by `path` only, so paging never re-hashes a large file over and
+  over. A mismatch or a missing blob refuses the call and points at
+  `memfw attach verify`.
+* `original=path` is verified **at call time only** (the result says
+  `verified_at_call_only: true`): what a client reads from the path later is
+  not checked. Use `bytes` when the bytes themselves must be the verified ones.
+* A detached, missing or purged attachment (MM1b states, when present) is
+  "not found", and so is a damaged record asked for under any clearance (only
+  an unfiltered local caller sees the integrity error).
 * Only embedded originals are served (referenced ones arrive with MM1b).
 
 ## Not yet

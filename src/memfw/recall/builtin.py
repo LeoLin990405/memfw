@@ -930,18 +930,21 @@ class ProxyProvider:
         *,
         name: str = "proxy",
         clearance: frozenset[str] | None = None,
+        index_path: Path | None = None,
     ) -> None:
+        from memfw.index.proxies import proxy_index_path
+
         self.name = name
         self.root = Path(root).expanduser()
         self.clearance = clearance
+        #: The out-of-vault index file (``memfw.index.proxies.proxy_index_path``).
+        self.index_path = index_path if index_path is not None else proxy_index_path(self.root)
         self.projection_version = ""
 
     def available(self) -> Availability:
-        from memfw.index.proxies import PROXY_INDEX_NAME
-
         if not _vault_ok(self.root):
             return Availability.missing("no_vault")
-        if not (self.root / PROXY_INDEX_NAME).is_file():
+        if not self.index_path.is_file():
             return Availability.missing("no_proxy_index")
         return Availability.ok()
 
@@ -955,9 +958,9 @@ class ProxyProvider:
         as_of: datetime | None,
     ) -> Sequence[Candidate]:
         del budget, as_of  # one bounded SQLite read; proxies have no validity window
-        from memfw.index.proxies import PROXY_INDEX_NAME, ProxyIndex
+        from memfw.index.proxies import ProxyIndex
 
-        hits = ProxyIndex(self.root / PROXY_INDEX_NAME).search(
+        hits = ProxyIndex(self.index_path).search(
             query, tenant=tenant, clearance=self.clearance, limit=_page(limit)
         )
         out: list[Candidate] = []
