@@ -34,9 +34,11 @@ _SHA_RE: Final = re.compile(r"^[0-9a-f]{64}$")
 #: Staging area under the blob root (never a vault id: those are UUIDs).
 STAGING_DIR: Final = ".staging"
 
-#: Synced-folder markers under the home directory. Same list as
-#: ``memfw.history.transcripts.SYNCED_MARKERS`` (kept equal by a test; the
-#: history package sits above this layer, so it cannot be imported here).
+#: Synced-folder markers under the home directory: every marker of
+#: ``memfw.history.transcripts.SYNCED_MARKERS`` (a test keeps it a subset; the
+#: history package sits above this layer, so it cannot be imported here) plus
+#: ``Documents`` and ``Desktop``, which macOS iCloud "Desktop & Documents"
+#: syncs.
 SYNCED_MARKERS: Final[tuple[tuple[str, ...], ...]] = (
     ("Library", "Mobile Documents"),
     ("Library", "CloudStorage"),
@@ -46,6 +48,8 @@ SYNCED_MARKERS: Final[tuple[tuple[str, ...], ...]] = (
     ("iCloud Drive",),
     ("Nextcloud",),
     ("Syncthing",),
+    ("Documents",),
+    ("Desktop",),
 )
 
 
@@ -75,8 +79,10 @@ def check_blob_location(path: Path, *, vault: Path, extra_synced: Sequence[Path]
         raise BlobLocationError("refusing a blob directory inside (or containing) the vault")
     for marker in SYNCED_MARKERS:
         synced = home.joinpath(*marker)
-        if resolved == synced or synced in resolved.parents:
-            raise BlobLocationError("refusing a blob directory inside a synced folder")
+        # Also the marker's target: ``~/Dropbox`` is often a symlink elsewhere.
+        for candidate in {synced, synced.resolve()}:
+            if resolved == candidate or candidate in resolved.parents:
+                raise BlobLocationError("refusing a blob directory inside a synced folder")
     for extra in extra_synced:
         synced = extra.expanduser().resolve()
         if resolved == synced or synced in resolved.parents:

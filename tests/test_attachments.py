@@ -96,10 +96,12 @@ def test_every_event_kind_is_classified_exactly_once() -> None:
         assert EventKind[name] in NON_MEMORY_EVENT_KINDS
 
 
-def test_synced_markers_match_the_history_guard() -> None:
+def test_synced_markers_cover_the_history_guard() -> None:
     from memfw.history.transcripts import SYNCED_MARKERS
 
-    assert blobs_module.SYNCED_MARKERS == SYNCED_MARKERS
+    assert set(SYNCED_MARKERS) <= set(blobs_module.SYNCED_MARKERS)
+    extra = set(blobs_module.SYNCED_MARKERS) - set(SYNCED_MARKERS)
+    assert extra == {("Documents",), ("Desktop",)}
 
 
 # --- add / list / show / verify -------------------------------------------------------
@@ -849,3 +851,21 @@ def test_blob_root_must_be_absolute_or_home_relative(
     record = repository.add_attachment(_file(tmp_path, "b.txt", b"b")).record
     assert _blob_dir(repository).parent == (private_home / "blob-root").resolve()
     assert repository.verify_attachments() == ([record.id], [])
+
+
+def test_synced_folders_by_target_and_desktop_documents(tmp_path: Path, private_home: Path) -> None:
+    repository = _repo(tmp_path)
+    source = _file(tmp_path, "a.txt", b"a")
+    # ~/Dropbox is a symlink to the real synced folder elsewhere.
+    real = tmp_path / "synced-elsewhere"
+    real.mkdir()
+    (private_home / "Dropbox").symlink_to(real)
+    for refused in (
+        real / "blobs",
+        private_home / "Documents" / "blobs",
+        private_home / "Desktop" / "blobs",
+    ):
+        _set_root(repository, refused)
+        with pytest.raises(BlobLocationError, match="synced"):
+            repository.add_attachment(source)
+    assert "vault_id" not in repository.read_config()
