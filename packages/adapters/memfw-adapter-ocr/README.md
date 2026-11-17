@@ -79,6 +79,9 @@ It discovers the server's tools with `tools/list` and uses:
   `ocr_job_result` instead. **An async job leaves records in the server's own
   job store** (a job file and a log naming the input), outside memfw's
   control and not removed by it; leave it off for `local-private` originals.
+  A job counts as finished only when its status is a done state or
+  `running: false` **and** its output file has the same non-zero size on two
+  polls; a server that never reports done times out.
 
 The engine (PaddleOCR, MinerU, …) is the server's choice (`engine` is passed
 through when set). The server's PDF answers have no boxes, so PDF segments

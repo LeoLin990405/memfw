@@ -42,6 +42,7 @@ import os
 import queue
 import re
 import signal
+import stat
 import subprocess
 import threading
 import time
@@ -596,10 +597,19 @@ class McpOcrBackend:
         return self._result("pdf", total, pages, "ocr")
 
     def _submit_and_wait(self, session: _Session, names: set[str], args: Mapping[str, Any]) -> Any:
+        """Submit, then poll until the job says it is done and its output stops growing.
+
+        An ``output_file`` alone is not "done" (a server may name it while it
+        still writes): the status must be a done state or ``running: false``,
+        and the file's size must be the same, and non-zero, on two polls.
+        """
+
         started = self._call(session, names, "ocr_submit", args)
         job = started.get("job_id") if isinstance(started, Mapping) else None
         if not isinstance(job, str) or not job:
             raise OcrError("mcp_bad_result")
+        out = Path(str(args["out_dir"]))
+        last_size: int | None = None
         while True:
             status = self._call(session, names, "ocr_job_status", {"job_id": job})
             if not isinstance(status, Mapping):
@@ -607,15 +617,33 @@ class McpOcrBackend:
             state = str(status.get("status", "")).lower()
             if state in _FAILED:
                 raise OcrError("mcp_job_failed")
-            if state in _DONE or status.get("running") is False or status.get("output_file"):
+            if state in _DONE or status.get("running") is False:
                 named = status.get("output_file")
                 if not named and "ocr_job_result" in names:
                     result = self._call(session, names, "ocr_job_result", {"job_id": job})
                     named = result.get("output_file") if isinstance(result, Mapping) else None
-                return named
+                size = _output_size(out, named)
+                if size and size == last_size:
+                    return named
+                last_size = size
             if time.monotonic() + self.poll_seconds >= session.deadline:
                 raise OcrError("mcp_timeout")
             time.sleep(self.poll_seconds)
+
+
+def _output_size(base: Path, named: Any) -> int | None:
+    """The size of the file the server named (inside ``base``), or ``None``."""
+
+    if not isinstance(named, str) or not named:
+        return None
+    path = Path(named) if Path(named).is_absolute() else base / named
+    try:
+        if not path.resolve().is_relative_to(base.resolve()):
+            raise OcrError("mcp_output_outside_workdir")
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    return info.st_size if stat.S_ISREG(info.st_mode) else None
 
 
 def _version() -> str:

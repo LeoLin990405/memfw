@@ -56,7 +56,12 @@ def answer(name, args):
             answer.out_dir = out_dir
     elif name == "ocr_job_status":
         STATUS_CALLS[0] += 1
-        key = "ocr_job_status_running" if STATUS_CALLS[0] == 1 else "ocr_job_status_written"
+        # running, then still "running" while naming its output, then done
+        key = (
+            ["ocr_job_status_running", "ocr_job_status_written"][STATUS_CALLS[0] - 1]
+            if (STATUS_CALLS[0] <= 2)
+            else "ocr_job_status_done"
+        )
         payload = RECORDED[key]
         out_dir = getattr(answer, "out_dir", "")
     elif name == "ocr_job_result":

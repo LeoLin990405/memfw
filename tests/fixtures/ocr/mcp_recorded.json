@@ -108,5 +108,13 @@
     ],
     "width": 400,
     "height": 300
+  },
+  "ocr_job_status_done": {
+    "job_id": "20260101-000000-abcdef",
+    "pid": 4242,
+    "status": "done",
+    "running": false,
+    "elapsed_sec": 90.0,
+    "output_file": "{out_dir}/ocr.md"
   }
 }
