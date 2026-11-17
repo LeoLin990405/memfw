@@ -271,6 +271,28 @@ def test_sync_is_idempotent_and_follows_changes_privacy_and_deletes(
     assert point_id(provider.vault_key, "m-backup") in fake.collections["memfw"]["points"]
 
 
+def test_withdrawn_memories_are_deleted_before_anything_is_embedded(
+    tmp_path: Path, fake: FakeQdrant
+) -> None:
+    repository = _vault(tmp_path)
+    sync(_provider(repository, fake))
+    repository.update("m-release", tags=["sensitivity:private"])
+    (repository.root / "memories" / "m-hal.md").unlink()
+    repository.update("m-backup", body="nightly homelab backup, now offsite too")
+
+    class Broken(WordsEmbedder):
+        def embed(self, texts: Sequence[str], *, role: str = "document") -> list[list[float]]:
+            raise RuntimeError("embedding endpoint down")
+
+    fake.requests.clear()
+    with pytest.raises(RuntimeError):
+        sync(_provider(repository, fake, Broken()))
+    assert not {"m-release", "m-hal"} & _stored_ids(fake)  # gone although the run failed
+    paths = [r["path"].rsplit("/", 1)[-1] for r in fake.requests if r["method"] != "GET"]
+    assert "delete" in paths and "points" not in paths  # deleted; no upsert happened
+    assert "m-backup" in _stored_ids(fake)  # the old version stays until a sync succeeds
+
+
 def test_another_vault_and_another_embedder_never_match(tmp_path: Path, fake: FakeQdrant) -> None:
     repository = _vault(tmp_path)
     provider = _provider(repository, fake)

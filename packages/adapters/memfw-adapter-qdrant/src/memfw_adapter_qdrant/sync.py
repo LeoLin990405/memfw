@@ -13,7 +13,9 @@ reads the vault and writes only to Qdrant. Steps:
    ``memory_id``, ``tenant``, ``vault`` (the vault key), ``embedder`` (the
    fingerprint) and ``sha`` (a hash of tenant and text). No text is stored;
 4. every point of this vault that is no longer sendable (deleted, now
-   ``local-private`` or ``unknown``, unreadable) is deleted.
+   ``local-private`` or ``unknown``, unreadable) is deleted, **before**
+   anything is embedded or upserted (step 3 runs last), so a failing
+   embedder or upsert cannot keep a withdrawn memory in Qdrant.
 
 Point ids are UUIDv5 of the vault key and the memory id, so a re-run is
 idempotent. The returned counts carry no id or text.
@@ -159,12 +161,23 @@ def sync(provider: QdrantProvider) -> SyncReport:
     report = SyncReport()
     report.created_collection = ensure_collection(client, settings.collection, dimension)
     existing = existing_points(client, settings.collection, provider.vault_key)
-    keep: set[str] = set()
+    # Decide what may stay before anything is embedded or sent, and delete the
+    # rest first: a failing embedder or upsert later in the run must never
+    # leave a memory in Qdrant after it was removed or became unsendable.
+    sendable = list(outgoing(provider.root, settings.clearance, report.skipped))
+    keep = {point_id(provider.vault_key, item.memory_id) for item in sendable}
+    stale = sorted(set(existing) - keep)
+    for start in range(0, len(stale), UPSERT_BATCH * 4):
+        chunk = stale[start : start + UPSERT_BATCH * 4]
+        client.call(
+            "POST",
+            collection_path(settings.collection, "/points/delete?wait=true"),
+            {"points": chunk},
+        )
+        report.deleted += len(chunk)
     pending: list[Outgoing] = []
-    for item in outgoing(provider.root, settings.clearance, report.skipped):
-        identifier = point_id(provider.vault_key, item.memory_id)
-        keep.add(identifier)
-        current = existing.get(identifier)
+    for item in sendable:
+        current = existing.get(point_id(provider.vault_key, item.memory_id))
         if (
             current is not None
             and current.get("sha") == item.sha
@@ -179,15 +192,6 @@ def sync(provider: QdrantProvider) -> SyncReport:
             pending = []
     if pending:
         _upsert(provider, pending, fingerprint, report)
-    stale = sorted(set(existing) - keep)
-    for start in range(0, len(stale), UPSERT_BATCH * 4):
-        chunk = stale[start : start + UPSERT_BATCH * 4]
-        client.call(
-            "POST",
-            collection_path(settings.collection, "/points/delete?wait=true"),
-            {"points": chunk},
-        )
-        report.deleted += len(chunk)
     return report
 
 
