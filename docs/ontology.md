@@ -278,8 +278,9 @@ states a privacy level is re-read too, so a memory deleted or made private
 after the last rebuild is hidden before the next one. A concept node must
 still exist in the vault: a concept file (or a label/alias of one, through
 the alias index), else a value that a memory the caller may see names in
-`about` or `applies_to` (the vault's memories are read once per match, only
-when such a node is reached). Any other concept node — one only a deleted,
+`about` or `applies_to` (only the memories the projection links to that
+node by `about`/`applies_to` are re-read, each once per match, so the cost
+grows with the node's degree, not the vault). Any other concept node — one only a deleted,
 edited or hidden memory named, or one whose file was removed and that no
 visible memory names — is hidden. A hidden node is absent:
 no path runs through it, it does not use up the fan-out, and a hidden start

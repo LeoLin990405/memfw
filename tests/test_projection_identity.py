@@ -453,3 +453,41 @@ def test_lint_strips_memory_prefixes(tmp_path: Path) -> None:
         if item["kind"] == "relation_cross_tenant"
     } == {("evidence", "m-other")}
     assert vault_store(repository).identity == vault_identity(repository)
+
+
+# --- review follow-ups (#90) ---------------------------------------------------------
+
+
+def test_free_text_concepts_never_list_the_vault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """H1: a free-text concept node is confirmed through its own edges, O(degree)."""
+
+    repository = _vault(tmp_path / "vault")
+    for number in range(300):
+        repository.add(
+            f"m{number}",
+            "b",
+            memory_id=f"m-{number:03d}",
+            about=[f"free text {number % 30}"],
+            privacy="public",
+        )
+    rebuild_edge_projection(repository)
+    calls = {"list": 0, "get": 0}
+    real_list, real_get = Repository.list, Repository.get
+
+    def counting_list(self: Repository) -> Any:
+        calls["list"] += 1
+        return real_list(self)
+
+    def counting_get(self: Repository, memory_id: str) -> Any:
+        calls["get"] += 1
+        return real_get(self, memory_id)
+
+    monkeypatch.setattr(Repository, "list", counting_list)
+    monkeypatch.setattr(Repository, "get", counting_get)
+    assert _ids(graph_match(repository, start="m-001", path="about>")) == [["m-001", "free text 1"]]
+    paths = graph_match(repository, start="m-001", path="about><about", limit=100)["paths"]
+    assert len(paths) == 9  # the 10 memories about "free text 1", less the start
+    assert calls["list"] == 0
+    assert calls["get"] <= 20  # the start, its concept's 10 memories: each read once
