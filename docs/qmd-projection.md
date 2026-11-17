@@ -405,9 +405,11 @@ Decisions the implementation took where the spec left a choice open:
   characters other than letters, digits and `$` becomes `-`), so the adapter
   handelizes the manifest's `memories/<id>.md` paths and looks hits up in that
   table; a hit not in the table, or one two paths share, is dropped. A
-  document whose manifest `meta.privacy_class` is not `none`, or whose
-  `meta.tenant` is not the call's tenant, is dropped too, so `local-private`
-  and `unknown` never leave the adapter. The coordinator then resolves the id
+  document whose manifest `meta.privacy_class` is not `none`, whose
+  `meta.tenant` is not the call's tenant, or that is not current (`lifecycle`
+  set and not `active`, `superseded_by` or `valid_to` set, `valid_until` past
+  or unparsable) is dropped too, so `local-private`, `unknown`, expired and
+  superseded memories never leave the adapter. The coordinator then resolves the id
   against the vault and filters it again. The manifest is re-read when the file
   behind the configured path changes (a flipped `current` symlink), and the
   provider is unavailable while it is missing, malformed, older than
@@ -428,10 +430,9 @@ bodies from QMD are never returned. When QMD is unreachable, slow or answers
 off-protocol, `search` raises and the coordinator reports the provider in
 `labels.degraded` while FTS answers (compat framework T7).
 
-Known gap: today's vault resolver reads privacy and lifecycle from the vault
-file only. The adapter's manifest check covers privacy (meta-index
-`privacy`), but a meta-index-only `valid_until` or `lifecycle: superseded` is
-not seen by the coordinator until the `join_meta` path resolver is plugged in.
+The vault resolver reads privacy and lifecycle from the vault file only, so
+the meta-index-only fields (`privacy`, `lifecycle`, `valid_until`) are checked
+by the adapter from the manifest; QMD hits therefore never include history.
 
 The contract fixtures (`tests/fixtures/qmd_contract/`) follow QMD 2.5.3's
 published wire format and were constructed, not captured from a live server;

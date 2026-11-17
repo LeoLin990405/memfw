@@ -265,11 +265,63 @@ def test_manifest_privacy_beats_the_vault_tags_in_a_coordinator(
     result = coordinator.search(MEMORY["query"], limit=10, policy=FilterPolicy())
     assert ID["privacy_mismatch"] not in result.ids
     assert ID["active"] in result.ids
-    # The coordinator still applies its own rules to what the adapter returned.
-    assert ID["superseded_vault"] not in result.ids
-    assert ID["superseded_vault"] in [c.ref for c in _search(provider, MEMORY["query"])]
     assert result.labels.providers == ("qmd",)
     assert result.labels.projection_versions == {"qmd": tree.name}
+
+
+LIFECYCLE_DROPS = (
+    "expired_meta",  # meta-index valid_until in the past
+    "expiry_unparsable",  # meta-index valid_until "next tuesday"
+    "superseded_meta",  # meta-index lifecycle: superseded
+    "superseded_vault",  # vault superseded_by
+    "expired_vault",  # vault valid_to
+)
+
+
+@pytest.mark.parametrize("policy", ["strict", "compat_fts"])
+def test_expired_and_superseded_never_leak_through_a_coordinator(
+    projected: tuple[Path, Path], fake: FakeQmd, policy: str
+) -> None:
+    """Meta-index-only lifecycle fields are invisible to the vault resolver: the adapter drops."""
+
+    root, tree = projected
+    provider = _memory(tree, fake.url)
+    returned = [c.ref for c in _search(provider, MEMORY["query"])]
+    coordinator = Coordinator([provider], resolvers=default_resolvers(root), clock=lambda: NOW)
+    chosen = FilterPolicy() if policy == "strict" else FilterPolicy.compat_fts(tenant="")
+    result = coordinator.search(MEMORY["query"], limit=10, policy=chosen)  # as recorded
+    for name in LIFECYCLE_DROPS:
+        assert ID[name] not in returned, name
+        assert ID[name] not in result.ids, name
+    assert ID["active"] in result.ids
+
+
+def test_valid_until_is_judged_at_the_adapter_clock(fake: FakeQmd, tmp_path: Path) -> None:
+    def doc(memory_id: str, **meta: Any) -> dict[str, Any]:
+        base = {"privacy_class": "none", "tenant": "", "lifecycle": "active"}
+        return {"id": memory_id, "path": f"memories/{memory_id}.md", "meta": {**base, **meta}}
+
+    docs = [
+        doc("m-future", valid_until="2026-12-01"),
+        doc("m-past", valid_until="2026-11-01T00:00:00Z"),
+        doc("m-edge", valid_until="2026-11-10T01:00:00+00:00"),  # == now: expired
+        doc("m-bad", valid_until=17),
+        doc("m-blank", valid_until="", superseded_by="", valid_to=None, lifecycle=" Active "),
+        doc("m-archived", lifecycle="archived"),
+    ]
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {"schema_version": 1, "tree": "t", "documents": docs, "lifecycle_source_status": "ok"}
+        ),
+        encoding="utf-8",
+    )
+    fake.results = lambda arguments: [
+        {"file": f"memfw-memory/memories/{d['id']}.md", "score": 0.5, "line": 1} for d in docs
+    ]
+    provider = _memory(manifest, fake.url)
+    provider._clock = lambda: NOW  # type: ignore[attr-defined]
+    assert [c.ref for c in _search(provider, "q")] == ["m-future", "m-blank"]
 
 
 def test_manifest_problems_make_the_provider_unavailable(

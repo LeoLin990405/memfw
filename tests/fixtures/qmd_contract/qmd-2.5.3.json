@@ -83,7 +83,7 @@
             "content": [
               {
                 "type": "text",
-                "text": "Found 16 results for \"cron migration\":"
+                "text": "Found 19 results for \"cron migration\":"
               }
             ],
             "structuredContent": {
@@ -215,6 +215,33 @@
                   "snippet": "12: SNIPPET-MARKER-DO-NOT-RETURN"
                 },
                 {
+                  "docid": "#479733",
+                  "file": "memfw-memory/memories/f0bbbcf9e8e3b.md",
+                  "title": "<redacted>",
+                  "score": 0.71,
+                  "context": null,
+                  "line": 12,
+                  "snippet": "12: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#fc9c07",
+                  "file": "memfw-memory/memories/fdb83f168004f.md",
+                  "title": "<redacted>",
+                  "score": 0.705,
+                  "context": null,
+                  "line": 12,
+                  "snippet": "12: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#e1b8a0",
+                  "file": "memfw-memory/memories/f61790536a97b.md",
+                  "title": "<redacted>",
+                  "score": 0.702,
+                  "context": null,
+                  "line": 12,
+                  "snippet": "12: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
                   "docid": "#408396",
                   "file": "memfw-memory/memories/zeval-0001.md",
                   "title": "<redacted>",
@@ -241,8 +268,6 @@
         "fda42050e4f41",
         "f377d4acb1842",
         "fc95afc5931ce",
-        "f9e6cb941b6f9",
-        "f7bf67d5fd472",
         "zeval-0001"
       ]
     },

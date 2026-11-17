@@ -13,8 +13,13 @@ through its MCP ``query`` tool (R6 design §5.1–5.2: one ``tools/call`` with
     Before that, fail closed: a result whose path is not in the manifest, or
     that two manifest paths map to, is dropped; so is every document the
     manifest does not mark ``privacy_class == "none"`` (``local-private`` and
-    ``unknown`` are never returned, whatever the caller's clearance) or whose
-    ``tenant`` differs from the call's tenant.
+    ``unknown`` are never returned, whatever the caller's clearance), whose
+    ``tenant`` differs from the call's tenant, or that the manifest says is
+    not current: ``lifecycle`` set and not ``active``, ``superseded_by`` or
+    ``valid_to`` set, or ``valid_until`` at or before now (or unparsable).
+    The vault resolver cannot see the meta-index's lifecycle fields, so this
+    check is the only one for them; QMD therefore never contributes history
+    (``include_retired`` / ``include_history`` results come from FTS).
 
 ``qmd-notes`` (:class:`QmdNotesProvider`)
     Over a collection that indexes a Knowledge-Hub tree that is also readable
@@ -407,10 +412,53 @@ class _QmdProvider:
 # --------------------------------------------------------------------------- memory
 
 
+#: ``valid_until`` that is set but not a date/time: never current.
+_UNPARSABLE = datetime.min.replace(tzinfo=UTC)
+
+
+@dataclass(frozen=True)
+class _Entry:
+    """What the adapter keeps of one manifest document (``documents[].meta``)."""
+
+    memory_id: str
+    privacy_class: str
+    tenant: str
+    #: False when ``lifecycle`` is set and not ``active``, ``superseded_by`` is
+    #: set, or ``valid_to`` is set (the index's own rule for ``valid_to``).
+    current: bool
+    #: Parsed ``valid_until``; ``_UNPARSABLE`` when set but unreadable.
+    valid_until: datetime | None
+
+
+def _blank(value: Any) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def _entry(memory_id: str, meta: Mapping[str, Any]) -> _Entry:
+    privacy = meta.get("privacy_class")
+    tenant = meta.get("tenant")
+    lifecycle = meta.get("lifecycle")
+    lifecycle_ok = _blank(lifecycle) or (
+        isinstance(lifecycle, str) and lifecycle.strip().lower() == "active"
+    )
+    until_raw = meta.get("valid_until")
+    until: datetime | None = None
+    if not _blank(until_raw):
+        until = _parse_time(until_raw) if isinstance(until_raw, str) else None
+        until = until or _UNPARSABLE
+    return _Entry(
+        memory_id=memory_id,
+        privacy_class=privacy if isinstance(privacy, str) else "unknown",
+        tenant=tenant if isinstance(tenant, str) else "\0",  # a non-string tenant matches nothing
+        current=lifecycle_ok and _blank(meta.get("superseded_by")) and _blank(meta.get("valid_to")),
+        valid_until=until,
+    )
+
+
 @dataclass(frozen=True)
 class _ManifestView:
     tree: str
-    by_handle: Mapping[str, tuple[str, str, str]]  # handle -> (id, privacy_class, tenant)
+    by_handle: Mapping[str, _Entry]
     ambiguous: frozenset[str]
     generated_at: datetime | None
     lifecycle_status: str
@@ -432,7 +480,7 @@ def _manifest_view(data: Any) -> _ManifestView:
     documents = data.get("documents")
     if not isinstance(documents, list):
         raise ValueError("bad_manifest")
-    by_handle: dict[str, tuple[str, str, str]] = {}
+    by_handle: dict[str, _Entry] = {}
     ambiguous: set[str] = set()
     for document in documents:
         if not isinstance(document, dict):
@@ -450,16 +498,9 @@ def _manifest_view(data: Any) -> _ManifestView:
         handle = handelize(path)
         if handle is None:
             continue
-        privacy = meta.get("privacy_class")
-        tenant = meta.get("tenant")
-        entry = (
-            memory_id,
-            privacy if isinstance(privacy, str) else "unknown",
-            tenant if isinstance(tenant, str) else "\0",  # a non-string tenant matches nothing
-        )
-        if handle in by_handle and by_handle[handle][0] != memory_id:
+        if handle in by_handle:  # two documents, one stored name: neither is trusted
             ambiguous.add(handle)
-        by_handle[handle] = entry
+        by_handle[handle] = _entry(memory_id, meta)
     tree = data.get("tree")
     status = data.get("lifecycle_source_status")
     return _ManifestView(
@@ -560,10 +601,11 @@ class QmdMemoryProvider(_QmdProvider):
         entry = view.by_handle.get(relative)
         if entry is None:
             return None
-        memory_id, privacy_class, doc_tenant = entry
-        if privacy_class != "none" or doc_tenant != tenant:
+        if entry.privacy_class != "none" or entry.tenant != tenant or not entry.current:
             return None
-        return memory_id, "memory_id"
+        if entry.valid_until is not None and entry.valid_until <= self._clock():
+            return None  # expired, or an unparsable valid_until
+        return entry.memory_id, "memory_id"
 
 
 def _version_ok(value: str) -> bool:

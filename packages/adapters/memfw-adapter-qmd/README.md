@@ -83,8 +83,11 @@ both; `local-private` is refused), `legacy_privacy` (level of a note without a
 ## Fail-closed rules
 
 - `qmd`: a hit is returned only if its manifest entry has
-  `privacy_class == "none"` and the call's tenant. `local-private` and
-  `unknown` documents are never returned. The coordinator then resolves the id
+  `privacy_class == "none"`, the call's tenant, and is current: `lifecycle`
+  empty or `active`, no `superseded_by`, no `valid_to`, and `valid_until`
+  empty or in the future (an unparsable one counts as expired).
+  `local-private` and `unknown` documents are never returned, and QMD never
+  contributes retired or historical memories. The coordinator then resolves the id
   against the vault and applies its own filter.
 - `qmd-notes`: a hit is returned only if the note file exists under
   `notes_root` (no symlinks), its privacy level (frontmatter `privacy`,
