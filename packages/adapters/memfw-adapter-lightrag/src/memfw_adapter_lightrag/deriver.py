@@ -139,8 +139,8 @@ class Settings:
 
 
 def _loopback(host: str) -> bool:
-    if host == "localhost":
-        return True
+    """A literal loopback IP (``127.0.0.0/8``, ``::1``). Names, ``localhost`` included, are not."""
+
     try:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:

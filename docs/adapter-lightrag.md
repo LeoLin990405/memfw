@@ -26,8 +26,9 @@ pointing memfw at it:
 - export the same key to the memfw process under the variable the adapter settings name in
   `api_key_env` (default `LIGHTRAG_API_KEY`). The settings hold only the variable's **name**.
 
-The adapter refuses a `base_url` that is not `http`/`https` to a loopback address
-(`bad_base_url`), so no setting can send memories to another host. By default it also
+The adapter refuses a `base_url` that is not `http`/`https` to a literal loopback address
+(`127.0.0.0/8` or `[::1]`; `localhost` and other names are refused, since a name can resolve
+elsewhere) (`bad_base_url`), so no setting can send memories to another host. By default it also
 refuses to run when that variable is empty (`missing_key`); `require_api_key: false` exists
 only for a server you have locked down some other way.
 

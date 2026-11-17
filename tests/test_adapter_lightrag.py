@@ -308,6 +308,8 @@ def test_the_key_env_name_comes_from_settings(vault: Path) -> None:
     "url",
     [
         "http://0.0.0.0:9621",
+        "http://localhost:9621",
+        "http://localhost.:9621",
         "http://192.0.2.10:9621",
         "https://lightrag.example.com",
         "http://user:pw@127.0.0.1:9621",
@@ -322,7 +324,7 @@ def test_non_loopback_urls_are_refused(url: str) -> None:
 
 
 def test_loopback_urls_are_accepted() -> None:
-    for url in ("http://127.0.0.1:9621/", "http://localhost:9621", "https://[::1]:9621"):
+    for url in ("http://127.0.0.1:9621/", "http://127.0.0.2:9621", "https://[::1]:9621"):
         assert check_loopback_url(url) == url.rstrip("/")
 
 
