@@ -709,6 +709,148 @@ def test_store_hidden_rows_beyond_one_page_never_set_truncated(tmp_path: Path) -
         assert result.truncated is False
 
 
+def test_one_projection_connection_per_match(
+    food: Repository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rebuild_edge_projection(food)
+    opened: list[int] = []
+    real = SqliteProjectionStore._connect
+
+    def counting(self: SqliteProjectionStore) -> Any:
+        opened.append(1)
+        return real(self)
+
+    monkeypatch.setattr(SqliteProjectionStore, "_connect", counting)
+    for start, path in (
+        ("m-apple", "about>broader*1..2><about"),
+        ("concept:food", "<about"),
+        ("concept:fruit", "broader*1..2>"),
+        ("m-missing", "about>"),
+    ):
+        opened.clear()
+        graph_match(food, start=start, path=path, clearance=list(EVERY))
+        assert len(opened) == 1, (start, path, len(opened))
+    opened.clear()
+    vault_store(food).query(EdgeScope("", EVERY), node="m-apple")
+    assert len(opened) == 1  # outside a match each call still opens (and closes) its own
+
+
+def test_a_node_is_read_from_the_store_once_per_match() -> None:
+    store = MemoryProjectionStore()
+    store.rebuild(
+        [
+            Edge("related", f"n{i}", f"n{j}", "concept", "concept", "related")
+            for i in range(4)
+            for j in range(4)
+            if i != j
+        ]
+    )
+    calls: list[tuple[str, str]] = []
+    real = store.query
+
+    def counting(scope: EdgeScope, **kwargs: Any) -> tuple[Edge, ...]:
+        calls.append((kwargs["node"], kwargs["direction"]))
+        return real(scope, **kwargs)
+
+    store.query = counting  # type: ignore[method-assign]
+    result = match(
+        store,
+        EdgeScope("", EVERY),
+        "n0",
+        parse_path("related*1..3>"),
+        start_kind="concept",
+        limit=100,
+    )
+    assert result.paths
+    assert len(calls) == len(set(calls)) == 4  # n0..n3, each once
+
+
+def test_sqlite_rows_push_visibility_and_limit_into_sql(tmp_path: Path) -> None:
+    store = SqliteProjectionStore(tmp_path / "p" / "edges.sqlite3")
+    private = [
+        Edge(
+            "about",
+            f"m-a{i:05d}",
+            "concept:hub",
+            "memory",
+            "concept",
+            "about",
+            source_tenant="",
+            source_privacy="local-private",
+        )
+        for i in range(1200)
+    ]
+    other = [
+        Edge(
+            "about",
+            f"m-b{i:05d}",
+            "concept:hub",
+            "memory",
+            "concept",
+            "about",
+            source_tenant="other",
+            source_privacy="public",
+        )
+        for i in range(300)
+    ]
+    store.rebuild([*private, *other, *_hub_edges(0, 3)])
+    scope = EdgeScope("", frozenset({"public"}))
+    fetched = list(store._rows(scope, "concept:hub", "in", None, 2, None))
+    assert [edge.source for edge in fetched] == ["m-z00", "m-z01"]  # SQL returned only these
+    rest = list(store._rows(scope, "concept:hub", "in", None, 10, fetched[-1].key))
+    assert [edge.source for edge in rest] == ["m-z02"]
+    none = EdgeScope("", frozenset())
+    assert list(store._rows(none, "concept:hub", "in", None, 10, None)) == []
+
+
+def test_sqlite_cursor_matches_the_reference_for_any_after_key(tmp_path: Path) -> None:
+    """The index-friendly cursor rewrite equals the full key comparison."""
+
+    from memfw.ports.projection_store import select
+
+    names = ["a", "b", "c"]
+    edges = [
+        Edge(relation, source, target, "concept", "concept", relation)
+        for relation in ("broader", "related")
+        for source in names
+        for target in names
+        if source != target
+    ]
+    sqlite = SqliteProjectionStore(tmp_path / "c" / "edges.sqlite3")
+    sqlite.rebuild(edges)
+    scope = EdgeScope("", EVERY)
+    probes = ["", "a", "b", "bb", "c", "d"]
+    for direction in ("out", "in"):
+        for node in names:
+            for after in [
+                (r, s_, t)
+                for r in ("", "broader", "c", "related", "z")
+                for s_ in probes
+                for t in probes
+            ]:
+                for relations in (None, ("related",), ("broader", "related")):
+                    names_set = frozenset(relations) if relations is not None else None
+                    for limit in (1, 100):
+                        want = select(
+                            edges,
+                            scope,
+                            node=node,
+                            direction=direction,
+                            relations=names_set,
+                            limit=limit,
+                            after=after,
+                        )
+                        got = sqlite.query(
+                            scope,
+                            node=node,
+                            direction=direction,
+                            relations=relations,
+                            limit=limit,
+                            after=after,
+                        )
+                        assert got == want, (direction, node, after, relations, limit)
+
+
 def test_leak_sweep_over_every_start_and_pattern(tmp_path: Path) -> None:
     repository = _vault(tmp_path)
     root = repository.root

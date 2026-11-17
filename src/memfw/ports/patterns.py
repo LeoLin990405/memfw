@@ -47,14 +47,13 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Collection, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Final
 
 from .projection_store import (
     MAX_QUERY_LIMIT,
     Direction,
     Edge,
-    EdgeKey,
     EdgeScope,
     ProjectionStore,
 )
@@ -211,6 +210,15 @@ class MatchResult:
 NodeCheck = Callable[[str, str], bool]
 
 
+@dataclass(slots=True)
+class _Rows:
+    """Store rows read so far for one (node, direction, relation) within a match."""
+
+    rows: list[Edge] = field(default_factory=list)
+    done: bool = False
+    next_page: int = 0
+
+
 def _cap(value: object, name: str, high: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise PatternError(f"{name} must be an integer")
@@ -246,25 +254,24 @@ def match(
     steps = pattern.steps
     found: list[MatchedPath] = []
     state = {"expansions": 0, "truncated": False}
-    page_size = min(MAX_QUERY_LIMIT, max(fanout + 1, 100))
+    first_page = min(MAX_QUERY_LIMIT, max(fanout + 1, 100))
+    # Per-node cache within this match: the store rows read so far for
+    # (node, direction, relation), and whether the store has no more.
+    cache: dict[tuple[str, str, str], _Rows] = {}
 
     def neighbours_of(
         node: str, step: Step, used: set[tuple[str, str, str]], visited: set[str]
     ) -> list[tuple[Edge, str, str]]:
         """Up to ``fanout`` visible neighbours, paging past hidden edges."""
 
+        known = cache.setdefault((node, step.direction, step.relation), _Rows())
         out: list[tuple[Edge, str, str]] = []
-        cursor: EdgeKey | None = None
+        position = 0
+        fetched = False
         while True:
-            rows = store.query(
-                scope,
-                node=node,
-                direction=step.direction,
-                relations=(step.relation,),
-                limit=page_size,
-                after=cursor,
-            )
-            for edge in rows:
+            while position < len(known.rows):
+                edge = known.rows[position]
+                position += 1
                 if edge.key in used:
                     continue
                 if step.direction == "out":
@@ -279,13 +286,29 @@ def match(
                 if len(out) > fanout:
                     state["truncated"] = True  # a visible neighbour is cut
                     return out[:fanout]
-            if len(rows) < page_size:
+            if known.done:
                 return out  # the store has no more
-            if state["expansions"] >= max_expansions:
-                state["truncated"] = True  # the query cap ran out mid-node
-                return out
-            state["expansions"] += 1
-            cursor = rows[-1].key
+            if fetched:
+                # The walk's expansion paid for its first page; later pages cost one each.
+                if state["expansions"] >= max_expansions:
+                    state["truncated"] = True  # the query cap ran out mid-node
+                    return out
+                state["expansions"] += 1
+            fetched = True
+            # Pages grow (doubling up to MAX_QUERY_LIMIT) while hidden rows fill them.
+            size = known.next_page or first_page
+            page = store.query(
+                scope,
+                node=node,
+                direction=step.direction,
+                relations=(step.relation,),
+                limit=size,
+                after=known.rows[-1].key if known.rows else None,
+            )
+            known.rows.extend(page)
+            known.next_page = min(MAX_QUERY_LIMIT, size * 2)
+            if len(page) < size:
+                known.done = True
 
     def walk(
         index: int,

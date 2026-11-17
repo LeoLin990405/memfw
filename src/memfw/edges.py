@@ -71,6 +71,7 @@ import re
 import secrets
 import sqlite3
 from collections.abc import Collection, Iterable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
@@ -84,6 +85,7 @@ from .ontology.normalise import normalise
 from .ontology.relations import RelationTable, builtin_relation_table
 from .ontology.taxonomy import broader_of
 from .ports.privacy import (
+    PRIVACY_LEVELS,
     SENSITIVITY_KEY,
     PrivacyLevel,
     effective_level,
@@ -410,6 +412,12 @@ class SqliteProjectionStore:
     vault). The file is created 0600 with ``O_EXCL`` and renamed into place,
     so a reader never sees a half-built projection; a missing parent
     directory is created 0700.
+
+    A ``query`` pushes the tenant and clearance filter, the relation filter,
+    the cursor and the limit into SQL (``edge_visible`` is applied again to
+    every row, fail closed). Each call opens its own read-only connection,
+    except inside ``with store.reading():``, where one connection serves every
+    call (a K4 match runs inside one).
     """
 
     name = "sqlite"
@@ -417,6 +425,8 @@ class SqliteProjectionStore:
     def __init__(self, path: Path | str, *, forbid: Path | None = None) -> None:
         self.path = Path(path)
         self.forbid = forbid
+        self._shared: sqlite3.Connection | None = None
+        self._depth = 0
 
     def available(self) -> Availability:
         return Availability.ok()
@@ -426,6 +436,40 @@ class SqliteProjectionStore:
             raise EdgeError("refusing a symlinked edge projection")
         uri = f"{self.path.resolve().as_uri()}?mode=ro"
         return sqlite3.connect(uri, uri=True)
+
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        if self._shared is not None:
+            yield self._shared
+            return
+        connection = self._connect()
+        try:
+            yield connection
+        finally:
+            connection.close()
+
+    @contextmanager
+    def reading(self) -> Iterator[SqliteProjectionStore]:
+        """Serve every ``version``/``query`` in the block from one connection.
+
+        Opened lazily (a block that reads nothing opens none) and closed when
+        the outermost block ends. Not shared between threads.
+        """
+
+        self._depth += 1
+        try:
+            yield self
+        finally:
+            self._depth -= 1
+            if self._depth == 0 and self._shared is not None:
+                self._shared.close()
+                self._shared = None
+
+    def _open(self) -> None:
+        """Inside ``reading()``: open the block's connection on first use."""
+
+        if self._depth > 0 and self._shared is None:
+            self._shared = self._connect()
 
     def rebuild(self, edges: Iterable[Edge]) -> RebuildResult:
         rows = checked_edges(edges)
@@ -478,49 +522,62 @@ class SqliteProjectionStore:
     def version(self) -> str | None:
         if not self.path.is_file():
             return None
-        connection = self._connect()
         try:
-            schema = connection.execute(
-                "SELECT value FROM meta WHERE key = 'schema_version'"
-            ).fetchone()
-            if schema is None or schema[0] != str(SCHEMA_VERSION):
-                raise EdgeError("edge projection has another schema version: rebuild it")
-            row = connection.execute("SELECT value FROM meta WHERE key = 'version'").fetchone()
+            self._open()
+            with self._connection() as connection:
+                schema = connection.execute(
+                    "SELECT value FROM meta WHERE key = 'schema_version'"
+                ).fetchone()
+                if schema is None or schema[0] != str(SCHEMA_VERSION):
+                    raise EdgeError("edge projection has another schema version: rebuild it")
+                row = connection.execute("SELECT value FROM meta WHERE key = 'version'").fetchone()
         except sqlite3.DatabaseError as exc:
             raise EdgeError(f"unreadable edge projection: {exc}") from exc
-        finally:
-            connection.close()
         return str(row[0]) if row else None
 
     def _rows(
         self,
+        scope: EdgeScope,
         node: str,
         direction: Direction,
         relations: frozenset[str] | None,
+        limit: int,
         after: EdgeKey | None,
     ) -> Iterator[Edge]:
         if not self.path.is_file():
             return
+        if relations is not None and not relations:
+            return
         end = "source" if direction == "out" else "target"
-        sql = f"SELECT {', '.join(_COLUMNS)} FROM edges WHERE {end} = ?"
-        args: list[Any] = [node]
-        if relations is not None:
-            if not relations:
-                return
-            names = sorted(relations)
-            sql += f" AND relation IN ({', '.join('?' for _ in names)})"
-            args.extend(names)
-        if after is not None:
-            sql += " AND (relation, source, target) > (?, ?, ?)"
-            args.extend(after)
-        sql += " ORDER BY relation, source, target"
-        connection = self._connect()
+        # The end's index (``edges_by_source``/``edges_by_target``) seeks the node.
+        base = f"SELECT {', '.join(_COLUMNS)} FROM edges INDEXED BY edges_by_{end} WHERE {end} = ?"
+        visible, visible_args = _visibility_clause(scope)
+        statements: list[tuple[str, list[Any]]] = []
+        if relations is None:
+            sql, args = base + visible, [node, *visible_args]
+            if after is not None:
+                sql += " AND (relation, source, target) > (?, ?, ?)"
+                args.extend(after)
+            statements.append((sql, args))
+        else:
+            # One range per relation, in key order: each seeks inside the index.
+            for name in sorted(relations):
+                bound = _after_bound(direction, node, name, after)
+                if bound is None:
+                    continue
+                sql = base + " AND relation = ?" + visible + bound[0]
+                statements.append((sql, [node, name, *visible_args, *bound[1]]))
+        found: list[tuple[Any, ...]] = []
         try:
-            found = connection.execute(sql, args).fetchall()
+            self._open()
+            with self._connection() as connection:
+                for sql, args in statements:
+                    if len(found) >= limit:
+                        break
+                    ordered = sql + " ORDER BY relation, source, target LIMIT ?"
+                    found.extend(connection.execute(ordered, [*args, limit - len(found)]))
         except sqlite3.DatabaseError as exc:
             raise EdgeError(f"unreadable edge projection: {exc}") from exc
-        finally:
-            connection.close()
         for values in found:
             try:
                 yield Edge(**dict(zip(_COLUMNS, values, strict=True)))
@@ -538,13 +595,56 @@ class SqliteProjectionStore:
         after: EdgeKey | None = None,
     ) -> tuple[Edge, ...]:
         names = check_query(scope, node, direction, relations, limit, after)
-        out: list[Edge] = []
-        for edge in self._rows(node, direction, names, check_after(after)):
-            if edge_visible(edge, scope):
-                out.append(edge)
-                if len(out) >= limit:
-                    break
-        return tuple(out)
+        cursor = check_after(after)
+        rows = self._rows(scope, node, direction, names, limit, cursor)
+        return tuple(edge for edge in rows if edge_visible(edge, scope))
+
+
+def _visibility_clause(scope: EdgeScope) -> tuple[str, list[str]]:
+    """``edge_visible`` in SQL: a set tenant must be the scope's, a set level admitted."""
+
+    sql = ""
+    args: list[str] = []
+    for column in ("source_tenant", "target_tenant"):
+        sql += f" AND ({column} IS NULL OR {column} = ?)"
+        args.append(scope.tenant)
+    levels = sorted(level for level in scope.clearance if level in PRIVACY_LEVELS)
+    for column in ("source_privacy", "target_privacy"):
+        if levels:
+            sql += f" AND ({column} IS NULL OR {column} IN ({', '.join('?' for _ in levels)}))"
+            args.extend(levels)
+        else:
+            sql += f" AND {column} IS NULL"
+    return sql, args
+
+
+def _after_bound(
+    direction: Direction, node: str, relation: str, after: EdgeKey | None
+) -> tuple[str, list[str]] | None:
+    """For one ``relation`` at ``node``: the SQL for ``key > after``, ``None`` if no key is.
+
+    The queried end equals ``node`` and the relation is fixed, so the key
+    comparison reduces to the one remaining index column: a range SQLite
+    seeks instead of scanning the node's edges from the start.
+    """
+
+    if after is None:
+        return "", []
+    after_relation, after_source, after_target = after
+    if relation < after_relation:
+        return None
+    if relation > after_relation:
+        return "", []
+    if direction == "out":  # key = (relation, node, target)
+        if node > after_source:
+            return "", []
+        if node < after_source:
+            return None
+        return " AND target > ?", [after_target]
+    # direction == "in": key = (relation, source, node)
+    if node > after_target:
+        return " AND source >= ?", [after_source]
+    return " AND source > ?", [after_source]
 
 
 def vault_store(repository: Repository) -> SqliteProjectionStore:

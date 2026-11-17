@@ -26,6 +26,7 @@ projection file.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from contextlib import nullcontext
 from typing import Any, Final
 
 from memfw.core.errors import MemfwError
@@ -34,6 +35,7 @@ from memfw.core.repository import Repository
 from memfw.edges import (
     INVERSE_ALIASES,
     EdgeError,
+    SqliteProjectionStore,
     concept_level,
     concept_ref,
     legacy_path,
@@ -44,6 +46,7 @@ from memfw.ontology import builtin_relation_table, load_concepts, project_aliase
 from memfw.ports.patterns import (
     DEFAULT_FANOUT,
     DEFAULT_LIMIT,
+    PathPattern,
     PatternError,
     match,
     parse_path,
@@ -188,6 +191,35 @@ def graph_match(
         raise GraphError(str(exc)) from exc
     scope = EdgeScope(tenant, _clearance(clearance))
     backend: ProjectionStore = store if store is not None else vault_store(repository)
+    # One read-only connection for the whole match (SQLite store).
+    with backend.reading() if isinstance(backend, SqliteProjectionStore) else nullcontext():
+        return _match(
+            repository,
+            backend,
+            scope,
+            pattern,
+            start,
+            tenant,
+            allowed_sources,
+            limit=limit,
+            fanout=fanout,
+            acyclic=acyclic,
+        )
+
+
+def _match(
+    repository: Repository,
+    backend: ProjectionStore,
+    scope: EdgeScope,
+    pattern: PathPattern,
+    start: str,
+    tenant: str,
+    allowed_sources: Iterable[str],
+    *,
+    limit: int,
+    fanout: int,
+    acyclic: bool,
+) -> dict[str, Any]:
     try:
         if backend.version() is None:
             raise GraphError("edge projection missing: run `memfw graph rebuild`")
