@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from memfw_adapter_bm25s import factory as bm25s_factory
 
 from memfw.context import (
     CoreSlotProvider,
@@ -126,6 +127,16 @@ RECALL: dict[str, Factory] = {
     "multihop": lambda root: MultihopProvider(root),
     "hybrid": lambda root: HybridProvider(root, embedder=HashEmbeddingProvider(8)),
     "inmemory": lambda root: InMemoryRecallProvider.from_vault(root),
+    # The bm25s adapter package (an operator-configured module:factory): its
+    # index lives outside the vault, next to it here; every level indexed so
+    # the drill sees the same memories as the others.
+    "bm25s": lambda root: bm25s_factory(
+        {
+            "vault": str(root),
+            "clearance": "public,shared,local-private",
+            "data_dir": str(root.parent / "bm25s-data"),
+        }
+    ),
 }
 #: Index files a provider may build in the vault on first use, left out of
 #: the kit's byte-identical vault check: the hybrid retriever's disposable

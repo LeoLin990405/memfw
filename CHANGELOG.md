@@ -14,6 +14,26 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 
 ## [Unreleased]
 
+### Added — bm25s recall adapter and operator-configured recall adapters
+
+- `vault.yaml` `runtime.recall.adapters` (off by default): a list of
+  `{factory: "module:factory", options, weight, timeout_seconds}` entries the
+  MCP `memory_search` `mode=two_stage` coordinator runs beside FTS (and
+  hybrid). The runtime passes each factory its `options` plus `vault` and
+  `embedder`; a bad entry fails `two_stage` closed with a fixed
+  `RecallAdapterError` code, an adapter that cannot serve is reported as
+  degraded while the others answer. Without the key, nothing is imported and
+  every output is unchanged (`docs/ports-and-recall.md` section 4.1b).
+- `packages/adapters/memfw-adapter-bm25s` 0.1.0 (wheel `memfw_adapter_bm25s`):
+  an in-process `RecallProvider` over memories with bm25s 0.3.16 (MIT) and
+  jieba segmentation. Tenant filtering as FTS; only memories whose privacy
+  level is in its `clearance` (default `public,shared`) are indexed. The index
+  is built on demand outside the vault (`~/.local/share/memfw/adapters/bm25s/`,
+  hashed tokens, no corpus), never writes the vault, and can be prebuilt with
+  `memfw-adapter-bm25s build`. Contract, swap drill and standalone wheel
+  coverage; `eval/retrieval_r0/bm25s_compare.py` reports it against FTS
+  (`docs/adapter-bm25s.md`).
+
 ### Added — event log forward compatibility for marked non-memory kinds
 
 - **Forward-compat contract for v0.4.x:** a v0.4.x reader accepts an event

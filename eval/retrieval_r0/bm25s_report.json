@@ -1,0 +1,182 @@
+{
+  "bm25s_clearance": "public,shared,local-private",
+  "bm25s_version": "0.3.16",
+  "by_class": {
+    "conflict": {
+      "bm25s": {
+        "all_evidence@10": 1.0,
+        "evidence_recall@10": 1.0,
+        "forbidden_in_topk_rate": 0.0,
+        "n": 160.0,
+        "other_tenant_in_topk_rate": 0.0
+      },
+      "fts": {
+        "all_evidence@10": 1.0,
+        "evidence_recall@10": 1.0,
+        "forbidden_in_topk_rate": 0.0,
+        "n": 160.0,
+        "other_tenant_in_topk_rate": 0.0
+      },
+      "fused": {
+        "all_evidence@10": 1.0,
+        "evidence_recall@10": 1.0,
+        "forbidden_in_topk_rate": 0.0,
+        "n": 160.0,
+        "other_tenant_in_topk_rate": 0.0
+      }
+    },
+    "delete": {
+      "bm25s": {
+        "all_evidence@10": 1.0,
+        "evidence_recall@10": 1.0,
+        "forbidden_in_topk_rate": 0.0,
+        "n": 160.0,
+        "other_tenant_in_topk_rate": 0.0
+      },
+      "fts": {
+        "all_evidence@10": 1.0,
+        "evidence_recall@10": 1.0,
+        "forbidden_in_topk_rate": 0.0,
+        "n": 160.0,
+        "other_tenant_in_topk_rate": 0.0
+      },
+      "fused": {
+        "all_evidence@10": 1.0,
+        "evidence_recall@10": 1.0,
+        "forbidden_in_topk_rate": 0.0,
+        "n": 160.0,
+        "other_tenant_in_topk_rate": 0.0
+      }
+    },
+    "multi_tenant": {
+      "bm25s": {
+        "all_evidence@10": 1.0,
+        "evidence_recall@10": 1.0,
+        "forbidden_in_topk_rate": 0.0,
+        "n": 160.0,
+        "other_tenant_in_topk_rate": 0.0
+      },
+      "fts": {
+        "all_evidence@10": 1.0,
+        "evidence_recall@10": 1.0,
+        "forbidden_in_topk_rate": 0.0,
+        "n": 160.0,
+        "other_tenant_in_topk_rate": 0.0
+      },
+      "fused": {
+        "all_evidence@10": 1.0,
+        "evidence_recall@10": 1.0,
+        "forbidden_in_topk_rate": 0.0,
+        "n": 160.0,
+        "other_tenant_in_topk_rate": 0.0
+      }
+    },
+    "multihop": {
+      "bm25s": {
+        "all_evidence@10": 0.0,
+        "evidence_recall@10": 0.5,
+        "forbidden_in_topk_rate": 0.0,
+        "n": 160.0,
+        "other_tenant_in_topk_rate": 0.0
+      },
+      "fts": {
+        "all_evidence@10": 0.0,
+        "evidence_recall@10": 0.5,
+        "forbidden_in_topk_rate": 0.0,
+        "n": 160.0,
+        "other_tenant_in_topk_rate": 0.0
+      },
+      "fused": {
+        "all_evidence@10": 0.0,
+        "evidence_recall@10": 0.5,
+        "forbidden_in_topk_rate": 0.0,
+        "n": 160.0,
+        "other_tenant_in_topk_rate": 0.0
+      }
+    },
+    "poisoning": {
+      "bm25s": {
+        "all_evidence@10": 1.0,
+        "evidence_recall@10": 1.0,
+        "forbidden_in_topk_rate": 0.0,
+        "n": 160.0,
+        "other_tenant_in_topk_rate": 0.0
+      },
+      "fts": {
+        "all_evidence@10": 1.0,
+        "evidence_recall@10": 1.0,
+        "forbidden_in_topk_rate": 0.0,
+        "n": 160.0,
+        "other_tenant_in_topk_rate": 0.0
+      },
+      "fused": {
+        "all_evidence@10": 1.0,
+        "evidence_recall@10": 1.0,
+        "forbidden_in_topk_rate": 0.0,
+        "n": 160.0,
+        "other_tenant_in_topk_rate": 0.0
+      }
+    },
+    "time_update": {
+      "bm25s": {
+        "all_evidence@10": 1.0,
+        "evidence_recall@10": 1.0,
+        "forbidden_in_topk_rate": 0.0,
+        "n": 160.0,
+        "other_tenant_in_topk_rate": 0.0
+      },
+      "fts": {
+        "all_evidence@10": 1.0,
+        "evidence_recall@10": 1.0,
+        "forbidden_in_topk_rate": 0.0,
+        "n": 160.0,
+        "other_tenant_in_topk_rate": 0.0
+      },
+      "fused": {
+        "all_evidence@10": 1.0,
+        "evidence_recall@10": 1.0,
+        "forbidden_in_topk_rate": 0.0,
+        "n": 160.0,
+        "other_tenant_in_topk_rate": 0.0
+      }
+    }
+  },
+  "gate": false,
+  "overall": {
+    "bm25s": {
+      "all_evidence@10": 0.833333,
+      "evidence_recall@10": 0.916667,
+      "forbidden_in_topk_rate": 0.0,
+      "n": 960.0,
+      "other_tenant_in_topk_rate": 0.0,
+      "p50_seconds": 0.014225,
+      "p95_seconds": 0.017936
+    },
+    "fts": {
+      "all_evidence@10": 0.833333,
+      "evidence_recall@10": 0.916667,
+      "forbidden_in_topk_rate": 0.0,
+      "n": 960.0,
+      "other_tenant_in_topk_rate": 0.0,
+      "p50_seconds": 0.020715,
+      "p95_seconds": 0.024305
+    },
+    "fused": {
+      "all_evidence@10": 0.833333,
+      "evidence_recall@10": 0.916667,
+      "forbidden_in_topk_rate": 0.0,
+      "n": 960.0,
+      "other_tenant_in_topk_rate": 0.0,
+      "p50_seconds": 0.030752,
+      "p95_seconds": 0.035807
+    }
+  },
+  "per_class": 160,
+  "phase": "adapter-bm25s",
+  "policy": "compat_fts",
+  "primary_k": 10,
+  "recall_delta_bm25s_minus_fts": 0.0,
+  "recall_delta_fused_minus_fts": 0.0,
+  "seed": 20261108,
+  "synthetic": true
+}

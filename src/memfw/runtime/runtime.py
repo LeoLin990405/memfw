@@ -40,6 +40,7 @@ from memfw.recall.coordinator import InflightRegistry
 from .context_cache import ContextCache, cached_core_candidates
 from .context_sources import concept_catalogue, share_feed
 from .index import ensure_search_index
+from .recall_adapters import LoadedAdapter, RecallAdapterError, load_adapters, parse_entries
 from .usage import (
     RuntimeOptions,
     checked_used_request,
@@ -187,6 +188,9 @@ class Runtime:
         self._usage_sink = usage_sink
         self._options: RuntimeOptions | None = None
         self._options_lock = threading.Lock()
+        #: ``runtime.recall.adapters`` (built once, on the first ``recall``).
+        self._recall_adapters: tuple[LoadedAdapter, ...] | None = None
+        self._recall_adapters_lock = threading.Lock()
         #: The time a usage signal is stamped with (a seam for tests).
         self.usage_clock: Callable[[], datetime] = lambda: datetime.now(UTC)
 
@@ -634,6 +638,35 @@ class Runtime:
             configs["hybrid"] = ProviderConfig(budget=budget)
         return providers, configs
 
+    def recall_adapters(
+        self, repository: Repository, *, taken: Sequence[str] = ()
+    ) -> tuple[LoadedAdapter, ...]:
+        """The operator's ``runtime.recall.adapters`` (``memfw.runtime.recall_adapters``).
+
+        Read and built on first use, then kept for the Runtime's life (restart
+        to pick up a change), so an adapter keeps its state (an index, a
+        connection) between calls. No key: none, and nothing is imported. An
+        unreadable ``vault.yaml`` adds none and is read again next time (fewer
+        providers is the closed side). A malformed entry or an adapter that
+        cannot be built raises ``RecallAdapterError`` every time (fail closed).
+        """
+
+        with self._recall_adapters_lock:
+            if self._recall_adapters is not None:
+                return self._recall_adapters
+            try:
+                config = repository.read_config()
+            except (MemfwError, OSError, ValueError):
+                return ()
+            entries = parse_entries(config)
+            loaded = (
+                load_adapters(entries, root=repository.root, embedder=self.embedder, taken=taken)
+                if entries
+                else ()
+            )
+            self._recall_adapters = loaded
+            return loaded
+
     def recall(
         self,
         repository: Repository,
@@ -654,7 +687,9 @@ class Runtime:
         clamped by the caller; ``as_of`` is already parsed. ``policy_name``
         is ``"compat_fts"`` or ``"strict"``; any other value raises
         ``ValueError`` (fail closed) before a provider runs. Providers: FTS
-        always, plus hybrid when an embedder is configured. Call
+        always, plus hybrid when an embedder is configured, plus the
+        operator's ``runtime.recall.adapters`` (``recall_adapters``; none by
+        default, a bad entry raises ``RecallAdapterError``). Call
         ``ensure_index`` first: the coordinator's deadline starts here.
 
         Providers are read-only: none appends an event or warms a memory.
@@ -709,6 +744,22 @@ class Runtime:
             scope=scope,
             observe=observe,
         )
+        adapters = self.recall_adapters(
+            repository, taken=[str(getattr(p, "name", "")) for p in providers]
+        )
+        if adapters:
+            from memfw.ports import RecallBudget
+            from memfw.recall import ProviderConfig
+
+            for adapter in adapters:
+                name = adapter.provider.name
+                if name in configs or any(getattr(p, "name", None) == name for p in providers):
+                    raise RecallAdapterError("duplicate_name")
+                providers.append(adapter.provider)
+                timeout = adapter.timeout_seconds or self.provider_timeout
+                configs[name] = ProviderConfig(
+                    weight=adapter.weight, budget=RecallBudget(timeout_seconds=timeout)
+                )
         filter_policy = self._filter_policy(
             policy_name, source=source, include_history=include_history, as_of=as_of
         )

@@ -100,6 +100,7 @@ do not contain `memfw/__init__.py`, so this does not affect them.
 | `memfw-ports` | 0.3.0 | `ProjectionStore` | 1 |
 | `memfw-recall` | 0.3.0 | `RecallProvider` | 1 |
 | `memfw-adapter-deepseek` | 0.1.1 | `ModelBackend` | 1 |
+| `memfw-adapter-bm25s` | 0.1.0 | `RecallProvider` | 1 |
 <!-- port-versions:end -->
 
 - **Wheels only.** `uv build --wheel --package memfw-ports` (and `memfw-recall`). An sdist is
@@ -613,6 +614,7 @@ index and builds the rows.
   call's `source`, `include_history` and (FTS only) `scope`. Each provider may take 3 s;
   all providers and resolvers together get **4 s** (the total deadline). The index staleness
   check (`Runtime.ensure_index`) runs before the deadline starts. Resolvers are `default_resolvers(root)`.
+  Operator-configured adapters (§4.1b) are added after them; there are none by default.
 - **Warming and access events.** After the filter and fusion, `Runtime.recall` warms each
   returned hit that is cold or a stub and then appends one `memory_access` event
   (`operation: two_stage_retrieve`), per returned hit, in hit order. A candidate the policy
@@ -683,6 +685,43 @@ index and builds the rows.
   `recall_labels`), and the same `errors` and `ambiguity`, across `source`,
   `allowed_sources`, `include_history` and `as_of` (`tests/test_mcp_two_stage.py`). With an
   embedder, the hybrid provider is fused in and the order differs by design.
+
+### 4.1b Operator-configured recall adapters
+
+`vault.yaml` `runtime.recall.adapters` adds `RecallProvider` adapters to the `two_stage`
+coordinator. Without the key nothing changes (and no adapter module is imported):
+
+```yaml
+runtime:
+  recall:
+    adapters:
+      - factory: "memfw_adapter_bm25s:factory"   # module:factory
+        options: {clearance: "public,shared"}
+        weight: 1.0                               # RRF weight, >= 0 (default 1.0)
+        timeout_seconds: 3.0                      # 0 < t <= 30 (default: 3 s)
+```
+
+- **Loading** (`memfw.runtime.recall_adapters`, used by `Runtime.recall_adapters`). On the
+  first `two_stage` call the runtime imports each `module:factory` named here (the only source
+  of a module name; never a request) and calls the factory with one mapping: the entry's
+  `options` plus `vault` (the vault root, a string) and `embedder` (the runtime's embedding
+  provider from `MEMFW_EMBEDDING_*`, or `None`), which `options` may not set. The result must
+  satisfy `RecallProvider` and have a name no other provider uses. Built providers are kept for
+  the Runtime's life (restart to pick up a change), so an adapter keeps its index or
+  connection between calls. At most 8 adapters.
+- **Fail closed.** A malformed section or entry, a module that cannot be imported, a factory
+  that raises, a result that is not a provider or a taken name raise `RecallAdapterError`
+  (a `ValueError`) with one fixed code: `bad_config`, `bad_entry`, `bad_factory`,
+  `bad_options`, `reserved_option`, `bad_weight`, `bad_timeout`, `not_importable`,
+  `factory_error`, `not_a_provider`, `duplicate_name`. `two_stage` then errors; the other
+  modes are unaffected. An unreadable `vault.yaml` adds no adapter and is read again next time.
+- **Degrade.** An adapter that loads but cannot serve (`available()` false, its service down,
+  `ProviderUnavailable`) is reported by the coordinator as degraded
+  (`recall.degraded: {"<name>": "unavailable:<code>"}`, top-level `degraded: true`) and the
+  other providers answer (compat framework T7).
+- **Rows.** An adapter hit has no index row, so it is built from the vault document (§4.1
+  Rows) and still passes the server's tenant, source and clearance checks.
+- **Adapters.** [`memfw-adapter-bm25s`](adapter-bm25s.md) (in-process BM25 over memories).
 
 ### 4.2 MCP `memory_context` `v=2` (ContextPack)
 
