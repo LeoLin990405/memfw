@@ -76,6 +76,26 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 - `docs/READONLY-SERVICE-UPGRADE.md`: deploy the three service files together
   and pair `MEMFW_READONLY_CLEARANCE` with the vault's privacy defaults.
 
+### Fixed — wave 3 wrap-up guards
+
+- New test `tests/test_no_conflict_markers.py`: every git-tracked text file
+  (walked tree without git) must be free of merge-conflict markers (lines
+  starting `<<<<<<< `, `||||||| `, `>>>>>>> `, or exactly `=======`; Markdown
+  setext headings and binary files excepted).
+- Usage projection (`SqliteUsageSink.record`): an index on `at_epoch` (added to
+  existing files with `CREATE INDEX IF NOT EXISTS`), and the count retention
+  deletes below the `max_rows`-th newest rowid instead of a sorted
+  `NOT IN (... LIMIT 100000)`; the same rows are kept, and a write at the
+  100000-row cap drops from ~30 ms to ~2 ms. An existing usage directory the
+  user owns is tightened to 0700, not only a new one. Docstring size note
+  corrected (about 7.4 MB at the cap, plus the index).
+- Settled history ingest: a forced re-read marker is cleared only after the
+  cursor is saved, so a locator that reads zero rows (busy) keeps its owed
+  re-read; a file whose mtime is in the future and that has no usable
+  timestamps falls back to its ctime instead of staying unsettled until the
+  clock catches up.
+- `DreamOptions`: the `allow_config_judge` docstring is back under its field.
+
 ### Added — settled ingest and archive state (M3e-a)
 
 - `memfw history ingest --settled-minutes N` skips transcripts whose last

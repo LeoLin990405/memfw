@@ -165,6 +165,17 @@ def _parse_ts(value: str | None) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
+def _file_time(info: os.stat_result | None, field: str) -> datetime | None:
+    """``info.<field>`` (a POSIX time) as a UTC datetime, or None."""
+
+    if info is None:
+        return None
+    try:
+        return datetime.fromtimestamp(getattr(info, field), UTC)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
 def _stamp(value: datetime) -> str:
     return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -720,7 +731,6 @@ class ConversationStore:
                 # full re-read: keep a marker so it is re-read once it settles.
                 self._note_force(connection, agent, key)
             return
-        self._clear_force(connection, agent, key)
         if after < 0 and not rows:
             had = connection.execute(
                 "SELECT 1 FROM conversation_turn_locators WHERE agent = ? AND locator = ? LIMIT 1",
@@ -728,6 +738,7 @@ class ConversationStore:
             ).fetchone()
             if had is not None:
                 # Nothing readable now although rows exist: likely locked or mid-rewrite.
+                # A force marker stays: the owed full re-read has not happened yet.
                 if self._note_busy(connection, agent, key, fingerprint) < BUSY_RETRIES:
                     counts.sessions_busy += 1
                     return
@@ -736,6 +747,7 @@ class ConversationStore:
                 counts.sessions_stale += 1
                 self._clear_busy(connection, agent, key)
                 self._save_cursor(connection, agent, key, fingerprint, -1, version)
+                self._clear_force(connection, agent, key)
                 return
         self._clear_busy(connection, agent, key)
         origins = {
@@ -816,6 +828,7 @@ class ConversationStore:
                         (other["locator"], *item, key),
                     )
         self._save_cursor(connection, agent, key, fingerprint, last, version)
+        self._clear_force(connection, agent, key)
         if self._settled is not None and last >= 0:
             self._archive(connection, agent, key, counts)
             self._mark_settled(connection, agent, key, json.dumps(fingerprint, sort_keys=True))
@@ -836,20 +849,23 @@ class ConversationStore:
         replies with the prompt time or skip lines without a timestamp. A
         session inside a shared database (``path#session`` key, or a reader's
         per-session marker): the file's mtime moves with every other session,
-        so ``activity`` decides and the mtime is only the fallback. Unknown
-        activity (no trusted timestamp, no readable or trusted mtime) is never
-        settled.
+        so ``activity`` decides and the mtime is only the fallback. An mtime
+        beyond now plus :data:`CLOCK_SKEW` is not trusted; with no trusted
+        timestamp either, the file's ctime stands in (setting the mtime moves
+        the ctime to the present, so it is not stuck in the future). Unknown
+        activity (no trusted timestamp, no readable or trusted mtime or ctime)
+        is never settled.
         """
 
         assert self._settled is not None
-        mtime: datetime | None = None
         try:
-            mtime = datetime.fromtimestamp(
-                os.stat(locator.path, follow_symlinks=False).st_mtime, UTC
-            )
-        except (OSError, OverflowError, ValueError):
-            mtime = None
-        mtime = self._newest([mtime])
+            info: os.stat_result | None = os.stat(locator.path, follow_symlinks=False)
+        except OSError:
+            info = None
+        mtime = self._newest([_file_time(info, "st_mtime")])
+        if mtime is None and info is not None and activity is None:
+            # A future (or unreadable) mtime and no usable timestamp: the ctime.
+            mtime = self._newest([_file_time(info, "st_ctime")])
         shared = "#" in locator.key or getattr(locator, "fingerprint", None) is not None
         if shared:
             last = activity or mtime

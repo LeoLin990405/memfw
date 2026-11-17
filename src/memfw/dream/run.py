@@ -72,10 +72,10 @@ class DreamOptions:
     dream_id: str | None = None
     judge: str | None = None
     allow_config_judge: bool = False
+    """Honour ``dream_judge`` from vault.yaml. Off: the vault must not choose code to run."""
     lifecycle_source: Path | None = None
     """Lifecycle meta-index for the open-question privacy check (default: the
     vault's ``status/memory-meta-index.json`` when present)."""
-    """Honour ``dream_judge`` from vault.yaml. Off: the vault must not choose code to run."""
     extra: dict[str, Any] = field(default_factory=dict)
 
 
