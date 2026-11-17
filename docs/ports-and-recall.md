@@ -72,7 +72,7 @@ do not contain `memfw/__init__.py`, so this does not affect them.
 - **memfw does not depend on the wheels.** It still ships `src/memfw/ports` and
   `src/memfw/recall` itself; `import memfw.ports` and every memfw output are unchanged. Making
   memfw depend on `memfw-ports` (and re-export it) is a later step (architecture section 6).
-- **Versions.** Both wheels carry `memfw.ports.PORTS_API_VERSION` (semver, `0.3.0` since K3 added `ProjectionStore`), and
+- **Versions.** Both wheels carry `memfw.ports.PORTS_API_VERSION` (semver, `0.3.0` since K3 added `ProjectionStore`; MM2a adds `memfw.ports.proxies`), and
   `memfw-recall` pins `memfw-ports` to it; a test keeps the three equal. Bump it with every
   change to the ports API (major for a breaking one). The members pin their build backend
   (`hatchling==1.33.0`) and ship memfw's `LICENSE` and `NOTICE` (symlinks in each package

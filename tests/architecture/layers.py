@@ -148,6 +148,7 @@ UNITS: Final[dict[str, str]] = {
     "memfw.handoff.cli": "L5-interface",
     "memfw.history.cli": "L5-interface",
     "memfw.attachments.cli": "L5-interface",
+    "memfw.attachments.proxy_cli": "L5-interface",
     "memfw.ontology.cli": "L5-interface",
     "memfw.notes.mcp": "L5-interface",
 }
@@ -175,6 +176,7 @@ SAME_LAYER_ALLOWED: Final[dict[tuple[str, str], str]] = {
     # The root Typer app mounts the sub-apps and serves the notes MCP server.
     ("memfw.cli", "memfw.capture.cli"): "mounts sub-app",
     ("memfw.cli", "memfw.attachments.cli"): "mounts sub-app",
+    ("memfw.attachments.cli", "memfw.attachments.proxy_cli"): "mounts `attach proxy`",
     ("memfw.cli", "memfw.conversations.cli"): "mounts sub-app",
     ("memfw.cli", "memfw.curation.review_cli"): "mounts sub-app",
     ("memfw.cli", "memfw.dream.cli"): "mounts sub-app",

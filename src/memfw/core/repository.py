@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 import yaml
 from filelock import FileLock
 
+from ..attachments.proxies import ProxyStoreMixin, validate_proxy_config
 from ..attachments.store import AttachmentStoreMixin, validate_attachment_config
 from ..budget import BudgetProfile
 from ..knowledge import KnowledgeStoreMixin
@@ -99,6 +100,7 @@ class Repository(
     MemoryOperationsMixin,
     KnowledgeStoreMixin,
     AttachmentStoreMixin,
+    ProxyStoreMixin,
 ):
     """A local vault. Markdown and events are authoritative; SQLite is disposable."""
 
@@ -296,6 +298,7 @@ class Repository(
         if reference_path is not None and not isinstance(reference_path, str):
             raise IntegrityError("keyness_reference_path must be a string or null")
         validate_attachment_config(raw)
+        validate_proxy_config(raw)
         return raw
 
     @_serialized

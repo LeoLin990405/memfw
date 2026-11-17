@@ -45,6 +45,7 @@ from .projection_store import (
     select,
 )
 from .protocols import Deriver, Ingestor, Projector, RecallProvider
+from .proxies import ProxyFormatError, ProxyImport, SourceDimensions, load_proxy_import
 from .staging import CANDIDATES_DIR
 from .types import (
     Availability,
@@ -702,6 +703,35 @@ def check_model_backend(
     return replies
 
 
+def check_proxy_import(
+    text: str | bytes,
+    *,
+    media_type: str,
+    source_sha256: str | None = None,
+    known: SourceDimensions | None = None,
+) -> ProxyImport:
+    """An adapter's proxy file (JSON text) follows the ``memfw.proxy`` v1 format.
+
+    The file parses with every locator inside the declared dimensions, its
+    ``source_sha256`` is ``source_sha256`` when given, and writing the parsed
+    value back (``ProxyImport.to_json``) and parsing it again gives the same
+    value: canonical locators survive a round trip.
+    """
+
+    try:
+        parsed = load_proxy_import(text, media_type=media_type, known=known)
+    except ProxyFormatError as exc:
+        raise ContractError(f"proxy file breaks the format: {exc}") from exc
+    if source_sha256 is not None:
+        _require(parsed.source_sha256 == source_sha256, "source_sha256 is not the original's")
+    try:
+        again = load_proxy_import(json.dumps(parsed.to_json()), media_type=media_type, known=known)
+    except ProxyFormatError as exc:
+        raise ContractError(f"the canonical form does not read back: {exc}") from exc
+    _require(again == parsed, "the canonical form does not read back identically")
+    return parsed
+
+
 __all__ = [
     "MODEL_SAMPLES",
     "ContractError",
@@ -715,6 +745,7 @@ __all__ = [
     "check_ingestor",
     "check_model_backend",
     "check_projector",
+    "check_proxy_import",
     "check_recall_provider",
     "check_usage_sink",
     "tree_digest",
