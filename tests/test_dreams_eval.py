@@ -83,7 +83,12 @@ def test_memfw_dream_is_a_command_group_with_run() -> None:
     assert "dream" in groups
     dream = groups["dream"].typer_instance
     assert dream is not None
-    assert {command.name for command in dream.registered_commands} == {"run", "skills"}
+    assert {command.name for command in dream.registered_commands} == {
+        "run",
+        "skills",
+        "accept-question",
+        "reject-question",
+    }
 
 
 def test_real_curate_scores_on_the_synthetic_cases() -> None:

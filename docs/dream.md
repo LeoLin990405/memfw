@@ -39,6 +39,59 @@ In priority order:
    - `mark-stale`: a memory superseded by another but without `valid_to`, or an
      unreferenced, unconfirmed memory not updated for `--stale-days` (180).
      Nothing is deleted.
+   - `open-question` (U3): every pair `supersede` is proposed for also gets an
+     open-question candidate. `changes.new_memory` is a `type: open-question`
+     memory (`about` the concept, the dream's `tenant`, `open_question.conflicts`
+     the two ids, `question`, and `missing`: what evidence would settle it);
+     `changes.conflicts` repeats the ids. It picks no winner and changes neither
+     memory (their `epistemic`, `status` and `evidence` stay). It passes the
+     open-question write gate as a new document before it is staged (a refused
+     one is listed in `skipped_candidates`).
+
+     No candidate is proposed for a pair (in either order) while
+     - a current, unresolved open question lists both ids in `conflicts`;
+     - a resolved or closed question lists both and neither memory changed
+       (`updated_at`) after the question's `valid_to`;
+     - a rejection is recorded for the pair and both memories are still at the
+       recorded `version` and `updated_at`;
+     - a staged dream holds an `open-question` candidate for the pair that was not
+       accepted.
+
+     A pair across tenants is skipped, and so is a pair in which either memory is
+     private in any way, because the question names both ids and is recalled like
+     any memory: a `sensitivity:*` tag, a `privacy:` tag other than `none`, or a
+     lifecycle meta-index item (joined by `fleet_path`) whose privacy is not
+     `none`. The meta-index is `--lifecycle-source`, else
+     `status/memory-meta-index.json` in the vault when present; an unknown
+     privacy value, an id that does not match its `fleet_path`, and a meta-index
+     that cannot be read count as private. `report.open_questions` (`conflicts`,
+     `proposed`, `deduplicated`, `skipped_private`, `skipped_tenant`) appears only
+     when the dream found a conflict. A dream without a conflict is byte-identical
+     to before; with one, its output gains the candidate and this report key.
+
+     Reviewing it, a human does one of three things:
+     - **accept the question:** `memfw dream accept-question DREAM_ID MEM_A MEM_B`
+       prints the full memory it would write; `--apply` writes it as the human
+       through the full write gate, with `evidence: [dream:DREAM_ID]` (which marks
+       this staged candidate as consumed). Title, body, `about` and the
+       `open_question` block are rebuilt from the two memories exactly as the
+       dream builds them; the staged file only identifies the candidate and is
+       never copied. If it differs from the rebuild (it was edited, or a memory
+       changed its concept or disagreement since the dream), the accept is
+       refused: re-run the dream. Also refused when either memory is no longer
+       current or has become private, when an existing question blocks the pair
+       (rules above), or when the candidate was already accepted. The checks and
+       the write run under the vault lock, so concurrent accepts write one
+       question. Close it later with `Repository.resolve_open_question`;
+     - **answer and supersede:** apply the `supersede` (or write the answer and
+       supersede the wrong memory); once a memory is superseded the pair no longer
+       conflicts and no question is proposed again;
+     - **reject:** `memfw dream reject-question DREAM_ID MEM_A MEM_B --apply`
+       removes only that candidate from its concept file (the file's other
+       candidates stay; a file left empty is removed) and records the rejection in
+       `_candidates/dream-rejections/<hash>.json` (tenant, pair, both memories'
+       `version` and `updated_at`). It never writes the vault. Later dreams do not
+       propose the pair again until one of the memories changes.
 
    How curate compares two memories (no model):
    - **Clauses and negation.** Each clause is read on its own, and a negation

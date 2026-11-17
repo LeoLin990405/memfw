@@ -11,6 +11,7 @@ import typer
 
 from ..core.errors import MemfwError
 from ..history import HistoryError
+from .questions import accept_question, reject_question
 from .run import MAX_SESSIONS, DreamOptions, run_dream
 from .skills.run import MAX_SESSIONS as SKILL_MAX_SESSIONS
 from .skills.run import SkillOptions, run_skills
@@ -75,6 +76,13 @@ def dream_run(
     ] = False,
     refresh: Annotated[bool, typer.Option("--refresh/--no-refresh")] = True,
     now: Annotated[str | None, typer.Option("--now", help="Inject an ISO-8601 UTC time")] = None,
+    lifecycle_source: Annotated[
+        Path | None,
+        typer.Option(
+            "--lifecycle-source",
+            help="memory-meta-index.json for the open-question privacy check",
+        ),
+    ] = None,
 ) -> None:
     """Run one dream. Stages candidates under _candidates/dream/<dream_id>/."""
 
@@ -93,6 +101,7 @@ def dream_run(
         dream_id=dream_id,
         judge=judge,
         allow_config_judge=allow_config_judge,
+        lifecycle_source=lifecycle_source,
     )
     try:
         result = run_dream(root, now=_now(now), dry_run=dry_run, options=options)
@@ -108,6 +117,68 @@ def dream_run(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(2) from exc
     typer.echo(json.dumps(result.as_dict(), ensure_ascii=False, indent=2))
+
+
+@app.command("accept-question")
+def dream_accept_question(
+    dream_id: Annotated[str, typer.Argument(help="staged dream id")],
+    memory_a: Annotated[str, typer.Argument(help="one conflicting memory id")],
+    memory_b: Annotated[str, typer.Argument(help="the other conflicting memory id")],
+    root: Annotated[Path, typer.Option("--root", "-r", help="memfw vault root")] = Path("."),
+    dry_run: Annotated[bool, typer.Option("--dry-run/--apply")] = True,
+    lifecycle_source: Annotated[
+        Path | None,
+        typer.Option("--lifecycle-source", help="memory-meta-index.json for the privacy check"),
+    ] = None,
+) -> None:
+    """Human-accept a staged open-question candidate: write it to the vault.
+
+    Dry run by default (prints the full memory); --apply writes the open
+    question as the human. The question is rebuilt from the two memories; an
+    edited or outdated staged candidate is refused.
+    """
+
+    from ..core.repository import Repository
+
+    try:
+        result = accept_question(
+            Repository(root),
+            dream_id,
+            [memory_a, memory_b],
+            actor="human",
+            dry_run=dry_run,
+            lifecycle_source=lifecycle_source,
+        )
+    except (MemfwError, ValueError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(2) from exc
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+@app.command("reject-question")
+def dream_reject_question(
+    dream_id: Annotated[str, typer.Argument(help="staged dream id")],
+    memory_a: Annotated[str, typer.Argument(help="one conflicting memory id")],
+    memory_b: Annotated[str, typer.Argument(help="the other conflicting memory id")],
+    root: Annotated[Path, typer.Option("--root", "-r", help="memfw vault root")] = Path("."),
+    dry_run: Annotated[bool, typer.Option("--dry-run/--apply")] = True,
+) -> None:
+    """Reject a staged open-question candidate (never writes the vault).
+
+    --apply removes only that candidate from its concept file and records the
+    rejection, so later dreams do not re-propose it until a memory changes.
+    """
+
+    from ..core.repository import Repository
+
+    try:
+        result = reject_question(
+            Repository(root), dream_id, [memory_a, memory_b], actor="human", dry_run=dry_run
+        )
+    except (MemfwError, ValueError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(2) from exc
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 @app.command("skills")

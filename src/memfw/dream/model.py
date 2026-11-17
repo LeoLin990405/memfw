@@ -13,7 +13,7 @@ from typing import Any, Literal
 from memfw.core.models import MemoryDocument
 
 Operation = Literal["verify", "curate", "distill", "promote"]
-"""① verify, ② curate (duplicates, conflicts, stale), ③ distill, ④ promote/demote."""
+"""① verify, ② curate (duplicates, conflicts, stale, open questions), ③ distill, ④ promote."""
 
 Action = Literal[
     # ① verify
@@ -24,6 +24,7 @@ Action = Literal[
     "merge",
     "supersede",
     "mark-stale",
+    "open-question",
     # ③ / ④ (proposal-only)
     "distill",
     "demote",

@@ -120,8 +120,9 @@ open_question:
   `open-question`, setting or clearing `resolved_by`, changing an open question's
   `valid_to`, and changing the `conflicts` of one that already has `valid_to` need a
   human actor or an approved proposal; a mechanism or a FULL-permission agent may edit
-  an open question's other fields. No candidate channel carries `type` or `open_question` yet (dream and
-  `memory_remember` cannot stage a new open question; that arrives with U3). An agent
+  an open question's other fields. The dream stages open-question candidates for the conflicts it finds (U3; see
+  [dream.md](dream.md)) and a human accepts one with `memfw dream accept-question`;
+  `memory_remember` cannot stage one. An agent
   can propose a resolution: an `update` proposal with `open_question` and `valid_to`.
   `valid_to` is proposable only for that: the target must be an open question and the
   proposed block must set `resolved_by`.
