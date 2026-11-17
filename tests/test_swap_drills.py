@@ -122,12 +122,19 @@ RECALL: dict[str, Factory] = {
     "hybrid": lambda root: HybridProvider(root, embedder=HashEmbeddingProvider(8)),
     "inmemory": lambda root: InMemoryRecallProvider.from_vault(root),
 }
-#: Providers whose search writes to the vault, so the kit's byte-identical
-#: vault check is not applied to them: the hybrid retriever builds its vector
-#: index in the vault on first use and appends ``memory_access`` events on
-#: every search (pre-existing behaviour, tracked separately; as in
-#: ``tests/test_recall_builtin.py``).
-WRITES_VAULT = frozenset({"hybrid"})
+#: Index files a provider may build in the vault on first use, left out of
+#: the kit's byte-identical vault check: the hybrid retriever's disposable
+#: vector index and manifest (an index projection). Everything else, the
+#: event log (``events.jsonl``, ``events.state.json``) included, must stay
+#: byte-identical: providers are read-only and append no events.
+INDEX_FILES: dict[str, tuple[str, ...]] = {
+    "hybrid": (
+        ".memory-hybrid.sqlite",
+        ".memory-hybrid.sqlite-wal",
+        ".memory-hybrid.sqlite-shm",
+        ".memory-hybrid.manifest.json",
+    ),
+}
 PROJECTORS: dict[str, Callable[[], object]] = {
     "jsonl-index": lambda: JsonlProjector(clock=FixedClock(T0)),
     "markdown-mirror": lambda: MirrorProjector(),
@@ -224,8 +231,8 @@ def test_recall_providers_pass_the_same_contract(tmp_path: Path, name: str) -> N
         provider,  # type: ignore[arg-type]
         queries=QUERIES,
         limit=5,
-        vault=None if name in WRITES_VAULT else repository.root,
-        vault_exclude=LOCK,
+        vault=repository.root,
+        vault_exclude=LOCK + INDEX_FILES.get(name, ()),
         tenant_of=lambda candidate: tenants.get(candidate.ref),
     )
     assert seen["HAL9000"] and seen["HAL9000"][0].ref == "m-hal"

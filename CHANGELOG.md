@@ -43,6 +43,12 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 - `two_stage` now logs access for its returned hits whether or not an
   embedder is configured (before, only the hybrid provider's hits were logged,
   unfiltered). `mode=fts` still logs no access; aligning it is a follow-up.
+- A cold or stub hit that `two_stage` warms is marked `stale` on that call (its
+  row comes from the pre-warm index row) and fresh from the next call on, as
+  direct `mode=hybrid` already marks a warmed hit.
+- Swap drills: the hybrid recall provider no longer skips the kit's
+  byte-identical vault check; only its disposable index files are excluded, so
+  `events.jsonl` and `events.state.json` are covered.
 
 ### Internal — swap drills: every port has two implementations (A5a)
 

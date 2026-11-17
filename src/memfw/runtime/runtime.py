@@ -236,6 +236,14 @@ class Runtime:
         never warmed or access-logged. This is best effort: a failure is
         reported in ``RecallOutcome.errors`` and never drops a hit.
 
+        Warming happens here, before the caller builds rows, but the rows
+        are built from what the providers saw: for a hit this call warmed,
+        the provider's index row describes the pre-warm version, so its row
+        is marked ``stale`` on this call (the vault file changed: tier and
+        version). The next call's index refresh makes it fresh. Direct
+        ``mode=hybrid`` marks a warmed hit ``stale`` the same way (and until
+        its vector index is rebuilt).
+
         Known race: the caller builds rows after this returns and re-checks
         each hit against the vault; a hit removed or changed in between is
         logged here but not shown. Logging follows the coordinator's output,

@@ -424,6 +424,10 @@ index and builds the rows.
   sets `degraded` and adds the error `access_not_recorded`. Known race: rows are built after
   `recall` returns and each hit is re-read from the vault; a hit removed or changed in
   between is logged but not shown. Logging follows the coordinator's output.
+  A hit warmed by this call is marked `stale` on that call: its row comes from the
+  provider's pre-warm index row, and warming changed the file (tier, version). The next
+  call's index refresh reports it fresh. Direct `mode=hybrid` marks a warmed hit `stale`
+  the same way.
 - **One thread per hung provider.** Every call on one `Runtime` (one Runtime per Gateway)
   shares its `InflightRegistry`, so `max_inflight` (1) holds across calls: a provider that hangs holds
   one worker thread, and later calls report it as `busy` instead of starting another.
