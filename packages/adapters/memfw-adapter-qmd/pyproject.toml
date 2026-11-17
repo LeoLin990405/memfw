@@ -1,0 +1,33 @@
+# memfw-adapter-qmd: QMD (https://github.com/tobi/qmd, MIT) as a memfw
+# RecallProvider for memory projections and Knowledge-Hub notes. It talks to
+# a running `qmd mcp --http` server over MCP JSON-RPC (loopback by default)
+# and contains no QMD code. Standard library only; it depends on memfw-ports
+# for the RecallProvider contract and nothing else. memfw itself never
+# imports it: the operator installs it and enables "qmd" / "qmd-notes" in the
+# adapters config.
+#
+# Build a wheel:  uv build --wheel --package memfw-adapter-qmd
+[build-system]
+requires = ["hatchling==1.33.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "memfw-adapter-qmd"
+version = "0.1.0"
+description = "QMD recall adapter (memory projections and notes) for the memfw recall coordinator"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+# Symlinks to memfw's own LICENSE and NOTICE (one copy of the text).
+license-files = ["LICENSE", "NOTICE"]
+dependencies = ["memfw-ports==0.3.0"]
+
+[project.entry-points."memfw.adapters"]
+qmd = "memfw_adapter_qmd:MEMORY_SPEC"
+qmd-notes = "memfw_adapter_qmd:NOTES_SPEC"
+
+[tool.uv.sources]
+memfw-ports = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/memfw_adapter_qmd"]

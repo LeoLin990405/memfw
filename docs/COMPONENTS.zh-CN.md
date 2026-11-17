@@ -102,6 +102,12 @@ CI 的 `standalone-wheels` 任务会构建两者，装进一个没有 memfw 的�
 
 `packages/adapters/memfw-adapter-qdrant`（wheel 名 `memfw_adapter_qdrant`，版本 0.1.0）是一个语义 `RecallProvider`，后端是运维自己运行的 Qdrant v1.20.x 服务（只绑 loopback，遥测关闭：`QDRANT__TELEMETRY_DISABLED=true`）。查询用 memfw 自己的 embedder 向量化，只取回记忆 id。它**默认关闭**；`memfw-adapter-qdrant sync` 只发送 `public`/`shared` 记忆，从不发送 `local-private`，也不在 Qdrant 里存正文。memfw 本身从不导入它。见 [`adapter-qdrant.md`](adapter-qdrant.md)。
 
+
+## QMD 召回适配器
+
+`packages/adapters/memfw-adapter-qmd`（wheel 名 `memfw_adapter_qmd`，版本 0.1.0）只用标准库，对一个正在运行的 [QMD](https://github.com/tobi/qmd)（MIT，锁定 2.5.3）MCP 服务实现了两个 `RecallProvider`：`qmd` 查由 `memfw projection export` 建成的 collection，按投影 manifest 映射回记忆 id；`qmd-notes` 查 Knowledge-Hub 的 collection，返回 `kh:<路径>#<标题>` 引用。两者都只返回引用、QMD 的分数和来源标签；映射不到可见文档的结果一律丢弃（`local-private` 和 `unknown` 永远不返回）；**默认关闭**（要在 `AdaptersConfig` 的 `enabled` 里打开）。端点默认必须是 loopback（除非设 `allow_remote`），loopback 请求不走代理。QMD 不可用或超时时，协调层把它标成降级，由 FTS 回答。memfw 本身从不导入这个适配器。见 [`qmd-projection.md`](qmd-projection.md#qmd-recall-adapter) 和包内 README。
+
+
 ## 佐证投影
 
 `memfw corroboration rebuild` 在 vault 之外生成佐证投影（`~/.local/share/memfw/corroboration/<key>.sqlite3`，文件里记着它属于哪个 vault）：每条记忆被哪些相互独立的（应用、会话）提到过，来源是记忆自己的 `conv:` 证据、会话 worker 暂存的论断，以及已接受的经验点。每个应用的每个会话只算一次；本身就引用了这条记忆 id 的来源、模型或 agent 生成的来源，以及被隐藏或已退出共享的应用都不算。只存 id、名称、计数和时间；文件权限 `0600`，每次重建逐字节一致，对 vault 只读不写。

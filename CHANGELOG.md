@@ -181,6 +181,25 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   as an opaque string). Memories without `att:`/`file:`/`sha256:` evidence (or without
   registered attachments) are gated exactly as before.
 
+### Added — QMD recall adapter (R6 PR-2a, off by default)
+
+- New workspace package `packages/adapters/memfw-adapter-qmd` (0.1.0,
+  wheel `memfw_adapter_qmd`, stdlib only, depends on `memfw-ports` alone):
+  two `RecallProvider`s over a running QMD 2.5.3 (MIT) MCP server, `qmd`
+  (memory projections → memory ids through the projection manifest) and
+  `qmd-notes` (Knowledge-Hub notes → `kh:<path>#<heading>` refs). They return
+  references, scores and a source label only; hits that do not map to a
+  visible document are dropped, and `local-private`/`unknown` are never
+  returned. Loopback endpoint by default, proxy bypass for loopback, no
+  redirects. When QMD is unavailable or times out the coordinator reports it
+  degraded and FTS answers. memfw does not import it; with no adapter config
+  nothing changes.
+- Contract tests against constructed QMD 2.5.3 fixtures
+  (`tests/fixtures/qmd_contract/`, loopback fake, no real QMD), the
+  standalone-wheel smoke (`--qmd`) and the T6 consistency report
+  `scripts/qmd_notes_consistency.py` (builtin notes index vs the adapter;
+  overlap only, not a gate).
+
 ### Added — two-stage conversation search and tag filters (M3c)
 
 - `memfw conversations search` and MCP `conversations_search` gain tag

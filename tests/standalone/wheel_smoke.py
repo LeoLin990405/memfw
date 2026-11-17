@@ -2,7 +2,7 @@
 
 Run it with the interpreter of a venv that has the wheels and NOT memfw:
 
-    python -I tests/standalone/wheel_smoke.py [--recall] [--deepseek] [--bm25s] [--qdrant]
+    python -I tests/standalone/wheel_smoke.py [--recall] [--deepseek] [--bm25s] [--qdrant] [--qmd]
 
 It refuses to run when ``memfw`` is importable, imports the wheels, and runs
 the contract kit (``memfw_ports.testing``) against the reference
@@ -13,8 +13,10 @@ implementations on a throwaway vault. With ``--recall`` it also runs
 the ``memfw-adapter-bm25s`` wheel's provider passes ``check_recall_provider``
 on a throwaway vault (index outside it, under the temporary root); with
 ``--qdrant`` the ``memfw-adapter-qdrant`` wheel's provider syncs a throwaway
-vault into its loopback ``FakeQdrant`` and passes ``check_recall_provider``.
-Prints one
+vault into its loopback ``FakeQdrant`` and passes ``check_recall_provider``;
+with ``--qmd``
+the ``memfw-adapter-qmd`` wheel's two recall providers pass
+``check_recall_provider`` against its loopback fake. Prints one
 ``ok`` line per check and exits non-zero on the first failure. Standard
 library only; not collected by pytest (``tests/test_standalone_ports_wheel.py``
 drives it).
@@ -325,6 +327,64 @@ def _qdrant(root: Path) -> None:
     _ok("check_recall_provider QdrantProvider (fake server)")
 
 
+def _qmd(root: Path) -> None:
+    """The QMD adapter wheel over the memfw-ports wheel, against its loopback fake only."""
+
+    import json
+
+    from memfw_adapter_qmd import _ports as seam
+    from memfw_adapter_qmd import memory_factory, notes_factory
+    from memfw_adapter_qmd.fake import FakeQmd
+    from memfw_ports.testing import check_recall_provider
+    from memfw_ports.types import Candidate
+
+    assert seam.Candidate is Candidate, seam.Candidate
+    _ok("import memfw_adapter_qmd (ports from memfw_ports)")
+    manifest = root / "qmd-manifest.json"
+    documents = [
+        {"id": "m-a", "path": "memories/m-a.md", "meta": {"privacy_class": "none", "tenant": ""}},
+        {
+            "id": "m-p",
+            "path": "memories/m-p.md",
+            "meta": {"privacy_class": "local-private", "tenant": ""},
+        },
+    ]
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "tree": "tree-smoke",
+                "documents": documents,
+                "lifecycle_source_status": "ok",
+            }
+        ),
+        encoding="utf-8",
+    )
+    notes = root / "kh"
+    (notes / "Course A").mkdir(parents=True)
+    (notes / "Course A" / "Week 1.md").write_text(
+        "---\nprivacy: shared\n---\n# Week 1\n\nbackup notes\n", encoding="utf-8"
+    )
+
+    def results(arguments: object) -> list[dict[str, object]]:
+        collection = arguments["collections"][0]  # type: ignore[index]
+        if collection == "memfw-memory":
+            return [
+                {"file": "memfw-memory/memories/m-p.md", "score": 0.9, "line": 1},
+                {"file": "memfw-memory/memories/m-a.md", "score": 0.8, "line": 1},
+            ]
+        return [{"file": "knowledge-hub/Course-A/Week-1.md", "score": 0.7, "line": 6}]
+
+    with FakeQmd(results=results) as fake:
+        memory = memory_factory({"endpoint": fake.url, "manifest": str(manifest)})
+        found = check_recall_provider(memory, queries=["backup"], limit=5)["backup"]
+        assert [c.ref for c in found] == ["m-a"], found
+        note = notes_factory({"endpoint": fake.url, "notes_root": str(notes)})
+        found = check_recall_provider(note, queries=["backup"], limit=5)["backup"]
+        assert [c.ref for c in found] == ["kh:Course%20A/Week%201.md#Week%201"], found
+    _ok("check_recall_provider QmdMemoryProvider + QmdNotesProvider (fake server)")
+
+
 def main(argv: list[str]) -> int:
     if importlib.util.find_spec("memfw") is not None:
         print("memfw is importable here; run this in a venv without memfw", file=sys.stderr)
@@ -340,6 +400,8 @@ def main(argv: list[str]) -> int:
             _bm25s(root)
         if "--qdrant" in argv:
             _qdrant(root)
+        if "--qmd" in argv:
+            _qmd(root)
     print("standalone wheel smoke passed")
     return 0
 

@@ -1,0 +1,564 @@
+{
+  "external": "qmd",
+  "external_version": "2.5.3",
+  "provenance": "Constructed, not captured from a live server: requests and responses follow the wire format of @tobilu/qmd 2.5.3 as published (dist/mcp/server.js: Streamable HTTP with JSON responses, tools/call query -> structuredContent.results[{docid,file,title,score,context,line,snippet}], file = <collection>/<handelized path>). Ids come from tests/projection_fixtures.py; note paths from notes/. handelize_cases are outputs of QMD 2.5.3's own handelize() (store.js) run under Node. Re-record with `python -m memfw_adapter_qmd.record` against a live server before upgrading QMD.",
+  "initialize": {
+    "request": {
+      "method": "initialize",
+      "params": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {},
+        "clientInfo": {
+          "name": "memfw-adapter-qmd",
+          "version": "0.1.0"
+        }
+      }
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "mcp-session-id": "00000000-0000-4000-8000-000000000001"
+      },
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "protocolVersion": "2025-06-18",
+          "capabilities": {
+            "tools": {
+              "listChanged": true
+            },
+            "resources": {
+              "listChanged": true
+            }
+          },
+          "serverInfo": {
+            "name": "qmd",
+            "version": "2.5.3"
+          },
+          "instructions": "QMD is your local search engine over 25 markdown documents."
+        }
+      }
+    }
+  },
+  "exchanges": [
+    {
+      "name": "memory",
+      "query": "cron migration",
+      "tenant": "",
+      "request": {
+        "method": "tools/call",
+        "params": {
+          "name": "query",
+          "arguments": {
+            "searches": [
+              {
+                "type": "lex",
+                "query": "cron migration"
+              },
+              {
+                "type": "vec",
+                "query": "cron migration"
+              }
+            ],
+            "limit": 20,
+            "minScore": 0.0,
+            "candidateLimit": 80,
+            "collections": [
+              "memfw-memory"
+            ],
+            "rerank": false
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "jsonrpc": "2.0",
+          "result": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Found 16 results for \"cron migration\":"
+              }
+            ],
+            "structuredContent": {
+              "results": [
+                {
+                  "docid": "#a93d59",
+                  "file": "memfw-memory/memories/fda42050e4f41.md",
+                  "title": "<redacted>",
+                  "score": 0.93,
+                  "context": null,
+                  "line": 12,
+                  "snippet": "12: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#95fceb",
+                  "file": "memfw-memory/memories/f027f0fa20916.md",
+                  "title": "<redacted>",
+                  "score": 0.91,
+                  "context": null,
+                  "line": 12,
+                  "snippet": "12: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#b31f61",
+                  "file": "memfw-memory/memories/ff72a986f8100.md",
+                  "title": "<redacted>",
+                  "score": 0.9,
+                  "context": null,
+                  "line": 12,
+                  "snippet": "12: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#37b5d2",
+                  "file": "memfw-memory/memories/f35d9375a06c4.md",
+                  "title": "<redacted>",
+                  "score": 0.88,
+                  "context": null,
+                  "line": 12,
+                  "snippet": "12: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#9220d9",
+                  "file": "memfw-memory/memories/f427f911ed320.md",
+                  "title": "<redacted>",
+                  "score": 0.87,
+                  "context": null,
+                  "line": 12,
+                  "snippet": "12: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#46367e",
+                  "file": "memfw-memory/memories/fedd74d186b44.md",
+                  "title": "<redacted>",
+                  "score": 0.86,
+                  "context": null,
+                  "line": 12,
+                  "snippet": "12: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#74b368",
+                  "file": "memfw-memory/memories/f1f8fdb897036.md",
+                  "title": "<redacted>",
+                  "score": 0.85,
+                  "context": null,
+                  "line": 12,
+                  "snippet": "12: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#1d5563",
+                  "file": "memfw-memory/memories/fdeadbeef0000.md",
+                  "title": "<redacted>",
+                  "score": 0.84,
+                  "context": null,
+                  "line": 12,
+                  "snippet": "12: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#4310d5",
+                  "file": "other-collection/memories/fda42050e4f41.md",
+                  "title": "<redacted>",
+                  "score": 0.83,
+                  "context": null,
+                  "line": 12,
+                  "snippet": "12: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#f1a993",
+                  "file": "memfw-memory/memories/f377d4acb1842.md",
+                  "title": "<redacted>",
+                  "score": 0.8,
+                  "context": null,
+                  "line": 12,
+                  "snippet": "12: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#2c45b9",
+                  "file": "memfw-memory/memories/fc95afc5931ce.md",
+                  "title": "<redacted>",
+                  "score": 0.78,
+                  "context": null,
+                  "line": 12,
+                  "snippet": "12: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#084493",
+                  "file": "memfw-memory/../memories/x.md",
+                  "title": "<redacted>",
+                  "score": 0.77,
+                  "context": null,
+                  "line": 12,
+                  "snippet": "12: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#61e501",
+                  "file": "memfw-memory/memories/f9e6cb941b6f9.md",
+                  "title": "<redacted>",
+                  "score": 0.74,
+                  "context": null,
+                  "line": 12,
+                  "snippet": "12: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#423f03",
+                  "file": "memfw-memory/memories/f7bf67d5fd472.md",
+                  "title": "<redacted>",
+                  "score": 0.72,
+                  "context": null,
+                  "line": 12,
+                  "snippet": "12: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#408396",
+                  "file": "memfw-memory/memories/zeval-0001.md",
+                  "title": "<redacted>",
+                  "score": 0.7,
+                  "context": null,
+                  "line": 12,
+                  "snippet": "12: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#a93d59",
+                  "file": "memfw-memory/memories/fda42050e4f41.md",
+                  "title": "<redacted>",
+                  "score": 0.69,
+                  "context": null,
+                  "line": 12,
+                  "snippet": "12: SNIPPET-MARKER-DO-NOT-RETURN"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "expected_refs": [
+        "fda42050e4f41",
+        "f377d4acb1842",
+        "fc95afc5931ce",
+        "f9e6cb941b6f9",
+        "f7bf67d5fd472",
+        "zeval-0001"
+      ]
+    },
+    {
+      "name": "notes",
+      "query": "migration checklist",
+      "tenant": "",
+      "request": {
+        "method": "tools/call",
+        "params": {
+          "name": "query",
+          "arguments": {
+            "searches": [
+              {
+                "type": "lex",
+                "query": "migration checklist"
+              },
+              {
+                "type": "vec",
+                "query": "migration checklist"
+              }
+            ],
+            "limit": 20,
+            "minScore": 0.0,
+            "candidateLimit": 80,
+            "collections": [
+              "knowledge-hub"
+            ],
+            "rerank": false
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "jsonrpc": "2.0",
+          "result": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Found 9 results for \"migration checklist\":"
+              }
+            ],
+            "structuredContent": {
+              "results": [
+                {
+                  "docid": "#affa99",
+                  "file": "knowledge-hub/Course-A/Week-1-notes.md",
+                  "title": "<redacted>",
+                  "score": 0.92,
+                  "context": null,
+                  "line": 12,
+                  "snippet": "12: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#950801",
+                  "file": "knowledge-hub/private/diary.md",
+                  "title": "<redacted>",
+                  "score": 0.9,
+                  "context": null,
+                  "line": 6,
+                  "snippet": "6: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#1931ab",
+                  "file": "knowledge-hub/private/tagged.md",
+                  "title": "<redacted>",
+                  "score": 0.89,
+                  "context": null,
+                  "line": 7,
+                  "snippet": "7: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#38ec10",
+                  "file": "knowledge-hub/迁移/迁移-计划.md",
+                  "title": "<redacted>",
+                  "score": 0.87,
+                  "context": null,
+                  "line": 7,
+                  "snippet": "7: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#3c3029",
+                  "file": "knowledge-hub/collide/a-b.md",
+                  "title": "<redacted>",
+                  "score": 0.85,
+                  "context": null,
+                  "line": 3,
+                  "snippet": "3: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#9a7b3d",
+                  "file": "knowledge-hub/top.md",
+                  "title": "<redacted>",
+                  "score": 0.8,
+                  "context": null,
+                  "line": 1,
+                  "snippet": "1: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#586b1a",
+                  "file": "knowledge-hub/missing.md",
+                  "title": "<redacted>",
+                  "score": 0.78,
+                  "context": null,
+                  "line": 1,
+                  "snippet": "1: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#18413a",
+                  "file": "knowledge-hub/weird/unreadable.md",
+                  "title": "<redacted>",
+                  "score": 0.75,
+                  "context": null,
+                  "line": 6,
+                  "snippet": "6: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#8ca661",
+                  "file": "knowledge-hub/public/C-tips.md",
+                  "title": "<redacted>",
+                  "score": 0.7,
+                  "context": null,
+                  "line": 8,
+                  "snippet": "8: SNIPPET-MARKER-DO-NOT-RETURN"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "expected_refs": [
+        "kh:Course%20A/Week%201%20notes.md#Disk%20migration%20checklist",
+        "kh:迁移/迁移%20计划.md#暂停定时任务",
+        "kh:top.md",
+        "kh:public/C++%20tips.md#Tips%20(advanced%29"
+      ]
+    },
+    {
+      "name": "t6:pause",
+      "query": "暂停定时任务",
+      "tenant": "",
+      "request": {
+        "method": "tools/call",
+        "params": {
+          "name": "query",
+          "arguments": {
+            "searches": [
+              {
+                "type": "lex",
+                "query": "暂停定时任务"
+              },
+              {
+                "type": "vec",
+                "query": "暂停定时任务"
+              }
+            ],
+            "limit": 20,
+            "minScore": 0.0,
+            "candidateLimit": 80,
+            "collections": [
+              "knowledge-hub"
+            ],
+            "rerank": false
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "jsonrpc": "2.0",
+          "result": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Found 2 results for \"暂停定时任务\":"
+              }
+            ],
+            "structuredContent": {
+              "results": [
+                {
+                  "docid": "#38ec10",
+                  "file": "knowledge-hub/迁移/迁移-计划.md",
+                  "title": "<redacted>",
+                  "score": 0.95,
+                  "context": null,
+                  "line": 7,
+                  "snippet": "7: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#affa99",
+                  "file": "knowledge-hub/Course-A/Week-1-notes.md",
+                  "title": "<redacted>",
+                  "score": 0.6,
+                  "context": null,
+                  "line": 12,
+                  "snippet": "12: SNIPPET-MARKER-DO-NOT-RETURN"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "expected_refs": [
+        "kh:迁移/迁移%20计划.md#暂停定时任务",
+        "kh:Course%20A/Week%201%20notes.md#Disk%20migration%20checklist"
+      ]
+    },
+    {
+      "name": "t6:reading",
+      "query": "reading list",
+      "tenant": "",
+      "request": {
+        "method": "tools/call",
+        "params": {
+          "name": "query",
+          "arguments": {
+            "searches": [
+              {
+                "type": "lex",
+                "query": "reading list"
+              },
+              {
+                "type": "vec",
+                "query": "reading list"
+              }
+            ],
+            "limit": 20,
+            "minScore": 0.0,
+            "candidateLimit": 80,
+            "collections": [
+              "knowledge-hub"
+            ],
+            "rerank": false
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "jsonrpc": "2.0",
+          "result": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Found 2 results for \"reading list\":"
+              }
+            ],
+            "structuredContent": {
+              "results": [
+                {
+                  "docid": "#affa99",
+                  "file": "knowledge-hub/Course-A/Week-1-notes.md",
+                  "title": "<redacted>",
+                  "score": 0.9,
+                  "context": null,
+                  "line": 16,
+                  "snippet": "16: SNIPPET-MARKER-DO-NOT-RETURN"
+                },
+                {
+                  "docid": "#8ca661",
+                  "file": "knowledge-hub/public/C-tips.md",
+                  "title": "<redacted>",
+                  "score": 0.4,
+                  "context": null,
+                  "line": 8,
+                  "snippet": "8: SNIPPET-MARKER-DO-NOT-RETURN"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "expected_refs": [
+        "kh:Course%20A/Week%201%20notes.md#Reading%20list",
+        "kh:public/C++%20tips.md#Tips%20(advanced%29"
+      ]
+    }
+  ],
+  "handelize_cases": {
+    "memories/f0123456789ab.md": "memories/f0123456789ab.md",
+    "memories/zeval-0001.md": "memories/zeval-0001.md",
+    "memories/m_under_score.md": "memories/m-under-score.md",
+    "Course A/Week 1 notes.md": "Course-A/Week-1-notes.md",
+    "迁移 计划.md": "迁移-计划.md",
+    "a___b.md": "a/b.md",
+    "🐘 elephant.md": "1f418-elephant.md",
+    "v1.2 notes.md": "v1-2-notes.md",
+    "-x-.md": "x.md",
+    "a b.md": "a-b.md",
+    "a-b.md": "a-b.md",
+    "dir.with.dots/File (1).MD": "dir-with-dots/File-1.MD",
+    "日本語/ノート.md": "日本語/ノート.md",
+    "x/.md": null,
+    "$route.md": "$route.md",
+    "...md": null,
+    "notes/C++ tips.md": "notes/C-tips.md",
+    "Ünïcödé/naïve café.md": "Ünïcödé/naïve-café.md",
+    "emoji/👍🏽 ok.md": "emoji/1f44d-1f3fd-ok.md",
+    "a//b.md": "a/b.md",
+    "trailing/": "trailing",
+    "☃️snow.md": "2603snow.md",
+    "ⓐbc.md": "24d0bc.md",
+    "100%.md": "100.md",
+    "x#y.md": "x-y.md",
+    "^caret.md": "5ecaret.md",
+    "中文（全角）.md": "中文-全角.md",
+    "tab\tname.md": "tab-name.md"
+  }
+}
