@@ -388,6 +388,43 @@ def test_index_skips_tampered_files(tmp_path: Path) -> None:
     assert dict(loaded.skipped) == {"bad_schema": 1, "bad_node": 1}
 
 
+@pytest.mark.parametrize(
+    ("mutate", "code"),
+    [
+        (lambda t: t.update(extra="x"), "unknown_key"),
+        (lambda t: t["structure"][0].update(text="BODY"), "bad_node"),
+        (lambda t: t["structure"][0].update(node_id="bad id!"), "bad_node_id"),
+        (lambda t: t["structure"][1].update(node_id=t["structure"][0]["node_id"]), "bad_node_id"),
+        (lambda t: t["structure"][0].update(summary="x" * 301), "bad_summary"),
+        (lambda t: t["structure"][0].update(title="  padded  "), "bad_node"),
+        (lambda t: t["structure"][0].update(end_index=7), "page_out_of_range"),
+        (lambda t: t.update(producer={"tool": "x"}), "bad_producer"),
+        (lambda t: t.update(pages=True), "bad_pages"),
+    ],
+)
+def test_load_applies_the_import_rules(mutate: Any, code: str) -> None:
+    from memfw_adapter_pageindex.tree import validate_tree
+
+    tree = import_pageindex_tree(
+        PDF_TREE, f"att:{ATT}", pages=6, source_sha256=SHA, keep_summaries=True
+    )
+    validate_tree(json.loads(json.dumps(tree)))
+    bad = json.loads(json.dumps(tree))
+    mutate(bad)
+    with pytest.raises(TreeError) as raised:
+        validate_tree(bad)
+    assert raised.value.code == code
+
+
+def test_load_checks_markdown_line_numbers(tmp_path: Path) -> None:
+    from memfw_adapter_pageindex.tree import validate_tree
+
+    tree = build_markdown_tree(_kh(tmp_path), "kh:notes/field notes.md", privacy="shared")
+    tree["structure"][0]["line_num"] = 0
+    with pytest.raises(TreeError, match="bad_line"):
+        validate_tree(tree)
+
+
 def test_deeply_nested_json_is_skipped_not_raised(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

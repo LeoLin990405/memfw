@@ -550,11 +550,40 @@ def _tree(
 # -- validation, storage ------------------------------------------------------------
 
 
+#: The keys a stored tree and its nodes may hold (anything else is refused on load).
+TREE_KEYS = frozenset(
+    {
+        "schema",
+        "source",
+        "media",
+        "tenant",
+        "privacy",
+        "source_sha256",
+        "producer",
+        "built_at",
+        "pages",
+        "structure",
+    }
+)
+NODE_KEYS = {
+    "markdown": frozenset({"title", "node_id", "line_num", "summary", "nodes"}),
+    "pdf": frozenset({"title", "node_id", "start_index", "end_index", "summary", "nodes"}),
+}
+
+
 def validate_tree(tree: Any) -> dict[str, Any]:
-    """Check a stored tree (also on load). Returns it; :class:`TreeError` otherwise."""
+    """Check a stored tree (on write and on load) with the import rules.
+
+    Known keys only, node ids matching the id rule and unique, titles already
+    clean, summaries at most :data:`MAX_SUMMARY_CHARS`, Markdown nodes with a
+    line number and PDF nodes with a page range inside ``pages``. Returns the
+    tree; :class:`TreeError` otherwise.
+    """
 
     if not isinstance(tree, dict) or tree.get("schema") != TREE_SCHEMA:
         raise TreeError("bad_schema")
+    if set(tree) - TREE_KEYS:
+        raise TreeError("unknown_key")
     source = parse_source(tree.get("source", ""))
     if tree.get("media") != source.media:
         raise TreeError("bad_media")
@@ -565,27 +594,56 @@ def validate_tree(tree: Any) -> dict[str, Any]:
         tree["source_sha256"]
     ):
         raise TreeError("bad_sha256")
+    producer = tree.get("producer")
+    if not isinstance(producer, dict) or set(producer) != {"tool", "version"}:
+        raise TreeError("bad_producer")
+    if not all(isinstance(v, str) and len(v) <= 64 for v in producer.values()):
+        raise TreeError("bad_producer")
+    if not isinstance(tree.get("built_at"), str) or len(tree["built_at"]) > 64:
+        raise TreeError("bad_time")
     structure = tree.get("structure")
     if not isinstance(structure, list) or not structure:
         raise TreeError("bad_tree")
     pages = tree.get("pages")
+    if source.media == "pdf":
+        if not isinstance(pages, int) or isinstance(pages, bool) or not 1 <= pages <= 100_000:
+            raise TreeError("bad_pages")
+    elif "pages" in tree:
+        raise TreeError("unknown_key")
+    allowed = NODE_KEYS[source.media]
+    seen: set[str] = set()
     total = 0
     for depth, node in iter_nodes(structure):
         total += 1
         if total > MAX_NODES or depth > MAX_DEPTH:
             raise TreeError("too_large")
-        if not isinstance(node, dict) or "text" in node:
+        if not isinstance(node, dict) or set(node) - allowed:
             raise TreeError("bad_node")
-        _clean_title(node.get("title"))
-        if not isinstance(node.get("node_id"), str) or not isinstance(node.get("nodes"), list):
+        title = node.get("title")
+        if _clean_title(title) != title:
             raise TreeError("bad_node")
+        node_id = node.get("node_id")
+        if not isinstance(node_id, str) or not _NODE_ID.fullmatch(node_id) or node_id in seen:
+            raise TreeError("bad_node_id")
+        seen.add(node_id)
+        if not isinstance(node.get("nodes"), list):
+            raise TreeError("bad_node")
+        summary = node.get("summary")
+        if summary is not None and (
+            not isinstance(summary, str) or len(summary) > MAX_SUMMARY_CHARS
+        ):
+            raise TreeError("bad_summary")
         if source.media == "pdf":
             start, end = node.get("start_index"), node.get("end_index")
-            if not (_is_int(start) and _is_int(end) and _is_int(pages)):
+            if not (_is_int(start) and _is_int(end)):
                 raise TreeError("bad_page")
             assert isinstance(start, int) and isinstance(end, int) and isinstance(pages, int)
             if not 1 <= start <= end <= pages:
                 raise TreeError("page_out_of_range")
+        else:
+            line = node.get("line_num")
+            if not isinstance(line, int) or isinstance(line, bool) or line < 1:
+                raise TreeError("bad_line")
     return tree
 
 
