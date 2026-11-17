@@ -58,7 +58,7 @@ Implementations:
 | `backend` | What it runs |
 |---|---|
 | `mcp` (default) | an OCR server named in `mcp_command`, run as a child process and spoken to over the MCP stdio protocol |
-| `pdftotext` | poppler's `pdftotext -bbox-layout` (text-layer PDFs only), at the absolute path in `pdftotext`; with `pdfinfo` (absolute path) only the first `max_pages` pages are converted and coverage names the page count, without it a longer PDF is refused (`page_budget`); output is read with a 64 MiB cap |
+| `pdftotext` | poppler's `pdftotext -bbox-layout` (text-layer PDFs only), at the absolute path in `pdftotext`; with `pdfinfo` (absolute path) only the first `max_pages` pages are converted and coverage names the page count, without it a longer PDF is refused (`page_budget`); output is read with a 64 MiB cap. `pdfinfo` and `pdftotext` each get the full timeout, so this backend may take up to twice the budget |
 | `"module:factory"` | any other implementation; `factory(backend_options)` returns it. **Outside the adapter's guarantees:** memfw cannot check that a custom backend stays local or uploads nothing; that is the operator's responsibility |
 
 Engine discovery is explicit configuration only: no `PATH` search, no
@@ -98,6 +98,9 @@ token, secret or password are never passed, and `mcp_env` may not set
 `PATH`, `HOME` or `TMPDIR` (refused as `bad_mcp_env`). An async job still running when
 the run's time is up is abandoned with the server process; its output
 directory is removed with the work directory.
+An engine that starts itself in its own session (`setsid`) leaves the
+server's process group and can outlive the run; there is no portable way to
+stop it.
 
 ## Privacy and integrity
 
