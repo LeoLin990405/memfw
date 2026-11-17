@@ -88,21 +88,29 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 - `Runtime.open_repository()` is the vault opener (refuses a missing vault,
   opens per call from the unresolved root, never keeps one); `Gateway._repo`
   and `Runtime.ensure_index` use it.
-- `Runtime.search` runs every `memory_search` mode (fts, hybrid/vector,
-  multihop, two_stage, alias expansion, U2 labels) and builds the rows;
-  that code moved from `memfw/mcp/tools_search.py` to `memfw/runtime/search.py`
-  (the MCP server passes its `_client_message` for error texts). The MCP tool
-  only checks the arguments.
+- `Runtime.search` checks the `memory_search` arguments (blank query,
+  `policy`, 512-character `scope`, allowed `source`; same messages, before the
+  vault is opened), then runs every mode (fts, hybrid/vector, multihop,
+  two_stage, alias expansion, U2 labels) and builds the rows; that code moved
+  from `memfw/mcp/tools_search.py` to `memfw/runtime/search.py` (the MCP
+  server passes its `_client_message` for error texts). The MCP tool only
+  parses the arguments.
+- `Gateway.tenant`, `allowed_sources`, `embedder` and `entity_enabled` are
+  read-only properties returning the Runtime's values.
 - `Runtime.remember`, `related`, `status`, `conversation_share`,
   `history_scoped`, `history_ref_source`, `dream_run` and `staged_dreams`
   (modules `memfw/runtime/{memories,sharing,dreams}.py`) back the other tool
   groups; the capability modules load on first use, so `import memfw.runtime`
   stays light.
 - Byte-identical: `mcp_all_tools` (11 variants) and `mcp_memory_search_stable`
-  (65 payloads, every mode with and without an embedder) match `origin/main`.
-- Tests that patch `search_multihop` now patch `memfw.runtime.search`;
-  `_RAW_HASH_CACHE` and friends stay importable from `memfw.mcp.tools_search`
-  and `memfw.mcp.server`.
+  (73 payloads, every mode with and without an embedder, error paths included)
+  match `origin/main`; the second is a new opt-in test next to the first
+  (`MEMFW_ARCH_BASE_REF`).
+- Tests that patch `search_multihop` now patch `memfw.runtime.search`.
+  `RawHashCache`, `RAW_HASH_CACHE`, `FRESHNESS_READ_ATTEMPTS` and
+  `frontmatter_version` are public in `memfw.runtime.search`; the underscore
+  names in `memfw.mcp.tools_search` and `memfw.mcp.server` are deprecated
+  aliases.
 
 ### Internal — swap drills: every port has two implementations (A5a)
 

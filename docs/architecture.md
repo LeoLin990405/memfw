@@ -169,19 +169,25 @@ labels for `labels: true`. The MCP server only parses the flag; no import edge w
   `build_runtime` still takes the resolved values.
 - `Runtime.open_repository()` opens the vault per call from the unresolved root and refuses
   a missing one (`ValueError("vault root does not exist")`); it never keeps a `Repository`.
-- `Runtime.search(repository, query, limit, *, mode, ..., client_message)` runs every
-  `memory_search` mode (`memfw/runtime/search.py`: fts through `memfw.index.readonly`,
+- `Runtime.search(query, limit, *, mode, ..., client_message)` checks the arguments (blank
+  query, `policy`, the 512-character `scope`, an allowed `source`; same messages, before the
+  vault is opened), opens the vault and runs every `memory_search` mode (`memfw/runtime/search.py`: fts through `memfw.index.readonly`,
   hybrid/vector through `MemoryHybridRetriever`, multihop, two_stage through `recall`,
   ontology alias expansion, U2 labels) and builds the rows (freshness, `_RawHashCache`).
-  Row building reads vault files, so it is not protocol code; the MCP tool only checks the
-  arguments and passes `_client_message` for error texts.
+  Row building reads vault files, so it is not protocol code; the MCP tool only parses the
+  arguments and passes `_client_message` for error texts. `RawHashCache`, `RAW_HASH_CACHE`,
+  `FRESHNESS_READ_ATTEMPTS` and `frontmatter_version` are public there; the underscore names
+  in `memfw.mcp.tools_search`/`server` are deprecated aliases.
+- `GatewayBase.tenant`, `allowed_sources`, `embedder` and `entity_enabled` are read-only
+  properties returning the Runtime's values (one source of truth).
 - `Runtime.remember`, `related`, `status` (`memories.py`), `conversation_share`,
   `history_scoped`, `history_ref_source` (`sharing.py`), `dream_run`, `staged_dreams`
   (`dreams.py`) back the other tool groups. Each loads its capability module on first use.
 - All 12 `memfw.mcp` allowlist entries are gone (A3: `core.repository`, `index`,
   `memory_hybrid`, `notes`, `related`, `retrieval`; A4: `core`, `capture`,
   `conversations`, `dream`, `history`, `ontology`). Byte-identical against `origin/main`:
-  `mcp_all_tools` (11 variants) and `mcp_memory_search_stable` (65 payloads).
+  `mcp_all_tools` (11 variants) and `mcp_memory_search_stable` (73 payloads, error paths
+  included); both are opt-in tests in `tests/test_mcp_split.py` (`MEMFW_ARCH_BASE_REF`).
 
 **Still to do.** The MCP server's types for the share and the transcript index are `Any`
 until `memfw.ports` has protocols for them. The CLI gets its capability objects from the
@@ -200,7 +206,7 @@ one mixin per group; each mixin subclasses `GatewayBase`.
 | `mcp/base.py` | `GatewayBase`: `__init__` (root, tenant, sources, embedder, Runtime), `_repo`, `_visible` (A3b: all from the Runtime) |
 | `mcp/schema.py` | `TOOLS`, `SERVER_INFO`, `PROTOCOL`, `INSTRUCTIONS`, `SEARCH_POLICIES` |
 | `mcp/protocol.py` | `ProtocolMixin` (`handle`, `respond`), `_rpc_error`, `client_endpoint_fields`, `_client_message`, `_flag` |
-| `mcp/tools_search.py` | `memory_search` (all modes), row building and freshness (`_RawHashCache`; A3b: moved to `memfw.runtime.search`) |
+| `mcp/tools_search.py` | `memory_search` argument parsing (A3b: the checks, every mode, row building and freshness are in `Runtime.search` / `memfw.runtime.search`) |
 | `mcp/tools_memory.py` | `memory_get`, `memory_remember`, `memory_related`, `memory_status` |
 | `mcp/tools_context.py` | `memory_context` |
 | `mcp/tools_history.py` | `history_list`, `history_search`, `history_read` |
@@ -222,9 +228,9 @@ gains the optional `slots` property; `with_expected_c2_changes`), so any other b
 
 **A4b (done, with A3b).** Each group reaches its capability through the `Runtime`;
 `memfw.mcp` imports only `memfw.ports`, `memfw.runtime` and itself, and its allowlist entries
-are gone. `tools_search.py` re-exports `_RAW_HASH_CACHE`, `_RawHashCache`,
-`_frontmatter_version` and `_FRESHNESS_READ_ATTEMPTS` from `memfw.runtime.search`; patch
-`memfw.runtime.search.search_multihop`.
+are gone. `tools_search.py` keeps `_RAW_HASH_CACHE`, `_RawHashCache`, `_frontmatter_version`
+and `_FRESHNESS_READ_ATTEMPTS` as deprecated aliases of `memfw.runtime.search`'s public names;
+patch `memfw.runtime.search.search_multihop`.
 
 ## A5: swap drills
 

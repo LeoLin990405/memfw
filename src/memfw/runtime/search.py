@@ -38,7 +38,7 @@ _FRONTMATTER_SCAN_BYTES = 64 * 1024
 def _frontmatter_scalar(raw: bytes, key: str) -> str:
     """One top-level scalar from the frontmatter, by a prefix line scan.
 
-    Like ``_frontmatter_version`` this never calls the YAML parser, so the
+    Like ``frontmatter_version`` this never calls the YAML parser, so the
     search path stays free of it. Quotes are stripped; null is empty.
     """
 
@@ -97,11 +97,11 @@ def _content_hash(path: Path) -> str:
 
 _FRESHNESS_LIMIT = 10
 _FRESHNESS_CACHE_CAP = 2048
-_FRESHNESS_READ_ATTEMPTS = 3
+FRESHNESS_READ_ATTEMPTS = 3
 _StatKey = tuple[str, int, int, int, int]
 
 
-def _frontmatter_version(raw: bytes) -> str:
+def frontmatter_version(raw: bytes) -> str:
     """Top-level ``version:`` line from bytes already read for the hash.
 
     This is a prefix scan of the frontmatter block. It does not call the YAML
@@ -130,7 +130,7 @@ def _stat_key(path: Path, stat: os.stat_result) -> _StatKey:
     return (str(path), stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
 
 
-class _RawHashCache:
+class RawHashCache:
     """LRU of raw-byte hashes keyed by path, inode, size, mtime, and ctime.
 
     A user edit cannot preserve ctime, so a file whose mtime was restored
@@ -152,7 +152,7 @@ class _RawHashCache:
         is false so the caller can fail closed.
         """
 
-        for _attempt in range(_FRESHNESS_READ_ATTEMPTS):
+        for _attempt in range(FRESHNESS_READ_ATTEMPTS):
             try:
                 before = path.stat()
             except OSError:
@@ -175,7 +175,7 @@ class _RawHashCache:
                 continue
             stored = (
                 "sha256:" + hashlib.sha256(raw).hexdigest(),
-                _frontmatter_version(raw),
+                frontmatter_version(raw),
             )
             with self._lock:
                 self._items.pop(key, None)
@@ -186,7 +186,7 @@ class _RawHashCache:
         return "", "", False
 
 
-_RAW_HASH_CACHE = _RawHashCache(_FRESHNESS_CACHE_CAP)
+RAW_HASH_CACHE = RawHashCache(_FRESHNESS_CACHE_CAP)
 
 
 def _hash_matches(live: str, indexed: str) -> bool:
@@ -237,7 +237,7 @@ def _index_row(
     memory_path = repository.root / "memories" / f"{item['id']}.md"
     checked = offset < _FRESHNESS_LIMIT
     if checked:
-        live_hash, live_version, consistent = _RAW_HASH_CACHE.lookup(memory_path)
+        live_hash, live_version, consistent = RAW_HASH_CACHE.lookup(memory_path)
     else:
         live_hash, live_version, consistent = "", "", True
     index_version = item["index_version"] if item.get("index_version") is not None else ""
@@ -315,6 +315,20 @@ def _document_row(
     }
     _annotate_hit(row, document, item, why=str(item.get("why") or why))
     return row
+
+
+_MAX_SCOPE_CHARS = 512
+
+
+def checked_scope(scope: object) -> str:
+    """Same rule as HTTP ``/search``: optional string of at most 512 characters."""
+    if scope is None:
+        return ""
+    if not isinstance(scope, str):
+        raise ValueError("scope must be a string")
+    if len(scope) > _MAX_SCOPE_CHARS:
+        raise ValueError("scope too long")
+    return scope.strip()
 
 
 def _alias_candidates(
@@ -421,11 +435,11 @@ def memory_search(
     labels: bool,
     client_message: ClientMessage,
 ) -> dict[str, Any]:
-    """One ``memory_search`` call on the caller's open vault (``Runtime.search``).
+    """One ``memory_search`` call on the caller's open vault.
 
-    The arguments are already checked by the interface (non-empty query,
-    known ``policy``, only with ``two_stage``; ``scope`` cleaned; ``source``
-    allowed).
+    ``Runtime.search`` has checked the arguments (non-empty query, known
+    ``policy``, only with ``two_stage``; ``scope`` cleaned; ``source``
+    allowed) and opened ``repository``.
     """
 
     if mode == "two_stage":
@@ -711,10 +725,11 @@ def _search_two_stage(
 
 
 __all__ = [
+    "FRESHNESS_READ_ATTEMPTS",
+    "RAW_HASH_CACHE",
     "ClientMessage",
-    "_FRESHNESS_READ_ATTEMPTS",
-    "_RAW_HASH_CACHE",
-    "_RawHashCache",
-    "_frontmatter_version",
+    "RawHashCache",
+    "checked_scope",
+    "frontmatter_version",
     "memory_search",
 ]

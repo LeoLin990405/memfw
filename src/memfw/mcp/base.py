@@ -16,8 +16,10 @@ class GatewayBase:
     """The bound vault and caller; ``memfw.mcp.server.Gateway`` composes the tool groups.
 
     Settings (explicit arguments, else ``MEMFW_*``) are resolved by the
-    runtime (``memfw.runtime.resolve_settings``); every capability, the vault
-    opener included, comes from ``self.runtime``.
+    runtime (``memfw.runtime.resolve_settings``); ``tenant``,
+    ``allowed_sources``, ``embedder`` and ``entity_enabled`` are read-only
+    views of ``self.runtime``'s values. Every capability, the vault opener
+    included, comes from ``self.runtime``.
     """
 
     def __init__(
@@ -39,24 +41,38 @@ class GatewayBase:
             app=app,
         )
         self.app = settings.app
-        self.tenant = settings.tenant
-        self.entity_enabled = settings.entity_enabled
-        self.allowed_sources = settings.allowed_sources
-        self.embedder = settings.embedder
         # The composition root owns the recall wiring and the index check: one
         # Runtime per Gateway, one InflightRegistry per Runtime. Every
         # ``mode=two_stage`` call shares it, so a hung provider holds at most
         # ``max_inflight`` worker threads per Runtime, not one per call.
         self.runtime = build_runtime(
             self.root,
-            tenant=self.tenant,
-            allowed_sources=self.allowed_sources,
-            embedder=self.embedder,
-            entity_enabled=self.entity_enabled,
+            tenant=settings.tenant,
+            allowed_sources=settings.allowed_sources,
+            embedder=settings.embedder,
+            entity_enabled=settings.entity_enabled,
         )
         self.dream_clock: Callable[[], datetime] = lambda: datetime.now(UTC)
         self._last_staged: float | None = None
         self.history_refresh_seconds = history_refresh_seconds()
+
+    # Read-only views of the Runtime's settings: one source of truth.
+
+    @property
+    def tenant(self) -> str:
+        return self.runtime.tenant
+
+    @property
+    def allowed_sources(self) -> tuple[str, ...]:
+        return self.runtime.allowed_sources
+
+    @property
+    def embedder(self) -> Any:
+        return self.runtime.embedder
+
+    @property
+    def entity_enabled(self) -> bool:
+        return self.runtime.entity_enabled
 
     def _repo(self) -> Any:
         """Open an existing vault (``Runtime.open_repository``): never init one.

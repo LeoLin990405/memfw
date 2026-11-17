@@ -180,31 +180,52 @@ class Runtime:
 
     def search(
         self,
-        repository: Repository,
         query: str,
-        limit: int,
+        limit: int = 10,
         *,
-        mode: str,
-        source: str,
-        include_history: bool,
-        as_of: str | None,
-        rounds: int | None,
-        scope: str,
-        policy: str,
-        labels: bool,
-        client_message: Callable[[str, Path], str],
+        mode: str = "hybrid",
+        source: str = "",
+        include_history: bool = False,
+        as_of: str | None = None,
+        rounds: int | None = None,
+        scope: object = "",
+        policy: str | None = "compat_fts",
+        labels: bool = False,
+        client_message: Callable[[str, Path], str] | None = None,
     ) -> dict[str, Any]:
-        """``memory_search`` on the caller's open vault, every mode.
+        """``memory_search``: check the arguments, open the vault, run ``mode``.
 
-        fts (the shared read-only reader), hybrid and vector
+        Checks, in this order and before the vault is opened (each raises
+        ``ValueError``): a non-blank ``query`` (``query required``); ``policy``
+        (``None``/``""`` mean ``compat_fts``) one of ``RECALL_POLICIES``
+        (``unknown policy``) and other than ``compat_fts`` only with
+        ``mode=two_stage`` (``policy only applies to mode=two_stage``);
+        ``scope`` ``None`` or a string of at most 512 characters (``scope must
+        be a string``, ``scope too long``; it is stripped); an explicit
+        ``source`` in the allowed sources when they are set (``source is not
+        allowed for this account``). Then ``open_repository`` (per call) and
+        the mode: fts (the shared read-only reader), hybrid and vector
         (``MemoryHybridRetriever``), multihop, two_stage (``recall``), plus
         ontology alias expansion and the U2 labels; rows are built here.
-        The interface has checked the arguments already. ``client_message``
-        cleans error texts that may name vault paths.
+
+        ``client_message(text, root)`` cleans error texts that may name vault
+        paths (the MCP server passes its own); the default returns the text.
         """
 
-        from .search import memory_search
+        from .search import checked_scope, memory_search
 
+        if not query.strip():
+            raise ValueError("query required")
+        if policy is None or policy == "":
+            policy = "compat_fts"  # absent, as before this argument existed
+        if policy not in RECALL_POLICIES:
+            raise ValueError("unknown policy")
+        if mode != "two_stage" and policy != "compat_fts":
+            raise ValueError("policy only applies to mode=two_stage")
+        cleaned_scope = checked_scope(scope)
+        if source and self.allowed_sources and source not in self.allowed_sources:
+            raise ValueError("source is not allowed for this account")
+        repository = self.open_repository()
         return memory_search(
             self,
             repository,
@@ -215,10 +236,10 @@ class Runtime:
             include_history=include_history,
             as_of=as_of,
             rounds=rounds,
-            scope=scope,
+            scope=cleaned_scope,
             policy=policy,
             labels=labels,
-            client_message=client_message,
+            client_message=client_message or _plain_message,
         )
 
     # --- memory_remember, memory_related, memory_status (A3b) -------------------
@@ -683,6 +704,13 @@ class Runtime:
             default_timeout=max(self.context_slot_timeouts.values(), default=3.0),
             inflight=self.context_inflight,
         )
+
+
+def _plain_message(message: str, root: Path) -> str:
+    """The default ``client_message``: the text unchanged."""
+
+    del root
+    return message
 
 
 def _with_open_question_labels(
