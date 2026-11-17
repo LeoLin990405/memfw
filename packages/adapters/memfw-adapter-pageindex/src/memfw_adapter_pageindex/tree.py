@@ -140,14 +140,19 @@ def node_ref(source: Source, node: Mapping[str, Any]) -> str | None:
             return None
         ref = f"{prefix}#page={page}"
     else:
-        title = encode_part(str(node.get("title", "")))
         room = MAX_REF_CHARS - len(prefix) - 1
-        if room < 1 or not title:
+        # cut on character boundaries, before encoding: never half a character
+        pieces: list[str] = []
+        used = 0
+        for char in str(node.get("title", "")):
+            piece = encode_part(char)
+            if used + len(piece) > room:
+                break
+            pieces.append(piece)
+            used += len(piece)
+        cut = "".join(pieces)
+        if not cut:
             return None
-        cut = title[:room]
-        # never end on half a %XX escape
-        if "%" in cut[-2:]:
-            cut = cut[: cut.rindex("%")]
         ref = f"{prefix}#{cut}"
     return ref if len(ref) <= MAX_REF_CHARS else None
 

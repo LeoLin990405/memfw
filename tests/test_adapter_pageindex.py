@@ -457,6 +457,23 @@ def test_deeply_nested_json_is_skipped_not_raised(
     assert json.loads(capsys.readouterr().out) == {"error": "unreadable"}
 
 
+def test_long_titles_are_cut_on_character_boundaries() -> None:
+    from urllib.parse import unquote
+
+    from memfw_adapter_pageindex.tree import node_ref
+
+    from memfw.ports.types import PATH_REF_RE
+
+    source = parse_source("kh:" + "d" * 300 + "/note.md")
+    title = "漂 移" * 100  # every character encodes to 3 or 9 bytes of %XX
+    ref = node_ref(source, {"title": title})
+    assert ref is not None and len(ref) <= 512 and PATH_REF_RE.fullmatch(ref)
+    fragment = ref.split("#", 1)[1]
+    decoded = unquote(fragment, errors="strict")
+    assert decoded and title.startswith(decoded)
+    assert node_ref(source, {"title": ""}) is None
+
+
 def test_refs_are_valid_path_refs_and_encode_unsafe_characters() -> None:
     assert encode_part('a b"#%<>') == "a%20b%22%23%25%3C%3E"
     assert encode_part("中文 标题") == "中文%20标题"
