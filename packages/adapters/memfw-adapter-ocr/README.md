@@ -16,9 +16,9 @@ form `memfw.ports.proxies`) owns and documents. The format is built in ONE
 function, `memfw_adapter_ocr.proxy.to_proxy_candidate`. When the installed
 ports have `memfw.ports.proxies`, its constants and parser are used and every
 file is validated with MM2a's own `parse_proxy_import` before it is written
-(the test suite then also runs `check_proxy_import`); with older ports the
-same constants are mirrored. Output was checked against MM2a's branch with
-`check_proxy_import`.
+and the test suite runs MM2a's `check_proxy_import` on it; with ports older
+than MM2a (the standalone `memfw-ports` 0.3.0 wheel, say) the same constants
+are mirrored and the parser check is skipped.
 
 ```jsonc
 {

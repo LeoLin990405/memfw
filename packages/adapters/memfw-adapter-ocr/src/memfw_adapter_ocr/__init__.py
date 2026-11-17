@@ -13,8 +13,8 @@ The two shipped backends run locally and upload nothing; a custom
 responsibility). Off by default: enable it in the
 adapter registry (``adapters: {enabled: [ocr], ocr: {...}}``) or run
 ``memfw-ocr-proxy`` by hand. The output is a proxy import file in MM2a's
-``memfw.proxy`` v1 format (:data:`~.proxy.PROXY_FORMAT`), mirrored from MM2a's
-draft until ``memfw.ports.proxies`` is on ``main``.
+``memfw.proxy`` v1 format (:data:`~.proxy.PROXY_FORMAT`), validated with
+``memfw.ports.proxies`` (MM2a) whenever the installed ports have it.
 """
 
 from __future__ import annotations

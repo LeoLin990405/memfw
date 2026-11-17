@@ -213,7 +213,7 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 - `memfw-ocr-proxy run | check`, and the `ocr` deriver through the
   `memfw.adapters` entry point (disabled until listed). The output is MM2a's
   `memfw.proxy` v1 import format; constants and validation come from
-  `memfw.ports.proxies` when installed (MM2a, #91), mirrored until then.
+  `memfw.ports.proxies` (MM2a, #91) when the installed ports have it.
   memfw does not import the package; default output is unchanged.
 
 ### Added — attachments as observation evidence (MM3)

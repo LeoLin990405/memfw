@@ -656,22 +656,12 @@ def test_no_text_and_marker_lines() -> None:
             parse_bbox_layout(bad + "</page>")
 
 
-def _mm2a() -> Any:
-    try:
-        from memfw.ports import proxies as module
-    except ImportError:
-        return None
-    return module
-
-
-# Skipped until MM2a (PR #91, memfw.ports.proxies) is on the base; mandatory after it merges.
-@pytest.mark.skipif(_mm2a() is None, reason="MM2a (memfw.ports.proxies) not on this base yet")
 def test_output_passes_the_mm2a_contract_check(tmp_path: Path, pdf: tuple[Path, str]) -> None:
     from memfw_adapter_ocr import _ports
 
-    from memfw.ports.testing import check_proxy_import  # type: ignore[attr-defined]
+    from memfw.ports import proxies
+    from memfw.ports.testing import check_proxy_import
 
-    proxies = _mm2a()
     assert _ports.HAS_PROXY_FORMAT and _ports.parse_proxy_import is proxies.parse_proxy_import
     assert (PROXY_FORMAT, _ports.PROXY_FORMAT_VERSION, _ports.MAX_SEGMENT_CHARS) == (
         proxies.PROXY_FORMAT,
