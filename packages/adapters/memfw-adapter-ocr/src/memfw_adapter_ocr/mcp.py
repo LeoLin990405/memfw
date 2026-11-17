@@ -53,6 +53,11 @@ from .backend import Media, OcrBudget, OcrError, OcrLine, OcrPage, OcrResult
 PROTOCOL_VERSION = "2025-06-18"
 MAX_LINE_BYTES = 8 << 20
 MAX_OUTPUT_BYTES = 64 << 20
+#: Lines read ahead from the server (each at most MAX_LINE_BYTES) and messages queued to it.
+READ_QUEUE = 16
+WRITE_QUEUE = 64
+#: Requests of its own a server may send while one call of ours is pending.
+MAX_SERVER_REQUESTS = 32
 _PAGE_HEADING = re.compile(r"^##\s+Page\s+(\d+)\s*$")
 _DONE = frozenset({"done", "finished", "completed", "complete", "success", "succeeded"})
 _FAILED = frozenset({"failed", "error", "errored", "cancelled", "canceled", "killed"})
@@ -63,7 +68,15 @@ _DROP_ENV = re.compile(
 
 
 class _Session:
-    """One running server: request/response over its pipes, with a deadline."""
+    """One running server: request/response over its pipes, held to a deadline.
+
+    Nothing here can block past ``deadline``: writes go through a writer
+    thread (a server that stops reading cannot stall the caller), every wait
+    is bounded by the time left, and a watchdog kills the server's process
+    group when the deadline passes. A server that sends more than
+    :data:`MAX_SERVER_REQUESTS` requests of its own during one call is
+    refused (``mcp_flood``).
+    """
 
     def __init__(self, command: Sequence[str], env: Mapping[str, str], deadline: float) -> None:
         self.deadline = deadline
@@ -78,32 +91,78 @@ class _Session:
             )
         except OSError:
             raise OcrError("mcp_start_failed") from None
-        self._lines: queue.Queue[bytes | None] = queue.Queue()
+        self._closed = threading.Event()
+        self._lines: queue.Queue[bytes | None] = queue.Queue(maxsize=READ_QUEUE)
+        self._out: queue.Queue[bytes | None] = queue.Queue(maxsize=WRITE_QUEUE)
+        self._write_failed = threading.Event()
         self._reader = threading.Thread(target=self._read, daemon=True)
+        self._writer = threading.Thread(target=self._write, daemon=True)
         self._reader.start()
+        self._writer.start()
+        self._watchdog = threading.Timer(max(0.0, deadline - time.monotonic()), self._kill)
+        self._watchdog.daemon = True
+        self._watchdog.start()
         self._next = 0
+
+    def _kill(self) -> None:
+        """The deadline passed: kill the whole process group (unblocks every pipe)."""
+
+        try:
+            os.killpg(self.proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
 
     def _read(self) -> None:
         stdout = self.proc.stdout
         assert stdout is not None
         try:
-            while True:
+            while not self._closed.is_set():
                 line = stdout.readline(MAX_LINE_BYTES + 1)
                 if not line:
                     break
-                self._lines.put(line)
+                while not self._closed.is_set():
+                    try:
+                        self._lines.put(line, timeout=0.2)  # bounded: memory stays capped
+                        break
+                    except queue.Full:
+                        continue
         except (OSError, ValueError):
             pass
-        self._lines.put(None)
+        try:
+            self._lines.put_nowait(None)
+        except queue.Full:
+            pass
 
-    def _send(self, message: Mapping[str, Any]) -> None:
+    def _write(self) -> None:
         stdin = self.proc.stdin
         assert stdin is not None
+        while True:
+            data = self._out.get()
+            if data is None:
+                return
+            try:
+                stdin.write(data)
+                stdin.flush()
+            except (OSError, ValueError):
+                self._write_failed.set()
+                return
+
+    def _gone(self) -> str:
+        """Why the pipes closed: the watchdog at the deadline, or the server itself."""
+
+        return "mcp_timeout" if time.monotonic() >= self.deadline else "mcp_closed"
+
+    def _send(self, message: Mapping[str, Any]) -> None:
+        if self._write_failed.is_set():
+            raise OcrError(self._gone())
+        data = json.dumps(message, ensure_ascii=False).encode("utf-8") + b"\n"
+        left = self.deadline - time.monotonic()
+        if left <= 0:
+            raise OcrError("mcp_timeout")
         try:
-            stdin.write(json.dumps(message, ensure_ascii=False).encode("utf-8") + b"\n")
-            stdin.flush()
-        except (OSError, ValueError):
-            raise OcrError("mcp_closed") from None
+            self._out.put(data, timeout=left)
+        except queue.Full:
+            raise OcrError("mcp_timeout") from None
 
     def notify(self, method: str, params: Mapping[str, Any] | None = None) -> None:
         message: dict[str, Any] = {"jsonrpc": "2.0", "method": method}
@@ -118,6 +177,7 @@ class _Session:
         ident = self._next
         self._send({"jsonrpc": "2.0", "id": ident, "method": method, "params": dict(params)})
         until = self.deadline if timeout is None else min(self.deadline, time.monotonic() + timeout)
+        answered = 0
         while True:
             left = until - time.monotonic()
             if left <= 0:
@@ -127,7 +187,7 @@ class _Session:
             except queue.Empty:
                 raise OcrError("mcp_timeout") from None
             if line is None:
-                raise OcrError("mcp_closed")
+                raise OcrError(self._gone())
             if len(line) > MAX_LINE_BYTES:
                 raise OcrError("mcp_message_too_large")
             try:
@@ -137,6 +197,9 @@ class _Session:
             if not isinstance(message, dict):
                 continue
             if "method" in message and "id" in message:  # a server request
+                answered += 1
+                if answered > MAX_SERVER_REQUESTS:
+                    raise OcrError("mcp_flood")
                 self._answer(message)
                 continue
             if message.get("id") != ident:
@@ -159,6 +222,16 @@ class _Session:
 
     def close(self) -> None:
         proc = self.proc
+        self._closed.set()
+        self._watchdog.cancel()
+        try:
+            self._out.put_nowait(None)
+        except queue.Full:
+            pass
+        self._writer.join(timeout=1)
+        if self._writer.is_alive():  # stuck writing to a server that stopped reading
+            self._kill()
+            self._writer.join(timeout=2)
         try:
             if proc.stdin is not None:
                 proc.stdin.close()

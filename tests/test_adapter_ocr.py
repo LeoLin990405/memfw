@@ -325,6 +325,37 @@ def test_hanging_server_times_out_and_is_stopped(tmp_path: Path, pdf: tuple[Path
     assert raised.value.code == "mcp_timeout"
 
 
+@pytest.mark.parametrize(
+    ("mode", "cap", "code"),
+    [
+        ("flood", None, "mcp_flood"),
+        ("flood_slow", None, "mcp_timeout"),
+        # no cap: our answers fill the pipe the server never reads (writes block)
+        ("flood", 10**6, "mcp_timeout"),
+    ],
+)
+def test_a_server_that_floods_and_stops_reading_cannot_outlast_the_deadline(
+    tmp_path: Path,
+    pdf: tuple[Path, str],
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    cap: int | None,
+    code: str,
+) -> None:
+    import time
+
+    from memfw_adapter_ocr import mcp as mcp_module
+
+    if cap is not None:
+        monkeypatch.setattr(mcp_module, "MAX_SERVER_REQUESTS", cap)
+    path, sha = pdf
+    started = time.monotonic()
+    with pytest.raises(OcrError) as raised:
+        _run(_mcp(tmp_path, mode), path, sha, budget=OcrBudget(timeout_seconds=2))
+    assert raised.value.code == code
+    assert time.monotonic() - started < 8
+
+
 def test_child_environment_has_no_proxy_or_credentials(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pdf: tuple[Path, str]
 ) -> None:

@@ -2,13 +2,14 @@
 
 Settings come from the environment (the adapter's ``mcp_env``):
 FAKE_MCP_RECORDED (the JSON file), FAKE_MCP_LOG (a JSON-lines log of calls and
-the environment keys it saw), FAKE_MCP_MODE (normal | scan | boxes | escape | hang |
-tool_error | no_async | structured | noise).
+the environment keys it saw), FAKE_MCP_MODE (normal | scan | boxes | escape |
+hang | flood | flood_slow | tool_error | no_async | structured | noise).
 """
 
 import json
 import os
 import sys
+import time
 
 RECORDED = json.load(open(os.environ["FAKE_MCP_RECORDED"], encoding="utf-8"))
 LOG = os.environ.get("FAKE_MCP_LOG", "")
@@ -98,6 +99,12 @@ def main():
             log({"tool": params["name"], "arguments": params["arguments"]})
             if MODE == "hang":
                 continue
+            if MODE in ("flood", "flood_slow"):
+                # requests of its own, never reading our answers
+                count = 5000 if MODE == "flood" else 20
+                for n in range(count):
+                    send({"jsonrpc": "2.0", "id": f"srv-{n}", "method": "ping"})
+                time.sleep(3600)
             result = answer(params["name"], params["arguments"])
         else:
             send({"jsonrpc": "2.0", "id": ident, "error": {"code": -32601, "message": "no"}})
