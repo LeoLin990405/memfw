@@ -71,7 +71,9 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   keyset `after` cursor so a match pages past hidden edges, contract
   `check_projection_store`, SQLite and in-memory implementations) and
   `memfw.ports.patterns`; `PORTS_API_VERSION` and the `memfw-ports` /
-  `memfw-recall` wheels move to 0.3.0. No MCP tool; existing outputs are
+  `memfw-recall` wheels move to 0.3.0;
+  `memfw-adapter-deepseek` moves to 0.1.1 (its `memfw-ports` pin is now
+  0.3.0). No MCP tool; existing outputs are
   unchanged. K2 follow-ups: relation rows are immutable and hashable, the
   loader refuses `version: true` and non-string node kinds, `import-seed`
   copies only a well-formed `broader`, and `broader_on_merged` is reported.

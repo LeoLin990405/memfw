@@ -129,7 +129,7 @@ the wheel without dependencies:
 
 ```sh
 uv build --wheel --package memfw-adapter-deepseek -o dist/
-<memfw venv>/bin/python -m pip install --no-deps dist/memfw_adapter_deepseek-0.1.0-py3-none-any.whl
+<memfw venv>/bin/python -m pip install --no-deps dist/memfw_adapter_deepseek-0.1.1-py3-none-any.whl
 ```
 
 (Outside memfw, install the locally built `memfw-ports` wheel next to it.)

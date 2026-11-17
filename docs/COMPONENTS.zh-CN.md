@@ -91,7 +91,7 @@ CI 的 `standalone-wheels` 任务会构建两者，装进一个没有 memfw 的�
 
 ## DeepSeek 打标签适配器
 
-`packages/adapters/memfw-adapter-deepseek`（wheel 名 `memfw_adapter_deepseek`，版本 0.1.0）只用标准库实现了 `ModelBackend` 端口。它给会话 worker 提供 `conv-v2` 格式的输出：每个分块和每个会话一段摘要，外加标签（项目、任务类型、组件、意图、结果）；它不抽取事实或论断。它**默认关闭**：只有 `vault.yaml` 里设置了 `conversations: {backend: "memfw_adapter_deepseek:factory", cloud: true}`，并且提供了 `DEEPSEEK_API_KEY`，worker 才会用它；每一轮都有 token 和费用上限。密钥只会发往服务商的 API 地址。memfw 本身从不导入这个适配器；它单独构建成 wheel（`uv build --wheel --package memfw-adapter-deepseek`），没有发布到 PyPI。见 [`conversations-share.md`](conversations-share.md#deepseek-tagging-adapter)。
+`packages/adapters/memfw-adapter-deepseek`（wheel 名 `memfw_adapter_deepseek`，版本 0.1.1）只用标准库实现了 `ModelBackend` 端口。它给会话 worker 提供 `conv-v2` 格式的输出：每个分块和每个会话一段摘要，外加标签（项目、任务类型、组件、意图、结果）；它不抽取事实或论断。它**默认关闭**：只有 `vault.yaml` 里设置了 `conversations: {backend: "memfw_adapter_deepseek:factory", cloud: true}`，并且提供了 `DEEPSEEK_API_KEY`，worker 才会用它；每一轮都有 token 和费用上限。密钥只会发往服务商的 API 地址。memfw 本身从不导入这个适配器；它单独构建成 wheel（`uv build --wheel --package memfw-adapter-deepseek`），没有发布到 PyPI。见 [`conversations-share.md`](conversations-share.md#deepseek-tagging-adapter)。
 
 
 ## 佐证投影

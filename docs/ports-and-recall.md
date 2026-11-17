@@ -99,7 +99,7 @@ do not contain `memfw/__init__.py`, so this does not affect them.
 | `memfw-ports` | 0.3.0 | `ModelBackend` | 1 |
 | `memfw-ports` | 0.3.0 | `ProjectionStore` | 1 |
 | `memfw-recall` | 0.3.0 | `RecallProvider` | 1 |
-| `memfw-adapter-deepseek` | 0.1.0 | `ModelBackend` | 1 |
+| `memfw-adapter-deepseek` | 0.1.1 | `ModelBackend` | 1 |
 <!-- port-versions:end -->
 
 - **Wheels only.** `uv build --wheel --package memfw-ports` (and `memfw-recall`). An sdist is
