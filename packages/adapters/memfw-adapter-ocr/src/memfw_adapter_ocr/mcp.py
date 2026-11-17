@@ -336,21 +336,44 @@ def tool_payload(result: Any) -> Any:
     raise OcrError("mcp_bad_result")
 
 
-def _inside(base: Path, named: Any) -> Path:
-    """``named`` (a path the server returned) if it is a regular file inside ``base``."""
+def _read_inside(base: Path, named: Any) -> str:
+    """The text of ``named`` (a path the server returned), read safely from inside ``base``.
+
+    The path must resolve inside ``base``; the file is opened with
+    ``O_NOFOLLOW`` and checked on the open descriptor (a regular file, one
+    link, at most :data:`MAX_OUTPUT_BYTES`), and at most that many bytes are
+    read from it, so a swap between the check and the read cannot point
+    elsewhere.
+    """
 
     if not isinstance(named, str) or not named:
         raise OcrError("mcp_no_output")
     path = Path(named)
     if not path.is_absolute():
         path = base / path
-    if path.is_symlink() or not path.resolve().is_relative_to(base.resolve()):
+    if not path.parent.resolve().is_relative_to(base.resolve()):
         raise OcrError("mcp_output_outside_workdir")
-    if not path.is_file():
-        raise OcrError("mcp_no_output")
-    if path.stat().st_size > MAX_OUTPUT_BYTES:
+    try:
+        fd = os.open(
+            path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        )
+    except FileNotFoundError:
+        raise OcrError("mcp_no_output") from None
+    except OSError:  # ELOOP: a symlink
+        raise OcrError("mcp_output_outside_workdir") from None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise OcrError("mcp_output_not_a_file")
+        if info.st_size > MAX_OUTPUT_BYTES:
+            raise OcrError("mcp_output_too_large")
+        with os.fdopen(fd, "rb", closefd=False) as handle:
+            data = handle.read(MAX_OUTPUT_BYTES + 1)
+    finally:
+        os.close(fd)
+    if len(data) > MAX_OUTPUT_BYTES:
         raise OcrError("mcp_output_too_large")
-    return path
+    return data.decode("utf-8", errors="replace")
 
 
 def parse_page_markdown(text: str) -> dict[int, list[str]]:
@@ -555,8 +578,8 @@ class McpOcrBackend:
             answer = self._call(
                 session, names, "pdf_text", {"path": str(path), "out_dir": str(out)}
             )
-            file = _inside(out, answer.get("text_path") if isinstance(answer, Mapping) else None)
-            chunks = file.read_text(encoding="utf-8", errors="replace").split("\f")
+            named = answer.get("text_path") if isinstance(answer, Mapping) else None
+            chunks = _read_inside(out, named).split("\f")
             pages = [
                 OcrPage(
                     page=n,
@@ -587,8 +610,7 @@ class McpOcrBackend:
             left = max(1, int(session.deadline - time.monotonic()))
             answer = self._call(session, names, "ocr_pdf", {**args, "timeout": left})
             named = answer.get("output_file") if isinstance(answer, Mapping) else None
-        file = _inside(out, named)
-        parsed = parse_page_markdown(file.read_text(encoding="utf-8", errors="replace"))
+        parsed = parse_page_markdown(_read_inside(out, named))
         pages = [
             OcrPage(page=n, lines=tuple(OcrLine(line) for line in parsed[n]))
             for n in sorted(parsed)

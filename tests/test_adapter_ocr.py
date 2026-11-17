@@ -320,7 +320,12 @@ def test_structured_content_and_protocol_noise_are_handled(
 
 @pytest.mark.parametrize(
     ("mode", "code"),
-    [("escape", "mcp_output_outside_workdir"), ("tool_error", "mcp_tool_error")],
+    [
+        ("escape", "mcp_output_outside_workdir"),
+        ("symlink", "mcp_output_outside_workdir"),
+        ("hardlink", "mcp_output_not_a_file"),
+        ("tool_error", "mcp_tool_error"),
+    ],
 )
 def test_server_misbehaviour_fails_closed(
     tmp_path: Path, pdf: tuple[Path, str], mode: str, code: str

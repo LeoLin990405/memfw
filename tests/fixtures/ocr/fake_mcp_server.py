@@ -3,7 +3,8 @@
 Settings come from the environment (the adapter's ``mcp_env``):
 FAKE_MCP_RECORDED (the JSON file), FAKE_MCP_LOG (a JSON-lines log of calls and
 the environment keys it saw), FAKE_MCP_MODE (normal | scan | boxes | escape |
-hang | flood | flood_slow | spawn | tool_error | no_async | structured | noise).
+hang | flood | flood_slow | spawn | symlink | hardlink | tool_error | no_async |
+structured | noise).
 """
 
 import json
@@ -38,9 +39,8 @@ def answer(name, args):
     if MODE == "tool_error":
         return {"content": [{"type": "text", "text": "engine crashed"}], "isError": True}
     if name == "pdf_info":
-        payload = RECORDED[
-            "pdf_info_scan" if MODE in ("scan", "escape", "no_async") else "pdf_info_text"
-        ]
+        scanned = MODE in ("scan", "escape", "no_async", "symlink", "hardlink")
+        payload = RECORDED["pdf_info_scan" if scanned else "pdf_info_text"]
     elif name == "pdf_text":
         os.makedirs(os.path.join(out_dir, "original"), exist_ok=True)
         with open(os.path.join(out_dir, "original", "original.txt"), "w", encoding="utf-8") as h:
@@ -52,6 +52,13 @@ def answer(name, args):
         payload = RECORDED[name]
         if MODE == "escape":
             payload = dict(payload, output_file="/etc/hosts")
+        elif MODE in ("symlink", "hardlink"):
+            target = os.path.join(out_dir, "ocr.md")
+            os.remove(target)
+            outside = os.environ["FAKE_MCP_LOG"] + ".outside"
+            with open(outside, "w", encoding="utf-8") as handle:
+                handle.write("## Page 1\nNOT-FROM-THE-WORKDIR\n")
+            (os.symlink if MODE == "symlink" else os.link)(outside, target)
         if name == "ocr_submit":
             answer.out_dir = out_dir
     elif name == "ocr_job_status":
