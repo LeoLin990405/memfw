@@ -185,8 +185,9 @@ class AttachmentStoreMixin:
             return existing
         self.init()
         config = self.read_config()
-        seed = hashlib.sha256(self.id_factory().encode("utf-8")).digest()
-        config[VAULT_ID_KEY] = str(uuid.UUID(bytes=seed[:16], version=4))
+        # Always random, never from ``id_factory``: a seeded factory (``--id-seed``)
+        # would give vaults that share one blob root the same blob directory.
+        config[VAULT_ID_KEY] = str(uuid.uuid4())
         cast(Any, self).configure(config)
         return str(config[VAULT_ID_KEY])
 

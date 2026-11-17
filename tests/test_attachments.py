@@ -748,3 +748,17 @@ def test_a_record_that_does_not_read_back_is_refused(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="read back"):
         render_record(record)
+
+
+def test_vault_id_is_random_even_with_a_seeded_id_factory(tmp_path: Path) -> None:
+    first = _repo(tmp_path / "one")
+    second = _repo(tmp_path / "two")
+    # Both vaults use the same seeded id factory and share the default blob root.
+    assert first.ensure_vault_id() != second.ensure_vault_id()
+    a = first.add_attachment(_file(tmp_path, "a.txt", b"one")).record
+    b = second.add_attachment(_file(tmp_path, "b.txt", b"two")).record
+    # Other seeded ids stay deterministic: same seed, same attachment id.
+    assert a.id == b.id
+    assert _blob_dir(first) != _blob_dir(second)
+    assert first.verify_attachments() == ([a.id], [])
+    assert second.verify_attachments() == ([b.id], [])
