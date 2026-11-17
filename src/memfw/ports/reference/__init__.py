@@ -14,6 +14,7 @@ Port                          Reference implementation(s)
 ``Deriver``                   ``ConcatDeriver``, ``TimelineDeriver``
 ``ClaimVerifier``             ``KeywordClaimVerifier``
 ``ClaimStager``               ``FileClaimStager``
+``UsageSink``                 ``NullUsageSink``, ``MemoryUsageSink``
 ============================  ======================================
 
 ``Clock`` and ``IdGen`` already have two each in ``memfw.ports.clock``.
@@ -41,6 +42,7 @@ from .ingestors import (
 )
 from .projectors import JsonlProjector, MirrorProjector
 from .recall import InMemoryRecallProvider, tokenize
+from .usage import MemoryUsageSink, NullUsageSink
 
 _SOURCE = "memfw.ports.reference"
 
@@ -99,7 +101,9 @@ __all__ = [
     "JsonlProjector",
     "KeywordClaimVerifier",
     "MarkdownIngestor",
+    "MemoryUsageSink",
     "MirrorProjector",
+    "NullUsageSink",
     "TimelineDeriver",
     "items_from_json",
     "items_from_json_file",

@@ -272,6 +272,8 @@ def all_tool_messages() -> list[Any]:
         _tool("memory_context", {"v": 2, "policy": "loose"}),
         _tool("memory_context", {"v": 1, "policy": "strict"}),
         _tool("memory_status", {}),
+        # Off by default (C5): an unknown tool on both trees, nothing recorded.
+        _tool("memory_used", {"ids": ["m-backup"], "session_ref": "s1"}),
         _tool("history_list", {}),
         _tool("history_list", {"source": "logs"}),
         _tool("history_list", {"session": "s1"}),

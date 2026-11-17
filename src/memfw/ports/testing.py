@@ -17,7 +17,7 @@ import json
 import os
 import re
 import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 
@@ -46,6 +46,7 @@ from .types import (
     StageResult,
     validate_candidate,
 )
+from .usage import UsageSignal, UsageSink
 
 
 class ContractError(AssertionError):
@@ -560,6 +561,58 @@ def check_claim_stager(
     return snapshot
 
 
+def check_usage_sink(
+    sink: UsageSink,
+    *,
+    signals: Sequence[UsageSignal],
+    vault: Path | None = None,
+    vault_exclude: Sequence[str] = (),
+    stored: Callable[[], Sequence[Mapping[str, object]]] | None = None,
+) -> None:
+    """``record()`` takes signals, returns ``None``, refuses non-signals, never writes the vault.
+
+    - each of ``signals`` is recorded twice (a repeated signal is allowed);
+    - ``record()`` of anything but a ``UsageSignal`` raises ``TypeError``;
+    - with ``vault``, its files (``tree_digest``, minus ``vault_exclude``:
+      the sink's own store and lock files) are unchanged;
+    - with ``stored`` (a sink that keeps signals: returns its rows), every id
+      of every signal appears, and every string in the rows is one of the
+      signals' ids, session refs, apps or ISO times: no other text is kept.
+    """
+
+    _require(bool(signals), "check_usage_sink needs at least one signal")
+    _require(isinstance(sink, UsageSink), "sink does not implement UsageSink")
+    _require(
+        all(type(signal) is UsageSignal for signal in signals),
+        "signals must be exactly memfw.ports.UsageSignal",
+    )
+    before = tree_digest(vault, exclude=vault_exclude) if vault is not None else None
+    for signal in [*signals, *signals]:
+        returned: object = sink.record(signal)  # type: ignore[func-returns-value]
+        _require(returned is None, "record() must return None")
+    for bogus in ("m-1", {"memory_ids": ["m-1"]}, None):
+        try:
+            sink.record(bogus)  # type: ignore[arg-type]
+        except TypeError:
+            continue
+        raise ContractError(f"record() accepted {type(bogus).__name__}, not a UsageSignal")
+    if vault is not None:
+        _require(tree_digest(vault, exclude=vault_exclude) == before, "sink changed the vault")
+    if stored is None:
+        return
+    rows = list(stored())
+    allowed: set[str] = set()
+    for signal in signals:
+        allowed.update(signal.memory_ids)
+        allowed.update({signal.session_ref, signal.app, signal.at.isoformat()})
+    kept = {str(row.get("memory_id")) for row in rows}
+    missing = sorted({i for signal in signals for i in signal.memory_ids} - kept)
+    _require(not missing, f"stored rows miss ids {missing}")
+    for row in rows:
+        for leaf in _string_leaves(dict(row)):
+            _require(leaf in allowed, f"stored rows keep text that is not a signal field: {leaf!r}")
+
+
 __all__ = [
     "ContractError",
     "check_claim_stager",
@@ -572,5 +625,6 @@ __all__ = [
     "check_ingestor",
     "check_projector",
     "check_recall_provider",
+    "check_usage_sink",
     "tree_digest",
 ]

@@ -71,6 +71,7 @@ def _ports(root: Path) -> None:
         SeededIdGen,
         StagedClaim,
         SystemClock,
+        UsageSignal,
         UuidIdGen,
     )
     from memfw_ports.reference import (
@@ -81,7 +82,9 @@ def _ports(root: Path) -> None:
         JsonlProjector,
         KeywordClaimVerifier,
         MarkdownIngestor,
+        MemoryUsageSink,
         MirrorProjector,
+        NullUsageSink,
         TimelineDeriver,
     )
     from memfw_ports.testing import (
@@ -93,6 +96,7 @@ def _ports(root: Path) -> None:
         check_ingestor,
         check_projector,
         check_recall_provider,
+        check_usage_sink,
     )
 
     leaked = sorted(m for m in sys.modules if m == "memfw" or m.startswith("memfw."))
@@ -158,6 +162,11 @@ def _ports(root: Path) -> None:
     )
     assert check_claim_stager(FileClaimStager(), vault=vault, claims=[claim])
     _ok("check_claim_stager FileClaimStager")
+    signals = [UsageSignal(memory_ids=("m-backup",), session_ref="s1", app="smoke", at=T0)]
+    memory = MemoryUsageSink()
+    check_usage_sink(memory, signals=signals, vault=vault, stored=memory.rows)
+    check_usage_sink(NullUsageSink(), signals=signals, vault=vault)
+    _ok("check_usage_sink MemoryUsageSink NullUsageSink")
 
 
 def _recall(root: Path) -> None:

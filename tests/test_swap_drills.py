@@ -63,6 +63,7 @@ from memfw.ports.reference import (
 )
 from memfw.ports.reference._vault import parse_memory, read_memory
 from memfw.ports.reference.ingestors import read_header
+from memfw.ports.reference.usage import MemoryUsageSink, NullUsageSink
 from memfw.ports.testing import (
     ContractError,
     check_claim_stager,
@@ -74,6 +75,7 @@ from memfw.ports.testing import (
     check_ingestor,
     check_projector,
     check_recall_provider,
+    check_usage_sink,
     tree_digest,
 )
 from memfw.recall import Coordinator, FilterPolicy
@@ -84,6 +86,7 @@ from memfw.recall.builtin import (
     default_resolvers,
     meta_from_document,
 )
+from memfw.usage import SqliteUsageSink
 from tests.conversation_fixtures import make_vault
 
 T0 = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
@@ -200,6 +203,13 @@ SLOT_PROVIDERS: dict[str, Callable[[Repository], object]] = {
     "handoff-fake-feed": lambda repository: HandoffSlotProvider(_sessions),
 }
 
+#: ``UsageSink`` (C5): the persistent projection and the two reference sinks.
+USAGE_SINKS: dict[str, Callable[[Path], object]] = {
+    "sqlite": lambda vault: SqliteUsageSink(vault / "usage.sqlite3"),
+    "null": lambda _vault: NullUsageSink(),
+    "memory": lambda _vault: MemoryUsageSink(),
+}
+
 MATRIX: dict[str, dict[str, object]] = {
     "RecallProvider": dict(RECALL),
     "Projector": dict(PROJECTORS),
@@ -210,6 +220,7 @@ MATRIX: dict[str, dict[str, object]] = {
     "ClaimVerifier": dict(VERIFIERS),
     "ClaimStager": dict(STAGERS),
     "ContextSlotProvider": dict(SLOT_PROVIDERS),
+    "UsageSink": dict(USAGE_SINKS),
 }
 
 
@@ -891,3 +902,23 @@ def test_context_slot_providers_pass_the_same_contract(tmp_path: Path, name: str
         assert [(entry.id, getattr(entry, "count", None)) for entry in slot.entries] == [
             ("concept:backup", 1)
         ]
+
+
+# --- UsageSink -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", sorted(USAGE_SINKS))
+def test_usage_sinks_pass_the_same_contract(tmp_path: Path, name: str) -> None:
+    from memfw.ports import UsageSignal
+
+    repository = _vault(tmp_path)
+    sink = USAGE_SINKS[name](repository.root)
+    signals = [UsageSignal(memory_ids=("m-hal", "m-backup"), session_ref="s1", app="kimi", at=T0)]
+    stored = getattr(sink, "rows", None)
+    check_usage_sink(
+        sink,  # type: ignore[arg-type]
+        signals=signals,
+        vault=repository.root,
+        vault_exclude=(*LOCK, "usage.sqlite3", "usage.sqlite3-journal"),
+        stored=stored,
+    )

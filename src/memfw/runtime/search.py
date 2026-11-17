@@ -410,12 +410,16 @@ def _alias_candidates(
 
 
 def _retriever(runtime: Runtime, repository: Repository) -> MemoryHybridRetriever:
+    # ``record_access`` off (session-safe, C6): no memory_access event, no warming.
+    record = runtime.record_access()
     return MemoryHybridRetriever(
         repository,
         embedder=runtime.embedder,
         tenant=runtime.tenant,
         entity_enabled=runtime.entity_enabled,
         allowed_sources=runtime.allowed_sources,
+        record_access=record,
+        autowarm=record,
     )
 
 

@@ -137,8 +137,9 @@ harness comparisons against `origin/main`. Another CI setup needs the same (or
 total_timeout=4.0)` keeps `root` as configured (`expanduser` only, never resolved) and takes
 the other values the interface already resolved. Calls take the caller's open `Repository` and
 use its (per call resolved) root, so a symlinked or relative vault root is followed per call by
-every mode; there is no `runtime:` section in `vault.yaml` yet, so the default
-assembly is today's behaviour, byte-identical except timing fields.
+every mode. Without a `runtime:` section in `vault.yaml` (C5/C6 added the first two
+switches, `usage.enabled` and `search.record_access`, both read by `memfw.runtime.usage`) the
+default assembly is today's behaviour, byte-identical except timing fields.
 
 **A3a (done).** `Runtime.recall(repository, query, *, limit, policy_name, source, include_history, as_of,
 scope) -> RecallOutcome` owns the `memory_search mode=two_stage` wiring: the providers
@@ -253,6 +254,7 @@ entry). `tests/test_ports_isolation.py` now walks `memfw/ports` recursively and 
 | `ClaimVerifier` | `DreamClaimVerifier` (`memfw.dream.claims`); `KeywordClaimVerifier` | `check_claim_verifier` |
 | `ClaimStager` | `DreamClaimStager` (`memfw.dream.claims`); `FileClaimStager` (`_candidates/claims-ref/<batch>.json`) | `check_claim_stager` |
 | `ContextSlotProvider` | `CoreSlotProvider` (the vault); `TopicsSlotProvider` and `HandoffSlotProvider` over injected sources (`memfw.context`; the drill feeds them a fixed catalogue and session feed) | `check_context_slot_provider` |
+| `UsageSink` (C5) | `SqliteUsageSink` (`memfw.usage`: `usage.sqlite3`, 0600); `NullUsageSink`, `MemoryUsageSink` | `check_usage_sink` |
 
 `tests/test_swap_drills.py` parametrizes each port over that column and fails if a port drops
 below two. Its coordinator drill runs the recall pipeline with `InMemoryRecallProvider` in
