@@ -28,19 +28,29 @@ except ModuleNotFoundError:  # the standalone memfw-ports wheel
     )
 
 
-def _proxy_parser() -> Any:
-    """MM2a's ``parse_proxy_import`` from the same ports this seam uses, or ``None``."""
+def _proxies_module() -> Any:
+    """MM2a's ``proxies`` module from the same ports this seam uses, or ``None``."""
 
     root = "memfw.ports" if AdapterSpec.__module__.startswith("memfw.") else "memfw_ports"
     try:
-        module = importlib.import_module(root + ".proxies")
+        return importlib.import_module(root + ".proxies")
     except ImportError:
         return None
-    return getattr(module, "parse_proxy_import", None)
 
 
-#: ``None`` until the installed ports carry MM2a's proxy format.
-parse_proxy_import = _proxy_parser()
+_PROXIES = _proxies_module()
+#: ``True`` when the installed ports carry MM2a's proxy format (``memfw.ports.proxies``).
+HAS_PROXY_FORMAT = _PROXIES is not None
+if _PROXIES is not None:
+    PROXY_FORMAT: str = _PROXIES.PROXY_FORMAT
+    PROXY_FORMAT_VERSION: int = _PROXIES.PROXY_FORMAT_VERSION
+    MAX_SEGMENT_CHARS: int = _PROXIES.MAX_SEGMENT_CHARS
+    parse_proxy_import: Any = _PROXIES.parse_proxy_import
+else:  # ports before MM2a: the same values, mirrored from memfw.ports.proxies
+    PROXY_FORMAT = "memfw.proxy"
+    PROXY_FORMAT_VERSION = 1
+    MAX_SEGMENT_CHARS = 65_536
+    parse_proxy_import = None
 
 __all__ = [
     "PRIVACY_LEVELS",
@@ -50,5 +60,9 @@ __all__ = [
     "DeriveRequest",
     "DerivedView",
     "field_level",
+    "HAS_PROXY_FORMAT",
+    "MAX_SEGMENT_CHARS",
+    "PROXY_FORMAT",
+    "PROXY_FORMAT_VERSION",
     "parse_proxy_import",
 ]

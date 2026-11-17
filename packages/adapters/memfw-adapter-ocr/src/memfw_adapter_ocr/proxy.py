@@ -2,10 +2,10 @@
 
 :func:`to_proxy_candidate` is the ONE place that knows the output format:
 memfw's proxy import format ``memfw.proxy`` version 1 (MM2a, ``memfw attach
-proxy import``; Python form ``memfw.ports.proxies``). MM2a was not on ``main``
-when this adapter was written, so the format is mirrored here from MM2a's
-documented draft; when ``memfw.ports.proxies`` is importable, every file is
-also checked with its ``parse_proxy_import`` before it is written.
+proxy import``). Its constants and parser come from ``memfw.ports.proxies``
+when the installed ports have it (MM2a, PR #91); with older ports the same
+constants are mirrored in ``_ports``. When the parser is available, every
+file is checked with it before it is written.
 
 Locators are written in canonical units (design v2.1), so no ``coordinates``
 block is needed: PDF boxes in points with the origin at the bottom-left of the
@@ -38,14 +38,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ._ports import PRIVACY_LEVELS, field_level, parse_proxy_import
+from ._ports import (
+    MAX_SEGMENT_CHARS,
+    PRIVACY_LEVELS,
+    PROXY_FORMAT,
+    PROXY_FORMAT_VERSION,
+    field_level,
+    parse_proxy_import,
+)
 from .backend import Media, OcrBackend, OcrBudget, OcrError, OcrPage, OcrResult
 
-#: MM2a's proxy import format (mirrored; see the module docstring).
-PROXY_FORMAT = "memfw.proxy"
-PROXY_FORMAT_VERSION = 1
 CHUNK = 1 << 20
-MAX_SEGMENT_CHARS = 65_536
 _MARKER = "<!-- memfw:segment"
 #: ``att-<uuid7>``, the attachment id rule.
 _ATT_ID = re.compile(r"^att-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")

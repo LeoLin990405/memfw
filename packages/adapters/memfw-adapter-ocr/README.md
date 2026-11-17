@@ -11,13 +11,14 @@ memfw never imports it. Import it as `memfw_adapter_ocr`.
 ## Output format: MM2a's `memfw.proxy` version 1
 
 The adapter writes memfw's proxy import format (`"format": "memfw.proxy"`,
-`"version": 1`), which MM2a (`memfw attach proxy import`, Python form
-`memfw.ports.proxies`) owns and documents. **MM2a was not on `main` when this
-package was written**: the format is mirrored from MM2a's draft in ONE
-function, `memfw_adapter_ocr.proxy.to_proxy_candidate`, and must be re-checked
-against MM2a as merged. Once the installed ports have `memfw.ports.proxies`,
-every file is also validated with MM2a's own `parse_proxy_import` before it
-is written (and the test suite runs `check_proxy_import` on it).
+`"version": 1`), which MM2a (PR #91: `memfw attach proxy import`, Python
+form `memfw.ports.proxies`) owns and documents. The format is built in ONE
+function, `memfw_adapter_ocr.proxy.to_proxy_candidate`. When the installed
+ports have `memfw.ports.proxies`, its constants and parser are used and every
+file is validated with MM2a's own `parse_proxy_import` before it is written
+(the test suite then also runs `check_proxy_import`); with older ports the
+same constants are mirrored. Output was checked against MM2a's branch with
+`check_proxy_import`.
 
 ```jsonc
 {
