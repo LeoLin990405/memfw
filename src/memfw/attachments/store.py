@@ -143,7 +143,8 @@ def embedded_total(events: Iterable[Event], store: BlobStore) -> int:
 
     Each blob is counted once, by the ``attach`` event that stored it
     (``details.blob == "new"``) while its attachment is committed. A log with
-    a committed ``attach`` event that predates ``details.size`` falls back to
+    a committed ``attach`` event that predates ``details.size`` (or carries a
+    malformed ``size`` / ``blob``) falls back to
     the sizes (``lstat``) of the files in the blob directory. Neither way
     parses a record, so the cost of an add does not grow with record parses.
     """
@@ -158,11 +159,19 @@ def embedded_total(events: Iterable[Event], store: BlobStore) -> int:
         if details.get("storage", "embedded") != "embedded":
             continue
         size = details.get("size")
-        if isinstance(size, bool) or not isinstance(size, int):
+        blob = details.get("blob")
+        # Anything but a non-negative int size and a known blob value is read
+        # as an event without them (an old or hand-edited log): fall back.
+        if (
+            isinstance(size, bool)
+            or not isinstance(size, int)
+            or size < 0
+            or blob not in {"new", "shared"}
+        ):
             legacy = True
             break
         sizes[event.memory_id] = size
-        if details.get("blob") == "new":
+        if blob == "new":
             owners.add(event.memory_id)
     if legacy:
         return store.stored_bytes()

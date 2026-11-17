@@ -39,7 +39,7 @@ STALE_STAGE_SECONDS: Final = 60 * 60
 #: ``.stage-<vault tag>-<random>.tmp``: the tag (see :func:`vault_stage_tag`)
 #: says which vault staged it, because ``.staging`` is shared by every vault
 #: under the root. A name without a tag (written before tags) is unattributable.
-_TAGGED_STAGE_RE: Final = re.compile(r"^\.stage-([0-9a-f]{8})-[^-]+\.tmp$")
+_TAGGED_STAGE_RE: Final = re.compile(r"^\.stage-([0-9a-f]{16})-[^-]+\.tmp$")
 
 #: Synced-folder markers under the home directory, equal to
 #: ``memfw.history.transcripts.SYNCED_MARKERS`` (a test keeps them equal; the
@@ -64,9 +64,14 @@ class BlobLocationError(IntegrityError):
 
 
 def vault_stage_tag(vault: Path) -> str:
-    """The 8-hex tag of ``vault`` in staging file names: sha256 of its resolved root."""
+    """The 16-hex tag of ``vault`` in staging file names: sha256 of its resolved root.
 
-    return hashlib.sha256(str(vault.expanduser().resolve()).encode("utf-8")).hexdigest()[:8]
+    A vault that moves (or is reached by another resolved path) gets a new
+    tag, so its own stale stages from before the move are then counted as
+    foreign: reported as a number, never deleted by it.
+    """
+
+    return hashlib.sha256(str(vault.expanduser().resolve()).encode("utf-8")).hexdigest()[:16]
 
 
 def check_sha(value: str) -> str:

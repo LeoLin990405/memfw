@@ -208,8 +208,9 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   older `attach` event falls back to the sizes (`lstat`) of the stored blob
   files. No record is parsed whatever the number of attachments.
 - Staging files under the shared `<blob root>/.staging` are named
-  `.stage-<tag>-….tmp`, where `<tag>` is the first 8 hex of the sha256 of the
-  vault's resolved path. `attach verify` / `fsck` report only this vault's
+  `.stage-<tag>-….tmp`, where `<tag>` is the first 16 hex of the sha256 of the
+  vault's resolved path (a moved vault gets a new tag, so its older stale
+  stages are then only counted, never deleted). `attach verify` / `fsck` report only this vault's
   stale stages by name; other vaults' (and untagged) ones are a count
   (`attachment_blob_stage_foreign`, a warning). `BlobStore.reclaim_stale_stages`
   removes only this vault's.

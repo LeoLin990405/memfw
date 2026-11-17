@@ -20,7 +20,7 @@ command prints for a vault without attachments.
 ~/.local/share/memfw/blobs/      default blob root (attachments_blob_root)
   <vault-id>/<sha[:2]>/<sha256>  the original's exact bytes, stored once per sha256
   .staging/.stage-<tag>-*.tmp    an original being copied in (shared by the root's vaults;
-                                 <tag> = first 8 hex of sha256 of the vault's resolved path)
+                                 <tag> = first 16 hex of sha256 of the vault's resolved path)
 ```
 
 * Records are never under `memories/`, so no memory command, index or export
@@ -35,7 +35,10 @@ command prints for a vault without attachments.
   needed), then, holding the vault lock, moves it into `<root>/<vault_id>`.
   The staging file name carries the vault's tag, so a stale stage is reported
   only to the vault that made it; other vaults' stale stages (and untagged
-  ones from before the tag) are only counted. If the blob root changed
+  ones from before the tag) are only counted. A vault that moves (or is
+  reached by another resolved path) gets a new tag; its stale stages from
+  before the move are then counted as another vault's and never deleted by it
+  (remove them by hand once no add is running). If the blob root changed
   between staging and the lock, the add is refused before
   `<new root>/<vault_id>` is created.
 * Directories are created `0700`, blobs `0600`.

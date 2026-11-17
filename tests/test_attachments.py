@@ -1213,3 +1213,66 @@ def test_blob_root_changed_while_staged_is_refused(tmp_path: Path) -> None:
 
 def test_blob_store_has_no_stage_method() -> None:
     assert not hasattr(BlobStore, "stage")
+
+
+def test_log_compaction_keeps_the_quota_log_derived(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from memfw.attachments.store import embedded_total
+
+    repository = _repo(tmp_path)
+    config = repository.read_config()
+    config.update(attachments_max_total_bytes=10)
+    repository.configure(config)
+    repository.add_attachment(_file(tmp_path, "a.txt", b"123456"))
+    repository.add_attachment(_file(tmp_path, "b.txt", b"123456"))
+    store = repository.attachment_blob_store()
+    assert store is not None
+    # An orphan blob makes the lstat fallback differ from the log-derived total.
+    with _file(tmp_path, "o.txt", b"orphan bytes").open("rb") as stream:
+        store.link(_stage(repository, stream))
+    assert store.stored_bytes() == 18
+    assert embedded_total(repository.events(), store) == 6
+    repository.compact_log(keep_recent=1)
+    attach = [event for event in repository.events() if event.kind == EventKind.ATTACH]
+    assert [event.details for event in attach] == [
+        {"storage": "embedded", "size": 6, "blob": "new"},
+        {"storage": "embedded", "size": 6, "blob": "shared"},
+    ]
+    with monkeypatch.context() as patch:
+        patch.setattr(BlobStore, "stored_bytes", lambda self: pytest.fail("fell back to lstat"))
+        assert embedded_total(repository.events(), store) == 6
+        # A 4-byte add still fits after compaction.
+        repository.add_attachment(_file(tmp_path, "c.txt", b"abcd"))
+
+
+def test_malformed_size_or_blob_falls_back_to_the_stored_blobs(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from memfw.attachments.store import embedded_total
+
+    repository = _repo(tmp_path)
+    repository.add_attachment(_file(tmp_path, "a.txt", b"123456"))
+    store = repository.attachment_blob_store()
+    assert store is not None
+
+    def event(details: dict[str, Any]) -> Any:
+        return SimpleNamespace(kind=EventKind.ATTACH, memory_id="a", details=details)
+
+    for details in (
+        {"storage": "embedded", "size": -6, "blob": "new"},
+        {"storage": "embedded", "size": "6", "blob": "new"},
+        {"storage": "embedded", "size": 6.0, "blob": "new"},
+        {"storage": "embedded", "size": True, "blob": "new"},
+        {"storage": "embedded", "size": 6, "blob": "shared?"},
+        {"storage": "embedded", "size": 6},
+        {"storage": "embedded", "size": 6, "blob": None},
+    ):
+        assert embedded_total([event(details)], store) == 6, details
+    # A well-formed shared event alone counts nothing (no lstat).
+    assert embedded_total([event({"storage": "embedded", "size": 6, "blob": "shared"})], store) == 0
+
+
+def test_stage_tag_is_16_hex() -> None:
+    tag = blobs_module.vault_stage_tag(Path("/some/vault"))
+    assert len(tag) == 16 and int(tag, 16) >= 0

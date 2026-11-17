@@ -1069,6 +1069,9 @@ _SUMMARY_DETAIL_KEYS = frozenset(
         # Read back from archived events by recovery and proposal checks
         # (storage/transactions.py, core/repository.py).
         "storage",
+        # Attachment quota accounting (memfw.attachments.store.embedded_total).
+        "size",
+        "blob",
         "before_config_hash",
         "after_config_hash",
         "target_snapshot_hash_mode",
