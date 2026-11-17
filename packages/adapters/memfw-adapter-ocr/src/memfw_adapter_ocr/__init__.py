@@ -8,7 +8,9 @@ Engines sit behind the adapter's own :class:`~.backend.OcrBackend` interface:
   with a text layer;
 * ``"module:factory"``: any other implementation of the interface.
 
-Everything runs locally; nothing is uploaded. Off by default: enable it in the
+The two shipped backends run locally and upload nothing; a custom
+``module:factory`` backend is outside that guarantee (the operator's
+responsibility). Off by default: enable it in the
 adapter registry (``adapters: {enabled: [ocr], ocr: {...}}``) or run
 ``memfw-ocr-proxy`` by hand. The output is a proxy import file in MM2a's
 ``memfw.proxy`` v1 format (:data:`~.proxy.PROXY_FORMAT`), mirrored from MM2a's

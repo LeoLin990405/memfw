@@ -59,7 +59,7 @@ Implementations:
 |---|---|
 | `mcp` (default) | an OCR server named in `mcp_command`, run as a child process and spoken to over the MCP stdio protocol |
 | `pdftotext` | poppler's `pdftotext -bbox-layout` (text-layer PDFs only), at the absolute path in `pdftotext`; with `pdfinfo` (absolute path) only the first `max_pages` pages are converted and coverage names the page count, without it a longer PDF is refused (`page_budget`); output is read with a 64 MiB cap |
-| `"module:factory"` | any other implementation; `factory(backend_options)` returns it |
+| `"module:factory"` | any other implementation; `factory(backend_options)` returns it. **Outside the adapter's guarantees:** memfw cannot check that a custom backend stays local or uploads nothing; that is the operator's responsibility |
 
 Engine discovery is explicit configuration only: no `PATH` search, no
 scanning for other tools' installs, no hard-coded locations.
@@ -102,7 +102,11 @@ directory is removed with the work directory.
 ## Privacy and integrity
 
 * Only levels in `clearance` (default `public`, `shared`) are handed to an
-  engine. Attachments default to `local-private`, so OCR of those needs the
+  engine. **The gate trusts the privacy level the caller declares** (CLI
+  `--privacy`, deriver `options.privacy`); the adapter does not read the
+  attachment record. Declaring a looser level than the attachment's gets the
+  original OCR'd under that clearance, but the result cannot become looser in
+  memfw: MM2a's import refuses a proxy less private than its attachment. Attachments default to `local-private`, so OCR of those needs the
   operator to add `local-private` to `clearance`, stating that the configured
   engine is local.
 * The original's sha256 must equal the given one before the run, and again
