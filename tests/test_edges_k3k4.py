@@ -277,7 +277,12 @@ def test_every_written_relation_becomes_a_typed_edge(tmp_path: Path) -> None:
     _concept(root, "old-plan", "concept:old-plan")
     _add(repository, "m-a", "body kh:notes/a#one", about=["concept:old-fruit", "fruits-label"])
     _add(repository, "m-b", applies_to=["concept:food"], related=["m-a"])
-    _add(repository, "m-c", evidence=["m-a", "att:photo.png#p1", "kh:notes/b", "https://x.test"])
+    _add(repository, "m-c", evidence=["m-a", "kh:notes/b", "https://x.test"])
+    # MM3 refuses a new att: pointer to an unregistered attachment; the edge
+    # projection reads the file as it is, so the pointer is written by hand.
+    _rewrite(
+        repository, "m-c", evidence=["m-a", "att:photo.png#p1", "kh:notes/b", "https://x.test"]
+    )
     _add(repository, "m-d")
     _rewrite(repository, "m-d", superseded_by="m-c")
     _add(
@@ -932,7 +937,8 @@ def test_leak_sweep_over_every_start_and_pattern(tmp_path: Path) -> None:
     _concept(root, "b", "concept:b")
     _concept(root, "c", "concept:c", privacy="local-private", broader=["concept:b"])
     _add(repository, "pub-1", about=["concept:a"], related=["pub-2"])
-    _add(repository, "pub-2", about=["concept:b", "concept:c"], evidence=["priv-1", "att:x"])
+    _add(repository, "pub-2", about=["concept:b", "concept:c"], evidence=["priv-1"])
+    _rewrite(repository, "pub-2", evidence=["priv-1", "att:x"])  # unregistered: by hand (MM3)
     _add(repository, "priv-1", about=["concept:a"], privacy="local-private", related=["pub-1"])
     _add(repository, "odd-1", about=["concept:b"], related=["pub-1"])
     _rewrite(repository, "odd-1", privacy="nope")

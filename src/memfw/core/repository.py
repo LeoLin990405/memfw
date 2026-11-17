@@ -27,6 +27,7 @@ from ..ports.privacy import (
     PRIVACY_LEVELS,
     legacy_default_from_config,
 )
+from ..storage.evidence import gate_evidence_classes
 from ..storage.markdown import MarkdownStorageMixin
 from ..storage.operations import MemoryOperationsMixin, lookup_current
 from ..storage.transactions import TransactionMixin, _serialized
@@ -341,7 +342,14 @@ class Repository(
             current: dict[str, Any] | None = self.get(memory_id).model_dump()
         except (NotFoundError, IntegrityError):
             current = None
-        validate_proposed_write(current, changes, actor=actor)
+        merged = dict(current or {})
+        merged.update(changes)
+        validate_proposed_write(
+            current,
+            changes,
+            actor=actor,
+            evidence_classes=gate_evidence_classes(self, merged, current),
+        )
         validate_proposed_open_question(
             current, changes, lookup=lambda ref: lookup_current(self, ref), actor=actor
         )

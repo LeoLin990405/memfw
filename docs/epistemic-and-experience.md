@@ -74,6 +74,7 @@ first:
 | human decision | the write-level `HUMAN_DECISION` flag | overrides the pointer rules for chat/LLM sources |
 | raw | `data:`, `dataset:`, `design:`, `experiment:`, `result:`, `test:`, `code:`, `file:`, `sha256:`, `pr:`, `commit:`, `issue:`, `repo:` | replayable raw data or a design |
 | link | `http://`, `https://` | points outside the vault, but cannot be verified by the vault |
+| observation | `att:<id>[#locator]` (MM3) | what was seen or heard; **not** outside-vault evidence (below) |
 | chat | `chat:`, `conversation:`, `session:`, `transcript:`, `message:`, `turn:` | narrative only |
 | generated | `llm:`, `reflection:`, `reasoning:`, `explanation:`, `dream:`, `distil:`, `summary:` | narrative only |
 
@@ -81,6 +82,67 @@ A prefix with nothing after it (`data:`, `https://`) is not a pointer. Anything 
 (including a bare memory id) is not outside-vault evidence. Evidence that only points at
 chat text, only at LLM explanations/reflections, or at no raw source at all cannot make a
 memory `verified`; it stays `hypothesis`.
+
+**An observation is not a cause, and not on its own a fact (MM3).** An `att:` pointer
+names a registered original (screenshot, scanned page, recording) or a place in it
+(`#page=3&bbox=x0,y0,x1,y1` in pt with a bottom-left origin on a PDF; `#bbox=` in px
+with a top-left origin on an image; `#t=start,end` or `#frame=t:seconds` on audio and
+video). When a memory's evidence holds an observation and no raw or link pointer,
+`epistemic` cannot be `fact` and `causal` stops at `hypothesis`. The check runs before
+the gate's early return, so `epistemic: fact` with `causal: none` is refused too.
+`experience`, `inference`, `judgment` and a causal `hypothesis` remain allowed.
+
+The repository layer (`memfw.storage.evidence`) does the vault half and hands the gate
+already-classified evidence, so the gate stays pure:
+
+* every `att:` pointer a write *adds* must name a committed, readable attachment, and a
+  locator must fit its media type (and its bounds, when the record has them); a locator
+  resolves at attachment level until proxy segments exist;
+* `att:` is the one way to cite an original. A `sha256:` pointer to a registered
+  original's hash (or an 8+ hex prefix of it, with any separators between hex
+  groups, or the digest in base64/base64url), a `file:` pointer to its blob, a copy of
+  it or its recorded location, any raw pointer whose value is such a path (absolute,
+  `~` or relative to the vault: `data:copies/s.png`), and any raw or link pointer
+  carrying its id, full hash or `sha256-<base64>` (SRI) are classified as observation. Spelling is folded first (case, percent-encoding,
+  Unicode compatibility forms, invisible format characters such as U+200B). Without
+  any attachment-like pointer the gate gets no classes and reads nothing, so other
+  memories behave exactly as before;
+* **legacy rule:** a memory that is already `verified` or `fact` and that this rule would
+  now refuse (a file it cites was registered as an attachment later) is not refused on
+  later writes that keep its level: only evidence the write adds is reclassified. A
+  write that *raises* the level (into `fact` or `verified`) reclassifies all of the
+  evidence, so a pointer added at `hypothesis` cannot be carried into `verified`.
+  `memfw fsck` lists such memories as `evidence_observation_review`, and `att:`
+  evidence that no longer resolves as `evidence_attachment_invalid`.
+
+Matching a cited file by content is bounded: nothing is hashed when the vault has no
+attachments, only a regular file whose size equals a registered original's (and at
+most `attachments_max_bytes`) is hashed, and one write hashes at most 32 files / 64 MiB
+(`fsck`: per memory). A candidate file left unhashed past that budget is treated as an
+observation (fail closed; the error says so). Backlinks never hash files. An original
+larger than `attachments_max_bytes` (a referenced original, once MM1b adds them) is
+matched only by its registered location, hash or id, never by the content of a copy.
+
+Digest detection is best effort across encodings: in any pointer, hex with any
+non-alphanumeric separator between groups (whitespace, NBSP, any punctuation such as
+`, : / - + * = # & ~`, Unicode dashes and minus) and base64/base64url with whitespace
+anywhere and any padding (`sha256=<b64>`, `sha-256=:<b64>:`, SRI `sha256-<b64>`, a bare
+`result:<b64>`, groups of four separated by spaces or newlines) are found and compared,
+window by window, with the registered originals' hashes; a value that matches no
+original changes nothing. Only the first 64 KiB of a pointer is scanned. Residual
+risk: a digest split across several pointers, placed after the first 64 KiB, or
+encrypted, compressed or otherwise transformed, is not detected.
+
+The cap is only as strong as raw pointers are honest: the gate cannot check what a
+`file:` or `dataset:` pointer that names no registered attachment really is, so a
+pointer to a file that does not exist (`file:/nonexistent`) still counts as raw and
+lifts the cap, as it already lifted the `verified` evidence rule before MM3. An
+`att:` pointer inside link syntax (`[shot](att:<id>)`) is checked and classified like
+a bare one. A `fact` with no evidence at all stays allowed (the gate never required
+evidence for `fact`); a `fact` whose only evidence is an observation is refused (H3).
+
+Backlinks (attachment → memories that cite it) are computed from `evidence` on read
+(`memfw attach show` → `cited_by`); nothing is written.
 
 **A bare web link is not raw data.** When `source` is a chat source or `provenance` is
 LLM-derived, `causal: verified` requires a replayable raw pointer (the `raw` row above)

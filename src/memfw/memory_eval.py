@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime
@@ -224,6 +225,7 @@ __all__ = [
     "generate_questions",
     "load_causal_materials",
     "run_causal_promotion_eval",
+    "run_multimodal_causal_eval",
 ]
 
 
@@ -545,3 +547,274 @@ def run_causal_promotion_eval(
             write=_write_layer(materials, base),
             retrieval=_retrieval_layer(materials, base),
         )
+
+
+# --- multimodal pseudo-causal corpus (MM3) ------------------------------------
+#
+# Synthetic originals (screenshot, recording, report, screen recording) are
+# registered as attachments in a scratch vault, then each case writes one claim
+# that cites them through ``Repository.add``. Observations may support an
+# ``experience``, an ``inference`` or a causal ``hypothesis``; never a ``fact``
+# or ``causal=verified`` on their own, whatever prefix or spelling cites them.
+# The corpus is package data in ``memfw/eval_data/causal_eval_multimodal/``.
+
+MULTIMODAL_FIXTURE: Traversable = (
+    resources.files("memfw") / "eval_data" / "causal_eval_multimodal" / "corpus.json"
+)
+
+_PLACEHOLDER = re.compile(
+    r"\{(att|id|ID|sha|SHA|sha16|sha_zw|sha_tab|sha_comma|sha_slash|sha_space|sha_dash|"
+    r"sha_endash|sha_nbsp|sha_plus|sha_tilde|b64|b64url|b64_spaced|"
+    r"file|file_pct|rel|blob):([a-z_]+)\}"
+)
+
+
+@dataclass(frozen=True)
+class MultimodalCaseResult:
+    name: str
+    group: str
+    expect_accept: bool
+    accepted: bool
+    epistemic: str | None
+    causal: str | None
+    error: str | None
+
+    @property
+    def spurious_promotion(self) -> bool:
+        return self.accepted and not self.expect_accept and self.causal == "verified"
+
+    @property
+    def fact_upgrade(self) -> bool:
+        return self.accepted and not self.expect_accept and self.epistemic == "fact"
+
+    @property
+    def false_accept(self) -> bool:
+        return self.accepted and not self.expect_accept
+
+    @property
+    def false_reject(self) -> bool:
+        return not self.accepted and self.expect_accept
+
+
+@dataclass
+class MultimodalCausalReport:
+    cases: list[MultimodalCaseResult]
+
+    def _count(self, predicate: Any) -> int:
+        return sum(1 for item in self.cases if predicate(item))
+
+    @property
+    def spurious_promotions(self) -> int:
+        return self._count(lambda item: item.spurious_promotion)
+
+    @property
+    def fact_upgrades(self) -> int:
+        return self._count(lambda item: item.fact_upgrade)
+
+    @property
+    def false_accepts(self) -> int:
+        return self._count(lambda item: item.false_accept)
+
+    @property
+    def false_rejects(self) -> int:
+        return self._count(lambda item: item.false_reject)
+
+    @property
+    def bypasses_blocked(self) -> int:
+        return self._count(lambda item: item.group == "bypass" and not item.accepted)
+
+    def as_dict(self) -> dict[str, Any]:
+        groups = sorted({item.group for item in self.cases})
+        return {
+            "cases": len(self.cases),
+            "spurious_promotions": self.spurious_promotions,
+            "fact_upgrades": self.fact_upgrades,
+            "false_accepts": self.false_accepts,
+            "false_rejects": self.false_rejects,
+            "bypass_attempts": self._count(lambda item: item.group == "bypass"),
+            "bypasses_blocked": self.bypasses_blocked,
+            "groups": {
+                group: {
+                    "cases": sum(1 for item in self.cases if item.group == group),
+                    "accepted": sum(
+                        1 for item in self.cases if item.group == group and item.accepted
+                    ),
+                }
+                for group in groups
+            },
+            "materials": [
+                {
+                    "name": item.name,
+                    "group": item.group,
+                    "expect": "accept" if item.expect_accept else "reject",
+                    "accepted": item.accepted,
+                    "epistemic": item.epistemic,
+                    "causal": item.causal,
+                    "error": item.error,
+                }
+                for item in self.cases
+            ],
+        }
+
+
+def load_multimodal_corpus(path: Traversable | Path | str | None = None) -> dict[str, Any]:
+    """Read the multimodal corpus (the packaged one by default)."""
+
+    source: Traversable | Path = (
+        MULTIMODAL_FIXTURE if path is None else Path(path) if isinstance(path, str) else path
+    )
+    if not source.is_file():
+        raise FileNotFoundError(f"multimodal causal corpus not found: {source}")
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or not payload.get("cases"):
+        raise ValueError(f"multimodal causal corpus has no cases: {source}")
+    for case in payload["cases"]:
+        if case.get("expect") not in ("accept", "reject"):
+            raise ValueError(f"case {case.get('name')!r}: expect must be accept or reject")
+    return payload
+
+
+def _multimodal_case(
+    index: int, case: dict[str, Any], corpus: dict[str, Any], workdir: Path
+) -> MultimodalCaseResult:
+    import base64
+    import hashlib
+    import urllib.parse
+
+    from .core.errors import IntegrityError
+    from .core.repository import Repository
+
+    base = workdir / f"case-{index}-{case['name']}"
+    sources = base / "originals"
+    copies = base / "copies"
+    sources.mkdir(parents=True)
+    copies.mkdir()
+    repository = Repository(base / "vault")
+    repository.init()
+    config = repository.read_config()
+    config["attachments_blob_root"] = str((base / "blobs").resolve())
+    repository.configure(config)
+    facts: dict[str, dict[str, str]] = {}
+    originals: dict[str, Path] = {}
+    for key, spec in corpus["attachments"].items():
+        data = str(spec["text"]).encode("utf-8")
+        source = sources / str(spec["name"])
+        source.write_bytes(data)
+        copy = copies / str(spec["name"])
+        copy.write_bytes(data)
+        originals[key] = source
+        sha = hashlib.sha256(data).hexdigest()
+        facts[key] = {
+            "sha": sha,
+            "SHA": sha.upper(),
+            "sha16": sha[:16],
+            "sha_zw": sha[:32] + "\u200b" + sha[32:],
+            "sha_tab": "\t".join(sha[i : i + 16] for i in range(0, 64, 16)),
+            "sha_comma": ",".join(sha[i : i + 8] for i in range(0, 64, 8)),
+            "sha_slash": sha[:32] + "/" + sha[32:],
+            "sha_space": " ".join(sha[i : i + 8] for i in range(0, 64, 8)),
+            "sha_dash": "-".join(sha[i : i + 4] for i in range(0, 64, 4)),
+            "sha_endash": "\u2013".join(sha[i : i + 16] for i in range(0, 64, 16)),
+            "sha_nbsp": "\u00a0".join(sha[i : i + 16] for i in range(0, 64, 16)),
+            "sha_plus": "+".join(sha[i : i + 4] for i in range(0, 64, 4)),
+            "sha_tilde": "~".join(sha[i : i + 8] for i in range(0, 64, 8)),
+            "b64": base64.b64encode(bytes.fromhex(sha)).decode("ascii"),
+            "b64url": base64.urlsafe_b64encode(bytes.fromhex(sha)).decode("ascii").rstrip("="),
+            "b64_spaced": " ".join(
+                base64.b64encode(bytes.fromhex(sha)).decode("ascii")[i : i + 4]
+                for i in range(0, 44, 4)
+            ),
+            "rel": f"../copies/{spec['name']}",
+            "file": str(copy.resolve()),
+            "file_pct": urllib.parse.quote(str(copy.resolve()), safe=""),
+        }
+
+    def fill(text: str) -> str:
+        return _PLACEHOLDER.sub(lambda match: facts[match.group(2)][match.group(1)], text)
+
+    def claim(spec: dict[str, Any]) -> dict[str, Any]:
+        values: dict[str, Any] = json.loads(json.dumps(corpus["claim"]))
+        values.update(spec.get("set") or {})
+        values["evidence"] = [fill(str(item)) for item in spec.get("evidence") or []]
+        return values
+
+    def register() -> None:
+        for key, spec in corpus["attachments"].items():
+            record = repository.add_attachment(
+                originals[key], media_type=str(spec["media_type"]), embed=True
+            ).record
+            store = repository.attachment_blob_store()
+            assert store is not None
+            facts[key].update(
+                att=f"att:{record.id}",
+                id=record.id,
+                ID=record.id.upper(),
+                blob=str(store.directory / record.sha256[:2] / record.sha256),
+            )
+
+    # ``prior`` (update cases): a memory written first, before the originals
+    # are registered when ``before_attachments`` (the legacy rule), then
+    # changed by ``update``.
+    prior = case.get("prior")
+    prior_id: str | None = None
+    if prior is not None and prior.get("before_attachments"):
+        prior_id = repository.add(**claim(prior), memory_type="claim").id
+    register()
+    if prior is not None and prior_id is None:
+        prior_id = repository.add(**claim(prior), memory_type="claim").id
+    accepted = False
+    epistemic: str | None = None
+    causal: str | None = None
+    error: str | None = None
+    try:
+        if prior_id is not None:
+            changes = dict(case.get("update") or {})
+            if "evidence" in changes:
+                changes["evidence"] = [fill(str(item)) for item in changes["evidence"]]
+            document = repository.update(prior_id, **changes)
+        else:
+            document = repository.add(**claim(case), memory_type="claim")
+        accepted = True
+        epistemic, causal = document.epistemic, document.causal
+    except (IntegrityError, ValueError, TypeError) as exc:
+        error = str(exc)
+    return MultimodalCaseResult(
+        name=str(case["name"]),
+        group=str(case.get("group") or ""),
+        expect_accept=case["expect"] == "accept",
+        accepted=accepted,
+        epistemic=epistemic,
+        causal=causal,
+        error=error,
+    )
+
+
+def run_multimodal_causal_eval(
+    corpus: Traversable | Path | str | None = None,
+    *,
+    workdir: Path | str | None = None,
+) -> MultimodalCausalReport:
+    """Write every multimodal case through the real gate; count what got through.
+
+    The acceptance metrics are ``spurious_promotions`` (an observation-only
+    claim stored as ``causal=verified``) and ``fact_upgrades`` (stored as
+    ``epistemic=fact``); both must be 0, and every ``bypass`` case blocked.
+    Local only: no network, no model.
+    """
+
+    payload = load_multimodal_corpus(corpus)
+
+    def run(base: Path) -> MultimodalCausalReport:
+        return MultimodalCausalReport(
+            cases=[
+                _multimodal_case(index, case, payload, base)
+                for index, case in enumerate(payload["cases"])
+            ]
+        )
+
+    if workdir is not None:
+        base = Path(workdir)
+        base.mkdir(parents=True, exist_ok=True)
+        return run(base)
+    with tempfile.TemporaryDirectory(prefix="memfw-mm-causal-eval-") as scratch:
+        return run(Path(scratch))

@@ -135,7 +135,9 @@ memfw attach verify [ID]... [--root VAULT]
 * `list` prints `id`, media type, size, privacy level and name, tab-separated
   (`--json`: one array). A damaged record is a warning on stderr and exit 1.
 * `show` prints the record as JSON plus `cited_by`: the memories whose
-  `evidence` holds `att:ID` (optionally with a `#locator`).
+  `evidence` names the attachment — `att:ID` (optionally with a `#locator`, in
+  any spelling) and, since MM3, the other pointers the gate treats as naming
+  it (its sha256, its blob path, its id inside another pointer).
 * `verify` re-hashes records and blobs and writes nothing. It prints
   `{"checked", "ok", "problems"}` and exits 1 when a record or blob is
   missing or changed.
@@ -318,5 +320,8 @@ MM1a is the base the later steps build on:
   `height`, `duration` on the record (not written yet). `attachment_search` /
   `attachment_get` go through `memfw.runtime` and must filter by
   `AttachmentRecord.privacy_level` with the exit's clearance.
-* **MM3** (`observation` evidence class): `att:` evidence is only listed by
-  `attach show` today; the gate does not yet treat it specially.
+* **MM3** (`observation` evidence class) is in: see "What counts as evidence"
+  in `docs/epistemic-and-experience.md`. Locators resolve at attachment level;
+  once MM2 has proxy segments, a segment index can be passed to
+  `memfw.storage.evidence.resolve_attachment_reference(segment_exists=...)`.
+  Locator bounds use `pages`/`width`/`height`/`duration` when a record has them.

@@ -137,6 +137,34 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   vault-root `corroboration.sqlite3` stays until you delete it by hand (it
   still counts toward the vault's size until you do).
 
+### Added — attachments as observation evidence (MM3)
+
+- `att:<id>[#locator]` evidence is the new `observation` class. A memory whose evidence
+  is only observations (no raw data or link) cannot be `epistemic: fact` and stops at
+  `causal: hypothesis`; the cap runs before the gate's early return. Observations are
+  not outside-vault evidence, so they never carry `causal: verified` on their own.
+- The repository layer (`memfw.storage.evidence`) checks `att:` pointers a write adds
+  (attachment committed and readable; locator fits the media type: PDF `page`[+`bbox`],
+  image `bbox`, audio `t`, video `t` or `frame`[+`bbox`]) and classifies `file:`/
+  `sha256:` (and other raw/link) pointers that name a registered attachment — by hash or
+  prefix, blob path, a copy's content, recorded location, embedded id, or a digest in
+  any common hex/base64 spelling inside any pointer — as observation,
+  after folding case, percent-encoding, NFKC and invisible characters. The gate stays
+  pure (`validate_epistemic_write(..., evidence_classes=...)`).
+- Legacy rule: a stored `verified`/`fact` memory that the rule would now refuse is not
+  refused on writes that keep its level; a write that raises the level reclassifies all
+  of its evidence. `memfw fsck` reports `evidence_observation_review` and
+  `evidence_attachment_invalid`.
+- Backlinks: `attachment_backlinks` (read-only); `memfw attach show` `cited_by` now
+  matches every spelling.
+- `memfw eval causal --multimodal`: 59 synthetic cases (spurious multimodal causal
+  claims, 37 bypass attempts, hygiene, legacy/update cases, controls); 0 spurious
+  promotions, 0 fact upgrades, every bypass blocked. Write-time hashing of cited files
+  is bounded (size must match an original; 32 files / 64 MiB per write; fail closed).
+- **Changed:** a new `att:` pointer that does not resolve is now refused (it was stored
+  as an opaque string). Memories without `att:`/`file:`/`sha256:` evidence (or without
+  registered attachments) are gated exactly as before.
+
 ### Added — two-stage conversation search and tag filters (M3c)
 
 - `memfw conversations search` and MCP `conversations_search` gain tag

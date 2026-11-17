@@ -28,6 +28,7 @@ from .core.epistemic import (
     validate_open_question_references,
 )
 from .core.errors import IntegrityError, MemfwError, NotFoundError
+from .core.evidence_refs import is_attachment_reference
 from .core.local_data import vault_identity
 from .core.models import Layer, Tier, foreign_event_kind_counts
 from .core.repository import Repository, open_vault
@@ -92,6 +93,7 @@ from .projections import ObsidianProjector
 from .related import RelatedIndex
 from .retrieval import VaultRetriever
 from .stats import measure_runtime
+from .storage.evidence import gate_evidence_classes
 from .storage.operations import lookup_current
 from .tiers import BudgetAwareTierPolicy
 
@@ -1346,7 +1348,16 @@ def add(
             if block is not None:
                 # Only with the open-question options: other dry runs are unchanged.
                 gate_values.update(id=memory_id, tenant=tenant, open_question=block)
-            validate_epistemic_write(gate_values, actor="human")
+            if vault_exists:
+                evidence_classes = gate_evidence_classes(repository, gate_values)
+            elif any(is_attachment_reference(item) for item in evidence or []):
+                # As for conflicts: the real write would check the attachment.
+                raise IntegrityError(
+                    "att: evidence can only be checked in an existing vault: " + str(root)
+                )
+            else:
+                evidence_classes = {}
+            validate_epistemic_write(gate_values, actor="human", evidence_classes=evidence_classes)
             if block is not None and block["conflicts"] and not vault_exists:
                 # The conflicts cannot be checked without the vault, and the
                 # real write would fail: do not report a dry run as valid.
@@ -1554,7 +1565,12 @@ def update(
             }:
                 values = old.model_dump()
                 values.update(changes)
-                validate_epistemic_write(values, actor="human", previous_causal=old.causal)
+                validate_epistemic_write(
+                    values,
+                    actor="human",
+                    previous_causal=old.causal,
+                    evidence_classes=gate_evidence_classes(repository, values, old.model_dump()),
+                )
             if changes and OPEN_QUESTION_TYPE in (old.type, changes.get("type")):
                 # As the real update: every write to an open question re-checks
                 # its references, whichever fields it changes.
@@ -2295,17 +2311,47 @@ def eval_causal(
     workdir: Annotated[
         Path | None, typer.Option("--workdir", help="Scratch directory (temporary by default)")
     ] = None,
+    multimodal: Annotated[
+        bool,
+        typer.Option(
+            "--multimodal",
+            help="Run the multimodal corpus (attachments as observation evidence, MM3); "
+            "--fixtures then names a corpus JSON file",
+        ),
+    ] = False,
 ) -> None:
     """Measure whether associations are promoted to causal conclusions.
 
     Two layers, reported separately: the write gate (false accepts and false
     rejects over the synthetic materials) and retrieval (labels on hits, and
     whether the answer template states a hypothesis as a conclusion). It runs
-    locally: no network and no model calls.
+    locally: no network and no model calls. ``--multimodal`` runs the
+    attachment corpus instead: screenshots, recordings and reports offered as
+    causal evidence, plus ``file:``/``sha256:`` bypass attempts.
     """
 
-    from .memory_eval import run_causal_promotion_eval
+    from .memory_eval import run_causal_promotion_eval, run_multimodal_causal_eval
 
+    if multimodal:
+        try:
+            multimodal_report = run_multimodal_causal_eval(fixtures, workdir=workdir)
+        except (OSError, ValueError) as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        result = multimodal_report.as_dict()
+        if json_output:
+            typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+            return
+        for key in (
+            "cases",
+            "spurious_promotions",
+            "fact_upgrades",
+            "false_accepts",
+            "false_rejects",
+            "bypass_attempts",
+            "bypasses_blocked",
+        ):
+            typer.echo(f"{key}: {result[key]}")
+        return
     try:
         report = run_causal_promotion_eval(fixtures, workdir=workdir)
     except (OSError, ValueError) as exc:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import builtins
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from datetime import datetime
 from pathlib import Path
@@ -193,6 +193,7 @@ class RepositoryHost(Protocol):
         privacy: str | None = None,
         _stamp_privacy_default: bool = True,
         _sensitivity_key: tuple[Any, ...] = (),
+        _evidence_previous: Mapping[str, Any] | None = None,
     ) -> MemoryDocument: ...
 
     def legacy_privacy_default(self) -> str: ...

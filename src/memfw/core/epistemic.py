@@ -222,6 +222,15 @@ class OpenQuestion(BaseModel):
 # * a link pointer is any ``http(s)://`` URL. It points outside the vault, but
 #   the vault cannot verify what sits behind it; when the memory is chat-sourced
 #   or LLM-derived, a link alone is not enough;
+# * an observation pointer is ``att:<id>[#locator]``: a registered original
+#   (screenshot, scanned page, recording) or one of its text proxies (MM3). It
+#   records what was seen or heard, so it is *not* outside-vault evidence: on
+#   its own it never lets ``causal=verified`` through, and a claim resting only
+#   on observations stops at ``epistemic`` below ``fact`` and ``causal`` at
+#   ``hypothesis`` (:func:`observation_cap_violations`). The repository layer
+#   also hands the gate ``file:``/``sha256:`` (or other raw) pointers that name
+#   a registered attachment as ``observation`` (``evidence_classes``), so the
+#   prefix cannot be swapped to get around the rule;
 # * a chat pointer is ``chat:``, ``conversation:``, ``session:``,
 #   ``transcript:``, ``message:`` or ``turn:``;
 # * a generated pointer is ``llm:``, ``reflection:``, ``reasoning:``,
@@ -256,8 +265,11 @@ _RAW_PREFIXES = (
     "issue:",
     "repo:",
 )
-EvidenceClass = Literal["chat", "generated", "link", "raw", "other"]
+_OBSERVATION_PREFIXES = ("att:",)
+EvidenceClass = Literal["chat", "generated", "link", "raw", "observation", "other"]
+EVIDENCE_CLASSES: tuple[str, ...] = ("chat", "generated", "link", "raw", "observation", "other")
 _PREFIX_CLASSES: tuple[tuple[EvidenceClass, tuple[str, ...]], ...] = (
+    ("observation", _OBSERVATION_PREFIXES),
     ("chat", _CHAT_PREFIXES),
     ("generated", _GENERATED_PREFIXES),
     ("link", _LINK_PREFIXES),
@@ -298,25 +310,57 @@ def evidence_source_class(reference: str) -> EvidenceClass:
     return "other"
 
 
-def _has_raw_evidence(references: Sequence[str]) -> bool:
+def _classes(
+    references: Sequence[str], overrides: Mapping[str, EvidenceClass] | None
+) -> list[EvidenceClass]:
+    """The class of every pointer: the repository's override, else the prefix rule."""
+
+    if not overrides:
+        return [evidence_source_class(item) for item in references]
+    return [overrides.get(item) or evidence_source_class(item) for item in references]
+
+
+def _has_raw_evidence(classes: Sequence[EvidenceClass]) -> bool:
     """Whether some pointer points outside the vault (raw data or a link)."""
 
-    return any(evidence_source_class(item) in {"raw", "link"} for item in references)
+    return any(item in {"raw", "link"} for item in classes)
 
 
-def _has_controlled_evidence(references: Sequence[str]) -> bool:
+def _has_controlled_evidence(classes: Sequence[EvidenceClass]) -> bool:
     """Whether some pointer names replayable/checkable raw data, not just a URL."""
 
-    return any(evidence_source_class(item) == "raw" for item in references)
+    return any(item == "raw" for item in classes)
 
 
-def _narrative_only_reason(references: Sequence[str]) -> str:
-    classes = {evidence_source_class(item) for item in references}
-    if classes and classes <= {"chat"}:
+def observation_cap_violations(
+    epistemic: Any, causal: Any, classes: Sequence[EvidenceClass]
+) -> list[str]:
+    """What an observation-only claim may not carry (design v2 H3, MM3).
+
+    A claim whose evidence holds an ``observation`` pointer and no raw data or
+    link rests on what was seen or heard: ``epistemic`` cannot be ``fact`` and
+    ``causal`` stops at ``hypothesis``. Returns the offending settings (empty
+    when the claim is within the caps, or cites no observation at all).
+    """
+
+    if "observation" not in classes or _has_raw_evidence(classes):
+        return []
+    violations: list[str] = []
+    if str(epistemic or "") == "fact":
+        violations.append("epistemic=fact")
+    if str(causal or "none") == "verified":
+        violations.append("causal=verified")
+    return violations
+
+
+def _narrative_only_reason(classes: Sequence[EvidenceClass]) -> str:
+    # An observation-only claim is refused earlier (``observation_cap_violations``).
+    kinds = set(classes)
+    if kinds and kinds <= {"chat"}:
         return "evidence points only at chat text"
-    if classes and classes <= {"generated"}:
+    if kinds and kinds <= {"generated"}:
         return "evidence points only at LLM-generated explanations or reflections"
-    if classes and classes <= {"link"}:
+    if kinds and kinds <= {"link"}:
         return "evidence points only at web links, not at raw data or a design"
     return "evidence has no pointer to raw data or a design"
 
@@ -374,6 +418,7 @@ def validate_epistemic_write(
     actor: str,
     human_decision: bool = False,
     previous_causal: str | None = None,
+    evidence_classes: Mapping[str, EvidenceClass] | None = None,
 ) -> None:
     """Reject an inconsistent epistemic/causal state before any write.
 
@@ -388,6 +433,12 @@ def validate_epistemic_write(
     be corrected, annotated, or demoted by an agent or dream; the verified
     invariants below keep applying, so such a write cannot strip the raw-data
     evidence or the identification/robustness record.
+
+    ``evidence_classes`` maps evidence pointers to the class the repository
+    layer resolved for them (``file:``/``sha256:`` pointers to a registered
+    attachment become ``observation``; see :mod:`memfw.storage.evidence`).
+    Pointers it does not name are classified by prefix. The gate itself does
+    no I/O.
 
     Raises :class:`IntegrityError` naming every missing or contradictory item.
     """
@@ -447,6 +498,20 @@ def validate_epistemic_write(
     if str(causal) in {"none"} and record is not None:
         raise IntegrityError("causal_record requires causal=hypothesis or causal=verified")
 
+    references = _strings(values.get("evidence"))
+    classes = _classes(references, evidence_classes)
+    # Checked before the early return below (design v2.1, H3): an
+    # observation-only ``epistemic=fact`` with ``causal=none`` must not slip by.
+    capped = observation_cap_violations(epistemic, causal, classes)
+    if capped:
+        raise IntegrityError(
+            "evidence is observation only (att: originals or their proxies, or a "
+            "file:/sha256: pointer to a registered attachment, or a local file the vault "
+            "could not hash within its per-write budget): an observation records "
+            "what was seen or heard, so epistemic cannot be fact and causal stops at "
+            "hypothesis; refused: " + ", ".join(capped)
+        )
+
     if str(causal) != "verified":
         return
 
@@ -465,7 +530,6 @@ def validate_epistemic_write(
             missing.append("causal_record.robustness or limitations")
     else:
         missing.append("causal_record")
-    references = _strings(values.get("evidence"))
     if not references:
         missing.append("evidence (at least one pointer to raw data or a design)")
     if missing:
@@ -479,10 +543,10 @@ def validate_epistemic_write(
             "causal_record.identification.untested is non-empty, so record "
             "causal=hypothesis until they are tested"
         )
-    if not _has_raw_evidence(references):
+    if not _has_raw_evidence(classes):
         raise IntegrityError(
             "causal=verified requires evidence that points outside the vault: "
-            + _narrative_only_reason(references)
+            + _narrative_only_reason(classes)
         )
     provenance = str(values.get("provenance") or "").strip().lower()
     source = str(values.get("source") or "").strip().lower()
@@ -491,7 +555,7 @@ def validate_epistemic_write(
     # pointer the vault can check or an explicit recorded HUMAN_DECISION. This is
     # the rule that stops "someone pasted a chat link" from becoming verified.
     if (provenance in _GENERATED_PROVENANCES or source in _CHAT_SOURCES) and not (
-        _has_controlled_evidence(references) or human_decision
+        _has_controlled_evidence(classes) or human_decision
     ):
         attribution = "source=" + (source or "unset") + ", provenance=" + (provenance or "unset")
         raise IntegrityError(
@@ -537,6 +601,7 @@ def validate_proposed_write(
     changes: Mapping[str, Any],
     *,
     actor: str,
+    evidence_classes: Mapping[str, EvidenceClass] | None = None,
 ) -> None:
     """Gate one proposal-shaped change set against the current document state.
 
@@ -556,7 +621,12 @@ def validate_proposed_write(
     if current is not None:
         previous_causal = str(current.get("causal") or "none")
     values = _merge_proposal(current, changes, keys=EPISTEMIC_FIELDS)
-    validate_epistemic_write(values, actor=actor, previous_causal=previous_causal)
+    validate_epistemic_write(
+        values,
+        actor=actor,
+        previous_causal=previous_causal,
+        evidence_classes=evidence_classes,
+    )
 
 
 def validate_proposed_open_question(
@@ -738,6 +808,7 @@ __all__ = [
     "CAUSAL_VALUES",
     "EPISTEMIC_FIELDS",
     "EPISTEMIC_VALUES",
+    "EVIDENCE_CLASSES",
     "EXPERIENCE_DISCLAIMER",
     "EXPERIENCE_POINT_TYPE",
     "MAX_OPEN_QUESTION_CONFLICTS",
@@ -755,6 +826,7 @@ __all__ = [
     "OpenQuestion",
     "RobustnessCheck",
     "evidence_source_class",
+    "observation_cap_violations",
     "validate_epistemic_write",
     "validate_open_question_references",
     "validate_proposed_open_question",

@@ -41,6 +41,7 @@ from ..ports.privacy import (
     strictest,
 )
 from ..storage import with_archived_body
+from ..storage.evidence import evidence_fsck_issues, gate_evidence_classes
 from ..storage.transactions import _serialized
 
 _LOG = logging.getLogger(__name__)
@@ -86,6 +87,7 @@ class MemoryOperationsMixin:
         privacy: str | None = None,
         _stamp_privacy_default: bool = True,
         _sensitivity_key: tuple[Any, ...] = (),
+        _evidence_previous: Mapping[str, Any] | None = None,
     ) -> MemoryDocument:
         try:
             privacy = privacy_value(privacy)
@@ -118,7 +120,16 @@ class MemoryOperationsMixin:
             "provenance": provenance,
             "body": body,
         }
-        validate_epistemic_write(gate_values, actor=actor)
+        # MM3: ``att:`` pointers are checked against the attachments, and
+        # ``file:``/``sha256:`` pointers to one are classified as observation
+        # here, so the gate itself stays pure. ``{}`` (no I/O) otherwise.
+        validate_epistemic_write(
+            gate_values,
+            actor=actor,
+            # ``_evidence_previous``: the predecessor a supersede replaces, so
+            # the legacy rule sees the evidence it carries over (review M2).
+            evidence_classes=gate_evidence_classes(self, gate_values, _evidence_previous),
+        )
         if memory_type == OPEN_QUESTION_TYPE and actor != "human":
             # Mechanisms (dream, the conversation worker) and agents stage an
             # open question as a candidate; a human applies it.
@@ -391,11 +402,13 @@ class MemoryOperationsMixin:
         # counts as a human decision; a bare agent write can edit an
         # already-verified document but cannot turn one into verified.
         if set(folded_changes) & EPISTEMIC_FIELDS:
+            previous_values = old.model_dump()
             validate_epistemic_write(
                 values,
                 actor=actor,
                 human_decision=approved or (_human_decision and actor == "human"),
                 previous_causal=old.causal,
+                evidence_classes=gate_evidence_classes(self, values, previous_values),
             )
         if OPEN_QUESTION_TYPE in (values.get("type"), old.type):
             # Turning a memory into or out of an open question, and resolving
@@ -655,6 +668,7 @@ class MemoryOperationsMixin:
             _stamp_privacy_default=False,
             # A hand-added ``sensitivity`` key carries over too (never looser).
             _sensitivity_key=old._sensitivity_key,
+            _evidence_previous=old.model_dump(),
             **inherited,
         )
         # One instant for both sides of the handoff. Taking a fresh ``_now()``
@@ -1388,6 +1402,9 @@ class MemoryOperationsMixin:
             and event.details.get("new_memory_id")
         }
         issues.extend(_open_question_issues(current_documents, successors=successors))
+        # MM3: att: evidence that does not resolve, and memories kept by the
+        # observation legacy rule (read-only; nothing without such evidence).
+        issues.extend(evidence_fsck_issues(self, current_documents))
         if registered_deletions:
             self.validate_knowledge_cards()
         # Attachments are checked on their own (read-only) and never projected

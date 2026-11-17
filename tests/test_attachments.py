@@ -720,7 +720,8 @@ def test_show_lists_citing_memories(tmp_path: Path) -> None:
     repository = _repo(tmp_path)
     record = repository.add_attachment(_file(tmp_path, "a.pdf", b"%PDF")).record
     repository.add("Cites", "see scan", memory_id="m-cites", evidence=[f"att:{record.id}#page=1"])
-    repository.add("Other", "no scan", memory_id="m-other", evidence=["att:att-other"])
+    other = repository.add_attachment(_file(tmp_path, "b.pdf", b"%PDF other")).record
+    repository.add("Other", "other scan", memory_id="m-other", evidence=[f"att:{other.id}"])
     assert repository.attachment_citations(record.id) == ["m-cites"]
     shown = json.loads(_cli("attach", "show", record.id, "--root", str(repository.root)).output)
     assert shown["cited_by"] == ["m-cites"]
