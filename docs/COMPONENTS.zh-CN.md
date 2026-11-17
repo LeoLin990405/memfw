@@ -98,6 +98,10 @@ CI 的 `standalone-wheels` 任务会构建两者，装进一个没有 memfw 的�
 
 `packages/adapters/memfw-adapter-bm25s`（wheel 名 `memfw_adapter_bm25s`，版本 0.1.0）是一个进程内的 `RecallProvider`：用 bm25s 0.3.16（MIT）给记忆排序，中文用 jieba 切词。它**默认关闭**：只有 `vault.yaml` 的 `runtime.recall.adapters` 里写了 `memfw_adapter_bm25s:factory`，MCP `memory_search` 的 `mode=two_stage` 才会用它。它只索引隐私级别在 `clearance` 里的记忆（默认 `public,shared`），索引放在 vault 之外的私有目录（`~/.local/share/memfw/adapters/bm25s/`）。memfw 本身从不导入它。见 [`adapter-bm25s.md`](adapter-bm25s.md)。
 
+## Qdrant 召回适配器
+
+`packages/adapters/memfw-adapter-qdrant`（wheel 名 `memfw_adapter_qdrant`，版本 0.1.0）是一个语义 `RecallProvider`，后端是运维自己运行的 Qdrant v1.20.x 服务（只绑 loopback，遥测关闭：`QDRANT__TELEMETRY_DISABLED=true`）。查询用 memfw 自己的 embedder 向量化，只取回记忆 id。它**默认关闭**；`memfw-adapter-qdrant sync` 只发送 `public`/`shared` 记忆，从不发送 `local-private`，也不在 Qdrant 里存正文。memfw 本身从不导入它。见 [`adapter-qdrant.md`](adapter-qdrant.md)。
+
 ## 佐证投影
 
 `memfw corroboration rebuild` 在 vault 之外生成佐证投影（`~/.local/share/memfw/corroboration/<key>.sqlite3`，文件里记着它属于哪个 vault）：每条记忆被哪些相互独立的（应用、会话）提到过，来源是记忆自己的 `conv:` 证据、会话 worker 暂存的论断，以及已接受的经验点。每个应用的每个会话只算一次；本身就引用了这条记忆 id 的来源、模型或 agent 生成的来源，以及被隐藏或已退出共享的应用都不算。只存 id、名称、计数和时间；文件权限 `0600`，每次重建逐字节一致，对 vault 只读不写。

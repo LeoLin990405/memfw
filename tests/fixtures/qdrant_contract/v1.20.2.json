@@ -1,0 +1,360 @@
+{
+  "qdrant_version": "1.20.2",
+  "api": "REST",
+  "source": "transcribed from the Qdrant v1.20.2 OpenAPI schema (docs/redoc/master/openapi.json at tag v1.20.2); not captured from a live server",
+  "vault_key": "0123456789abcdef01234567",
+  "embedder": "fedcba9876543210",
+  "expected_refs": [
+    "m-backup",
+    "m-hal"
+  ],
+  "exchanges": [
+    {
+      "name": "root",
+      "request": {
+        "method": "GET",
+        "path": "/",
+        "body": null
+      },
+      "status": 200,
+      "response": {
+        "title": "qdrant - vector search engine",
+        "version": "1.20.2",
+        "commit": "5c0e4b4fd06e3ddcd3b9d6a8bde7d27b9f5b1f6d"
+      }
+    },
+    {
+      "name": "exists",
+      "request": {
+        "method": "GET",
+        "path": "/collections/memfw/exists",
+        "body": null
+      },
+      "status": 200,
+      "response": {
+        "result": {
+          "exists": true
+        },
+        "status": "ok",
+        "time": 9e-06
+      }
+    },
+    {
+      "name": "collection_missing",
+      "request": {
+        "method": "GET",
+        "path": "/collections/memfw",
+        "body": null
+      },
+      "status": 404,
+      "response": {
+        "status": {
+          "error": "Not found: Collection `memfw` doesn't exist!"
+        },
+        "time": 1.1e-05
+      }
+    },
+    {
+      "name": "create_collection",
+      "request": {
+        "method": "PUT",
+        "path": "/collections/memfw",
+        "body": {
+          "vectors": {
+            "size": 4,
+            "distance": "Cosine"
+          }
+        }
+      },
+      "status": 200,
+      "response": {
+        "result": true,
+        "status": "ok",
+        "time": 0.041217
+      }
+    },
+    {
+      "name": "create_index",
+      "request": {
+        "method": "PUT",
+        "path": "/collections/memfw/index",
+        "query": "wait=true",
+        "body": {
+          "field_name": "vault",
+          "field_schema": "keyword"
+        }
+      },
+      "status": 200,
+      "response": {
+        "result": {
+          "operation_id": 0,
+          "status": "completed"
+        },
+        "status": "ok",
+        "time": 0.004113
+      }
+    },
+    {
+      "name": "collection_info",
+      "request": {
+        "method": "GET",
+        "path": "/collections/memfw",
+        "body": null
+      },
+      "status": 200,
+      "response": {
+        "result": {
+          "status": "green",
+          "optimizer_status": "ok",
+          "indexed_vectors_count": 0,
+          "points_count": 2,
+          "segments_count": 2,
+          "config": {
+            "params": {
+              "vectors": {
+                "size": 4,
+                "distance": "Cosine"
+              },
+              "shard_number": 1,
+              "replication_factor": 1,
+              "write_consistency_factor": 1,
+              "on_disk_payload": true
+            },
+            "hnsw_config": {
+              "m": 16,
+              "ef_construct": 100,
+              "full_scan_threshold": 10000,
+              "max_indexing_threads": 0,
+              "on_disk": false
+            },
+            "optimizer_config": {
+              "deleted_threshold": 0.2,
+              "vacuum_min_vector_number": 1000,
+              "default_segment_number": 0,
+              "max_segment_size": null,
+              "memmap_threshold": null,
+              "indexing_threshold": 10000,
+              "flush_interval_sec": 5,
+              "max_optimization_threads": null
+            },
+            "wal_config": {
+              "wal_capacity_mb": 32,
+              "wal_segments_ahead": 0
+            },
+            "quantization_config": null,
+            "strict_mode_config": {
+              "enabled": false
+            }
+          },
+          "payload_schema": {
+            "vault": {
+              "data_type": "keyword",
+              "points": 2
+            },
+            "tenant": {
+              "data_type": "keyword",
+              "points": 2
+            },
+            "embedder": {
+              "data_type": "keyword",
+              "points": 2
+            },
+            "memory_id": {
+              "data_type": "keyword",
+              "points": 2
+            }
+          }
+        },
+        "status": "ok",
+        "time": 0.000102
+      }
+    },
+    {
+      "name": "scroll",
+      "request": {
+        "method": "POST",
+        "path": "/collections/memfw/points/scroll",
+        "body": {
+          "limit": 256,
+          "filter": {
+            "must": [
+              {
+                "key": "vault",
+                "match": {
+                  "value": "0123456789abcdef01234567"
+                }
+              }
+            ]
+          },
+          "with_payload": [
+            "memory_id",
+            "sha",
+            "embedder"
+          ],
+          "with_vector": false
+        }
+      },
+      "status": 200,
+      "response": {
+        "result": {
+          "points": [
+            {
+              "id": "1c1d8f63-66d8-5c1f-9f7c-2b5a4f0e8a11",
+              "payload": {
+                "memory_id": "m-backup",
+                "sha": "9b2f0c6a1d3e4f5a6b7c8d9e0f1a2b3c",
+                "embedder": "fedcba9876543210"
+              }
+            },
+            {
+              "id": "6e2a1b7c-3d4e-5f60-8a9b-0c1d2e3f4a5b",
+              "payload": {
+                "memory_id": "m-hal",
+                "sha": "0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+                "embedder": "fedcba9876543210"
+              }
+            }
+          ],
+          "next_page_offset": null
+        },
+        "status": "ok",
+        "time": 0.000611
+      }
+    },
+    {
+      "name": "upsert",
+      "request": {
+        "method": "PUT",
+        "path": "/collections/memfw/points",
+        "query": "wait=true",
+        "body": {
+          "points": [
+            {
+              "id": "1c1d8f63-66d8-5c1f-9f7c-2b5a4f0e8a11",
+              "vector": [
+                0.5,
+                0.5,
+                0.5,
+                0.5
+              ],
+              "payload": {
+                "memory_id": "m-backup",
+                "tenant": "",
+                "vault": "0123456789abcdef01234567",
+                "embedder": "fedcba9876543210",
+                "sha": "9b2f0c6a1d3e4f5a6b7c8d9e0f1a2b3c"
+              }
+            }
+          ]
+        }
+      },
+      "status": 200,
+      "response": {
+        "result": {
+          "operation_id": 3,
+          "status": "completed"
+        },
+        "status": "ok",
+        "time": 0.003311
+      }
+    },
+    {
+      "name": "delete",
+      "request": {
+        "method": "POST",
+        "path": "/collections/memfw/points/delete",
+        "query": "wait=true",
+        "body": {
+          "points": [
+            "6e2a1b7c-3d4e-5f60-8a9b-0c1d2e3f4a5b"
+          ]
+        }
+      },
+      "status": 200,
+      "response": {
+        "result": {
+          "operation_id": 4,
+          "status": "completed"
+        },
+        "status": "ok",
+        "time": 0.002004
+      }
+    },
+    {
+      "name": "query",
+      "request": {
+        "method": "POST",
+        "path": "/collections/memfw/points/query",
+        "body": {
+          "query": [
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ],
+          "limit": 5,
+          "filter": {
+            "must": [
+              {
+                "key": "vault",
+                "match": {
+                  "value": "0123456789abcdef01234567"
+                }
+              },
+              {
+                "key": "embedder",
+                "match": {
+                  "value": "fedcba9876543210"
+                }
+              },
+              {
+                "key": "tenant",
+                "match": {
+                  "value": ""
+                }
+              }
+            ]
+          },
+          "with_payload": [
+            "memory_id",
+            "tenant",
+            "vault",
+            "embedder"
+          ],
+          "with_vector": false
+        }
+      },
+      "status": 200,
+      "response": {
+        "result": {
+          "points": [
+            {
+              "id": "1c1d8f63-66d8-5c1f-9f7c-2b5a4f0e8a11",
+              "version": 3,
+              "score": 0.99999994,
+              "payload": {
+                "memory_id": "m-backup",
+                "tenant": "",
+                "vault": "0123456789abcdef01234567",
+                "embedder": "fedcba9876543210"
+              }
+            },
+            {
+              "id": "6e2a1b7c-3d4e-5f60-8a9b-0c1d2e3f4a5b",
+              "version": 2,
+              "score": 0.8660254,
+              "payload": {
+                "memory_id": "m-hal",
+                "tenant": "",
+                "vault": "0123456789abcdef01234567",
+                "embedder": "fedcba9876543210"
+              }
+            }
+          ]
+        },
+        "status": "ok",
+        "time": 0.000734
+      }
+    }
+  ]
+}

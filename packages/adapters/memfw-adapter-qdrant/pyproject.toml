@@ -1,0 +1,41 @@
+# memfw-adapter-qdrant: a RecallProvider that asks a Qdrant service (REST,
+# loopback by default) for the memories nearest to a query embedded with
+# memfw's own embedder, plus the `memfw-adapter-qdrant sync` command that
+# writes the vault's public/shared memories there. Standard library plus
+# PyYAML (urllib for HTTP); it depends on memfw-ports for the RecallProvider contract and the
+# stdlib vault reader, and on nothing else of memfw. memfw never imports it:
+# the operator names it in vault.yaml (runtime.recall.adapters).
+#
+# Server: Qdrant v1.20.x (Apache-2.0), run by the operator, telemetry off.
+# Build a wheel:  uv build --wheel --package memfw-adapter-qdrant
+[build-system]
+requires = ["hatchling==1.33.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "memfw-adapter-qdrant"
+version = "0.1.0"
+description = "Qdrant (v1.20.x) recall provider for the memfw recall coordinator"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+# Symlinks to memfw's own LICENSE and NOTICE (one copy of the text).
+license-files = ["LICENSE", "NOTICE"]
+dependencies = [
+    "memfw-ports==0.3.0",
+    # vault.yaml is read with yaml.safe_load, exactly as memfw reads it (MIT).
+    "PyYAML==6.0.3",
+]
+
+[project.scripts]
+memfw-adapter-qdrant = "memfw_adapter_qdrant.cli:main"
+
+# Discovery only (AdapterRegistry.discover imports nothing); still off until enabled.
+[project.entry-points."memfw.adapters"]
+qdrant = "memfw_adapter_qdrant:SPEC"
+
+[tool.uv.sources]
+memfw-ports = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/memfw_adapter_qdrant"]

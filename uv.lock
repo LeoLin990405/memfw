@@ -12,6 +12,7 @@ members = [
     "memfw",
     "memfw-adapter-bm25s",
     "memfw-adapter-deepseek",
+    "memfw-adapter-qdrant",
     "memfw-ports",
     "memfw-recall",
 ]
@@ -356,6 +357,21 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "memfw-ports", editable = "packages/memfw-ports" }]
+
+[[package]]
+name = "memfw-adapter-qdrant"
+version = "0.1.0"
+source = { editable = "packages/adapters/memfw-adapter-qdrant" }
+dependencies = [
+    { name = "memfw-ports" },
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "memfw-ports", editable = "packages/memfw-ports" },
+    { name = "pyyaml", specifier = "==6.0.3" },
+]
 
 [[package]]
 name = "memfw-ports"
