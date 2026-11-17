@@ -194,8 +194,9 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   redirects. When QMD is unavailable or times out the coordinator reports it
   degraded and FTS answers. memfw does not import it; with no adapter config
   nothing changes.
-- Contract tests against constructed QMD 2.5.3 fixtures
-  (`tests/fixtures/qmd_contract/`, loopback fake, no real QMD), the
+- Contract tests replaying fixtures recorded from a live QMD 2.5.3 over a
+  throwaway synthetic index (`tests/fixtures/qmd_contract/`, lexical only:
+  no embeddings; CI uses a loopback fake, no real QMD), the
   standalone-wheel smoke (`--qmd`) and the T6 consistency report
   `scripts/qmd_notes_consistency.py` (builtin notes index vs the adapter;
   overlap only, not a gate).

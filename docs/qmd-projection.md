@@ -434,9 +434,12 @@ The vault resolver reads privacy and lifecycle from the vault file only, so
 the meta-index-only fields (`privacy`, `lifecycle`, `valid_until`) are checked
 by the adapter from the manifest; QMD hits therefore never include history.
 
-The contract fixtures (`tests/fixtures/qmd_contract/`) follow QMD 2.5.3's
-published wire format and were constructed, not captured from a live server;
-`handelize_cases` are outputs of QMD's own function. Re-record with
+The contract fixtures (`tests/fixtures/qmd_contract/`) were recorded from a
+live QMD 2.5.3 `qmd mcp --http` on loopback, over a throwaway index of two
+synthetic collections (the projection of `tests/projection_fixtures.py` and the
+fixture notes tree). No embeddings were built, so the recorded answers are
+lexical only; text fields are redacted. `handelize_cases` are outputs of QMD's
+own function. Re-record with
 `python -m memfw_adapter_qmd.record` before upgrading QMD.
 `scripts/qmd_notes_consistency.py` is the T6 report: overlap between memfw's
 notes index and the QMD notes adapter (not a gate).

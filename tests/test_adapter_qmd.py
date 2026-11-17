@@ -239,19 +239,46 @@ def test_both_providers_pass_the_recall_contract_kit(
 # --------------------------------------------------------------------------- memory: fail closed
 
 
+def _recorded_files(exchange: dict[str, Any]) -> list[str]:
+    rows = exchange["response"]["body"]["result"]["structuredContent"]["results"]
+    return [row["file"] for row in rows]
+
+
 def test_memory_mapping_drops_everything_not_visible(
     projected: tuple[Path, Path], fake: FakeQmd
 ) -> None:
     _root, tree = projected
-    refs = [c.ref for c in _search(_memory(tree, fake.url), MEMORY["query"])]
+    meta = _exchange("memory:meta")
+    provider = _memory(tree, fake.url)
+    refs = [c.ref for q in (MEMORY["query"], meta["query"]) for c in _search(provider, q)]
+    # The live answers do carry these documents; the manifest makes the adapter drop them.
+    recorded = " ".join(_recorded_files(MEMORY) + _recorded_files(meta))
     for name in ("private", "privacy_mismatch", "privacy_unknown", "tenant_other"):
+        assert ID[name] in recorded, name
         assert ID[name] not in refs, name  # privacy / tenant from the manifest
-    for name in ("retired", "orphan"):
-        assert ID[name] not in refs, name  # not projected, so not in the manifest
-    assert "fdeadbeef0000" not in refs  # unknown id
-    assert refs.count(ID["active"]) == 1  # duplicate, foreign collection, `..` path dropped
-    other = [c.ref for c in _search(_memory(tree, fake.url), MEMORY["query"], tenant="other-team")]
+    other = [c.ref for c in _search(provider, MEMORY["query"], tenant="other-team")]
     assert other == [ID["tenant_other"]]
+
+
+def test_memory_rows_outside_the_manifest_are_dropped(
+    projected: tuple[Path, Path], fake: FakeQmd
+) -> None:
+    """Hand-made rows (not a recording): shapes a live answer could carry."""
+
+    _root, tree = projected
+    active = f"memories/{ID['active']}.md"
+    fake.results = lambda arguments: [
+        {"file": f"memfw-memory/memories/{ID['retired']}.md", "score": 0.9, "line": 1},
+        {"file": f"memfw-memory/memories/{ID['orphan']}.md", "score": 0.9, "line": 1},
+        {"file": "memfw-memory/memories/fdeadbeef0000.md", "score": 0.9, "line": 1},
+        {"file": f"other-collection/{active}", "score": 0.9, "line": 1},
+        {"file": f"memfw-memory/../{active}", "score": 0.9, "line": 1},
+        {"file": f"memfw-memory/{active}", "score": True, "line": 1},  # bool is not a score
+        {"file": f"memfw-memory/{active}", "score": 0.5, "line": 1},
+        {"file": f"qmd://memfw-memory/{active}", "score": 0.4, "line": 1},  # duplicate
+    ]
+    found = _search(_memory(tree, fake.url), "q")
+    assert [(c.ref, c.score) for c in found] == [(ID["active"], 0.5)]
 
 
 def test_manifest_privacy_beats_the_vault_tags_in_a_coordinator(
@@ -290,7 +317,9 @@ def test_expired_and_superseded_never_leak_through_a_coordinator(
     coordinator = Coordinator([provider], resolvers=default_resolvers(root), clock=lambda: NOW)
     chosen = FilterPolicy() if policy == "strict" else FilterPolicy.compat_fts(tenant="")
     result = coordinator.search(MEMORY["query"], limit=10, policy=chosen)  # as recorded
+    recorded = " ".join(_recorded_files(MEMORY))
     for name in LIFECYCLE_DROPS:
+        assert ID[name] in recorded, name  # the live answer carries it
         assert ID[name] not in returned, name
         assert ID[name] not in result.ids, name
     assert ID["active"] in result.ids
@@ -401,21 +430,28 @@ def test_handelize_collisions_in_the_manifest_are_dropped(fake: FakeQmd, tmp_pat
 def test_notes_privacy_tenant_and_collisions(fake: FakeQmd) -> None:
     refs = [c.ref for c in _search(_notes(fake.url), NOTES_X["query"])]
     paths = {parse_note_ref(ref)[0] for ref in refs}  # type: ignore[index]
-    assert "private/diary.md" not in paths  # privacy: local-private
-    assert "private/tagged.md" not in paths  # sensitivity:private tag
-    assert "weird/unreadable.md" not in paths  # unreadable privacy form → unknown
-    assert not any(path.startswith("collide/") for path in paths)  # two files, one name
-    assert "missing.md" not in paths
+    recorded = " ".join(_recorded_files(NOTES_X))
+    for path in ("private/diary.md", "private/tagged.md", "weird/unreadable.md"):
+        assert path in recorded, path  # QMD returned it ...
+        assert path not in paths, path  # ... local-private, sensitivity tag, unreadable form
     assert _search(_notes(fake.url), NOTES_X["query"], tenant="team-a") == []
+    fake.results = lambda arguments: [
+        {"file": "knowledge-hub/collide/a-b.md", "score": 0.9, "line": 1},  # two files, one name
+        {"file": "knowledge-hub/missing.md", "score": 0.8, "line": 1},
+        {"file": "knowledge-hub/top.md", "score": 0.7, "line": 1},
+    ]
+    assert [c.ref for c in _search(_notes(fake.url), "q")] == ["kh:top.md"]
 
 
 def test_notes_without_a_privacy_field_need_an_explicit_legacy_level(fake: FakeQmd) -> None:
     default = NOTES_SPEC.factory({"endpoint": fake.url, "notes_root": str(NOTES)})
     refs = [c.ref for c in _search(default, NOTES_X["query"])]
-    # Only the notes that say shared/public; the two without a privacy field are withheld.
-    assert refs == [NOTES_X["expected_refs"][0], NOTES_X["expected_refs"][3]]
+    top, tips, week = NOTES_X["expected_refs"]
+    # Only the notes that say shared/public; top.md has no privacy field and is withheld.
+    assert refs == [tips, week]
     public_only = _notes(fake.url, clearance="public")
-    assert [c.ref for c in _search(public_only, NOTES_X["query"])] == [NOTES_X["expected_refs"][3]]
+    assert [c.ref for c in _search(public_only, NOTES_X["query"])] == [tips]
+    assert top == "kh:top.md"
 
 
 def test_notes_never_follow_symlinks(fake: FakeQmd, tmp_path: Path) -> None:

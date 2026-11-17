@@ -10,6 +10,23 @@ Text fields QMD returns (``title``, ``snippet``, ``context``, the text
 output has the layout ``FakeQmd.from_recording`` replays: ``initialize`` plus
 one ``exchanges[]`` entry per query, each with the exact ``tools/call``
 request this adapter sends. Fill in ``expected_refs`` by hand.
+
+How ``tests/fixtures/qmd_contract/qmd-<version>.json`` was made (never against
+a real index; every QMD path points into one temp directory ``$T``)::
+
+    export HOME=$T/home XDG_CACHE_HOME=$T/cache XDG_CONFIG_HOME=$T/config \
+           QMD_CONFIG_DIR=$T/qmdconf INDEX_PATH=$T/index.sqlite
+    qmd collection add $T/projection/tree-*/files --name memfw-memory  # projection of
+    qmd collection add $T/notes --name knowledge-hub                # the test fixtures
+    qmd mcp --http --port $PORT &      # no `qmd embed`: lexical answers, no model loaded
+    python -m memfw_adapter_qmd.record --endpoint http://localhost:$PORT/mcp \
+        --collection memfw-memory --query synthetic --query "cron migration" \
+        --query meta --limit 20
+    python -m memfw_adapter_qmd.record --endpoint http://localhost:$PORT/mcp \
+        --collection knowledge-hub --query "migration checklist" \
+        --query 暂停定时任务 --query "reading list" --limit 20
+
+``--limit 20`` is what the adapter asks for at ``limit=10`` (``fetch_factor`` 2).
 """
 
 from __future__ import annotations
