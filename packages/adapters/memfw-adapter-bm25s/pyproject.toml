@@ -27,6 +27,8 @@ dependencies = [
     "numpy==2.5.5; python_version >= '3.12'",
     # Chinese segmentation, the same dependency memfw's own FTS uses (MIT).
     "jieba==0.42.1",
+    # vault.yaml is read with yaml.safe_load, exactly as memfw reads it (MIT).
+    "PyYAML==6.0.3",
 ]
 
 [project.scripts]

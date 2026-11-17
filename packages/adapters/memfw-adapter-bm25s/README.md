@@ -7,7 +7,7 @@ returns memory ids and scores only, never text. Import it as
 `memfw_adapter_bm25s`.
 
 Licences (re-checked from each project's `LICENSE`): bm25s 0.3.16 is MIT,
-jieba 0.42.1 is MIT, numpy is BSD-3-Clause. This package itself is
+jieba 0.42.1 is MIT, PyYAML 6.0.3 is MIT, numpy is BSD-3-Clause. This package itself is
 Apache-2.0, like memfw. It depends on `memfw-ports` for the port contract and
 the stdlib vault reader, and on nothing else of memfw; memfw never imports it.
 

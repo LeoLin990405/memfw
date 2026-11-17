@@ -94,6 +94,7 @@ MEMBERS = (
 ADAPTER_DEPENDENCIES = (
     "bm25s==0.3.16",
     "jieba==0.42.1",
+    "PyYAML==6.0.3",
     "numpy==2.4.6" if sys.version_info < (3, 12) else "numpy==2.5.5",
 )
 
@@ -267,7 +268,7 @@ def test_adapter_dependency_pins_match_the_lockfile_and_pyproject() -> None:
     locked = {(pkg["name"], pkg["version"]) for pkg in lock["package"]}
     for pin in ADAPTER_DEPENDENCIES:
         name, version = pin.split("==")
-        assert (name, version) in locked, pin
+        assert (name.lower(), version) in locked, pin
     project = tomllib.loads(
         (PACKAGES / "adapters" / "memfw-adapter-bm25s" / "pyproject.toml").read_text("utf-8")
     )
@@ -281,5 +282,5 @@ def test_ci_wheel_job_builds_and_smokes_every_adapter_with_the_pins() -> None:
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     for package in ("memfw-adapter-deepseek", "memfw-adapter-bm25s"):
         assert f"uv build --wheel --package {package} " in ci, package
-    assert "bm25s==0.3.16 jieba==0.42.1 numpy==2.4.6" in ci  # CI runs Python 3.11
+    assert "bm25s==0.3.16 jieba==0.42.1 PyYAML==6.0.3 numpy==2.4.6" in ci  # CI runs Python 3.11
     assert "wheel_smoke.py --recall --deepseek --bm25s" in ci

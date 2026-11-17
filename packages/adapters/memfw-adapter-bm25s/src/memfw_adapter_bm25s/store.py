@@ -44,13 +44,11 @@ from pathlib import Path
 from typing import Any, Final
 
 from ._ports import (
-    LEGACY_PRIVACY_FALLBACK,
-    LEGACY_PRIVACY_KEY,
     MemoryFile,
     admits,
     effective_level,
     iter_memories,
-    legacy_default,
+    legacy_default_from_config,
     memory_ids,
 )
 
@@ -64,7 +62,6 @@ MANIFEST: Final = "manifest.json"
 DOCS: Final = "docs.json"
 
 _WORD = re.compile(r"\w", re.UNICODE)
-_LEGACY_LINE = re.compile(rf"^{LEGACY_PRIVACY_KEY}:[ \t]*(.*?)[ \t]*$")
 
 
 class StoreError(OSError):
@@ -111,23 +108,21 @@ def vault_key(root: Path | str) -> str:
 
 
 def legacy_privacy(vault: Path) -> str:
-    """The vault's ``legacy_privacy_default`` from a line scan of ``vault.yaml``.
+    """The vault's ``legacy_privacy_default``, read as memfw reads it.
 
-    Fails closed: an unreadable file, a value this scan does not understand or
-    several lines (the strictest would be a guess) give ``local-private``.
+    ``yaml.safe_load`` of ``vault.yaml`` and the L0 rule
+    (``legacy_default_from_config``), exactly as
+    ``memfw.index.readonly.vault_legacy_privacy``: an unreadable or invalid
+    file, a non-mapping or an unknown value give ``local-private``.
     """
 
+    import yaml
+
     try:
-        text = (vault / "vault.yaml").read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return LEGACY_PRIVACY_FALLBACK
-    found = [match.group(1) for line in text.splitlines() if (match := _LEGACY_LINE.match(line))]
-    if len(found) != 1:
-        return LEGACY_PRIVACY_FALLBACK
-    value = found[0]
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
-        value = value[1:-1]
-    return legacy_default(value)
+        config = yaml.safe_load((vault / "vault.yaml").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        config = None
+    return str(legacy_default_from_config(config))
 
 
 def privacy_level(memory: MemoryFile, legacy: str) -> str:

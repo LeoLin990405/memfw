@@ -157,6 +157,35 @@ def test_legacy_privacy_default_decides_memories_without_a_privacy_field(tmp_pat
     assert provider.status()["documents"] == 0
 
 
+@pytest.mark.parametrize(
+    "lines",
+    [
+        "legacy_privacy_default: public\n",
+        "legacy_privacy_default: 'shared'\n",
+        "legacy_privacy_default: public\n  local-private\n",  # a multi-line plain scalar
+        "legacy_privacy_default: public\nlegacy_privacy_default: local-private\n",
+        "x: [a,\nlegacy_privacy_default: public]\n",  # inside a flow sequence
+        "legacy_privacy_default: |\n  public\n",
+        "legacy_privacy_default: public # note\n",
+        "legacy_privacy_default: PUBLIC\n",
+        "legacy_privacy_default: [public]\n",
+        "legacy_privacy_default: !!str public\n",
+        "legacy_privacy_default: public\n---\nother: 1\n",
+        "{legacy_privacy_default: public}\n",
+        "",
+    ],
+)
+def test_legacy_default_is_read_exactly_as_memfw_reads_it(tmp_path: Path, lines: str) -> None:
+    from memfw.index.readonly import vault_legacy_privacy
+
+    vault = tmp_path / "v"
+    vault.mkdir()
+    (vault / "vault.yaml").write_text(lines, encoding="utf-8")
+    assert store.legacy_privacy(vault) == vault_legacy_privacy(vault), lines
+    if "local-private" in lines or "[" in lines or "---" in lines:
+        assert store.legacy_privacy(vault) == "local-private", lines
+
+
 def test_index_lives_outside_the_vault_privately_and_holds_no_words(
     tmp_path: Path, _home: Path
 ) -> None:
