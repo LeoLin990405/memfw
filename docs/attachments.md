@@ -19,7 +19,8 @@ command prints for a vault without attachments.
   vault.yaml                     gains vault_id on the first attach
 ~/.local/share/memfw/blobs/      default blob root (attachments_blob_root)
   <vault-id>/<sha[:2]>/<sha256>  the original's exact bytes, stored once per sha256
-  .staging/.stage-*.tmp          an original being copied in (shared by the root's vaults)
+  .staging/.stage-<tag>-*.tmp    an original being copied in (shared by the root's vaults;
+                                 <tag> = first 8 hex of sha256 of the vault's resolved path)
 ```
 
 * Records are never under `memories/`, so no memory command, index or export
@@ -32,6 +33,11 @@ command prints for a vault without attachments.
   under the vault lock: concurrent first adds agree on one id.
 * `add` copies the original into `<root>/.staging` first (no vault id
   needed), then, holding the vault lock, moves it into `<root>/<vault_id>`.
+  The staging file name carries the vault's tag, so a stale stage is reported
+  only to the vault that made it; other vaults' stale stages (and untagged
+  ones from before the tag) are only counted. If the blob root changed
+  between staging and the lock, the add is refused before
+  `<new root>/<vault_id>` is created.
 * Directories are created `0700`, blobs `0600`.
 
 ### Where the blob root may be
@@ -136,13 +142,21 @@ memfw attach verify [ID]... [--root VAULT]
 | `vault.yaml` key | Default | Meaning |
 |---|---|---|
 | `attachments_max_bytes` | 26214400 (25 MiB) | largest original `add` accepts |
-| `attachments_max_total_bytes` | 2147483648 (2 GiB) | sum of distinct blobs the vault's records reference |
+| `attachments_max_total_bytes` | 2147483648 (2 GiB) | sum of the distinct blobs the vault's `attach` events stored |
 | `attachments_blob_root` | `~/.local/share/memfw/blobs` | blob root |
 | `vault_id` | generated on first attach | names the vault's blob directory (a UUID) |
 
 Over a limit, `add` fails and says so; it never switches to a reference on
 its own. A duplicate original adds nothing to the total. The keys are checked
 whenever `vault.yaml` is read or written.
+
+The total is summed from the event log: each `attach` event records the
+original's `size` and whether it stored new bytes (`blob: new`) or reused a
+stored blob (`blob: shared`), so an add parses no record and its cost does
+not grow with the number of attachments. A log with an `attach` event from
+before these fields falls back to the sizes (`lstat`) of the files in the
+vault's blob directory. A blob left by an interrupted add (an orphan) that a
+later add of the same bytes reuses is not counted.
 
 ## Events
 
@@ -159,8 +173,9 @@ skip lists that `replay()` and `_project_events()` used to carry are now that
 one constant, with the same members for the old kinds.
 
 An `attach` event names the attachment id (`memory_id`), the record's hash
-(`after_hash`) and `details: {"storage": "embedded"}`. It never carries the
-original's sha256, name or content, so a later purge has nothing to scrub
+(`after_hash`) and `details: {"storage": "embedded", "size": N, "blob":
+"new"|"shared"}` (events written before `size` carry only `storage`). It never
+carries the original's sha256, name or content, so a later purge has nothing to scrub
 from the hash-chained log. The first attach also records one `config_change`
 for `vault_id` (`vault.yaml` is rewritten by `configure`, like
 `memfw privacy legacy-default`).
@@ -181,7 +196,8 @@ for `vault_id` (`vault.yaml` is rewritten by `configure`, like
 | `blob_unavailable` | the blob directory cannot be used (no `vault_id`, refused location) |
 | `blob_orphan` (warning) | a blob no readable record names |
 | `blob_mode_loose` (warning) | a blob readable by group or others |
-| `blob_stage_stale` (warning) | a `.stage-*.tmp` older than an hour under the blob root (an interrupted `add`); never deleted |
+| `blob_stage_stale` (warning) | one of this vault's `.stage-*.tmp` older than an hour under the blob root (an interrupted `add`); never deleted |
+| `blob_stage_foreign` (warning) | how many stale staging files under the root belong to other vaults (or carry no tag); not named, never deleted |
 
 * `fsck` only reports attachment problems. It never registers an
   `external_delete` for an attachment (attachments are not memories in the

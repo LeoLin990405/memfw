@@ -341,6 +341,34 @@ def test_store_location_guard(tmp_path: Path, isolated_home: Path) -> None:  # n
         open_share(vault, "claude", store=repo / "c.sqlite")
 
 
+def test_store_location_guard_resolves_markers_and_refuses_documents_desktop(
+    tmp_path: Path,
+    isolated_home: Path,  # noqa: F811
+) -> None:
+    # ~/Dropbox is a symlink to the real synced folder elsewhere: its target is refused too.
+    real = tmp_path / "synced-elsewhere"
+    real.mkdir()
+    (isolated_home / "Dropbox").symlink_to(real)
+    for refused in (
+        real / "c.sqlite",
+        real / "deep" / "c.sqlite",
+        isolated_home / "Dropbox" / "c.sqlite",
+        isolated_home / "Documents" / "c.sqlite",
+        isolated_home / "Desktop" / "memfw" / "c.sqlite",
+    ):
+        with pytest.raises(ConversationError, match="synced"):
+            check_private_location(refused)
+        with pytest.raises(ConversationError, match="synced"):
+            store_path({"conversation_store": {"path": str(refused)}})
+    # Neighbours of the markers stay allowed.
+    for allowed in (
+        isolated_home / "Documents-local" / "c.sqlite",
+        isolated_home / ".local/share/memfw/c.sqlite",
+        tmp_path / "elsewhere" / "c.sqlite",
+    ):
+        assert check_private_location(allowed) == allowed.resolve()
+
+
 def test_missing_store_is_reported(tmp_path: Path) -> None:
     vault = make_vault(tmp_path / "vault", SHARE_ON)
     share = open_share(vault, "claude", store=tmp_path / "data" / "absent.sqlite")

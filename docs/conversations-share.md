@@ -59,7 +59,11 @@ When an app is opted out or hidden, its summaries, jobs and episodes are
 deleted; candidates it already staged stay in the vault and are listed in the
 run report (`candidates_to_review`). State lives in
 `~/.local/share/memfw/conversations-work.sqlite` (0600, refused inside a git
-work tree, the vault or a synced folder).
+work tree, the vault or a synced folder). The synced folders are iCloud Drive
+(`~/Library/Mobile Documents`), `~/Library/CloudStorage`, Dropbox, Google
+Drive, OneDrive, Nextcloud, Syncthing, and `~/Documents` and `~/Desktop`
+(macOS iCloud "Desktop & Documents"), each also at its target when the folder
+is a symlink, plus `conversation_store.synced_dirs`.
 
 - Backend: `extractive` (no model) by default. `--backend module:factory`
   picks another; a backend that is not `local` needs `conversations.cloud:

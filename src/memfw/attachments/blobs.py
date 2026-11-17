@@ -36,12 +36,15 @@ _SHA_RE: Final = re.compile(r"^[0-9a-f]{64}$")
 STAGING_DIR: Final = ".staging"
 #: A staging file older than this is reported as stale (an interrupted add).
 STALE_STAGE_SECONDS: Final = 60 * 60
+#: ``.stage-<vault tag>-<random>.tmp``: the tag (see :func:`vault_stage_tag`)
+#: says which vault staged it, because ``.staging`` is shared by every vault
+#: under the root. A name without a tag (written before tags) is unattributable.
+_TAGGED_STAGE_RE: Final = re.compile(r"^\.stage-([0-9a-f]{8})-[^-]+\.tmp$")
 
-#: Synced-folder markers under the home directory: every marker of
-#: ``memfw.history.transcripts.SYNCED_MARKERS`` (a test keeps it a subset; the
-#: history package sits above this layer, so it cannot be imported here) plus
-#: ``Documents`` and ``Desktop``, which macOS iCloud "Desktop & Documents"
-#: syncs.
+#: Synced-folder markers under the home directory, equal to
+#: ``memfw.history.transcripts.SYNCED_MARKERS`` (a test keeps them equal; the
+#: history package sits above this layer, so it cannot be imported here).
+#: ``Documents`` and ``Desktop`` are synced by macOS iCloud "Desktop & Documents".
 SYNCED_MARKERS: Final[tuple[tuple[str, ...], ...]] = (
     ("Library", "Mobile Documents"),
     ("Library", "CloudStorage"),
@@ -58,6 +61,12 @@ SYNCED_MARKERS: Final[tuple[tuple[str, ...], ...]] = (
 
 class BlobLocationError(IntegrityError):
     """The blob directory is not a private local location."""
+
+
+def vault_stage_tag(vault: Path) -> str:
+    """The 8-hex tag of ``vault`` in staging file names: sha256 of its resolved root."""
+
+    return hashlib.sha256(str(vault.expanduser().resolve()).encode("utf-8")).hexdigest()[:8]
 
 
 def check_sha(value: str) -> str:
@@ -163,9 +172,9 @@ def checked_root(root: Path, *, vault: Path, extra_synced: Sequence[Path] = ()) 
     return check_blob_location(expanded, vault=vault, extra_synced=extra_synced)
 
 
-def _stage_into(directory: Path, source: BinaryIO, *, max_bytes: int) -> StagedBlob:
+def _stage_into(directory: Path, source: BinaryIO, *, max_bytes: int, tag: str) -> StagedBlob:
     _private_dir(directory)
-    handle, name = tempfile.mkstemp(prefix=".stage-", suffix=".tmp", dir=directory)
+    handle, name = tempfile.mkstemp(prefix=f".stage-{tag}-", suffix=".tmp", dir=directory)
     temporary = Path(name)
     digest = hashlib.sha256()
     size = 0
@@ -198,20 +207,29 @@ def stage_blob(
 
     The staging area does not depend on a vault id, so an original can be
     staged before the vault lock is taken; :meth:`BlobStore.link` then moves
-    it into the vault's blob directory under the same root.
+    it into the vault's blob directory under the same root. The file name
+    carries :func:`vault_stage_tag` of ``vault``, so a stale stage is reported
+    (and reclaimed) only by the vault that made it.
     Raises ``ValueError`` (and leaves nothing behind) past ``max_bytes``.
     """
 
     resolved_root = checked_root(root, vault=vault, extra_synced=extra_synced)
     _private_dir(resolved_root)
-    return _stage_into(resolved_root / STAGING_DIR, source, max_bytes=max_bytes)
+    return _stage_into(
+        resolved_root / STAGING_DIR, source, max_bytes=max_bytes, tag=vault_stage_tag(vault)
+    )
 
 
 class BlobStore:
-    """The blob directory of one vault (``<root>/<vault id>``)."""
+    """The blob directory of one vault (``<root>/<vault id>``).
 
-    def __init__(self, directory: Path) -> None:
+    ``stage_tag`` is the vault's :func:`vault_stage_tag`: staging files with
+    another tag belong to another vault under the same root.
+    """
+
+    def __init__(self, directory: Path, stage_tag: str) -> None:
         self.directory = directory
+        self.stage_tag = stage_tag
 
     @property
     def staging(self) -> Path:
@@ -232,40 +250,52 @@ class BlobStore:
         """The blob dir for ``vault_id`` under ``root``, location-checked.
 
         ``root`` itself may not be a symlink (its parents may: ``/tmp`` is one
-        on macOS). With ``create`` the directories are made 0700.
+        on macOS). With ``create`` the directories are made 0700; otherwise
+        :meth:`link` makes them when it first stores a blob.
         """
 
         resolved_root = checked_root(root, vault=vault, extra_synced=extra_synced)
         directory = resolved_root / vault_id
+        store = cls(directory, vault_stage_tag(vault))
         if create:
-            _private_dir(resolved_root)
-            _private_dir(directory)
+            store.ensure()
         elif directory.is_symlink():
             raise BlobLocationError("blob directory is a symlink")
-        return cls(directory)
+        return store
+
+    def ensure(self) -> None:
+        """Create the root and this vault's blob directory (0700); refuse symlinks."""
+
+        _private_dir(self.directory.parent)
+        _private_dir(self.directory)
 
     def path_for(self, sha256: str) -> Path:
         sha = check_sha(sha256)
         return self.directory / sha[:2] / sha
 
-    def stage(self, source: BinaryIO, *, max_bytes: int) -> StagedBlob:
-        """Copy ``source`` into the root's staging area while hashing it."""
+    def has(self, sha256: str) -> bool:
+        """A file (of any kind) is at the address of ``sha256``; nothing is hashed."""
 
-        _private_dir(self.directory.parent)
-        return _stage_into(self.staging, source, max_bytes=max_bytes)
+        try:
+            os.lstat(self.path_for(sha256))
+        except FileNotFoundError:
+            return False
+        return True
 
     def link(self, staged: StagedBlob) -> bool:
         """Move ``staged`` to its content address. ``False``: the blob was already there.
 
         An existing blob is re-hashed first (only that one blob); one that no
         longer matches its address raises ``IntegrityError`` instead of being
-        reused or overwritten.
+        reused or overwritten. A blob staged under another root (the root
+        changed in between) is refused before any directory is created.
         """
 
         target = self.path_for(staged.sha256)
         if staged.temporary.parent != self.staging:
             staged.discard()
             raise IntegrityError("the blob root changed while the original was staged; retry")
+        self.ensure()
         _private_dir(target.parent)
         existing = self.check(staged.sha256, expected_size=staged.size)
         if existing.status == "ok":
@@ -305,16 +335,10 @@ class BlobStore:
             return BlobCheck(sha256, "modified", actual, size, loose)
         return BlobCheck(sha256, "ok", actual, size, loose)
 
-    def stale_stages(self, *, older_than: float = STALE_STAGE_SECONDS) -> list[str]:
-        """Staging temp files left by an interrupted add, older than ``older_than`` seconds.
-
-        Looks in the root's staging area and in the blob directory itself.
-        Younger files may belong to an add still running, so they are skipped.
-        Names are relative to the blob root; nothing is deleted.
-        """
-
+    def _stale(self, older_than: float) -> tuple[list[Path], int]:
         cutoff = time.time() - older_than
-        found: list[str] = []
+        own: list[Path] = []
+        foreign = 0
         for directory in (self.staging, self.directory):
             if directory.is_symlink() or not directory.is_dir():
                 continue
@@ -323,9 +347,58 @@ class BlobStore:
                     info = os.lstat(item)
                 except FileNotFoundError:
                     continue
-                if info.st_mtime < cutoff:
-                    found.append(f"{directory.name}/{item.name}")
-        return found
+                if info.st_mtime >= cutoff or not stat.S_ISREG(info.st_mode):
+                    continue
+                tagged = _TAGGED_STAGE_RE.fullmatch(item.name)
+                # The vault's own blob directory holds only this vault's files.
+                if directory == self.directory or (tagged and tagged.group(1) == self.stage_tag):
+                    own.append(item)
+                else:
+                    foreign += 1
+        return own, foreign
+
+    def stale_stages(self, *, older_than: float = STALE_STAGE_SECONDS) -> list[str]:
+        """This vault's staging temp files left by an interrupted add, older than ``older_than``.
+
+        Looks in the root's staging area (files tagged with this vault) and in
+        the blob directory itself. Younger files may belong to an add still
+        running, so they are skipped. Names are relative to the blob root;
+        nothing is deleted.
+        """
+
+        own, _ = self._stale(older_than)
+        return [f"{item.parent.name}/{item.name}" for item in own]
+
+    def foreign_stale_stages(self, *, older_than: float = STALE_STAGE_SECONDS) -> int:
+        """How many stale staging files under the root belong to other vaults (or to none).
+
+        Only a count: their names would say nothing useful to this vault, and
+        this vault never deletes them.
+        """
+
+        _, foreign = self._stale(older_than)
+        return foreign
+
+    def reclaim_stale_stages(self, *, older_than: float = STALE_STAGE_SECONDS) -> list[str]:
+        """Delete this vault's stale staging files (never another vault's). Returns their names."""
+
+        own, _ = self._stale(older_than)
+        removed: list[str] = []
+        for item in own:
+            item.unlink(missing_ok=True)
+            removed.append(f"{item.parent.name}/{item.name}")
+        return removed
+
+    def stored_bytes(self) -> int:
+        """Total size of the files at blob addresses (``lstat`` only, nothing hashed)."""
+
+        total = 0
+        for sha in self.stored():
+            try:
+                total += os.lstat(self.path_for(sha)).st_size
+            except FileNotFoundError:
+                continue
+        return total
 
     def stored(self) -> Iterator[str]:
         """Every sha256 with a file at its address (no hashing). Temp files skipped."""
@@ -355,4 +428,5 @@ __all__ = [
     "check_sha",
     "hash_stream",
     "stage_blob",
+    "vault_stage_tag",
 ]

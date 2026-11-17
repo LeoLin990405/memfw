@@ -252,6 +252,9 @@ class ConversationSource(Protocol):
 
 # -- private-location guard -------------------------------------------------------
 
+#: Synced folders under the home directory. ``Documents`` and ``Desktop`` are
+#: synced by macOS iCloud "Desktop & Documents". ``memfw.attachments.blobs``
+#: keeps the same tuple (a test keeps the two equal).
 SYNCED_MARKERS = (
     ("Library", "Mobile Documents"),
     ("Library", "CloudStorage"),
@@ -261,6 +264,8 @@ SYNCED_MARKERS = (
     ("iCloud Drive",),
     ("Nextcloud",),
     ("Syncthing",),
+    ("Documents",),
+    ("Desktop",),
 )
 
 
@@ -280,8 +285,10 @@ def check_private_location(
             raise ConversationError("refusing a data path inside the vault")
     for marker in SYNCED_MARKERS:
         synced = home.joinpath(*marker)
-        if synced in resolved.parents:
-            raise ConversationError("refusing a data path inside a synced folder")
+        # Also the marker's target: ``~/Dropbox`` is often a symlink elsewhere.
+        for candidate in {synced, synced.resolve()}:
+            if resolved == candidate or candidate in resolved.parents:
+                raise ConversationError("refusing a data path inside a synced folder")
     for extra in extra_synced:
         synced = extra.expanduser().resolve()
         if resolved == synced or synced in resolved.parents:

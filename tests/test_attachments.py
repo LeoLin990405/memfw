@@ -75,6 +75,16 @@ def _cli(*args: str) -> Any:
     return CliRunner().invoke(app, list(args))
 
 
+def _stage(repository: Repository, stream: Any, *, max_bytes: int = 100) -> Any:
+    """Stage ``stream`` under the vault's blob root, as ``add_attachment`` does."""
+
+    store = repository.attachment_blob_store()
+    assert store is not None
+    return blobs_module.stage_blob(
+        store.directory.parent, stream, vault=repository.root, max_bytes=max_bytes
+    )
+
+
 # --- the event manifest -------------------------------------------------------------
 
 
@@ -99,9 +109,8 @@ def test_every_event_kind_is_classified_exactly_once() -> None:
 def test_synced_markers_cover_the_history_guard() -> None:
     from memfw.history.transcripts import SYNCED_MARKERS
 
-    assert set(SYNCED_MARKERS) <= set(blobs_module.SYNCED_MARKERS)
-    extra = set(blobs_module.SYNCED_MARKERS) - set(SYNCED_MARKERS)
-    assert extra == {("Documents",), ("Desktop",)}
+    assert SYNCED_MARKERS == blobs_module.SYNCED_MARKERS
+    assert {("Documents",), ("Desktop",)} <= set(SYNCED_MARKERS)
 
 
 # --- add / list / show / verify -------------------------------------------------------
@@ -161,7 +170,11 @@ def test_add_list_show_verify(tmp_path: Path, private_home: Path) -> None:
     assert kinds == [EventKind.CONFIG_CHANGE, EventKind.ATTACH]
     attach = repository.events()[-1]
     assert attach.memory_id == attachment_id
-    assert attach.details == {"storage": "embedded"}
+    assert attach.details == {
+        "storage": "embedded",
+        "size": len(source.read_bytes()),
+        "blob": "new",
+    }
     assert attach.after_hash == hashlib.sha256(record_text.encode()).hexdigest()
 
 
@@ -333,7 +346,7 @@ def test_orphan_blob_is_reported_never_deleted(tmp_path: Path) -> None:
     store = repository.attachment_blob_store()
     assert store is not None
     with _file(tmp_path, "o.txt", b"orphan").open("rb") as stream:
-        staged = store.stage(stream, max_bytes=100)
+        staged = _stage(repository, stream)
     store.link(staged)
     statuses = _statuses(repository)
     assert statuses == [(None, "blob_orphan")]
@@ -997,13 +1010,13 @@ def test_stale_stages_are_reported_and_fsck_checks_a_vault_with_only_a_vault_id(
     assert store is not None
     # An add that stopped after linking its blob, before any record existed.
     with _file(tmp_path, "o.txt", b"orphan").open("rb") as stream:
-        orphan = store.stage(stream, max_bytes=100)
+        orphan = _stage(repository, stream)
     store.link(orphan)
     # And one that stopped while staging, long ago; plus one still running.
     with _file(tmp_path, "s.txt", b"stale").open("rb") as stream:
-        stale = store.stage(stream, max_bytes=100)
+        stale = _stage(repository, stream)
     with _file(tmp_path, "r.txt", b"running").open("rb") as stream:
-        running = store.stage(stream, max_bytes=100)
+        running = _stage(repository, stream)
     old = stale.temporary.stat().st_mtime - 2 * blobs_module.STALE_STAGE_SECONDS
     os.utime(stale.temporary, (old, old))
     assert running.temporary.exists()
@@ -1020,3 +1033,183 @@ def test_stale_stages_are_reported_and_fsck_checks_a_vault_with_only_a_vault_id(
         "blob_orphan",
         "blob_stage_stale",
     ]
+
+
+# --- MM1a review follow-ups ----------------------------------------------------------
+
+
+def _parse_counter(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
+    """Count every attachment record parse (``parse_record`` and the YAML loads in it)."""
+
+    from memfw.attachments import records as records_module
+    from memfw.attachments import store as store_module
+
+    counts = {"parse": 0}
+    original = records_module.parse_record
+
+    def counted(raw: bytes, expected_id: str) -> AttachmentRecord:
+        counts["parse"] += 1
+        return original(raw, expected_id)
+
+    monkeypatch.setattr(records_module, "parse_record", counted)
+    monkeypatch.setattr(store_module, "parse_record", counted)
+    return counts
+
+
+def test_add_cost_does_not_grow_with_the_record_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def parses_per_add(count: int) -> tuple[int, int]:
+        repository = _repo(tmp_path / f"n{count}")
+        for index in range(count):
+            repository.add_attachment(_file(tmp_path, f"f{count}-{index}.txt", f"{index}".encode()))
+        # A nested context: undoing it must not undo the fixture's HOME.
+        with monkeypatch.context() as patch:
+            counts = _parse_counter(patch)
+            repository.add_attachment(_file(tmp_path, f"new{count}.txt", b"new bytes"))
+            fresh = counts["parse"]
+            counts["parse"] = 0
+            repository.add_attachment(_file(tmp_path, f"dup{count}.txt", b"0"))
+            return fresh, counts["parse"]
+
+    few = parses_per_add(2)
+    many = parses_per_add(40)
+    assert few == many
+    # Only the new record's own read-back checks (draft and final) parse anything.
+    assert many == (2, 2)
+
+
+def test_total_is_summed_from_the_log(tmp_path: Path) -> None:
+    repository = _repo(tmp_path)
+    config = repository.read_config()
+    config.update(attachments_max_total_bytes=10)
+    repository.configure(config)
+    first = repository.add_attachment(_file(tmp_path, "a.txt", b"123456")).record
+    duplicate = repository.add_attachment(_file(tmp_path, "b.txt", b"123456"))
+    assert duplicate.deduplicated
+    attach = [event for event in repository.events() if event.kind == EventKind.ATTACH]
+    assert [event.details for event in attach] == [
+        {"storage": "embedded", "size": 6, "blob": "new"},
+        {"storage": "embedded", "size": 6, "blob": "shared"},
+    ]
+    store = repository.attachment_blob_store()
+    assert store is not None
+    from memfw.attachments.store import embedded_total
+
+    assert embedded_total(repository.events(), store) == 6
+    # 6 + 4 fits exactly; one byte more does not.
+    repository.add_attachment(_file(tmp_path, "c.txt", b"abcd"))
+    with pytest.raises(ValueError, match="attachments_max_total_bytes"):
+        repository.add_attachment(_file(tmp_path, "d.txt", b"z"))
+    assert repository.verify_attachments()[1] == []
+    assert first.id in repository.attachment_ids()
+
+
+def test_total_of_a_log_without_sizes_falls_back_to_the_stored_blobs(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from memfw.attachments.store import embedded_total
+
+    repository = _repo(tmp_path)
+    repository.add_attachment(_file(tmp_path, "a.txt", b"123456"))
+    repository.add_attachment(_file(tmp_path, "b.txt", b"abc"))
+    store = repository.attachment_blob_store()
+    assert store is not None
+
+    def event(identifier: str, details: dict[str, Any]) -> Any:
+        return SimpleNamespace(kind=EventKind.ATTACH, memory_id=identifier, details=details)
+
+    # An MM1a log (details carry only storage): the blob files' sizes are summed.
+    legacy = [event("a", {"storage": "embedded"}), event("b", {"storage": "embedded"})]
+    assert embedded_total(legacy, store) == 9
+    # Mixed: one event without size is enough to fall back.
+    mixed = [event("a", {"storage": "embedded", "size": 6, "blob": "new"}), legacy[1]]
+    assert embedded_total(mixed, store) == 9
+    # Shared and referenced events add nothing; config events are skipped.
+    current = [
+        event("a", {"storage": "embedded", "size": 6, "blob": "new"}),
+        event("b", {"storage": "embedded", "size": 6, "blob": "shared"}),
+        event("c", {"storage": "referenced", "size": 1000}),
+        SimpleNamespace(kind=EventKind.CONFIG_CHANGE, memory_id="x", details={}),
+    ]
+    assert embedded_total(current, store) == 6
+
+
+def test_stale_stages_are_attributed_to_their_vault(tmp_path: Path) -> None:
+    shared_root = tmp_path / "shared-root"
+    first = _repo(tmp_path / "one")
+    second = _repo(tmp_path / "two")
+    for repository in (first, second):
+        _set_root(repository, shared_root)
+        repository.ensure_vault_id()
+        assert repository.attachment_blob_store(create=True) is not None
+    with _file(tmp_path, "s1.txt", b"stale one").open("rb") as stream:
+        mine = _stage(first, stream)
+    with _file(tmp_path, "s2.txt", b"stale two").open("rb") as stream:
+        theirs = _stage(second, stream)
+    # A stage from before tags: nobody's.
+    untagged = shared_root / ".staging" / ".stage-abc_123x.tmp"
+    untagged.write_bytes(b"untagged")
+    for path in (mine.temporary, theirs.temporary, untagged):
+        old = path.stat().st_mtime - 2 * blobs_module.STALE_STAGE_SECONDS
+        os.utime(path, (old, old))
+    tag = blobs_module.vault_stage_tag(first.root)
+    assert mine.temporary.name.startswith(f".stage-{tag}-")
+    assert theirs.temporary.name.startswith(f".stage-{blobs_module.vault_stage_tag(second.root)}-")
+
+    def rows(repository: Repository) -> list[tuple[str, str | None]]:
+        return [(row["kind"], row["message"]) for row in repository.fsck()]
+
+    assert rows(first) == [
+        ("attachment_blob_stage_stale", f".staging/{mine.temporary.name}"),
+        ("attachment_blob_stage_foreign", "2 stale staging file(s) of other vaults"),
+    ]
+    assert rows(second) == [
+        ("attachment_blob_stage_stale", f".staging/{theirs.temporary.name}"),
+        ("attachment_blob_stage_foreign", "2 stale staging file(s) of other vaults"),
+    ]
+    # Another vault's name never appears in this vault's report.
+    verified = _cli("attach", "verify", "--root", str(first.root))
+    assert verified.exit_code == 0
+    assert theirs.temporary.name not in verified.output
+    assert untagged.name not in verified.output
+    # Reclaiming removes only this vault's stale stages.
+    store = first.attachment_blob_store()
+    assert store is not None
+    assert store.reclaim_stale_stages() == [f".staging/{mine.temporary.name}"]
+    assert not mine.temporary.exists()
+    assert theirs.temporary.exists() and untagged.exists()
+
+
+def test_blob_root_changed_while_staged_is_refused(tmp_path: Path) -> None:
+    repository = _repo(tmp_path)
+    old_root = tmp_path / "old-root"
+    new_root = tmp_path / "new-root"
+    _set_root(repository, old_root)
+    vault_id = repository.ensure_vault_id()
+    with _file(tmp_path, "a.txt", b"staged under the old root").open("rb") as stream:
+        staged = _stage(repository, stream)
+    assert staged.temporary.parent == old_root.resolve() / ".staging"
+    _set_root(repository, new_root)
+    before = repository.events_path.read_bytes()
+    draft = AttachmentRecord(
+        id=new_attachment_id(NOW, b"\0" * 10),
+        sha256="0" * 64,
+        size=0,
+        media_type="text/plain",
+        recorded_at=NOW.isoformat(),
+    )
+    with pytest.raises(IntegrityError, match="blob root changed"):
+        repository.add_attachment_record(draft, staged)
+    # Nothing was written: no event, no record, no directory under the new root.
+    assert repository.events_path.read_bytes() == before
+    assert not repository.pending_path.exists()
+    assert not (repository.root / ATTACHMENTS_DIR).exists()
+    assert not new_root.exists()
+    assert not (new_root / vault_id).exists()
+    assert not staged.temporary.exists()
+    assert not (old_root / vault_id).exists()
+
+
+def test_blob_store_has_no_stage_method() -> None:
+    assert not hasattr(BlobStore, "stage")
