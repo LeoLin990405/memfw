@@ -31,6 +31,7 @@ from ..core.models import (
     Tier,
     _same_instant,
     fold_temporal_aliases,
+    foreign_event_kind_counts,
 )
 from ..ports.privacy import (
     effective_level,
@@ -864,7 +865,9 @@ class MemoryOperationsMixin:
         events = [
             event.after_hash
             for event in self.events()
-            if event.memory_id == memory_id and event.after_hash is not None
+            if event.memory_id == memory_id
+            and event.after_hash is not None
+            and not event.is_foreign_kind
         ]
         current = hashlib.sha256(self._current_path(memory_id).read_bytes()).hexdigest()
         previous: list[str] = []
@@ -1027,7 +1030,9 @@ class MemoryOperationsMixin:
                 (
                     event.after_hash
                     for event in reversed(self.events())
-                    if event.memory_id == memory_id and event.after_hash is not None
+                    if event.memory_id == memory_id
+                    and event.after_hash is not None
+                    and not event.is_foreign_kind
                 ),
                 None,
             )
@@ -1135,6 +1140,13 @@ class MemoryOperationsMixin:
         event = next((item for item in event_list if item.event_id == event_id), None)
         if event is None:
             raise NotFoundError(f"Event not found: {event_id}")
+        if event.is_foreign_kind:
+            # Written by a newer memfw and marked as never affecting memories:
+            # there is no memory state here to restore.
+            raise IntegrityError(
+                f"Event {event_id} has kind {event.kind!s}, which this memfw version does "
+                "not know; rollback acts only on memory events"
+            )
         if event.kind == EventKind.DELETE:
             raise DeletedContentUnavailable(
                 "A hard-deleted memory has no retained version to restore"
@@ -1150,7 +1162,9 @@ class MemoryOperationsMixin:
         retained_hashes = [
             item.after_hash
             for item in event_list
-            if item.memory_id == event.memory_id and item.after_hash is not None
+            if item.memory_id == event.memory_id
+            and item.after_hash is not None
+            and not item.is_foreign_kind
         ][-rollback_keep:]
         if event.before_hash not in retained_hashes:
             raise DeletedContentUnavailable(
@@ -1379,6 +1393,19 @@ class MemoryOperationsMixin:
         # Attachments are checked on their own (read-only) and never projected
         # as memories, so they can never produce an external_delete (MM1a).
         issues.extend(cast(Any, self).attachment_fsck_issues())
+        # Marked events of kinds this version does not know (written by a newer
+        # memfw): reported once per kind, never an error, never projected.
+        for kind, count in foreign_event_kind_counts(self.events()).items():
+            issues.append(
+                {
+                    "memory_id": None,
+                    "kind": "unknown_non_memory_events",
+                    "expected_hash": None,
+                    "actual_hash": None,
+                    "message": f"{count} event(s) of kind {kind} that this memfw version "
+                    "does not know, marked as never affecting memories; skipped",
+                }
+            )
         return issues
 
 

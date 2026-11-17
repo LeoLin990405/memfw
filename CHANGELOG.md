@@ -14,6 +14,23 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 
 ## [Unreleased]
 
+### Added — event log forward compatibility for marked non-memory kinds
+
+- **Forward-compat contract for v0.4.x:** a v0.4.x reader accepts an event
+  of a kind it does not know only when the event carries
+  `details.projection == "none"`, a newer writer's promise that the event
+  never changes memory state. Such events are kept byte-for-byte (also
+  through `log compact`, whose summary keeps all their details and their
+  canonical line), skipped by `replay`, counted by `log verify`
+  (`unknown_non_memory_event_count`, `unknown_non_memory_event_kinds`),
+  reported by `fsck` (`unknown_non_memory_events`, not an error) and
+  refused by `rollback`. An unknown kind without the marker is still
+  refused exactly as in 0.3.0. Kinds added after v0.4.0 that never change a
+  memory must be written with the marker; the eight MM1a attachment kinds
+  are known to every v0.4.x reader and stay unmarked (no on-disk change).
+  Without such events every command's output is unchanged. See
+  `docs/attachments.md` ("Unknown event kinds").
+
 ### Fixed — recall reads the meta-index lifecycle; `kh:` note refs resolve
 
 - The recall vault resolver (`VaultIdResolver`, behind every `two_stage`

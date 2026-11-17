@@ -2,20 +2,29 @@
 
 from __future__ import annotations
 
+import re
+from collections import Counter
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    FieldSerializationInfo,
     PrivateAttr,
     SerializerFunctionWrapHandler,
+    TypeAdapter,
+    ValidatorFunctionWrapHandler,
+    WrapValidator,
+    field_serializer,
     field_validator,
     model_serializer,
     model_validator,
 )
+from pydantic_core import core_schema
 
 from .epistemic import CausalLevel, CausalRecord, EpistemicType, ExperiencePoint, OpenQuestion
 
@@ -139,6 +148,56 @@ ATTACHMENT_EVENT_KINDS: frozenset[EventKind] = frozenset(
         EventKind.ATTACH_RELINK,
     }
 )
+
+
+#: Forward compatibility (v0.4.x). An event whose kind this version does not
+#: know is accepted only when it carries this marker, ``details.projection ==
+#: "none"``: a promise by the newer writer that the event never changes a
+#: memory's committed state. Such an event is kept byte-for-byte (also through
+#: log compaction), skipped by ``replay``, listed by ``log verify`` and
+#: ``fsck``, and never acted on by ``rollback``. An unknown kind without the
+#: marker is refused exactly as before (fail closed). Known kinds are classified
+#: by the tables above alone; the marker on them changes nothing. See
+#: ``docs/attachments.md`` ("Unknown event kinds").
+NON_MEMORY_MARKER_KEY = "projection"
+NON_MEMORY_MARKER_VALUE = "none"
+_FOREIGN_KIND_NAME = re.compile(r"[a-z][a-z0-9_.-]{0,63}")
+
+
+class ForeignEventKind(str):
+    """An event kind written by a newer memfw and marked as never affecting memories.
+
+    It is a ``str`` with ``.value`` (like :class:`EventKind`) so code that
+    prints a kind works unchanged; it never equals an :class:`EventKind`.
+    Only :class:`Event` validation creates one, from a marked event.
+    """
+
+    __slots__ = ()
+
+    @property
+    def value(self) -> str:
+        return str(self)
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source: Any, handler: Any) -> core_schema.CoreSchema:
+        return core_schema.is_instance_schema(cls)
+
+
+_EVENT_KIND_ADAPTER: TypeAdapter[EventKind] = TypeAdapter(EventKind)
+
+
+def _validate_event_kind(value: Any, handler: ValidatorFunctionWrapHandler) -> Any:
+    if isinstance(value, ForeignEventKind):
+        return value
+    # Same validation and error as a plain ``EventKind`` field, so an unmarked
+    # unknown kind fails exactly as in 0.3.0 (``input_value='<kind>'``).
+    return _EVENT_KIND_ADAPTER.validate_python(value)
+
+
+def foreign_event_kind_counts(events: Iterable[Event]) -> dict[str, int]:
+    """Count marked events of kinds this version does not know, by kind name."""
+    counts = Counter(str(event.kind) for event in events if event.is_foreign_kind)
+    return dict(sorted(counts.items()))
 
 
 def utc_now() -> datetime:
@@ -378,7 +437,7 @@ class Event(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     event_id: str
-    kind: EventKind
+    kind: Annotated[EventKind | ForeignEventKind, WrapValidator(_validate_event_kind)]
     memory_id: str
     timestamp: datetime
     actor: str
@@ -393,6 +452,34 @@ class Event(BaseModel):
     @property
     def is_compacted_summary(self) -> bool:
         return self._compacted
+
+    @property
+    def is_foreign_kind(self) -> bool:
+        """Whether this is a marked event of a kind this version does not know."""
+        return isinstance(self.kind, ForeignEventKind)
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_marked_foreign_kind(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        kind = data.get("kind")
+        details = data.get("details")
+        if (
+            type(kind) is str
+            and kind not in EventKind._value2member_map_
+            and _FOREIGN_KIND_NAME.fullmatch(kind)
+            and isinstance(details, dict)
+            and details.get(NON_MEMORY_MARKER_KEY) == NON_MEMORY_MARKER_VALUE
+        ):
+            return {**data, "kind": ForeignEventKind(kind)}
+        return data
+
+    @field_serializer("kind")
+    def serialize_kind(
+        self, kind: EventKind | ForeignEventKind, info: FieldSerializationInfo
+    ) -> EventKind | ForeignEventKind | str:
+        return str(kind.value) if info.mode_is_json() else kind
 
     @field_validator("timestamp")
     @classmethod

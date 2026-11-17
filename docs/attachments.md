@@ -171,9 +171,9 @@ MM1b and MM2 so their classification is fixed today.
 `memfw.core.models` holds the one event manifest: every `EventKind` is in
 exactly one of `MEMORY_EVENT_KINDS` (projected by `replay` onto `memories/`)
 and `NON_MEMORY_EVENT_KINDS` (skipped by `replay` and by the log-segment
-snapshot); a test fails when a new kind is in neither. The two hand-written
-skip lists that `replay()` and `_project_events()` used to carry are now that
-one constant, with the same members for the old kinds.
+snapshot); a test fails when a new kind is in neither. `replay()` and
+`_project_events()` project only `MEMORY_EVENT_KINDS` and skip everything
+else, which for the known kinds is exactly `NON_MEMORY_EVENT_KINDS`.
 
 An `attach` event names the attachment id (`memory_id`), the record's hash
 (`after_hash`) and `details: {"storage": "embedded", "size": N, "blob":
@@ -182,6 +182,53 @@ carries the original's sha256, name or content, so a later purge has nothing to 
 from the hash-chained log. The first attach also records one `config_change`
 for `vault_id` (`vault.yaml` is rewritten by `configure`, like
 `memfw privacy legacy-default`).
+
+### Unknown event kinds (forward compatibility, v0.4.x)
+
+memfw 0.3.0 refuses an event log with any kind it does not know. From v0.4
+a reader also accepts an unknown kind, but only when the event carries an
+explicit marker that it never changes memory state:
+
+```json
+{"kind": "proxy_retire", "details": {"projection": "none", ...}, ...}
+```
+
+* **The marker** is `details.projection == "none"` (the exact string). It sits
+  in `details`, so it is covered by the event hash, adds no field to the event
+  model and leaves every existing event's bytes alone. The kind name must
+  match `[a-z][a-z0-9_.-]{0,63}`. A namespaced kind (`x-<name>`) was not
+  chosen: a kind would keep its prefix after a later version learns it.
+* **Unmarked unknown kinds are refused exactly as before**: the same
+  `Invalid event … input_value='<kind>'` integrity error. Any other marker
+  value (`"memory"`, `null`, `"None"`, a different key) counts as unmarked.
+* **Known kinds are classified by the tables above alone**; a marker on them
+  changes nothing (a marked `create` still projects).
+* A marked unknown event (`ForeignEventKind` in `memfw.core.models`) is:
+  * kept byte-for-byte: the active log is never rewritten, and
+    `log compact` archives it losslessly (all of its `details`, plus its
+    canonical line as `event_line` in the summary row), so it reads back
+    with the same bytes and hash, also after compacting again;
+  * skipped by `replay` and the log-segment snapshot (never a memory state,
+    never an `external_delete`), and ignored by the history retention and
+    `rollback` retention windows even when its `memory_id` names a memory;
+  * listed by `log verify` as `unknown_non_memory_event_count` and
+    `unknown_non_memory_event_kinds` (`{kind: count}`), keys that appear only
+    when there is at least one;
+  * reported by `fsck` as one `unknown_non_memory_events` row per kind (a
+    report, not an error; `fsck` changes nothing for it);
+  * never acted on by `rollback`: `rollback <event>` refuses it ("rollback
+    acts only on memory events") and `--dry-run` reports `available: false`.
+* **Contract for writers after v0.4.0**: a new kind that never changes a
+  memory must be written with the marker so that v0.4.x reads the log. A new
+  kind that can change a memory must not carry it; v0.4.x then refuses the
+  log, which is the intended fail-closed outcome.
+* **The eight MM1a kinds do not carry the marker** and do not need it: every
+  v0.4.x reader knows them (including the reserved MM1b/MM2 ones), and 0.3.0
+  refuses them with or without it (its model has no such rule). Already
+  written `attach` events keep their bytes.
+* Checked against a fixture vault whose log a hypothetical newer version
+  extended (`tests/fixtures/event_forward_compat/newer-log`,
+  `tests/test_event_forward_compat.py`).
 
 ## Integrity
 
