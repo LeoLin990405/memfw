@@ -13,7 +13,9 @@ page (``{"page": 3, "bbox": [x0, y0, x1, y1]}``), image boxes in pixels with
 the origin at the top-left (``{"bbox": [...]}``); a segment without a box is
 ``{"page": N}`` (PDF) or has no locator (the whole image). A box outside the
 page (0.5 unit tolerance) or of zero size is dropped, its text kept; the
-number dropped goes into ``coverage.detail``. ``source`` declares the pages and
+number dropped goes into ``coverage.detail``. A dropped box or a segment
+that had to be cut (over 65 536 characters, or a line that would open a
+segment marker) makes ``coverage.status`` ``partial``. ``source`` declares the pages and
 page sizes (PDF) or the image size, so memfw can check every locator.
 
 :func:`generate_proxy` runs one job: privacy clearance, sha256 of the
@@ -102,12 +104,14 @@ def _to_memfw_frame(
     return box
 
 
-def _clean(text: str) -> str:
-    """Segment text MM2a accepts: no NUL, no line that opens a segment marker, capped."""
+def _clean(text: str) -> tuple[str, bool]:
+    """Segment text MM2a accepts (no NUL, no segment-marker line, capped) and whether it was cut."""
 
     lines = [line for line in text.replace("\r\n", "\n").replace("\x00", "").split("\n")]
     kept = [line for line in lines if not line.lstrip().startswith(_MARKER)]
-    return "\n".join(kept).strip()[:MAX_SEGMENT_CHARS].strip()
+    whole = "\n".join(kept).strip()
+    cut = len(kept) != len(lines) or len(whole) > MAX_SEGMENT_CHARS
+    return whole[:MAX_SEGMENT_CHARS].strip(), cut
 
 
 def _span(read: list[int]) -> str:
@@ -135,6 +139,7 @@ def to_proxy_candidate(
     media = result.media
     segments: list[dict[str, Any]] = []
     dropped = 0
+    cut = 0
     read: list[int] = []
     empty: list[int] = []
     for page in result.pages:
@@ -142,7 +147,8 @@ def to_proxy_candidate(
             read.append(page.page)
         found = False
         for line in page.lines:
-            text = _clean(line.text)
+            text, was_cut = _clean(line.text)
+            cut += was_cut
             if not text:
                 continue
             found = True
@@ -174,6 +180,10 @@ def to_proxy_candidate(
         full, detail = True, "image"
     if dropped:
         detail += f"; {dropped} box(es) dropped"
+    if cut:
+        detail += f"; {cut} segment(s) cut"
+    # anything left out (a box, a line, the end of a segment) makes it partial
+    full = full and not dropped and not cut
     source: dict[str, Any] = {}
     if media == "pdf":
         source["pages"] = result.total_pages

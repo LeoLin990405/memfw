@@ -43,7 +43,8 @@ block is used: PDF boxes in points with the origin at the bottom-left of the
 page, image boxes in pixels with the origin at the top-left. Engine
 coordinates are converted (poppler's top-left points: `y' = height - y`); a
 box outside the page or of zero size is dropped and its text kept (counted in
-`coverage.detail`). A segment without a box is `{"page": N}`, or has no
+`coverage.detail`); a dropped box or a segment that had to be cut makes
+`coverage.status` `partial`. A segment without a box is `{"page": N}`, or has no
 locator for a whole image. A run that finds no text at all is refused
 (`no_text`): a proxy needs at least one segment.
 

@@ -31,8 +31,18 @@ _WORD = re.compile(r"<word [^>]*>(.*?)</word>", re.S)
 
 
 def parse_bbox_layout(text: str) -> list[OcrPage]:
-    """Pages of ``pdftotext -bbox-layout`` output: one line per segment, top-left frame."""
+    """Pages of ``pdftotext -bbox-layout`` output: one line per segment, top-left frame.
 
+    Malformed numbers or sizes raise :class:`OcrError` ``pdftotext_unreadable``.
+    """
+
+    try:
+        return _parse_bbox_layout(text)
+    except (ValueError, OcrError):
+        raise OcrError("pdftotext_unreadable") from None
+
+
+def _parse_bbox_layout(text: str) -> list[OcrPage]:
     pages: list[OcrPage] = []
     for number, match in enumerate(_PAGE.finditer(text), 1):
         width, height = float(match.group(1)), float(match.group(2))

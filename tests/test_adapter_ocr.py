@@ -307,7 +307,7 @@ def test_image_boxes_are_top_left_pixels_and_out_of_range_ones_dropped(tmp_path:
     assert first["locator"] == {"bbox": [3, 10, 120, 30]}  # pixels, top-left
     assert candidate["source"] == {"width": 400, "height": 300}
     assert "locator" not in second  # x1 900 > width 400: box dropped, text kept
-    assert candidate["coverage"]["detail"] == "image; 1 box(es) dropped"
+    assert candidate["coverage"] == {"status": "partial", "detail": "image; 1 box(es) dropped"}
 
 
 def test_structured_content_and_protocol_noise_are_handled(
@@ -517,7 +517,7 @@ def test_swap_any_backend_through_the_deriver(tmp_path: Path, pdf: tuple[Path, s
     assert segment["confidence"] == 0.5
     assert kept_text["locator"] == {"page": 1} and kept_text["text"] == "off page"
     assert candidate["coverage"] == {
-        "status": "full",
+        "status": "partial",  # a dropped box is something left out
         "detail": "pages 1-2/2; no text on 1 page(s); 1 box(es) dropped",
     }
     assert fake.paths and fake.paths[0] != path
@@ -640,6 +640,20 @@ def test_no_text_and_marker_lines() -> None:
         created_at=NOW,
     )
     assert candidate["segments"][0]["text"] == "ok\nmore"
+    assert candidate["coverage"] == {"status": "partial", "detail": "pages 1/1; 1 segment(s) cut"}
+    long = OcrResult("t", "1", "pdf", 1, (OcrPage(1, (OcrLine("x" * 70_000),)),))
+    cut = to_proxy_candidate(
+        long,
+        attachment_id=ATT,
+        source_sha256="ab" * 32,
+        media_type="application/pdf",
+        privacy="shared",
+        created_at=NOW,
+    )
+    assert len(cut["segments"][0]["text"]) == 65_536 and cut["coverage"]["status"] == "partial"
+    for bad in ('<page width="1.2.3" height="9">', '<page width="0" height="9">'):
+        with pytest.raises(OcrError, match="pdftotext_unreadable"):
+            parse_bbox_layout(bad + "</page>")
 
 
 def _mm2a() -> Any:
