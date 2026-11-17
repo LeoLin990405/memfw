@@ -54,6 +54,9 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 - Edge and corroboration rebuilds read the vault under its lock, so a rebuild
   beside a write no longer fails with "A pending transaction needs explicit
   `memfw recover`".
+- `memfw forget residue` checks the corroboration projection at its new
+  place, and a leftover vault-root `corroboration.sqlite3` too (store
+  `corroboration_legacy`, listed only when the file exists; remedy: delete it).
 - `memfw concepts lint-relations` strips `memory:`/`mem:` from
   `superseded_by`, `evidence` and `experience.evidence`, as the edge builder
   does (before: a prefixed reference was reported dangling, and a prefixed

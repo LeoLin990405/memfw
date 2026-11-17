@@ -22,6 +22,7 @@ from typer.testing import CliRunner
 import scripts.memfw_readonly_service as service
 from memfw.cli import app
 from memfw.core.repository import Repository
+from memfw.corroboration import projection_path as corroboration_path
 from memfw.curation.residue import list_forget_requests, projection_residue
 from memfw.index import MemoryIndex
 from memfw.ports.usage import UsageSignal
@@ -56,8 +57,11 @@ def _related(repository: Repository) -> Path:
     return path
 
 
-def _corroboration(repository: Repository, memory_id: str) -> Path:
-    path = repository.root / "corroboration.sqlite3"
+def _corroboration(repository: Repository, memory_id: str, path: Path | None = None) -> Path:
+    """A corroboration file naming ``memory_id`` (default: the projection, under ``HOME``)."""
+
+    path = path or corroboration_path(repository.root)
+    path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as connection:
         connection.execute(
             "CREATE TABLE IF NOT EXISTS mentions (memory_id TEXT NOT NULL, app TEXT NOT NULL,"
@@ -131,12 +135,28 @@ def test_hard_delete_leaves_projections_until_they_are_rebuilt(tmp_path: Path, h
     assert result.exit_code == 1, result.output
 
     RelatedIndex(related).rebuild_memory(repository)
-    (repository.root / "corroboration.sqlite3").unlink()
+    corroboration_path(repository.root).unlink()
     usage.unlink()
     report = projection_residue(repository.root, "mem-b", home=home)
     assert report == {**report, "clean": True, "residue": []}
     result = runner.invoke(app, ["forget", "residue", "mem-b", "--root", str(repository.root)])
     assert result.exit_code == 0, result.output
+
+
+def test_a_legacy_vault_root_corroboration_file_is_residue(tmp_path: Path, home: Path) -> None:
+    """memfw no longer reads it, but it still names a deleted id inside the vault."""
+
+    repository = _vault(tmp_path)
+    clean = projection_residue(repository.root, "mem-b", home=home)
+    assert "corroboration_legacy" not in _checks(clean)  # absent: not listed
+    legacy = _corroboration(repository, "mem-b", repository.root / "corroboration.sqlite3")
+    repository.delete("mem-b")
+    MemoryIndex(repository.index_path).rebuild(repository)
+    report = projection_residue(repository.root, "mem-b", home=home)
+    assert report["residue"] == ["corroboration_legacy"]
+    assert _checks(report)["corroboration_legacy"]["remedy"].startswith("delete")
+    legacy.unlink()
+    assert projection_residue(repository.root, "mem-b", home=home)["clean"] is True
 
 
 def test_soft_close_keeps_history_rows_but_not_current_ones(tmp_path: Path, home: Path) -> None:
