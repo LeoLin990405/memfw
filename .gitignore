@@ -48,6 +48,8 @@ model_cache/
 /memfw-data/
 **/pilot_vault/
 **/memories/
+# Checked-in test fixture vault (no private content).
+!/tests/fixtures/event_forward_compat/newer-log/memories/
 /pilot_queries*.md
 /query_approval.json
 /events.jsonl
