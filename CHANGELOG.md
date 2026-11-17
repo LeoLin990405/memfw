@@ -11,6 +11,18 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
+### Fixed — loopback requests never go through an environment proxy (security)
+
+- `memfw.notes.http.open_http` (embeddings for notes, memory hybrid search
+  and the notes model helpers) kept urllib's default `ProxyHandler`: with
+  `HTTP_PROXY` / `HTTPS_PROXY` set and `no_proxy` not listing the host, a
+  request to a local embedding or model service on `localhost` or
+  `127.0.0.1` was sent through the proxy, memory and note text included.
+  A request to a loopback host (`localhost`, `127.0.0.0/8`, `::1`,
+  `::ffff:127.x`) now always goes direct. Other hosts still honour the
+  environment's proxy settings. New helpers `is_loopback_host` and
+  `is_loopback_url`.
+
 ### Fixed — a top-level `sensitivity:` key is read the same at every exit
 
 - A hand-added top-level `sensitivity:` front matter key was treated as
