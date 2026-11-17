@@ -570,3 +570,22 @@ def test_mcp_switches_are_validated_and_handlers_route(tmp_path: Path) -> None:
     assert [s["n"] for s in got["proxies"][0]["segments"]] == [1]
     with pytest.raises(PermissionError):
         handlers["attachment_get"]({"id": ids["shared"], "original": "path"})
+
+
+def test_an_index_from_another_vault_at_the_same_path_is_never_used(tmp_path: Path) -> None:
+    import shutil
+
+    repository, ids = _corpus(tmp_path)
+    index = ensure_proxy_index(repository, now=NOW)
+    assert index is not None
+    assert index.meta() is not None and index.meta()["vault_path"]  # type: ignore[index]
+    # Delete the vault and create another one at the same path with its own proxy.
+    shutil.rmtree(repository.root)
+    fresh = _repo(tmp_path)
+    data = b"%PDF fresh original"
+    attachment = _attach(fresh, tmp_path, data, "fresh.pdf")
+    _proxy(fresh, tmp_path, attachment, data, ["fresh vault text"])
+    rebuilt = ensure_proxy_index(fresh, now=NOW)
+    assert rebuilt is not None and rebuilt.path == index.path
+    hits = rebuilt.search("backup schedule fresh", tenant="", clearance=None, limit=50)
+    assert {hit.attachment_id for hit in hits} == {attachment}

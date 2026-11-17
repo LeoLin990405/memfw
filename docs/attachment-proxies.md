@@ -250,8 +250,11 @@ read-only service, OKF and every projection keep reading `index.sqlite3` and
   proxy and attachment). Attachments belong to the default tenant `""`, so a
   caller bound to another tenant (or to a source allow-list: attachments have
   no source) sees none. Search filters both in SQL.
-* The index stores a fingerprint of the vault id and the attachment and proxy
-  events (and the day, for retention); it is rebuilt on first use when stale.
+* The index stores the vault identity (`memfw.core.local_data.vault_identity`:
+  resolved path, `vault_id`, first event hash) and a fingerprint of the
+  attachment and proxy events (and the day, for retention); it is rebuilt on
+  first use when either differs, so an index left by a deleted vault at the
+  same path is never used.
   A vault without a `proxy_add` event never gets the file.
 * **Purge:** `memfw.index.proxies.drop_proxy_index(repository)` deletes the
   file (and SQLite side files); `attach purge` must call it so no index page

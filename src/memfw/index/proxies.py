@@ -23,9 +23,12 @@ privacy level (the strictest of the proxy's and the attachment's). Search
 filters by tenant and clearance in SQL; callers re-check every hit against the
 proxy file and the attachment record before returning text.
 
-The index records a fingerprint of the vault id and the attachment and proxy
-events it was built from; :meth:`ProxyIndex.is_current` compares it with the
-log, and :func:`ensure_proxy_index` rebuilds when they differ. The fingerprint
+The index records the vault identity (``memfw.core.local_data.vault_identity``:
+resolved path, ``vault_id``, first event hash) and a fingerprint of the vault
+id and the attachment and proxy events it was built from; a file from another
+vault (deleted and re-created at the same path) is never used.
+:meth:`ProxyIndex.is_current` compares both with the vault, and
+:func:`ensure_proxy_index` rebuilds when they differ. The fingerprint
 is taken *before* the vault is read, so a write that lands during a rebuild
 leaves the new file stale and the next call rebuilds again; no lock is
 needed. It is never built on a vault without proxies.
@@ -52,7 +55,7 @@ from typing import Any, Final
 from ..attachments.proxies import ProxyRecord, proxy_log
 from ..attachments.records import AttachmentRecord
 from ..core.errors import IntegrityError, MemfwError, NotFoundError
-from ..core.local_data import ensure_private_dir, projection_file
+from ..core.local_data import VaultIdentity, ensure_private_dir, projection_file, vault_identity
 from ..core.models import ATTACHMENT_EVENT_KINDS, Event, EventKind
 from ..core.repository import Repository
 from .fts_terms import (
@@ -252,7 +255,9 @@ class ProxyIndex:
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
 
-    def fingerprint(self) -> str | None:
+    def meta(self) -> dict[str, str] | None:
+        """The ``proxy_meta`` rows; ``None`` without a readable current-schema file."""
+
         if not self.path.is_file():
             return None
         try:
@@ -260,17 +265,32 @@ class ProxyIndex:
                 version = connection.execute("PRAGMA user_version").fetchone()[0]
                 if version != PROXY_INDEX_SCHEMA_VERSION:
                     return None
-                row = connection.execute(
-                    "SELECT value FROM proxy_meta WHERE key='fingerprint'"
-                ).fetchone()
+                rows = connection.execute("SELECT key, value FROM proxy_meta").fetchall()
         except sqlite3.DatabaseError:
             return None
-        return None if row is None else str(row[0])
+        return {str(key): str(value) for key, value in rows}
 
-    def is_current(self, events: Iterable[Event], *, today: date, vault_id: str = "") -> bool:
-        stored = self.fingerprint()
+    def fingerprint(self) -> str | None:
+        meta = self.meta()
+        return None if meta is None else meta.get("fingerprint")
+
+    def is_current(
+        self,
+        events: Iterable[Event],
+        *,
+        today: date,
+        vault_id: str = "",
+        identity: VaultIdentity | None = None,
+    ) -> bool:
+        """Built from this log (and, with ``identity``, from this very vault)."""
+
+        meta = self.meta()
+        if meta is None:
+            return False
+        if identity is not None and not identity.matches(meta):
+            return False
         expected = _built_for(proxy_fingerprint(events, vault_id=vault_id), today)
-        return stored is not None and stored == expected
+        return meta.get("fingerprint") == expected
 
     def rebuild(self, repository: Repository, *, today: date) -> int:
         """Write a complete replacement (no vault lock); returns the segment count.
@@ -283,6 +303,8 @@ class ProxyIndex:
 
         ensure_private_dir(self.path.parent)
         temporary = self.path.with_name(f".{self.path.name}.{secrets.token_hex(8)}.tmp")
+        # The identity and the fingerprint are read before the proxies.
+        identity = vault_identity(repository)
         fingerprint = _built_for(
             proxy_fingerprint(repository.events(), vault_id=_vault_id(repository)), today
         )
@@ -336,7 +358,11 @@ class ProxyIndex:
                     count += 1
             connection.executemany(
                 "INSERT INTO proxy_meta VALUES (?,?)",
-                [("fingerprint", fingerprint), ("tokenizer", tokenizer)],
+                [
+                    ("fingerprint", fingerprint),
+                    ("tokenizer", tokenizer),
+                    *identity.meta().items(),
+                ],
             )
             connection.execute(f"PRAGMA user_version = {PROXY_INDEX_SCHEMA_VERSION}")
             connection.commit()
@@ -453,7 +479,12 @@ def ensure_proxy_index(
         return None
     index = ProxyIndex(proxy_index_path(repository, home=home))
     today = now.date()
-    if not index.is_current(events, today=today, vault_id=_vault_id(repository)):
+    if not index.is_current(
+        events,
+        today=today,
+        vault_id=_vault_id(repository),
+        identity=vault_identity(repository),
+    ):
         index.rebuild(repository, today=today)
     return index
 
