@@ -85,6 +85,9 @@ memfw-pageindex list --index-dir DIR
   `max_documents` trees of the caller's tenant, each node's id, depth, title,
   page range or line and stored summary. The reply is `{"node_ids": [...]}`
   (PageIndex's `{"thinking", "node_list"}` is accepted). Unknown ids are dropped.
+  The rendered prompt is estimated (about 3 characters per token, 1 per CJK
+  character) and trailing nodes are dropped until it fits `max_prompt_tokens`;
+  if not even the query fits, the search is refused (`prompt_too_large`).
   A backend serves the task by listing it in `tasks` and rendering
   `render_tree_search_prompt(data)`.
 - **`titles`**: no model; nodes ranked by shared query terms in the title

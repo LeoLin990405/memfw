@@ -34,6 +34,7 @@ logged.
 from __future__ import annotations
 
 import importlib
+import json
 import math
 import re
 import threading
@@ -290,8 +291,8 @@ class PageIndexProvider:
         ranked = sorted(enumerate(trees), key=lambda item: (-best(item[1]), item[0]))
         documents: list[dict[str, Any]] = []
         hits: dict[str, _Hit] = {}
-        room = self.settings.max_prompt_tokens * 3  # characters, conservatively
-        used = len(query) + 600
+        room = self.settings.max_prompt_tokens
+        used = _prompt_tokens({"query": query, "max_nodes": 0, "documents": []})
         for number, (_, tree) in enumerate(ranked[: self.settings.max_documents], 1):
             source = parse_source(tree["source"])
             doc = f"d{number}"
@@ -313,7 +314,7 @@ class PageIndexProvider:
                     entry["line"] = node["line_num"]
                 if isinstance(node.get("summary"), str):
                     entry["summary"] = node["summary"]
-                cost = sum(len(str(v)) for v in entry.values()) + 40
+                cost = estimate_tokens(json.dumps(entry, ensure_ascii=False)) + 2
                 if used + cost > room:
                     break
                 used += cost
@@ -321,9 +322,31 @@ class PageIndexProvider:
                 hits[entry["id"]] = hit
             if nodes:
                 documents.append({"doc": doc, "media": source.media, "nodes": nodes})
+                used += 10
             if used >= room:
                 break
         return {"query": query, "max_nodes": 0, "documents": documents}, hits
+
+    def _fit(self, data: dict[str, Any], hits: dict[str, _Hit]) -> tuple[str, str]:
+        """Render the prompt, dropping trailing nodes until it is within ``max_prompt_tokens``.
+
+        The estimate is of the rendered text (escapes and CJK included), so
+        the cap holds whatever the characters are. Raises
+        :class:`ProviderUnavailable` (``prompt_too_large``) when not even the
+        query fits.
+        """
+
+        documents: list[dict[str, Any]] = data["documents"]
+        while True:
+            system, user = render_tree_search_prompt(data)
+            if estimate_tokens(system + user) <= self.settings.max_prompt_tokens:
+                return system, user
+            if not documents:
+                raise ProviderUnavailable("prompt_too_large")
+            last = documents[-1]["nodes"].pop()
+            hits.pop(last["id"], None)
+            if not documents[-1]["nodes"]:
+                documents.pop()
 
     def _reserve(self, tokens: int) -> None:
         with self._lock:
@@ -342,11 +365,16 @@ class PageIndexProvider:
         reason = self._backend_reason()
         if reason:
             raise ProviderUnavailable(reason)
-        data, hits = self._outline(query, self._sendable(trees))
-        if not hits:
+        sendable = self._sendable(trees)
+        if not sendable:
             return []
+        data, hits = self._outline(query, sendable)
+        if not hits:
+            raise ProviderUnavailable("prompt_too_large")
         data["max_nodes"] = limit
-        system, user = render_tree_search_prompt(data)
+        system, user = self._fit(data, hits)
+        if not hits:
+            raise ProviderUnavailable("prompt_too_large")
         worst = estimate_tokens(system + user) + self.settings.max_output_tokens
         self._reserve(worst)
         backend = self.backend
@@ -368,6 +396,11 @@ class PageIndexProvider:
         if ids is None:
             raise ProviderUnavailable("bad_reply")
         return _unique([hits[i] for i in ids], limit)
+
+
+def _prompt_tokens(data: Mapping[str, Any]) -> int:
+    system, user = render_tree_search_prompt(data)
+    return estimate_tokens(system + user)
 
 
 def _reported(reply: Any) -> int | None:

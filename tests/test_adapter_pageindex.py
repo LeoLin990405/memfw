@@ -439,6 +439,29 @@ def test_reasoning_mode_follows_the_recorded_reply(tmp_path: Path) -> None:
     }
 
 
+def test_prompt_cap_holds_for_cjk_titles(tmp_path: Path) -> None:
+    from memfw_adapter_pageindex import render_tree_search_prompt
+    from memfw_adapter_pageindex.provider import estimate_tokens
+
+    root = tmp_path / "kh"
+    root.mkdir()
+    headings = "".join(f"## 传感器漂移校准第{i}节的详细说明与注意事项<>\n" for i in range(200))
+    (root / "cjk.md").write_text("# 总览\n" + headings, encoding="utf-8")
+    index = tmp_path / "index"
+    write_tree(index, build_markdown_tree(root, "kh:cjk.md", privacy="shared"))
+    backend = RecordedBackend('{"node_ids": ["d1:0002"]}')
+    provider = _provider(index, backend, max_prompt_tokens=1000)
+    hits = provider.search("漂移", limit=3, budget=RecallBudget(), tenant="", as_of=None)
+    assert [h.extra.get("why") for h in hits] == ["tree_search"]
+    (_, data, _) = backend.calls[0]
+    system, user = render_tree_search_prompt(data)
+    assert estimate_tokens(system + user) <= 1000
+    assert 0 < len(data["documents"][0]["nodes"]) < 201
+    tiny = _provider(index, RecordedBackend(), max_prompt_tokens=10)
+    with pytest.raises(ProviderUnavailable):
+        tiny.search("漂移", limit=3, budget=RecallBudget(), tenant="", as_of=None)
+
+
 def test_tenant_is_exact(tmp_path: Path) -> None:
     index = _index(tmp_path)
     provider = _provider(index, RecordedBackend())
