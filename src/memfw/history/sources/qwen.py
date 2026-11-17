@@ -38,6 +38,11 @@ as ``parent_session`` (their session id is the file stem, ``agent-<id>``).
 Offsets are byte offsets of the record lines. The CLI appends, but its
 maintenance step may rewrite a file, so the session is re-read in full on
 every change (``append_only`` is false).
+
+A session has one locator key, ``<project>/chats/<uuid>.jsonl``, whether its
+file is in ``chats/`` or ``chats/archive/`` (the CLI archives by renaming):
+moving the file re-reads it under the same key instead of storing it twice.
+When both copies exist, the active ``chats/`` one is read.
 """
 
 from __future__ import annotations
@@ -169,15 +174,21 @@ class QwenReader:
     def sessions(self, root: Path) -> Iterator[SessionLocator]:
         for project_dir in _real_dirs(root):
             chats = project_dir / CHATS_DIR
-            for directory in (chats, chats / ARCHIVE_DIR):
+            found: dict[str, Path] = {}
+            # Archived copies first so the active ``chats/`` copy wins when both exist.
+            for directory in (chats / ARCHIVE_DIR, chats):
                 for path in _files(directory, SESSION_FILE):
-                    yield SessionLocator(
-                        agent=self.agent,
-                        path=path,
-                        key=relative_key(root, path),
-                        session_id=path.stem,
-                        extra={"parent_id": ""},
-                    )
+                    found[path.name] = path
+            for name, path in sorted(found.items()):
+                # One key per session wherever the file sits: archiving is a
+                # rename, and a second key would keep the old rows forever.
+                yield SessionLocator(
+                    agent=self.agent,
+                    path=path,
+                    key=relative_key(root, chats / name),
+                    session_id=path.stem,
+                    extra={"parent_id": ""},
+                )
             for parent in _real_dirs(project_dir / SUBAGENTS_DIR):
                 for path in _files(parent, AGENT_FILE):
                     yield SessionLocator(

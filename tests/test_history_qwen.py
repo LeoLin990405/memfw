@@ -149,6 +149,10 @@ def _at(path: Path, index: int) -> int:
     raise AssertionError(index)
 
 
+def _main(root: Path) -> Any:
+    return next(loc for loc in READER.sessions(root) if loc.session_id == SESSION)
+
+
 def test_registered_with_alias(tmp_path: Path) -> None:
     assert get_reader("qwen") is READER
     assert get_reader("Qwen-Code") is READER
@@ -162,8 +166,8 @@ def test_sessions_layout(tmp_path: Path) -> None:
     [root] = default_roots(READER, tmp_path)
     locators = list(READER.sessions(root))
     assert [(loc.key, loc.session_id, loc.extra["parent_id"]) for loc in locators] == [
+        (f"{PROJECT}/chats/{ARCHIVED}.jsonl", ARCHIVED, ""),
         (f"{PROJECT}/chats/{SESSION}.jsonl", SESSION, ""),
-        (f"{PROJECT}/chats/archive/{ARCHIVED}.jsonl", ARCHIVED, ""),
         (f"{PROJECT}/subagents/{SESSION}/agent-explore1.jsonl", "agent-explore1", SESSION),
     ]
 
@@ -171,7 +175,7 @@ def test_sessions_layout(tmp_path: Path) -> None:
 def test_records(tmp_path: Path) -> None:
     chat = _store(tmp_path)
     [root] = default_roots(READER, tmp_path)
-    locator = next(iter(READER.sessions(root)))
+    locator = _main(root)
     records = list(READER.read(locator))
     assert [(r.offset, r.turn, r.role) for r in records] == [
         (_at(chat, 1), 0, "user"),
@@ -202,7 +206,7 @@ def test_records(tmp_path: Path) -> None:
 def test_incremental_after(tmp_path: Path) -> None:
     chat = _store(tmp_path)
     [root] = default_roots(READER, tmp_path)
-    locator = next(iter(READER.sessions(root)))
+    locator = _main(root)
     later = list(READER.read(locator, after=_at(chat, 3)))
     assert [(r.role, r.turn) for r in later] == [("system", 3), ("tool", 4), ("assistant", 5)]
 
@@ -315,3 +319,56 @@ def test_ingest_round_trip_redacts(tmp_path: Path) -> None:
         "system",
         "tool",
     ]
+
+
+def _texts(store: Any) -> list[str]:
+    return [t["text"] for t in store.turns("qwen", SESSION)]
+
+
+def test_archive_and_unarchive_keep_one_copy(tmp_path: Path) -> None:
+    """Repro A: archive (a rename), then unarchive with a rewritten, shifted file."""
+
+    from memfw.history.conversations import ConversationStore
+    from memfw.history.sources.base import StoreRoot
+
+    root = tmp_path / ".qwen" / "projects"
+    active = _write(root / PROJECT / "chats" / f"{SESSION}.jsonl", [_user(0, "hello")])
+    archived = root / PROJECT / "chats" / "archive" / f"{SESSION}.jsonl"
+    store = ConversationStore(tmp_path / "store" / "conversations.sqlite")
+    store.ingest(READER, [StoreRoot(root)])
+    assert _texts(store) == ["hello"]
+
+    archived.parent.mkdir(parents=True)
+    active.rename(archived)
+    [locator] = list(READER.sessions(root))
+    assert locator.path == archived and locator.key == f"{PROJECT}/chats/{SESSION}.jsonl"
+    store.ingest(READER, [StoreRoot(root)])
+    assert _texts(store) == ["hello"]
+
+    archived.rename(active)
+    # Rewritten on unarchive: a new first line shifts every offset.
+    _write(
+        active, [_record("system", 0, subtype="custom_title"), _user(1, "hello"), _user(2, "hi")]
+    )
+    store.ingest(READER, [StoreRoot(root)])
+    assert _texts(store) == ["hello", "hi"]
+    store.ingest(READER, [StoreRoot(root)])
+    assert _texts(store) == ["hello", "hi"]
+
+
+def test_both_copies_present_reads_the_active_one(tmp_path: Path) -> None:
+    """Repro B: an active and an archived copy that differ never mix."""
+
+    from memfw.history.conversations import ConversationStore
+    from memfw.history.sources.base import StoreRoot
+
+    root = tmp_path / ".qwen" / "projects"
+    chats = root / PROJECT / "chats"
+    _write(chats / "archive" / f"{SESSION}.jsonl", [_user(0, "old copy"), _user(1, "old reply")])
+    active = _write(chats / f"{SESSION}.jsonl", [_user(0, "new copy")])
+    [locator] = list(READER.sessions(root))
+    assert locator.path == active
+    store = ConversationStore(tmp_path / "store" / "conversations.sqlite")
+    counts = store.ingest(READER, [StoreRoot(root)])
+    assert counts.sessions_seen == 1
+    assert _texts(store) == ["new copy"]
