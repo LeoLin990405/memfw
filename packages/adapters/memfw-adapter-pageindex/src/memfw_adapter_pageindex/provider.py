@@ -445,10 +445,16 @@ def factory(settings: Mapping[str, Any] | None = None) -> PageIndexProvider:
 
     data = dict(settings or {})
     # memfw's runtime recall loader (``runtime.recall.adapters``) adds these two
-    # keys; trees live in ``index_dir`` and no embedder is used, so both are ignored.
-    for key in RUNTIME_KEYS:
-        data.pop(key, None)
+    # keys. No embedder is used; the vault is only checked against index_dir.
+    vault = data.pop("vault", None)
+    data.pop("embedder", None)
     parsed = Settings.from_mapping(data)
+    if vault is not None:
+        if not isinstance(vault, str | Path):
+            raise SettingsError("bad_vault")
+        index, root = Path(parsed.index_dir).resolve(), Path(vault).resolve()
+        if index == root or index.is_relative_to(root) or root.is_relative_to(index):
+            raise SettingsError("index_dir_in_vault")
     backend = None
     if parsed.mode == "reasoning" and parsed.backend:
         backend = load_backend(parsed.backend, parsed.backend_options)

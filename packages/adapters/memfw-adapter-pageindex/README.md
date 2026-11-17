@@ -76,7 +76,10 @@ memfw-pageindex list --index-dir DIR
   `doc_description`, and keeps summaries (cut to 300 characters) only with
   `--keep-summaries`. Default privacy `local-private`.
 - Each tree is one `0600` JSON file (`memfw-pageindex-tree/1`) in the index
-  directory (created `0700`). `list` prints sources and counts, no titles.
+  directory (created `0700`; an existing one open to others is tightened to
+  `0700`, one owned by another user is refused). `list` prints sources and
+  counts, no titles. Through the runtime loader, an `index_dir` inside the
+  vault (or containing it) is refused (`index_dir_in_vault`).
 
 ## Search
 

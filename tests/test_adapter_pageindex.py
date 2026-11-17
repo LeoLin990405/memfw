@@ -196,9 +196,26 @@ def test_factory_accepts_the_runtime_loader_keys(tmp_path: Path) -> None:
     # memfw's runtime recall loader (runtime.recall.adapters) adds vault and embedder
     index = _index(tmp_path)
     provider = factory(
-        {"index_dir": str(index), "mode": "titles", "vault": str(tmp_path), "embedder": None}
+        {
+            "index_dir": str(index),
+            "mode": "titles",
+            "vault": str(tmp_path / "vault"),
+            "embedder": None,
+        }
     )
     assert provider.available().available
+
+
+def test_index_dir_may_not_be_inside_the_vault_and_is_kept_private(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    for inside in (vault / "pageindex", vault, tmp_path):
+        with pytest.raises(SettingsError, match="index_dir_in_vault"):
+            factory({"index_dir": str(inside), "mode": "titles", "vault": str(vault)})
+    index = _index(tmp_path)
+    os.chmod(index, 0o755)
+    assert load_index(index).trees
+    assert os.stat(index).st_mode & 0o077 == 0
 
 
 def test_settings_refuse_keys_relative_dirs_and_unknown_options(tmp_path: Path) -> None:

@@ -663,6 +663,10 @@ def _index_dir(index_dir: Path, *, create: bool) -> Path:
         raise TreeError("no_index") from None
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
         raise TreeError("bad_index_dir")
+    if hasattr(os, "getuid") and info.st_uid != os.getuid():
+        raise TreeError("index_dir_not_owned")
+    if stat.S_IMODE(info.st_mode) & 0o077:
+        os.chmod(path, 0o700)  # an existing directory open to others is tightened
     return path
 
 
