@@ -120,6 +120,11 @@ multimodal locator (`#page=N[&bbox=x0,y0,x1,y1]`, PDF points, bottom-left
 origin). PageIndex has no boxes, so no `bbox` is emitted. Spaces, quotes,
 angle brackets, backslash, backtick, control characters, `%` and `#` are
 percent-encoded (UTF-8). `extra` holds only `kind` (`section`), `page` (PDF)
-and `why` (`tree_search` or `title_match`). memfw resolves `kh:`/`att:` refs
-only once a resolver for them is configured; until then the coordinator drops
-them as `unresolved`.
+and `why` (`tree_search` or `title_match`).
+
+**Today these refs do not reach a caller.** The kernel has no `kh:`/`att:`
+resolver yet, so the coordinator drops every PageIndex candidate as
+`unresolved` (counted in `metrics.dropped`, no error, other providers
+unaffected). A resolver for them comes in a separate kernel PR; until then
+enabling this adapter only costs the search (and, in `reasoning` mode, the
+model call).

@@ -462,6 +462,28 @@ def test_prompt_cap_holds_for_cjk_titles(tmp_path: Path) -> None:
         tiny.search("漂移", limit=3, budget=RecallBudget(), tenant="", as_of=None)
 
 
+def test_coordinator_drops_every_candidate_as_unresolved_today(tmp_path: Path) -> None:
+    # The kernel has no kh:/att: resolver yet (a separate kernel PR adds one), so
+    # the coordinator drops every PageIndex candidate as unresolved, without error.
+    from memfw.core.repository import Repository
+    from memfw.recall import Coordinator, FilterPolicy, ProviderConfig
+    from memfw.recall.builtin import default_resolvers
+
+    repository = Repository(tmp_path / "vault")
+    repository.init()
+    repository.add("Public", "public body", memory_id="pub")
+    provider = _provider(_index(tmp_path), mode="titles")
+    coordinator = Coordinator(
+        [provider],
+        resolvers=default_resolvers(repository.root),
+        configs={"pageindex": ProviderConfig(budget=RecallBudget(timeout_seconds=5))},
+    )
+    result = coordinator.search("sensor drift", limit=5, policy=FilterPolicy())
+    assert result.ids == []
+    assert result.metrics.dropped == {"unresolved": 3}
+    assert dict(result.labels.degraded) == {} and "pageindex" in result.labels.providers
+
+
 def test_tenant_is_exact(tmp_path: Path) -> None:
     index = _index(tmp_path)
     provider = _provider(index, RecordedBackend())
