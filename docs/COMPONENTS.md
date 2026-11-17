@@ -139,7 +139,7 @@ the vault (`~/.local/share/memfw/adapters/bm25s/`). memfw never imports it. See
 
 ## Qdrant recall adapter
 
-`packages/adapters/memfw-adapter-qdrant` (wheel `memfw_adapter_qdrant`, version 0.1.0) is a
+`packages/adapters/memfw-adapter-qdrant` (wheel `memfw_adapter_qdrant`, version 0.1.1) is a
 semantic `RecallProvider` over a Qdrant v1.20.x service the operator runs, bound to loopback with
 telemetry off (`QDRANT__TELEMETRY_DISABLED=true`). It embeds queries with memfw's own embedder
 and asks for memory ids only. It is **off by default**; `memfw-adapter-qdrant sync` sends only

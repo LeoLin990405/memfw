@@ -14,7 +14,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "memfw-adapter-qdrant"
-version = "0.1.0"
+version = "0.1.1"
 description = "Qdrant (v1.20.x) recall provider for the memfw recall coordinator"
 readme = "README.md"
 requires-python = ">=3.11"

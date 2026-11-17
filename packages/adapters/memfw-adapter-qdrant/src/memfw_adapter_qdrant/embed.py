@@ -27,7 +27,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
-from .http import MAX_RESPONSE_BYTES, open_url
+from .http import ResponseTooLarge, open_url, read_capped
 
 
 class Embedder(Protocol):
@@ -99,14 +99,16 @@ class EnvEmbedder:
             )
             try:
                 with open_url(request, self.timeout) as response:
-                    raw = response.read(MAX_RESPONSE_BYTES + 1)
-                if len(raw) > MAX_RESPONSE_BYTES:
-                    raise EmbedderError("embedding_response_too_large")
-                payload = json.loads(raw.decode("utf-8"))
-            except EmbedderError:
-                raise
+                    raw = read_capped(response)
+            except ResponseTooLarge:
+                # Checked before any OSError mapping: a cap breach is never "unreachable".
+                raise EmbedderError("embedding_response_too_large") from None
             except (urllib.error.URLError, TimeoutError, OSError, ValueError):
                 raise EmbedderError("embedding_unreachable") from None
+            try:
+                payload = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, ValueError):
+                raise EmbedderError("embedding_bad_response") from None
             rows = payload.get("data") if isinstance(payload, dict) else None
             if not isinstance(rows, list) or len(rows) != len(batch):
                 raise EmbedderError("embedding_bad_response")

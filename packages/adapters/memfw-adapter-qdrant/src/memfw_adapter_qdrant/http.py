@@ -25,6 +25,41 @@ from urllib.parse import quote, urlsplit
 
 #: Largest response body read, in bytes.
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+#: Bytes read per call while a body is read under the cap.
+READ_CHUNK = 64 * 1024
+
+
+class ResponseTooLarge(Exception):
+    """A response body is larger than the cap (never an ``OSError``: not "unreachable")."""
+
+
+def read_capped(response: Any, cap: int = MAX_RESPONSE_BYTES) -> bytes:
+    """The whole body, refused as soon as it is known to exceed ``cap`` bytes.
+
+    A ``Content-Length`` above the cap is refused before anything is read; then
+    the body is read in chunks and refused the moment the running total passes
+    the cap (a chunked or close-delimited body, or a ``Content-Length`` that
+    lies), so the decision never depends on how the peer closes the socket.
+    """
+
+    headers = getattr(response, "headers", None)
+    declared = headers.get("Content-Length") if headers is not None else None
+    if declared is not None:
+        try:
+            if int(declared) > cap:
+                raise ResponseTooLarge
+        except ValueError:
+            pass  # a malformed length: the running total still decides
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = response.read(min(READ_CHUNK, cap + 1 - total))
+        if not chunk:
+            return b"".join(chunks)
+        total += len(chunk)
+        if total > cap:
+            raise ResponseTooLarge
+        chunks.append(chunk)
 
 
 class QdrantError(Exception):
@@ -136,7 +171,9 @@ class QdrantClient:
         )
         try:
             with open_url(request, self.timeout if timeout is None else timeout) as response:
-                raw = response.read(MAX_RESPONSE_BYTES + 1)
+                raw = read_capped(response)
+        except ResponseTooLarge:
+            raise QdrantError("response_too_large") from None
         except urllib.error.HTTPError as exc:
             if exc.code == 404 and allow_missing:
                 return None
@@ -147,8 +184,6 @@ class QdrantClient:
             raise QdrantError(f"http_{exc.code}", status=exc.code) from None
         except (urllib.error.URLError, TimeoutError, OSError):
             raise QdrantError("unreachable") from None
-        if len(raw) > MAX_RESPONSE_BYTES:
-            raise QdrantError("response_too_large")
         try:
             payload = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, ValueError):
@@ -168,10 +203,13 @@ def collection_path(collection: str, suffix: str = "") -> str:
 
 __all__ = [
     "MAX_RESPONSE_BYTES",
+    "READ_CHUNK",
+    "ResponseTooLarge",
     "QdrantClient",
     "QdrantError",
     "check_base_url",
     "collection_path",
     "is_loopback_host",
     "open_url",
+    "read_capped",
 ]

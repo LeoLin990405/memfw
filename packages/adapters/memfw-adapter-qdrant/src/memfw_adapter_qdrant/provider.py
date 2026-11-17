@@ -69,7 +69,7 @@ from .embed import EmbedderError, dimension_of, embedder_from_env, fingerprint_o
 from .http import QdrantClient, QdrantError, check_base_url, collection_path, is_loopback_host
 from .vault import check_vault_id, configured_vault_id, points_key
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 #: The Qdrant server line this adapter is pinned to (REST API, recorded fixtures).
 SERVER_SERIES: Final = "1.20"
 #: The exact server release the fixtures were taken from.
