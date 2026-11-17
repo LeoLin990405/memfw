@@ -12,8 +12,7 @@ class MemoryTools(GatewayBase):
 
     def get(self, memory_id: str) -> dict[str, Any]:
         document = self._repo().get(memory_id)
-        if not self._visible(document):
-            raise ValueError("memory is not visible in this tenant")
+        self.runtime.require_visible(document)
         return {
             "id": document.id,
             "title": document.title,
@@ -47,8 +46,9 @@ class MemoryTools(GatewayBase):
         *,
         tags: list[str] | None = None,
         related: list[str] | None = None,
+        privacy: str | None = None,
     ) -> dict[str, Any]:
-        return self.runtime.remember(content, title, tags=tags, related=related)
+        return self.runtime.remember(content, title, tags=tags, related=related, privacy=privacy)
 
     def related(self, memory_id: str, limit: int = 10) -> dict[str, Any]:
         return self.runtime.related(self._repo(), memory_id, limit)

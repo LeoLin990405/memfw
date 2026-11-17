@@ -95,8 +95,9 @@ def _strongest_lifecycle(values: Sequence[str]) -> str | None:
 def meta_from_document(document: MemoryDocument) -> MemoryMeta:
     """Filter metadata from a parsed vault document.
 
-    Privacy comes from tags until the meta-index is joined: a
-    ``privacy:<value>`` tag gives the declared value, and ``sensitivity:*``
+    Privacy comes from the ``privacy`` field and tags until the meta-index is
+    joined: the field and every ``privacy:<value>`` tag are declared values
+    (the strictest wins), and ``sensitivity:*``
     tags are classed exactly like the projection does
     (:func:`memfw.projection.tag_privacy_class`): any case, only
     ``sensitivity:private`` is ``local-private``, and any other
@@ -111,6 +112,11 @@ def meta_from_document(document: MemoryDocument) -> MemoryMeta:
             privacy_values.append(tag.split(":", 1)[1])
         elif lowered.startswith("lifecycle:"):
             lifecycle_values.append(tag.split(":", 1)[1])
+    # The ``privacy`` field (MM0) is one more declared value: the strictest of
+    # it and the ``privacy:`` tags wins. A missing field adds nothing here, so
+    # recall reads older memories exactly as before.
+    if document.privacy is not None:
+        privacy_values.append(document.privacy)
     declared = _strictest_privacy(privacy_values)
     lifecycle = _strongest_lifecycle(lifecycle_values)
     tag_class = tag_privacy_class(document.tags)
@@ -262,19 +268,24 @@ def open_questions(
 
 
 def open_question_index(
-    repository: Repository, policy: FilterPolicy, *, now: datetime
+    repository: Repository,
+    policy: FilterPolicy,
+    *,
+    now: datetime,
+    keep: Callable[[MemoryDocument], bool] | None = None,
 ) -> OpenQuestionIndex:
     """The open questions ``policy`` lets this caller see, keyed for labelling.
 
     The questions are :func:`open_questions`'s, so a question in another
     tenant, or one the policy drops, contributes nothing and its id can never
-    appear in a label.
+    appear in a label. ``keep`` (the caller's privacy clearance, MM0) drops
+    more: a question it refuses gives neither its id nor ``conflicted``.
     """
 
     return OpenQuestionIndex.build(
         (document.id, list(document.about), list(document.open_question.conflicts))
         for document in open_questions(repository, policy, now=now)
-        if document.open_question is not None
+        if document.open_question is not None and (keep is None or keep(document))
     )
 
 
@@ -284,8 +295,11 @@ def open_question_labels_for(
     policy: FilterPolicy,
     *,
     now: datetime,
+    keep: Callable[[MemoryDocument], bool] | None = None,
 ) -> dict[str, tuple[str, ...]]:
     """Open-question labels for each hit id that has any (others are absent).
+
+    ``keep`` filters the questions as in :func:`open_question_index`.
 
     ``now`` is the instant the policy is evaluated at (the coordinator's, for
     ``two_stage``). The hit's ``about`` is read from the vault; a hit outside
@@ -295,7 +309,7 @@ def open_question_labels_for(
 
     if not memory_ids:
         return {}
-    index = open_question_index(repository, policy, now=now)
+    index = open_question_index(repository, policy, now=now, keep=keep)
     if not index:
         return {}
     out: dict[str, tuple[str, ...]] = {}

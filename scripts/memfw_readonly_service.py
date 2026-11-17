@@ -40,10 +40,15 @@ Configuration: ``MEMFW_READONLY_ROOT`` (or ``--root``; ``--root`` falls back
 to the environment variable), ``MEMFW_RELATED_DB`` (or ``--related-db``),
 ``MEMFW_READONLY_TOKEN`` / ``MEMFW_READONLY_TOKEN_FILE`` and
 ``MEMFW_WRITE_TOKEN`` / ``MEMFW_WRITE_TOKEN_FILE`` (environment first, then
-file; file content is stripped). A token file must be mode ``0600``. The read
-and write tokens must differ. A ``--host`` that resolves to a wildcard
-address (``0.0.0.0``, ``::``, ``0``, an empty host) is refused. Each request
-socket times out after 5 seconds.
+file; file content is stripped), ``MEMFW_READONLY_CLEARANCE`` (or
+``--clearance``): the privacy levels ``/search`` and ``/related`` may return,
+comma separated from ``public``, ``shared``, ``local-private`` (MM0). Unset
+means no privacy filtering, the behaviour before MM0; the design's remote
+default is ``public,shared``. A memory with no ``privacy`` field has the
+vault's ``legacy_privacy_default`` (``local-private`` when unset). A token
+file must be mode ``0600``. The read and write tokens must differ. A
+``--host`` that resolves to a wildcard address (``0.0.0.0``, ``::``, ``0``,
+an empty host) is refused. Each request socket times out after 5 seconds.
 
 The read side is ``memfw.index.readonly``. This script loads its own copy of
 that file as module ``memfw_readonly_library`` (beside the script, the
@@ -215,6 +220,7 @@ WRITE_TOKEN_FILE_ENV = "MEMFW_WRITE_TOKEN_FILE"
 ROOT_ENV = "MEMFW_READONLY_ROOT"
 RELATED_DB_ENV = "MEMFW_RELATED_DB"
 TENANT_ENV = "MEMFW_TENANT"
+CLEARANCE_ENV = "MEMFW_READONLY_CLEARANCE"
 TOKEN_FILE_MODE = 0o600
 # Codes BaseHTTPRequestHandler raises before the route runs. 414/431 are size
 # failures; 505 is an unsupported version and must still carry a status line.
@@ -356,6 +362,17 @@ def scope_tenant(requested: Any) -> str:
     raise ServiceError(403, "tenant is outside the bound tenant")
 
 
+def configured_clearance() -> frozenset[str] | None:
+    """``MEMFW_READONLY_CLEARANCE`` parsed; unset → ``None`` (no privacy filtering).
+
+    A malformed value narrows to ``{"public"}`` here; ``main`` refuses to start
+    with one.
+    """
+
+    parsed: frozenset[str] | None = read_path.parse_clearance(os.environ.get(CLEARANCE_ENV))
+    return parsed
+
+
 def _related_db() -> Path | None:
     value = os.environ.get(RELATED_DB_ENV, "").strip()
     if not value:
@@ -402,7 +419,9 @@ def _unit_interval(raw: float) -> float:
 # ---------------------------------------------------------------------------
 
 
-def _memory_metadata(root: Path, memory_id: str, tenant: str) -> tuple[Path, dict[str, Any]]:
+def _memory_metadata(
+    root: Path, memory_id: str, tenant: str, *, clearance: frozenset[str] | None = None
+) -> tuple[Path, dict[str, Any]]:
     if not isinstance(memory_id, str) or not memory_id.strip():
         raise _bad_request("memory_id is invalid")
     identifier = memory_id.strip()
@@ -416,6 +435,17 @@ def _memory_metadata(root: Path, memory_id: str, tenant: str) -> tuple[Path, dic
     # that another tenant's memory exists.
     if str(metadata.get("tenant") or "") != tenant:
         raise ServiceError(404, "memory not found")
+    # Same answer for a memory the clearance withholds: its existence is not
+    # revealed either.
+    if clearance is not None:
+        try:
+            # Bytes, not ``read_text``: universal newlines would hide CRLF.
+            raw = path.read_bytes().decode("utf-8")
+        except (OSError, UnicodeDecodeError):
+            raw = ""
+        level = _library.metadata_privacy(raw, metadata, _library.vault_legacy_privacy(root))
+        if not read_path.admits(clearance, level):
+            raise ServiceError(404, "memory not found")
     return path, metadata
 
 
@@ -450,7 +480,13 @@ def _reason_name(method: str) -> str:
 
 
 def _projection_target_is_current(
-    root: Path, source: str, identifier: str, *, tenant: str = ""
+    root: Path,
+    source: str,
+    identifier: str,
+    *,
+    tenant: str = "",
+    clearance: frozenset[str] | None = None,
+    legacy_privacy: str | None = None,
 ) -> bool:
     """Drop superseded memories and memories whose live tenant has moved.
 
@@ -459,17 +495,21 @@ def _projection_target_is_current(
     contribute its id or title. Non-memory targets have no vault temporal
     fields. Search results keep emitting ``valid_to`` and ``superseded_by``;
     this only decides membership.
+
+    With a ``clearance`` a memory target must be admitted by it, and a
+    non-memory target (a note) is dropped: its privacy cannot be read here,
+    so it fails closed.
     """
     if source != "memory":
-        return True
-    payload = _document_payload(root, identifier)
+        return clearance is None
+    payload = _document_payload(root, identifier, legacy_privacy=legacy_privacy)
     if payload is None:
         return False
     if payload["valid_to"] or payload["superseded_by"]:
         return False
     if str(payload["tenant"] or "") != tenant:
         return False
-    return True
+    return read_path.admits(clearance, payload["privacy"])
 
 
 def _related_from_edges(
@@ -479,6 +519,7 @@ def _related_from_edges(
     root: Path,
     limit: int,
     tenant: str,
+    clearance: frozenset[str] | None = None,
 ) -> list[dict[str, Any]]:
     connection = _connect_related(related_db)
     try:
@@ -521,10 +562,18 @@ def _related_from_edges(
             merged[key] = item
         item["score"] = max(float(item["score"]), float(row["score"]))
         item["reasons"].add(_reason_name(str(row["method"])))
+    legacy_privacy = _library.vault_legacy_privacy(root)
     current = [
         item
         for item in merged.values()
-        if _projection_target_is_current(root, str(item["source"]), str(item["id"]), tenant=tenant)
+        if _projection_target_is_current(
+            root,
+            str(item["source"]),
+            str(item["id"]),
+            tenant=tenant,
+            clearance=clearance,
+            legacy_privacy=legacy_privacy,
+        )
     ]
     ordered = sorted(current, key=lambda item: (-float(item["score"]), item["id"]))[:limit]
     return [
@@ -539,7 +588,13 @@ def _related_from_edges(
 
 
 def _related_from_search(
-    root: Path, memory_id: str, metadata: dict[str, Any], *, limit: int, tenant: str
+    root: Path,
+    memory_id: str,
+    metadata: dict[str, Any],
+    *,
+    limit: int,
+    tenant: str,
+    clearance: frozenset[str] | None = None,
 ) -> list[dict[str, Any]]:
     title = str(metadata.get("title") or "")
     path = root / "memories" / f"{memory_id}.md"
@@ -559,7 +614,7 @@ def _related_from_search(
         query = candidate.strip()[:MAX_QUERY_CHARS]
         if not query:
             continue
-        payload = search_vault(root, query, limit=MAX_LIMIT, tenant=tenant)
+        payload = search_vault(root, query, limit=MAX_LIMIT, tenant=tenant, clearance=clearance)
         results = []
         for item in payload["results"]:
             if item["id"] == memory_id:
@@ -586,7 +641,10 @@ def related_vault(
     limit: int = 10,
     tenant: str = "",
     related_db: str | Path | None = None,
+    clearance: frozenset[str] | str | None = None,
 ) -> dict[str, Any]:
+    """``/related``. ``clearance`` as in ``search_vault`` (``None`` filters nothing)."""
+
     base = Path(root).expanduser().resolve()
     if not (base / "vault.yaml").is_file() or not (base / "index.sqlite3").is_file():
         raise _internal()
@@ -597,14 +655,17 @@ def related_vault(
         raise _bad_request("tenant must be a string")
     candidate = Path(related_db).expanduser() if related_db is not None else _related_db()
     identifier = memory_id.strip() if isinstance(memory_id, str) else ""
-    _path, metadata = _memory_metadata(base, memory_id, tenant)
+    cleared = _library.checked_clearance(clearance)
+    _path, metadata = _memory_metadata(base, memory_id, tenant, clearance=cleared)
     if candidate is not None and candidate.is_file() and _has_related_edges(candidate):
         try:
             results = _related_from_edges(
-                candidate, identifier, root=base, limit=limit, tenant=tenant
+                candidate, identifier, root=base, limit=limit, tenant=tenant, clearance=cleared
             )
         except sqlite3.Error:
-            results = _related_from_search(base, identifier, metadata, limit=limit, tenant=tenant)
+            results = _related_from_search(
+                base, identifier, metadata, limit=limit, tenant=tenant, clearance=cleared
+            )
             return {
                 "contract": CONTRACT,
                 "mode": "fts",
@@ -619,7 +680,9 @@ def related_vault(
             "memory_id": identifier,
             "results": results,
         }
-    results = _related_from_search(base, identifier, metadata, limit=limit, tenant=tenant)
+    results = _related_from_search(
+        base, identifier, metadata, limit=limit, tenant=tenant, clearance=cleared
+    )
     return {
         "contract": CONTRACT,
         "mode": "fts",
@@ -679,7 +742,15 @@ def _validate_stage_payload(payload: dict[str, Any]) -> dict[str, Any]:
         raise _bad_request("related must be an array of strings")
     tenant = _header_text(payload.get("tenant", ""), "tenant")
     source = _header_text(payload.get("source", "conductor"), "source", single_line=True)
+    # Optional privacy level (MM0), carried to the memory by candidate-apply.
+    privacy = payload.get("privacy")
+    if privacy is not None:
+        if read_path.field_level(privacy) == "unknown":
+            raise _bad_request("privacy must be one of: public, shared, local-private")
+        privacy = str(privacy).strip().lower()
+    extra = {"privacy": privacy} if privacy is not None else {}
     return {
+        **extra,
         "proposal_id": proposal_id,
         "title": title,
         "content": content,
@@ -747,6 +818,11 @@ def _candidate_markdown(metadata: dict[str, Any], content: str) -> str:
             }
         ),
     }
+    if metadata.get("privacy") is not None:
+        # MM0: written only when the request set it, so other candidates keep
+        # their bytes.
+        header["privacy"] = metadata["privacy"]
+        header["metadata"]["privacy"] = metadata["privacy"]
     rendered = yaml.dump(
         _single_line(header),
         Dumper=_CandidateDumper,
@@ -800,6 +876,7 @@ def _candidate_key(metadata: dict[str, Any]) -> dict[str, Any]:
         "source": str(metadata.get("source") or ""),
         "tags": [str(item) for item in metadata.get("tags") or []],
         "related": [str(item) for item in metadata.get("related") or []],
+        "privacy": str(metadata.get("privacy") or ""),
     }
 
 
@@ -947,6 +1024,8 @@ def stage_candidate(root: Path | str, payload: dict[str, Any]) -> dict[str, Any]
         "content_hash": content_hash,
         "authority": False,
     }
+    if values.get("privacy") is not None:
+        header["privacy"] = values["privacy"]
     markdown_text = _candidate_markdown(header, values["content"])
     with _open_candidate_directory(base) as directory_handle:
         published = _publish_candidate(directory_handle.descriptor, candidate_id, markdown_text)
@@ -1126,6 +1205,7 @@ class Handler(BaseHTTPRequestHandler):
                     include_history=payload.get("include_history", False),
                     as_of=payload.get("as_of"),
                     scope=payload.get("scope", ""),
+                    clearance=configured_clearance(),
                 )
             elif self.path == "/related":
                 result = related_vault(
@@ -1133,6 +1213,7 @@ class Handler(BaseHTTPRequestHandler):
                     payload.get("memory_id", ""),
                     limit=payload.get("limit", 10),
                     tenant=scope_tenant(payload.get("tenant", "")),
+                    clearance=configured_clearance(),
                 )
             else:
                 if os.environ.get(TENANT_ENV, ""):
@@ -1252,6 +1333,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=18080)
     parser.add_argument("--related-db", default=None)
     parser.add_argument(
+        "--clearance",
+        default=None,
+        help=(
+            "privacy levels /search and /related may return, comma separated "
+            f"(public, shared, local-private); falls back to {CLEARANCE_ENV}; "
+            "unset means no privacy filtering"
+        ),
+    )
+    parser.add_argument(
         "--check-url",
         default=None,
         help="GET /health at this URL, print the contract check as JSON, and exit",
@@ -1261,6 +1351,11 @@ def main(argv: list[str] | None = None) -> int:
         checked = check_readonly_contract(args.check_url)
         sys.stdout.write(json.dumps(checked, sort_keys=True) + "\n")
         return 0 if checked["ok"] else 1
+    clearance = args.clearance if args.clearance is not None else os.environ.get(CLEARANCE_ENV)
+    if not read_path.clearance_is_valid(clearance):
+        raise SystemExit(
+            f"--clearance / {CLEARANCE_ENV} must list only public, shared, local-private"
+        )
     host = str(args.host).strip()
     if _binds_wildcard(host, args.port):
         raise SystemExit(
@@ -1281,6 +1376,8 @@ def main(argv: list[str] | None = None) -> int:
             f"{READ_TOKEN_ENV}, {READ_TOKEN_FILE_ENV}, {WRITE_TOKEN_ENV} or "
             f"{WRITE_TOKEN_FILE_ENV} is required"
         )
+    if args.clearance is not None:
+        os.environ[CLEARANCE_ENV] = str(args.clearance)
     os.environ[ROOT_ENV] = str(Path(root_value).expanduser().resolve())
     if args.related_db:
         os.environ[RELATED_DB_ENV] = str(Path(args.related_db).expanduser().resolve())

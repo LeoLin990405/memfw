@@ -7,23 +7,40 @@ Tools:
 
 The server is read-only and local-only. It reuses the same NotesIndex as the
 CLI; embedding configuration is optional.
+
+Privacy clearance (MM0): with ``--clearance`` (or ``MEMFW_NOTES_CLEARANCE``)
+the server returns only notes whose privacy level is in it. A note's level is
+the strictest of its frontmatter ``privacy`` field (missing →
+``--legacy-privacy-default``, ``local-private`` unless set) and its
+``privacy:``/``sensitivity:`` tags, read from the note file itself. Without a
+clearance nothing is filtered, the behaviour before MM0.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
 
+from ..ports.privacy import (
+    LEGACY_PRIVACY_FALLBACK,
+    admits,
+    clearance_is_valid,
+    legacy_default,
+    metadata_level,
+    parse_clearance,
+)
 from ..related import RelatedIndex
 from .feedback import FeedbackEvent, FeedbackStore
-from .index import HttpEmbeddingProvider, NotesIndex
-from .retrieval import HttpRerankerProvider, NotesRetriever, RetrievalConfig
+from .index import HttpEmbeddingProvider, NoteParseError, NotesIndex, _split_frontmatter
+from .retrieval import HttpRerankerProvider, NotesRetriever, RetrievalConfig, query_coverage
 
 SERVER_INFO = {"name": "memfw-notes", "version": "0.2.0"}
+CLEARANCE_ENV = "MEMFW_NOTES_CLEARANCE"
 PROTOCOL = "2024-11-05"
 
 TOOLS: list[dict[str, Any]] = [
@@ -134,12 +151,92 @@ class NotesGateway:
         reranker: HttpRerankerProvider | None = None,
         feedback_store: FeedbackStore | None = None,
         related_db: Path | None = None,
+        clearance: frozenset[str] | str | None = None,
+        legacy_privacy_default: str = LEGACY_PRIVACY_FALLBACK,
     ) -> None:
         self.root = root.expanduser().resolve()
         self.index = NotesIndex(db, embedder=embedder)
         self.reranker = reranker
         self.feedback_store = feedback_store
         self.related = RelatedIndex(related_db) if related_db else None
+        #: ``None`` filters nothing (before MM0); otherwise the levels returned.
+        self.clearance = (
+            clearance
+            if clearance is None or isinstance(clearance, frozenset)
+            else parse_clearance(clearance)
+        )
+        self.legacy_privacy_default = legacy_default(legacy_privacy_default)
+
+    def _note_path(self, rel: str) -> Path | None:
+        """``rel`` under the notes root, or ``None`` when unsafe or missing."""
+
+        cleaned = str(rel or "").strip().lstrip("/")
+        if not cleaned or ".." in Path(cleaned).parts:
+            return None
+        path = (self.root / cleaned).resolve()
+        if self.root not in path.parents or not path.is_file():
+            return None
+        return path
+
+    def _cleared_hits(
+        self, query: str, result: Any, limit: int, threshold: float | None
+    ) -> tuple[list[Any], int, bool, str]:
+        """Hits, candidate count and abstention as if withheld notes never matched.
+
+        The retriever judged coverage on its own top hit, which may be a
+        withheld note, so the decision is taken again on the visible pool.
+        """
+
+        pool = [hit for hit in (result.candidate_hits or result.hits) if self.admitted(hit.path)]
+        visible = [hit for hit in result.hits if self.admitted(hit.path)]
+        if threshold is None:
+            return visible, len(pool), False, ""
+        if not pool:
+            return [], 0, True, "no candidates"
+        top = pool[0]
+        coverage = query_coverage(query, top.title + " " + top.heading + " " + top.content)
+        if coverage < threshold:
+            return [], len(pool), True, f"top query coverage {coverage:.3f} < {threshold:.3f}"
+        return (visible or pool[:limit]), len(pool), False, ""
+
+    def _status(self) -> dict[str, Any]:
+        """``notes_status``; with a clearance the counts cover only visible notes."""
+
+        status = self.index.status()
+        if self.clearance is None or not status.get("exists"):
+            return status
+        with sqlite3.connect(self.index.db_path) as connection:
+            rows = connection.execute(
+                "SELECT n.path, COUNT(s.id) FROM notes n "
+                "LEFT JOIN sections s ON s.note_id = n.id GROUP BY n.id"
+            ).fetchall()
+        visible = [(str(path), int(count)) for path, count in rows if self.admitted(str(path))]
+        status["notes"] = len(visible)
+        status["sections"] = sum(count for _path, count in visible)
+        # Vector counts are not split per note here; do not report the total.
+        status["vectors"] = None
+        return status
+
+    def admitted(self, rel: str) -> bool:
+        """Whether the clearance admits the note at ``rel`` (always, without one).
+
+        Read from the note file, not the index, so a stale index cannot widen
+        access. An unreadable note, bad frontmatter or a path outside the root
+        is withheld (fail closed).
+        """
+
+        if self.clearance is None:
+            return True
+        path = self._note_path(rel)
+        if path is None:
+            return False
+        try:
+            frontmatter, _body, _offset = _split_frontmatter(
+                path.read_text(encoding="utf-8", errors="replace")
+            )
+        except (OSError, NoteParseError):
+            return False
+        return admits(self.clearance, metadata_level(frontmatter, self.legacy_privacy_default))
 
     def call(self, name: str, args: dict[str, Any]) -> Any:
         if name == "retrieval_feedback":
@@ -167,25 +264,43 @@ class NotesGateway:
             trace = self.feedback_store.trace(str(args.get("trace_id") or ""))
             if trace is None:
                 raise ValueError("unknown trace")
+            if self.clearance is not None:
+                trace["candidates"] = [
+                    candidate
+                    for candidate in trace.get("candidates") or []
+                    if isinstance(candidate, dict) and self.admitted(str(candidate.get("path")))
+                ]
             return trace
         if name == "notes_related":
             if self.related is None:
                 raise RuntimeError("related index is not configured")
             identifier = str(args.get("path") or "")
-            return {
-                "path": identifier,
-                "related": self.related.related(
-                    "notes", identifier, limit=max(1, min(int(args.get("limit", 10)), 50))
-                ),
-            }
+            limit = max(1, min(int(args.get("limit", 10)), 50))
+            if self.clearance is None:
+                related = self.related.related("notes", identifier, limit=limit)
+            else:
+                if not self.admitted(identifier):
+                    raise FileNotFoundError(identifier)
+                # Only note neighbours can be checked against the clearance;
+                # anything else is withheld. Over-fetch so the page can fill.
+                related = [
+                    item
+                    for item in self.related.related("notes", identifier, limit=50)
+                    if _related_note_path(item) is not None
+                    and self.admitted(str(_related_note_path(item)))
+                ][:limit]
+            return {"path": identifier, "related": related}
         if name == "notes_status":
-            return self.index.status()
+            return self._status()
         if name == "notes_get":
             rel = str(args.get("path") or "").strip().lstrip("/")
             if not rel or ".." in Path(rel).parts:
                 raise ValueError("unsafe note path")
             path = (self.root / rel).resolve()
             if self.root not in path.parents or not path.is_file():
+                raise FileNotFoundError(rel)
+            if not self.admitted(rel):
+                # The same answer as a missing note: existence is not revealed.
                 raise FileNotFoundError(rel)
             return {"path": rel, "content": path.read_text(encoding="utf-8", errors="replace")}
         if name == "notes_search":
@@ -220,19 +335,35 @@ class NotesGateway:
                 since=args.get("since"),
                 until=args.get("until"),
             )
+            hits = list(result.hits)
+            candidates = result.candidates
+            abstained, abstain_reason = result.abstained, result.abstain_reason
+            if self.clearance is not None:
+                hits, candidates, abstained, abstain_reason = self._cleared_hits(
+                    query, result, limit, retriever.config.min_query_coverage
+                )
             return {
                 "mode": result.mode_used,
                 "degraded": result.degraded,
                 "rewrites": result.rewrites,
                 "errors": result.errors,
-                "candidates": result.candidates,
+                "candidates": candidates,
                 "trace_id": result.trace_id,
                 "task_id": result.task_id,
-                "abstained": result.abstained,
-                "abstain_reason": result.abstain_reason,
-                "results": [hit.as_dict() for hit in result.hits],
+                "abstained": abstained,
+                "abstain_reason": abstain_reason,
+                "results": [hit.as_dict() for hit in hits],
             }
         raise KeyError(name)
+
+
+def _related_note_path(item: Any) -> str | None:
+    """The note path of one ``RelatedIndex.related`` row, or ``None`` if it is not a note."""
+
+    if not isinstance(item, dict) or item.get("source") not in ("notes", "notes_sections"):
+        return None
+    value = item.get("path") or (item.get("id") if item.get("source") == "notes" else None)
+    return str(value) if value else None
 
 
 _CONFIG_ERRORS = frozenset(
@@ -338,7 +469,23 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--related-db", type=Path)
     parser.add_argument("--rerank-endpoint")
     parser.add_argument("--rerank-model", default="reranker")
+    parser.add_argument(
+        "--clearance",
+        default=None,
+        help=(
+            "privacy levels to return, comma separated (public, shared, local-private); "
+            f"falls back to {CLEARANCE_ENV}; unset means no privacy filtering"
+        ),
+    )
+    parser.add_argument(
+        "--legacy-privacy-default",
+        default=LEGACY_PRIVACY_FALLBACK,
+        help="level of notes without a privacy field (default local-private)",
+    )
     args = parser.parse_args(argv)
+    clearance = args.clearance if args.clearance is not None else os.environ.get(CLEARANCE_ENV)
+    if not clearance_is_valid(clearance):
+        parser.error("--clearance must list only public, shared, local-private")
     embedder = None
     if args.endpoint:
         embedder = HttpEmbeddingProvider(
@@ -359,6 +506,8 @@ def main(argv: list[str] | None = None) -> None:
             reranker=reranker,
             feedback_store=feedback_store,
             related_db=args.related_db,
+            clearance=clearance,
+            legacy_privacy_default=args.legacy_privacy_default,
         )
     )
 

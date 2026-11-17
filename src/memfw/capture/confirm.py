@@ -171,6 +171,9 @@ def confirm_candidates(
                         anchor=f"capture:{candidate.candidate_id}" if is_anchor else None,
                         tags=["capture", candidate.source],
                         actor="human",
+                        # A session capture is transcript text (MM0): always
+                        # local-private, never the vault's defaults.
+                        privacy="local-private",
                     )
                 else:
                     existing = repository.get(memory_id)

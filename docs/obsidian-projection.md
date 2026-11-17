@@ -70,17 +70,21 @@ a memory that the clearance or the tenant hides.
 
 ## Privacy
 
-Each memory gets the strictest of memfw's readings of its privacy. These
-readings are the `sensitivity:*` and `privacy:*` tags, which are matched in
-any case, and any top-level `privacy` or `sensitivity` front matter key. A
+Each memory gets the level every memfw exit uses (`memfw.ports.privacy`):
+the strictest of its `privacy` field, its `privacy:*` tags and its
+`sensitivity:*` tags, all matched in any case. Memories without a privacy
+field follow `legacy_privacy_default` from the vault's `vault.yaml`, which is
+`local-private` when unset, so under the default clearance they are not
+exported until the vault sets it (`memfw privacy legacy-default shared`).
+Tags and a top-level `sensitivity` key can only make a memory stricter. A
 memory ends up in one of these classes:
 
 | Class | When |
 |---|---|
-| `public` | every declared privacy value is `public` |
-| `shared` | no declared value, or `shared`/`fleet`/`none` |
-| `local-private` | `sensitivity:private` or `privacy: local-private` |
-| `unknown` | any other value, such as `sensitivity:secret` or `privacy:restricted` |
+| `public` | `privacy: public` (or no field and `legacy_privacy_default: public`), no stricter tag |
+| `shared` | `privacy: shared` (or no field and `legacy_privacy_default: shared`), or a `privacy:shared`/`privacy:fleet` tag on a public memory |
+| `local-private` | `privacy: local-private`, no field and no `legacy_privacy_default`, `sensitivity:private` or `privacy:local-private` |
+| `unknown` | any other value, such as `sensitivity:secret`, `privacy:restricted` or `privacy: Top-Secret` |
 
 `--clearance` is a comma list of `public`, `shared` and `local-private`, read
 in any case. The default is `public,shared`. Any other token, `unknown`

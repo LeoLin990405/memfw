@@ -32,6 +32,7 @@ from ..core.models import (
     _same_instant,
     fold_temporal_aliases,
 )
+from ..ports.privacy import effective_level, is_looser, privacy_value
 from ..storage import with_archived_body
 from ..storage.transactions import _serialized
 
@@ -75,7 +76,16 @@ class MemoryOperationsMixin:
         group_key: str | None = None,
         manually_marked: bool = False,
         open_question: OpenQuestion | dict[str, Any] | None = None,
+        privacy: str | None = None,
+        _stamp_privacy_default: bool = True,
     ) -> MemoryDocument:
+        try:
+            privacy = privacy_value(privacy)
+        except ValueError as exc:
+            raise IntegrityError(str(exc)) from exc
+        if privacy is None and _stamp_privacy_default and self.config_path.exists():
+            # ``new_privacy_default`` (MM0): unset stamps nothing, as before.
+            privacy = self.new_privacy_default()
         anchor_always_hot = (
             self.read_config().get("anchor_always_hot", True) if self.config_path.exists() else True
         )
@@ -146,6 +156,7 @@ class MemoryOperationsMixin:
             limitations=limitations or [],
             experience=experience,
             open_question=open_question,
+            privacy=privacy,
             evidence=list(evidence or []),
             created_at=now,
             updated_at=now,
@@ -282,6 +293,9 @@ class MemoryOperationsMixin:
             "limitations",
             "experience",
             "open_question",
+            # Privacy level (MM0); only a human (or an approved proposal) may
+            # loosen it, see below.
+            "privacy",
         }
         if (
             actor != "human"
@@ -298,6 +312,11 @@ class MemoryOperationsMixin:
         )
         if anchor_change and actor != "human":
             raise IntegrityError("Only a human actor may set or remove anchor protection")
+        if "privacy" in changes:
+            try:
+                changes["privacy"] = privacy_value(changes["privacy"])
+            except ValueError as exc:
+                raise IntegrityError(str(exc)) from exc
         # Fold aliases before they meet the stored document. A conflict is only
         # two names in this request, and it raises before any write.
         folded_changes = fold_temporal_aliases(dict(changes))
@@ -306,6 +325,28 @@ class MemoryOperationsMixin:
             _check_supersession_target(self, memory_id, str(new_target))
         values = old.model_dump()
         values.update(folded_changes)
+        if (
+            "privacy" in folded_changes
+            and folded_changes["privacy"] is None
+            and old.privacy is not None
+            and actor != "human"
+            and not approved
+        ):
+            # Unset reads as the vault's defaults, which may change later: an
+            # explicit level is cleared only by a human decision (MM0).
+            raise IntegrityError("Only a human or an approved proposal may clear privacy")
+        if {"privacy", "tags"} & set(folded_changes) and actor != "human" and not approved:
+            # Fail closed (MM0): the level is the strictest of the field and the
+            # ``privacy:``/``sensitivity:`` tags, so both are compared as a whole.
+            # Without a human decision a write may keep or tighten it, never loosen.
+            legacy = self.legacy_privacy_default()
+            before = effective_level(old.privacy, old.tags, legacy=legacy)
+            after = effective_level(values.get("privacy"), values.get("tags") or [], legacy=legacy)
+            if is_looser(after, before):
+                raise IntegrityError(
+                    "Only a human or an approved proposal may loosen privacy "
+                    "(the privacy field or privacy:/sensitivity: tags)"
+                )
         # One gate for every write path. A human approval of an agent proposal
         # counts as a human decision; a bare agent write can edit an
         # already-verified document but cannot turn one into verified.
@@ -535,6 +576,8 @@ class MemoryOperationsMixin:
             "experience": old.experience,
             "evidence": list(old.evidence),
             "open_question": question_block,
+            # The replacement is the same memory: it keeps the level (MM0).
+            "privacy": old.privacy,
         }
         if overrides:
             if "tenant" in overrides:
@@ -549,6 +592,12 @@ class MemoryOperationsMixin:
                     f"accepted fields: {', '.join(sorted(inherited))}"
                 )
             inherited.update(overrides)
+        if inherited.get("privacy") is not None:
+            try:
+                inherited["privacy"] = privacy_value(inherited["privacy"])
+            except ValueError:
+                # An unrecognised predecessor value: keep it fail closed.
+                inherited["privacy"] = "local-private"
         memory_type = inherited.pop("type")
         new = self.add(
             title,
@@ -560,6 +609,9 @@ class MemoryOperationsMixin:
             provenance=provenance or f"supersedes:{memory_id}",
             tags=tags if tags is not None else list(old.tags),
             actor="human",
+            # An unset predecessor stays unset (legacy level), never stamped
+            # with ``new_privacy_default``, which could be looser.
+            _stamp_privacy_default=False,
             **inherited,
         )
         # One instant for both sides of the handoff. Taking a fresh ``_now()``
@@ -1087,6 +1139,8 @@ class MemoryOperationsMixin:
         )
         # An absent block is left out of the dump; restore that absence too.
         restored.setdefault("open_question", None)
+        # Same for ``privacy`` (MM0): a version without the field restores unset.
+        restored.setdefault("privacy", None)
         stale_target = restored.get("superseded_by")
         if (
             stale_target is not None

@@ -16,6 +16,7 @@ from typing import Any
 import yaml
 
 from ..core.errors import IntegrityError
+from ..ports.privacy import imported_value
 
 #: A staged candidate nobody applied is hidden this many days after memfw
 #: recorded it. Expiry only marks and hides; the file is never deleted.
@@ -41,6 +42,9 @@ class Candidate:
     frontmatter: dict[str, Any]
     recorded_at: str | None = None
     expired: bool = False
+    #: Privacy level to give the memory (MM0); ``None`` when the candidate sets
+    #: none. An unrecognised value reads as ``local-private`` (fail closed).
+    privacy: str | None = None
 
 
 def _field(frontmatter: dict[str, Any], metadata: dict[str, Any], key: str) -> Any:
@@ -147,7 +151,22 @@ def read_candidate(path: Path | str) -> Candidate:
         frontmatter=frontmatter,
         recorded_at=_optional_text(_field(frontmatter, metadata, "recorded_at")),
         expired=expired,
+        privacy=_candidate_privacy(frontmatter, metadata),
     )
+
+
+def _candidate_privacy(frontmatter: dict[str, Any], metadata: dict[str, Any]) -> str | None:
+    """Strictest of the top-level and ``metadata`` privacy values, if any is present."""
+
+    values = [
+        imported_value(source["privacy"])
+        for source in (frontmatter, metadata)
+        if source.get("privacy") is not None
+    ]
+    if not values:
+        return None
+    order = ("public", "shared", "local-private")
+    return max((value for value in values if value), key=order.index)
 
 
 def candidate_dict(candidate: Candidate) -> dict[str, Any]:
@@ -167,6 +186,7 @@ def candidate_dict(candidate: Candidate) -> dict[str, Any]:
         "recorded_at": candidate.recorded_at,
         "status": candidate.status,
         "applied_memory_id": candidate.applied_memory_id,
+        **({"privacy": candidate.privacy} if candidate.privacy is not None else {}),
     }
 
 

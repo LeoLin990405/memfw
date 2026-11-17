@@ -324,6 +324,10 @@ class MarkdownStorageMixin:
             ordered["experience"] = metadata["experience"]
         if metadata.get("open_question"):
             ordered["open_question"] = metadata["open_question"]
+        # Privacy (MM0) is written only when set: files from before it keep
+        # their bytes, and a missing field is read as ``legacy_privacy_default``.
+        if metadata.get("privacy") is not None:
+            ordered["privacy"] = metadata["privacy"]
         # Files written before ``type``, ``tenant``, ``related`` and the temporal
         # fields existed keep their bytes too: the default carries no
         # information, so it stays off the file exactly like ``recorded_at`` and

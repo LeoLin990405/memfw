@@ -161,7 +161,6 @@ SAME_LAYER_ALLOWED: Final[dict[tuple[str, str], str]] = {
     ("memfw.notes", "memfw.index"): "notes index reuses FTS term building",
     ("memfw.related", "memfw.entities"): "entity overlap is one relatedness signal",
     ("memfw.related", "memfw.notes"): "relatedness edges over notes",
-    ("memfw.projections", "memfw.projection"): "board pages reuse the privacy classification",
     # Read paths.
     ("memfw.memory_hybrid", "memfw.retrieval"): "hybrid route falls back to retrieval",
     # The recall adapter module is the designed bridge into recall's core.

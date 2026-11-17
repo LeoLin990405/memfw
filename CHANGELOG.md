@@ -11,6 +11,71 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
+### Added — privacy levels and clearance filtering on the exits (MM0)
+
+- `MemoryDocument.privacy`: `public`, `shared` or `local-private` (read
+  case-insensitively). Absent in older files: they parse as `None`, render
+  without the key and dump without it, so their bytes and snapshot hashes do
+  not change. `Repository.add(privacy=...)`, `update(privacy=...)` and
+  `memfw add --privacy` store the lowercase value and refuse anything else;
+  only a human (or an approved proposal) may loosen or clear it.
+- New `memfw.ports.privacy` (stdlib): the level a reader acts on is the
+  strictest of the field (missing → the vault's `legacy_privacy_default`,
+  `local-private` when unset), `privacy:*` tags and `sensitivity:*` tags;
+  unrecognised values are `unknown` and never admitted. A clearance is a set
+  of levels; a malformed one narrows to `public`. `memfw/index/read_path.py`
+  carries a stdlib copy for the HTTP service (parity test-enforced).
+- New `vault.yaml` key `legacy_privacy_default` (validated) and
+  `memfw privacy legacy-default [LEVEL]` to show or set it (one
+  `config_change` event).
+- Opt-in clearance on every exit; **unset means no filtering, exactly as
+  before**: HTTP read-only service `--clearance` / `MEMFW_READONLY_CLEARANCE`
+  (`/search`, `/related`; a withheld source memory answers 404, note
+  neighbours are dropped), `memfw okf export --clearance` (withheld memories
+  are left out; the manifest gains `privacy: {clearance, withheld_count}` only
+  then; a concept carries `memfw.privacy` only when the memory sets it), the
+  notes MCP server `--clearance` / `MEMFW_NOTES_CLEARANCE` (plus
+  `--legacy-privacy-default`; search, get, related and traces, read from the
+  note file), and the memfw MCP server `MEMFW_MCP_CLEARANCE` (search in every
+  mode, get, related, context, status; a withheld memory raises the same
+  not-found error as a missing one). HTTP `/search` rows list only `related`
+  ids the clearance admits; a memory file whose frontmatter does not parse to
+  a mapping (CRLF, YAML error, none at all) is `unknown`. Leak tests:
+  `tests/test_mm0_privacy_clearance.py`.
+- Writes keep the level: `supersede` inherits `privacy` (a human may
+  override it), `rollback` restores an unset field, and without a human
+  decision an update may not loosen the effective level (field and
+  `privacy:`/`sensitivity:` tags together). The recall strict policy reads the
+  field too (strictest of field and tags).
+- New `vault.yaml` key `new_privacy_default` and
+  `memfw privacy new-default [LEVEL]`: when set, new memories that set no
+  level get it; unset, nothing is stamped (as before).
+- Privacy travels through staged candidates: `memory_remember` (new optional
+  `privacy` argument), HTTP `/stage` (optional `privacy`), `candidate-apply`,
+  and `memfw okf import`, which honours `memfw.privacy` (an unrecognised
+  value becomes `local-private`). Export → import keeps `local-private`.
+- notes MCP under a clearance: abstention is judged on visible notes and
+  `notes_status` counts only visible notes.
+- Dream open questions (U3): a memory whose `privacy` field is not
+  `public`/`shared` counts as private and is never named; when either memory
+  sets the field, the candidate carries the stricter level and
+  `accept-question` writes it. Conversation-derived dream claims propose
+  `privacy: local-private`, and confirmed session captures are written
+  `local-private`. A non-human, unapproved write may not clear an explicit
+  `privacy` field.
+- Under `MEMFW_MCP_CLEARANCE`, recall labels (`labels: true` in every mode and
+  `two_stage`) count only open questions the clearance admits: a withheld
+  question gives neither `open_question:<id>` nor `conflicted`. The U5
+  review queue (`memfw corroboration queue`) reads the field through the
+  strict policy, and under a clearance lists only admitted questions and
+  conflict ids. Corroboration is computed on rows that passed the clearance.
+- The O1a Obsidian projection classifies with the same rule: memories without
+  a privacy field follow `legacy_privacy_default` (unset → `local-private`,
+  so they are not exported under the default `public,shared` until the vault
+  sets it); a `privacy:public` tag alone no longer makes a memory public.
+- `docs/READONLY-SERVICE-UPGRADE.md`: deploy the three service files together
+  and pair `MEMFW_READONLY_CLEARANCE` with the vault's privacy defaults.
+
 ### Added — settled ingest and archive state (M3e-a)
 
 - `memfw history ingest --settled-minutes N` skips transcripts whose last

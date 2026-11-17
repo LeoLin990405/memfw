@@ -30,14 +30,14 @@ Links are Obsidian wikilinks: ``about`` → ``[[concepts/<name>]]``,
 ``conflicts`` and ``resolved_by``. A link is written only when its target is
 exported too, so a page never names a memory the clearance hides.
 
-**Privacy.** A memory's class is the strictest of core's readings
-(:func:`memfw.projection.tag_privacy_class`,
-:func:`memfw.projection.classify_privacy` over its ``privacy:`` tags, and the
-fail-closed front matter reader in ``memfw.ports.reference``, which also reads
-top-level ``privacy``/``sensitivity`` keys), case-insensitive. ``unknown``
-(any value memfw does not recognise) is never exported, whatever the
-clearance. A memory in class ``none`` is ``public`` when every declared
-privacy value is ``public`` and ``shared`` otherwise (undeclared included).
+**Privacy.** A memory's class follows the rule every exit uses
+(:mod:`memfw.ports.privacy`, MM0): the strictest of its ``privacy`` field
+(memories without one follow the vault's ``legacy_privacy_default``,
+``local-private`` when unset), its ``privacy:*`` tags and its
+``sensitivity:*`` tags, case-insensitive. The fail-closed front matter reader
+in ``memfw.ports.reference`` (which also reads a top-level ``sensitivity``
+key) can only make it stricter. ``unknown`` (any value memfw does not
+recognise) is never exported, whatever the clearance.
 The clearance is a set of ``public``, ``shared``, ``local-private``; the
 default is ``public,shared``. Hidden memories leave no trace: no page, no
 link, no backlink, no count, no Bases row, and no concept page that only they
@@ -85,9 +85,14 @@ from ..core.models import MemoryDocument
 from ..ontology.model import Concept, load_concepts
 from ..ontology.taxonomy import broader_of, narrower_index
 from ..ports.clock import Clock, SystemClock
-from ..ports.reference._vault import MemoryFile, iter_memories, strictest
+from ..ports.privacy import (
+    LEGACY_PRIVACY_FALLBACK,
+    effective_level,
+    legacy_default_from_config,
+)
+from ..ports.privacy import strictest as strictest_level
+from ..ports.reference._vault import MemoryFile, iter_memories
 from ..ports.types import Availability, Manifest, ProjectionPolicy
-from ..projection import classify_privacy, tag_privacy_class
 
 #: Generator marker: the ``generated`` property of every page and the
 #: manifest's ``generator``. Distinct from any other generator writing into the
@@ -158,27 +163,33 @@ def parse_clearance(value: str | Iterable[str] | None) -> frozenset[str]:
     return frozenset(cleaned)
 
 
-def privacy_level(document: MemoryDocument, memory: MemoryFile) -> str:
-    """``public``, ``shared``, ``local-private`` or ``unknown`` (strictest reading wins)."""
+def privacy_level(
+    document: MemoryDocument, memory: MemoryFile, legacy: str = LEGACY_PRIVACY_FALLBACK
+) -> str:
+    """``public``, ``shared``, ``local-private`` or ``unknown`` (strictest reading wins).
 
-    declared: list[str] = [
-        tag.split(":", 1)[1] for tag in document.tags if tag.lower().startswith("privacy:")
-    ]
-    front = memory.front.get("privacy")
-    if isinstance(front, str):
-        declared.append(front)
-    elif isinstance(front, list):
-        declared.extend(front)
-    tag_class = tag_privacy_class(document.tags)
-    classes = [tag_class, memory.privacy_class()]
-    classes.extend(classify_privacy(value, tag_class=tag_class)[0] for value in declared)
-    found = strictest(classes)
-    if found != "none":
-        return found
-    values = [value.strip().lower() for value in declared]
-    if values and all(value == "public" for value in values):
-        return "public"
-    return "shared"
+    The rule every exit uses (``memfw.ports.privacy``, MM0): the ``privacy``
+    field, or ``legacy`` (the vault's ``legacy_privacy_default``) when it is
+    missing, then ``privacy:*`` and ``sensitivity:*`` tags. The fail-closed
+    front matter reader in ``memfw.ports.reference`` (which also reads a
+    top-level ``sensitivity`` key) can only make it stricter.
+    """
+
+    level = effective_level(document.privacy, document.tags, legacy=legacy)
+    file_class = memory.privacy_class()
+    if file_class != "none":
+        level = strictest_level([level, file_class])
+    return level
+
+
+def vault_legacy_privacy(root: Path) -> str:
+    """``legacy_privacy_default`` of the vault at ``root``; unreadable → ``local-private``."""
+
+    try:
+        config = yaml.safe_load((root / "vault.yaml").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        config = None
+    return legacy_default_from_config(config)
 
 
 def safe_name(raw: str) -> str:
@@ -280,6 +291,7 @@ class ObsidianProjector:
     def _select(self, root: Path) -> tuple[dict[str, _Entry], dict[str, int]]:
         skipped = {"unreadable": 0, "tenant": 0, "privacy": 0}
         entries: dict[str, _Entry] = {}
+        legacy = vault_legacy_privacy(root)
         for memory_id, memory in iter_memories(root):
             document = _parse(memory_id, memory)
             if memory is None or document is None:
@@ -288,7 +300,7 @@ class ObsidianProjector:
             if document.tenant != self.tenant:
                 skipped["tenant"] += 1
                 continue
-            level = privacy_level(document, memory)
+            level = privacy_level(document, memory, legacy)
             if level == "unknown" or level not in self.clearance:
                 skipped["privacy"] += 1
                 continue

@@ -22,6 +22,7 @@ import yaml
 from memfw.core.epistemic import OPEN_QUESTION_TYPE
 from memfw.core.models import MemoryDocument
 from memfw.core.repository import Repository
+from memfw.ports.privacy import admits, effective_level, parse_clearance
 
 OKF_VERSION = "0.2"
 GENERATOR = "memfw-okf-export/1"
@@ -114,6 +115,9 @@ def _concept(document: MemoryDocument, generated_by: str) -> tuple[str, str, dic
         memfw["causal_record"] = document.causal_record.model_dump(mode="json")
     if document.limitations:
         memfw["limitations"] = list(document.limitations)
+    # Only when the memory sets it, so bundles of older memories are unchanged.
+    if document.privacy is not None:
+        memfw["privacy"] = document.privacy
     if document.experience is not None:
         memfw["experience"] = document.experience.model_dump(mode="json")
     # An open question says what is unknown; a consumer must not read it as a
@@ -172,8 +176,19 @@ def export_okf(
     generated_by: str = "process:memfw-okf-export",
     now: datetime | None = None,
     bundle_title: str | None = None,
+    clearance: frozenset[str] | str | None = None,
 ) -> OkfExportResult:
-    """Export ``root`` (a memfw vault) to ``output`` as an OKF v0.2 bundle."""
+    """Export ``root`` (a memfw vault) to ``output`` as an OKF v0.2 bundle.
+
+    ``clearance`` (MM0) is the set of privacy levels the bundle may contain
+    (``public``, ``shared``, ``local-private``; text is comma separated and
+    a malformed value becomes ``{"public"}``). ``None``, the default, exports
+    every memory, as before MM0. With a clearance, a memory's level is the
+    strictest of its ``privacy`` field (missing → the vault's
+    ``legacy_privacy_default``) and its ``privacy:``/``sensitivity:`` tags;
+    memories outside it are left out and the manifest records the clearance
+    and how many were withheld (never which).
+    """
     repository = Repository(Path(root))
     # Resolve first: ``Path(".").with_name`` raises, and the safety checks
     # below must compare real locations, not spellings or symlinks.
@@ -181,6 +196,17 @@ def export_okf(
     _check_output(output_path, repository.root, force=force)
     repository.init()
     documents = repository.list()
+    cleared = parse_clearance(clearance) if not isinstance(clearance, frozenset) else clearance
+    withheld = 0
+    if cleared is not None:
+        legacy = repository.legacy_privacy_default()
+        kept = [
+            document
+            for document in documents
+            if admits(cleared, effective_level(document.privacy, document.tags, legacy=legacy))
+        ]
+        withheld = len(documents) - len(kept)
+        documents = kept
     moment = (now or datetime.now(UTC)).astimezone(UTC)
     generated_at = moment.isoformat().replace("+00:00", "Z")
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -193,8 +219,17 @@ def export_okf(
         shutil.rmtree(temp_path)
     temp_path.mkdir(parents=True)
     try:
+        privacy_note = (
+            None if cleared is None else {"clearance": sorted(cleared), "withheld_count": withheld}
+        )
         concepts, validation = _write_bundle(
-            temp_path, repository, documents, generated_by, generated_at, bundle_title
+            temp_path,
+            repository,
+            documents,
+            generated_by,
+            generated_at,
+            bundle_title,
+            privacy_note=privacy_note,
         )
         if output_path.exists():
             # Re-check: the output may have appeared since the first check.
@@ -309,6 +344,8 @@ def _write_bundle(
     generated_by: str,
     generated_at: str,
     bundle_title: str | None,
+    *,
+    privacy_note: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], OkfValidation]:
     concepts: list[dict[str, Any]] = []
     for document in documents:
@@ -343,6 +380,8 @@ def _write_bundle(
         "generated_by": generated_by,
         "canonical_source": str(repository.root),
     }
+    if privacy_note is not None:
+        manifest["privacy"] = privacy_note
     temp_path.joinpath("manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )

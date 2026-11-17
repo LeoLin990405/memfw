@@ -55,9 +55,12 @@ def _raw(vault: Path, memory_id: str, front: str, body: str) -> None:
     (vault / "memories" / f"{memory_id}.md").write_text(text, encoding="utf-8")
 
 
-def _vault(tmp_path: Path) -> Repository:
+def _vault(tmp_path: Path, *, legacy: str | None = "shared") -> Repository:
     repository = Repository(tmp_path / "vault")
     repository.init()
+    if legacy is not None:
+        # Memories without a privacy field follow legacy_privacy_default (MM0).
+        repository.configure({**repository.read_config(), "legacy_privacy_default": legacy})
     add = repository.add
     add(
         "Backup",
@@ -66,6 +69,7 @@ def _vault(tmp_path: Path) -> Repository:
         tags=["privacy:public", "ops:backup", "fleet_path:x/y.md"],
         about=["concept:demo:backup", "concept:hidden:shared"],
         epistemic="fact",
+        privacy="public",
     )
     add("Shared note", "shared default note", memory_id="m-shared", about=["concept:demo:backup"])
     add(
@@ -212,7 +216,32 @@ def test_privacy_strictest_wins(tmp_path: Path) -> None:
         document = parse_memory_markdown(raw.decode(), expected_id=memory_id)
         memory = parse_memory(memory_id, raw)
         assert memory is not None
-        assert privacy_level(document, memory) == expected, memory_id
+        assert privacy_level(document, memory, "shared") == expected, memory_id
+    # Without a field, the level is the vault's legacy default (MM0).
+    raw = (repository.memories_dir / "m-shared.md").read_bytes()
+    document = parse_memory_markdown(raw.decode(), expected_id="m-shared")
+    memory = parse_memory("m-shared", raw)
+    assert memory is not None
+    assert privacy_level(document, memory) == "local-private"
+    assert privacy_level(document, memory, "public") == "public"
+
+
+def test_memories_without_a_field_follow_legacy_privacy_default(tmp_path: Path) -> None:
+    """Unset legacy default → local-private → not exported under public,shared."""
+
+    repository = _vault(tmp_path, legacy=None)
+    out = tmp_path / "board"
+    ObsidianProjector().build(repository.root, out)
+    pages = sorted(n for n in _tree(out) if n.startswith(("memories/", "questions/")))
+    assert pages == ["memories/m-pub.md"]
+    blob = _blob(out)
+    for hidden in ("m-shared", "m-new", "m-old", "q-1"):
+        assert hidden not in blob
+    # Setting the vault's legacy default brings them back.
+    repository.configure({**repository.read_config(), "legacy_privacy_default": "shared"})
+    ObsidianProjector().build(repository.root, out)
+    names = set(_tree(out))
+    assert {"memories/m-new.md", "memories/m-old.md", "questions/q-1.md"} <= names
 
 
 # --- tenant -------------------------------------------------------------------
