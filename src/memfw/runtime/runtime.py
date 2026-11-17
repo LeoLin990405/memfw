@@ -309,6 +309,7 @@ class Runtime:
         policy: str | None = "compat_fts",
         labels: bool = False,
         client_message: Callable[[str, Path], str] | None = None,
+        app: str | None = None,
     ) -> dict[str, Any]:
         """``memory_search``: check the arguments, open the vault, run ``mode``.
 
@@ -324,6 +325,9 @@ class Runtime:
         the mode: fts (the shared read-only reader), hybrid and vector
         (``MemoryHybridRetriever``), multihop, two_stage (``recall``), plus
         ontology alias expansion and the U2 labels; rows are built here.
+        ``labels=true`` also gives every row, in every mode, the U5
+        ``corroboration`` field as ``app`` (the calling app) may see it
+        (``memfw.runtime.corroboration``); ``app`` is read for nothing else.
 
         ``client_message(text, root)`` cleans error texts that may name vault
         paths (the MCP server passes its own); the default returns the text.
@@ -357,6 +361,7 @@ class Runtime:
             policy=policy,
             labels=labels,
             client_message=client_message or _plain_message,
+            app=app,
         )
 
     # --- memory_remember, memory_related, memory_status (A3b) -------------------
@@ -703,6 +708,52 @@ class Runtime:
         self.ensure_index(repository)
         moment = now if now is not None else datetime.now(UTC)
         return open_question_labels_for(repository, memory_ids, policy, now=moment)
+
+    def open_question_queue(
+        self,
+        repository: Repository,
+        *,
+        app: str | None,
+        policy_name: str = "strict",
+        allow_operator: bool = False,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """The open-question review queue, corroborated conflicts first (U5 reverse signal).
+
+        Fails closed: ``policy_name`` defaults to ``strict`` (privacy clearance
+        ``none``, status, lifecycle, archive), and both the questions and the
+        conflicts that may add support must pass it, so a private, rejected or
+        archived question is never listed and a private conflict never moves
+        one. The questions are the unresolved, current ones the policy keeps
+        for this Runtime's tenant and sources. Order: ``memfw.recall.priority``,
+        from corroboration trimmed to what ``app`` may read; ``allow_operator``
+        is for the memfw CLI only. Never writes the vault or the corroboration
+        projection.
+        """
+
+        if policy_name not in RECALL_POLICIES:
+            raise ValueError("unknown policy")
+        from memfw.recall import evaluate
+        from memfw.recall.builtin import meta_from_document, open_questions
+
+        from .corroboration import open_question_queue
+
+        policy = self._filter_policy(policy_name, source="", include_history=False, as_of=None)
+        self.ensure_index(repository)
+        moment = now if now is not None else datetime.now(UTC)
+
+        def keep(document: MemoryDocument) -> bool:
+            if not self._visible(document):
+                return False
+            return evaluate(meta_from_document(document), policy, now=moment).kept
+
+        return open_question_queue(
+            repository,
+            [item for item in open_questions(repository, policy, now=moment) if keep(item)],
+            app=app,
+            visible=keep,
+            allow_operator=allow_operator,
+        )
 
     # --- memory_context (C1) ---------------------------------------------------
 

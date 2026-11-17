@@ -66,7 +66,11 @@ TOOLS: list[dict[str, Any]] = [
                     "description": (
                         "Add recall_labels (open_question:<id>, conflicted) to every row of "
                         "the fts, hybrid, vector and multihop modes. mode=two_stage always "
-                        "has them."
+                        "has them. In every mode, also add corroboration: {count, apps, "
+                        "sessions, first_seen, last_seen}, the independent app sessions that "
+                        "mention the memory, only those this server's app may read; or "
+                        "{degraded: <code>} when it cannot be shown. Display only: it changes "
+                        "no ranking and is not proof."
                     ),
                 },
             },

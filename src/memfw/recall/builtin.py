@@ -225,10 +225,10 @@ def _is_open(document: MemoryDocument, policy: FilterPolicy, now: datetime) -> b
     return evaluate(meta_from_document(document), policy, now=now).kept
 
 
-def open_question_index(
+def open_questions(
     repository: Repository, policy: FilterPolicy, *, now: datetime
-) -> OpenQuestionIndex:
-    """The open questions ``policy`` lets this caller see, keyed for labelling.
+) -> list[MemoryDocument]:
+    """The unresolved open questions ``policy`` lets this caller see, by id.
 
     ``repository`` is the caller's open vault (resolved per call). Candidates
     come from the search index (``memory_access``: type ``open-question`` in
@@ -237,14 +237,14 @@ def open_question_index(
     it is unresolved (no ``resolved_by``, no ``valid_to``, not superseded; see
     ``_is_open``) and ``evaluate`` keeps it under ``policy`` (tenant, source,
     ``as_of``; for ``strict`` also privacy, status, lifecycle, archive): a
-    question in another tenant, or one the policy drops, contributes nothing,
-    so its id can never appear in a label. An unreadable file is skipped.
+    question in another tenant, or one the policy drops, is never returned.
+    An unreadable file is skipped.
     """
 
     ids = _indexed_question_ids(repository, policy.tenant)
     if ids is None:
         ids = _scanned_question_ids(repository)
-    questions: list[tuple[str, list[str], list[str]]] = []
+    found: list[MemoryDocument] = []
     for memory_id in ids:
         if not _ID_RE.fullmatch(memory_id):
             continue
@@ -257,10 +257,25 @@ def open_question_index(
             continue
         if document.open_question is None or not _is_open(document, policy, now):
             continue
-        questions.append(
-            (document.id, list(document.about), list(document.open_question.conflicts))
-        )
-    return OpenQuestionIndex.build(questions)
+        found.append(document)
+    return found
+
+
+def open_question_index(
+    repository: Repository, policy: FilterPolicy, *, now: datetime
+) -> OpenQuestionIndex:
+    """The open questions ``policy`` lets this caller see, keyed for labelling.
+
+    The questions are :func:`open_questions`'s, so a question in another
+    tenant, or one the policy drops, contributes nothing and its id can never
+    appear in a label.
+    """
+
+    return OpenQuestionIndex.build(
+        (document.id, list(document.about), list(document.open_question.conflicts))
+        for document in open_questions(repository, policy, now=now)
+        if document.open_question is not None
+    )
 
 
 def open_question_labels_for(
@@ -583,5 +598,6 @@ __all__ = [
     "default_resolvers",
     "meta_from_document",
     "open_question_index",
+    "open_questions",
     "open_question_labels_for",
 ]

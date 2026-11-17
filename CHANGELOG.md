@@ -11,6 +11,21 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
+### Added — corroboration display and the open-question review order (U5, part 1)
+
+- MCP `memory_search` with `labels: true` adds `corroboration`
+  (`{count, apps, sessions, first_seen, last_seen}`) to every row in every mode,
+  `two_stage` included, trimmed to the server app's `can_read` (computed in
+  `memfw.runtime.corroboration`). It is `{"degraded": CODE}` when it cannot be shown
+  (no caller app, invalid share policy, missing or unreadable projection). Without
+  `labels` the output is byte-identical.
+- `memfw corroboration queue` lists unresolved open questions in review order: questions
+  whose `conflicts` include a memory corroborated by at least 2 visible apps come first
+  (rule in `memfw.recall.priority`, shipped in the `memfw-recall` wheel). Read-only and
+  fail-closed: `--policy strict` (default) filters both the questions and the conflicts
+  that add support (no private, rejected or archived memory is listed or counted).
+- Deferred: promotion candidates and ranking weights (need evaluation and approval).
+
 ### Added — conflicts become open-question candidates (U3)
 
 - `memfw dream run`: every pair curate proposes a `supersede` for (two current

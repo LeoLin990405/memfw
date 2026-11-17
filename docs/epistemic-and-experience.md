@@ -174,7 +174,8 @@ open_question:
 `memfw corroboration rebuild` writes `corroboration.sqlite3` at the vault root (next to
 `index.sqlite3`; never inside `memories/`). It is a rebuildable projection: delete it and
 rebuild it and the bytes are identical. It never writes the vault and never changes
-`epistemic` or `status`. Nothing else in memfw reads it yet.
+`epistemic` or `status`. It is read only for display and for the open-question review
+order (U5, below); it changes no ranking.
 
 Per memory it records which (app, session) pairs mention it, from
 `conv:APP:SESSION@OFFSET` references in three places:
@@ -219,6 +220,35 @@ its `can_read` allows (plus itself) appear in `apps`, `sessions` and `count`; wi
 are filtered again at read time, so tightening the policy takes effect before the next
 rebuild. `first_seen`/`last_seen` use the evidence timestamp, else the carrier's
 `created_at` (an upper bound).
+
+### How corroboration is used (U5)
+
+* **Display only, opt-in.** MCP `memory_search` with `labels: true` gives every row, in
+  every mode (`two_stage` included), a `corroboration` field: the same
+  `{count, apps, sessions, first_seen, last_seen}` as `show`, trimmed to the server's
+  `--app` (`MEMFW_APP`). With `can_read: false` an app sees only its own share. Without
+  `labels` the output is byte-identical to before. When it cannot be shown the field is
+  `{"degraded": CODE}` and the search itself is not degraded: `caller_app_required` (no
+  `--app`, or the reserved `operator` name over MCP), `share_policy_invalid`,
+  `projection_missing` (run `memfw corroboration rebuild`), `projection_unreadable`.
+  The projection can be stale until the next rebuild.
+* **Reverse signal: review order.**
+  `memfw corroboration queue [--as-app APP] [--tenant T] [--policy strict|compat_fts]`
+  lists the unresolved, current open questions in review order. It fails closed:
+  `--policy strict` (the default) is the recall strict policy (privacy clearance `none`,
+  status, lifecycle, archive), and both the questions and the conflicts that may add
+  support must pass it, so a private, rejected or archived question is never listed and a
+  private conflict never moves one; `compat_fts` is the explicit wider opt-in. A memory in a question's `conflicts` is *corroborated* when its visible
+  corroboration names at least 2 distinct apps. Order: more corroborated conflicts first,
+  then more support (the sum of their `count`s), then older (`created_at`), then id. Each
+  row carries `priority: {corroborated_conflicts, support}`. Corroboration is trimmed to
+  `APP` first (default: the operator, every readable app), so a hidden app can never move
+  a question; only conflicts the caller can see are looked up. Without the projection the
+  order is oldest first and `corroboration.degraded` says why. The order never hides,
+  edits or decides a question. The rule is `memfw.recall.priority`.
+* **Deferred.** Promotion candidates (`inference` to `fact` after 2 apps, 3 sessions and
+  no open question) and ranking weights need evaluation data and approval first; neither
+  is implemented.
 
 ## Retrieval and export
 

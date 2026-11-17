@@ -108,13 +108,23 @@ def _zero_timings(value: Any) -> Any:
     return value
 
 
+#: ``conv:`` evidence for ``mcp_memory_search_stable`` with ``corroboration``.
+CORROBORATION_EVIDENCE: dict[str, tuple[str, ...]] = {
+    "m-port-a": ("conv:claude:s1@1", "conv:codex:s2@4", "conv:kimi:s3@2"),
+    "m-port-b": ("conv:codex:s9@1",),
+}
+
+
 def mcp_memory_search_stable(payload: dict[str, Any], workdir: Path) -> str:
     """``memory_search`` on the fixture vault plus concept memories, timings zeroed.
 
     ``payload``: ``arguments`` (the tool arguments), ``open_question`` (add an
     unresolved open question about ``concept:service-port`` listing
-    ``m-port-a`` and ``m-legacy`` in its conflicts) and ``embedder`` (a
-    ``HashEmbeddingProvider``). Uses only APIs present since U1.
+    ``m-port-a`` and ``m-legacy`` in its conflicts), ``embedder`` (a
+    ``HashEmbeddingProvider``) and ``corroboration`` (conversation sharing on,
+    ``conv:`` evidence from three apps on ``m-port-a`` and one on ``m-port-b``,
+    the U4 projection rebuilt, the server run as ``--app claude``). Uses only
+    APIs present since U4.
     """
 
     from memfw.core.repository import Repository
@@ -129,8 +139,15 @@ def mcp_memory_search_stable(payload: dict[str, Any], workdir: Path) -> str:
     repository.init()
     for memory_id, title, body, source, tags in VAULT:
         repository.add(title, body, memory_id=memory_id, source=source, tags=list(tags))
+    evidence = CORROBORATION_EVIDENCE if payload.get("corroboration") else {}
     for memory_id, title, body, about in CONCEPT_VAULT:
-        repository.add(title, body, memory_id=memory_id, about=list(about))
+        repository.add(
+            title,
+            body,
+            memory_id=memory_id,
+            about=list(about),
+            evidence=list(evidence.get(memory_id, ())),
+        )
     if payload.get("open_question"):
         repository.add(
             "Service port unknown",
@@ -144,9 +161,21 @@ def mcp_memory_search_stable(payload: dict[str, Any], workdir: Path) -> str:
             },
         )
     MemoryIndex(repository.index_path).rebuild(repository)
+    app = None
+    if payload.get("corroboration"):
+        from memfw.conversations.policy import SharePolicy
+        from memfw.corroboration import rebuild
+
+        config = repository.read_config()
+        config["conversation_share"] = {"enabled": True}
+        repository.configure(config)
+        rebuild(repository, SharePolicy.from_config(repository.read_config()))
+        app = "claude"
     root = repository.root
     embedder = HashEmbeddingProvider(dimension=64) if payload.get("embedder") else None
-    gateway = Gateway(root, tenant="", entity_enabled=False, allowed_sources=(), embedder=embedder)
+    gateway = Gateway(
+        root, tenant="", entity_enabled=False, allowed_sources=(), embedder=embedder, app=app
+    )
     sent: list[dict[str, Any]] = []
     gateway.respond = sent.append  # type: ignore[method-assign]
     gateway.handle(
@@ -175,6 +204,10 @@ HISTORY_LINES: tuple[dict[str, str], ...] = (
     {"session_id": "s1", "ts": "2026-02-01T00:00:01Z", "message": "Fan curve tuned for backup"},
     {"session_id": "s2", "ts": "2026-02-02T00:00:00Z", "message": "Restore drill for the NAS"},
 )
+
+
+#: JSON-RPC id of the ``all_tool_messages`` ``memory_search`` calls with ``labels: true``.
+LABELS_ID = "memory_search:labels"
 
 
 def _tool(name: str, arguments: Any = None, *, omit: bool = False) -> dict[str, Any]:
@@ -247,7 +280,14 @@ def all_tool_messages() -> list[Any]:
         _tool("memory_search", {"query": "backup", "base_url": "http://x.invalid"}),
         _tool("memory_search", {"query": "backup", "rerank-endpoint": "x"}),
     ]
-    messages += [_tool("memory_search", arguments) for arguments in search]
+    # ``labels: true`` calls get their own id, so a comparison can tell their
+    # responses (U5 adds ``corroboration`` to exactly those) from the rest.
+    messages += [
+        {**_tool("memory_search", arguments), "id": LABELS_ID}
+        if isinstance(arguments, dict) and arguments.get("labels") is True
+        else _tool("memory_search", arguments)
+        for arguments in search
+    ]
     messages += [
         _tool("memory_get", {"memory_id": "m-backup"}),
         _tool("memory_get", {"memory_id": "m-port-a"}),

@@ -423,6 +423,14 @@ def _retriever(runtime: Runtime, repository: Repository) -> MemoryHybridRetrieve
     )
 
 
+def _corroborate(repository: Repository, rows: list[dict[str, Any]], *, app: str | None) -> None:
+    """``labels=true``: the U5 ``corroboration`` field on every row (imported on first use)."""
+
+    from .corroboration import rows_corroboration
+
+    rows_corroboration(repository, rows, app=app)
+
+
 def memory_search(
     runtime: Runtime,
     repository: Repository,
@@ -438,16 +446,18 @@ def memory_search(
     policy: str,
     labels: bool,
     client_message: ClientMessage,
+    app: str | None = None,
 ) -> dict[str, Any]:
     """One ``memory_search`` call on the caller's open vault.
 
     ``Runtime.search`` has checked the arguments (non-empty query, known
     ``policy``, only with ``two_stage``; ``scope`` cleaned; ``source``
-    allowed) and opened ``repository``.
+    allowed) and opened ``repository``. ``labels`` adds the U5
+    ``corroboration`` field to every row, in every mode, as ``app`` sees it.
     """
 
     if mode == "two_stage":
-        return _search_two_stage(
+        payload = _search_two_stage(
             runtime,
             repository,
             query,
@@ -459,6 +469,9 @@ def memory_search(
             policy=policy,
             client_message=client_message,
         )
+        if labels:
+            _corroborate(repository, payload["results"], app=app)
+        return payload
     concepts = repository.root / "concepts"
     expand = concepts.is_dir() and not concepts.is_symlink()
     if mode == "multihop":
@@ -587,6 +600,7 @@ def memory_search(
         )
         for row in rows:
             row["recall_labels"] = list(found.get(str(row["id"]), ()))
+        _corroborate(repository, rows, app=app)
     errors = [client_message(str(item), repository.root) for item in result["errors"]]
     if alias_note:
         errors.append(alias_note)
