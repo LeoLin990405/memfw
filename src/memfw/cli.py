@@ -1333,6 +1333,12 @@ def add(
                 # Only with the open-question options: other dry runs are unchanged.
                 gate_values.update(id=memory_id, tenant=tenant, open_question=block)
             validate_epistemic_write(gate_values, actor="human")
+            if block is not None and block["conflicts"] and not vault_exists:
+                # The conflicts cannot be checked without the vault, and the
+                # real write would fail: do not report a dry run as valid.
+                raise IntegrityError(
+                    "open_question.conflicts can only be checked in an existing vault: " + str(root)
+                )
             if block is not None and vault_exists:
                 validate_open_question_references(
                     gate_values, lookup=lambda ref: lookup_current(repository, ref)
@@ -1535,12 +1541,16 @@ def update(
                 values = old.model_dump()
                 values.update(changes)
                 validate_epistemic_write(values, actor="human", previous_causal=old.causal)
-                if "open_question" in changes:
-                    validate_open_question_references(
-                        values,
-                        lookup=lambda ref: lookup_current(repository, ref),
-                        previous=old.model_dump(),
-                    )
+            if changes and OPEN_QUESTION_TYPE in (old.type, changes.get("type")):
+                # As the real update: every write to an open question re-checks
+                # its references, whichever fields it changes.
+                values = old.model_dump()
+                values.update(changes)
+                validate_open_question_references(
+                    values,
+                    lookup=lambda ref: lookup_current(repository, ref),
+                    previous=old.model_dump(),
+                )
             typer.echo(
                 json.dumps(
                     {

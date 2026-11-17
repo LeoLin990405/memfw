@@ -164,6 +164,20 @@ def test_add_open_question_dry_run_writes_nothing(tmp_path: Path) -> None:
     assert len(repository.events()) == events
 
 
+def test_add_dry_run_without_a_vault_rejects_unchecked_conflicts(tmp_path: Path) -> None:
+    missing_root = tmp_path / "no-vault"
+    args = ["add", "--title", "q", "--body", "b", "--type", OPEN_QUESTION_TYPE]
+    args += ["--question", "Which port?", "--root", str(missing_root), "--dry-run"]
+    result = _run(*args, "--conflicts", "some-id")
+    assert result.exit_code == 2
+    assert "existing vault" in result.output
+    # Without conflicts there is nothing to look up: still a valid dry run.
+    result = _run(*args)
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["valid"] is True
+    assert not missing_root.exists()
+
+
 # --- update ------------------------------------------------------------------------
 
 
@@ -211,6 +225,30 @@ def test_update_open_question_gates(tmp_path: Path) -> None:
         result = _run("update", plain.id, "--question", "q?", *root, *dry)
         assert result.exit_code == 2 and "open_question requires type" in result.output
     assert (repository.root / "memories" / f"{question_id}.md").read_bytes() == before
+
+
+def test_update_dry_run_checks_references_on_any_open_question_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = _vault(tmp_path)
+    plain = repository.add("plain", "x")
+    question_id = _add_question(repository, "--conflicts", plain.id).stdout.strip()
+    calls: list[str] = []
+    real = cli.validate_open_question_references
+
+    def spy(values: Any, **kwargs: Any) -> None:
+        calls.append(str(values.get("id")))
+        real(values, **kwargs)
+
+    monkeypatch.setattr(cli, "validate_open_question_references", spy)
+    root = ("--root", str(repository.root))
+    result = _run("update", question_id, "--title", "reworded", "--dry-run", *root)
+    assert result.exit_code == 0, result.output
+    assert calls == [question_id]
+    # A plain memory's dry run is not an open-question write.
+    result = _run("update", plain.id, "--title", "reworded", "--dry-run", *root)
+    assert result.exit_code == 0, result.output
+    assert calls == [question_id]
 
 
 def test_update_resolved_by(tmp_path: Path) -> None:

@@ -143,8 +143,11 @@ existing vault) and writes nothing.
 
 ## Machine output (`--json`)
 
-Every read command prints JSON by default except the three below, which now
-take `--json` (their default output is unchanged byte for byte):
+Most read commands print JSON by default. Two already printed text by
+default and had a `--json` flag before this change: `eval causal` (a summary;
+`--json` prints the full report) and `okf import` (a per-concept table;
+`--json` prints the result). The three below printed text and had no flag;
+they now take `--json` (their default output is unchanged byte for byte):
 
 | Command | Default | `--json` |
 |---|---|---|
@@ -159,9 +162,11 @@ Already JSON (no flag needed): `stats`, `fsck`, `recover`, `log *`, `budget *`,
 `experience *`, `capture *`, `notes search/status/related`, `code *`,
 `okf *`, `projection export`, `project obsidian`, `resolve`,
 `privacy legacy-default/new-default`, and every `--dry-run`.
-`conversations handoff` and `handoff` choose with `--format`. `conversations schedule` prints a launchd plist (a
-generated file, not data). `okf import`,
-`projection export` and `resolve` keep their existing `--json` flag.
+(`okf *` here means `okf export` and `okf validate`; `okf import` is text by
+default, see above.) `projection export` and `resolve` print JSON by default
+and keep their existing `--json` flag, which is a no-op. `conversations
+handoff` and `handoff` choose with `--format`. `conversations schedule`
+prints a launchd plist (a generated file, not data).
 Write commands that confirm with a line (`init`, `add`, `update`, `delete`,
 `rollback`, `index rebuild`) are not read commands and keep their output.
 
