@@ -1,0 +1,131 @@
+# memfw-adapter-ocr
+
+MM4 of the multimodal design: turns an attachment's original (a PDF or an
+image) into a **proxy import file** (MM2a's `memfw.proxy` v1): text segments, each with a locator,
+plus `coverage`, `source_sha256` and the producer. memfw itself never runs a
+model; this adapter calls a **local** OCR engine and nothing is uploaded.
+
+Standard library only; depends on `memfw-ports` and nothing else of memfw.
+memfw never imports it. Import it as `memfw_adapter_ocr`.
+
+## Output format: MM2a's `memfw.proxy` version 1
+
+The adapter writes memfw's proxy import format (`"format": "memfw.proxy"`,
+`"version": 1`), which MM2a (`memfw attach proxy import`, Python form
+`memfw.ports.proxies`) owns and documents. **MM2a was not on `main` when this
+package was written**: the format is mirrored from MM2a's draft in ONE
+function, `memfw_adapter_ocr.proxy.to_proxy_candidate`, and must be re-checked
+against MM2a as merged. Once the installed ports have `memfw.ports.proxies`,
+every file is also validated with MM2a's own `parse_proxy_import` before it
+is written (and the test suite runs `check_proxy_import` on it).
+
+```jsonc
+{
+  "format": "memfw.proxy", "version": 1,
+  "kind": "ocr",                                   // or "extract" (a text layer)
+  "source_sha256": "<64 hex>",
+  "attachment_id": "att-…",
+  "coverage": {"status": "partial", "detail": "pages 1-12/40; no text on 1 page(s)"},
+  "producer": {"tool": "mcp", "version": "…"},
+  "created_at": "2026-01-06T12:00:00+00:00",
+  "privacy": "shared",
+  "source": {"pages": 40, "page_size": [612, 792]}, // image: {"width", "height"} px
+  "segments": [
+    {"text": "…", "locator": {"page": 3, "bbox": [72, 695.032, 242.712, 717.232]},
+     "confidence": 0.98},
+    {"text": "…", "locator": {"page": 4}}
+  ]
+}
+```
+
+Locators are written in canonical units (design v2.1), so no `coordinates`
+block is used: PDF boxes in points with the origin at the bottom-left of the
+page, image boxes in pixels with the origin at the top-left. Engine
+coordinates are converted (poppler's top-left points: `y' = height - y`); a
+box outside the page or of zero size is dropped and its text kept (counted in
+`coverage.detail`). A segment without a box is `{"page": N}`, or has no
+locator for a whole image. A run that finds no text at all is refused
+(`no_text`): a proxy needs at least one segment.
+
+## Engines: the `OcrBackend` interface
+
+`memfw_adapter_ocr.backend.OcrBackend` is the adapter's own narrow interface
+(`name`, `available()`, `extract(path, *, media, budget, workdir)`).
+Implementations:
+
+| `backend` | What it runs |
+|---|---|
+| `mcp` (default) | an OCR server named in `mcp_command`, run as a child process and spoken to over the MCP stdio protocol |
+| `pdftotext` | poppler's `pdftotext -bbox-layout` (text-layer PDFs only), at the absolute path in `pdftotext` |
+| `"module:factory"` | any other implementation; `factory(backend_options)` returns it |
+
+Engine discovery is explicit configuration only: no `PATH` search, no
+scanning for other tools' installs, no hard-coded locations.
+
+### The MCP backend
+
+One server process per run, stopped (terminate, then kill) when the run ends.
+It discovers the server's tools with `tools/list` and uses:
+
+* image: `ocr_image(path, lang)`: texts with per-line confidence (and boxes,
+  when the server returns `boxes` with `width`/`height`);
+* PDF: `pdf_info(path)` for the page count and text-layer size; then
+  `pdf_text(path, out_dir)` for a text layer, `ocr_pdf(path, out_dir, …)` for a
+  short scan, or `ocr_submit` / `ocr_job_status` / `ocr_job_result` (polled)
+  for more than `sync_max_pages` pages. Every call gets an `out_dir` inside the
+  run's private work directory, and a file the server names is read only if it
+  is inside that directory.
+
+The engine (PaddleOCR, MinerU, …) is the server's choice (`engine` is passed
+through when set). The server's PDF answers have no boxes, so PDF segments
+from it are page-level. MinerU's licence is not pure Apache-2.0 (additional
+terms); memfw does not depend on it and must not: if a server uses it, that is
+the operator's external tool. The adapter never imports a server's code or
+reads its installation, models, configuration or job store.
+
+The child gets a small environment (`PATH`, `HOME`, locale, a private
+`TMPDIR`, plus `mcp_env`); proxy variables and anything named like a key,
+token, secret or password are never passed. An async job still running when
+the run's time is up is abandoned with the server process; its output
+directory is removed with the work directory.
+
+## Privacy and integrity
+
+* Only levels in `clearance` (default `public`, `shared`) are handed to an
+  engine. Attachments default to `local-private`, so OCR of those needs the
+  operator to add `local-private` to `clearance`, stating that the configured
+  engine is local.
+* The original's sha256 must equal the given one before the run, and again
+  after it (`source_changed` otherwise). The engine reads a private copy
+  (`0700` directory, `0400` file), removed afterwards. Symlinks are refused.
+* The output file is written `0600` and never replaces an existing file.
+
+## Use
+
+Off by default. Either by hand:
+
+```
+memfw-ocr-proxy check --settings ocr-settings.json
+memfw-ocr-proxy run --settings ocr-settings.json --attachment-id att-… \
+    --source FILE --sha256 HEX --media-type application/pdf --privacy shared --out proxy.json
+```
+
+or through the adapter registry as the `ocr` deriver (`adapters: {enabled:
+[ocr], ocr: {...}}`): `DeriveRequest(kind="ocr_proxy", memory_ids=("att-…",),
+options={"source": "<path under a source root>", "root": 0, "sha256": …,
+"media_type": …, "privacy": …})` returns the candidate as a read-only view
+(`epistemic_cap: experience`, `causal_cap: none`). Settings:
+
+```jsonc
+{
+  "backend": "mcp",
+  "mcp_command": ["/absolute/path/to/ocr-server"],
+  "mcp_env": {},
+  "lang": "en", "engine": "", "dpi": 200,
+  "text_layer_min_words": 10, "sync_max_pages": 5,
+  "pdftotext": "/absolute/path/to/pdftotext",
+  "source_roots": ["/absolute/dir"],
+  "clearance": ["public", "shared"],
+  "timeout_seconds": 600, "max_pages": 200
+}
+```

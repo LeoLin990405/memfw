@@ -1,0 +1,112 @@
+{
+  "_comment": "Recorded answers of an OCR MCP server's tools (synthetic documents; paths replaced by {path} and {out_dir}). Served by fake_mcp_server.py.",
+  "server_info": {
+    "name": "fake-ocr",
+    "version": "1.2.3"
+  },
+  "tools": [
+    "pdf_info",
+    "pdf_text",
+    "ocr_pdf",
+    "ocr_image",
+    "ocr_submit",
+    "ocr_job_status",
+    "ocr_job_result",
+    "ocr_jobs"
+  ],
+  "pdf_info_text": {
+    "path": "{path}",
+    "pages": 2,
+    "text_layer_words": 40,
+    "words_per_page": 20.0,
+    "recommendation": "pdf_text (digital PDF)",
+    "preview": "Hello calibration\n\fSecond page drift\n\f"
+  },
+  "pdf_info_scan": {
+    "path": "{path}",
+    "pages": 2,
+    "text_layer_words": 0,
+    "words_per_page": 0.0,
+    "recommendation": "ocr_pdf (scanned/image PDF)",
+    "preview": ""
+  },
+  "pdf_text": {
+    "text_path": "{out_dir}/original/original.txt",
+    "words": 5,
+    "preview": "Hello calibration\n\fSecond page drift\n\f"
+  },
+  "pdf_text_file": "Hello calibration\nsecond line on page one\n\fSecond page drift\n\f",
+  "ocr_pdf": {
+    "engine": "paddle",
+    "output_dir": "{out_dir}",
+    "output_file": "{out_dir}/ocr.md",
+    "elapsed_sec": 6.2,
+    "preview": "# OCR: original.pdf\n\n## Page 1\nHello calibration\n\n## Page 2\nSecond page drift\n\n"
+  },
+  "ocr_md_file": "# OCR: original.pdf\n\n## Page 1\nHello calibration\n\n## Page 2\nSecond page drift\n\n",
+  "ocr_submit": {
+    "job_id": "20260101-000000-abcdef",
+    "pid": 4242,
+    "out_dir": "{out_dir}"
+  },
+  "ocr_job_status_running": {
+    "job_id": "20260101-000000-abcdef",
+    "pid": 4242,
+    "status": "running",
+    "running": true,
+    "elapsed_sec": 2.8,
+    "output_file": null
+  },
+  "ocr_job_status_written": {
+    "job_id": "20260101-000000-abcdef",
+    "pid": 4242,
+    "status": "running",
+    "running": true,
+    "elapsed_sec": 85.2,
+    "output_file": "{out_dir}/ocr.md"
+  },
+  "ocr_job_result": {
+    "job_id": "20260101-000000-abcdef",
+    "output_file": "{out_dir}/ocr.md",
+    "chars": 72,
+    "preview": "# OCR: original.pdf\n\n## Page 1\nHello calibration\n\n"
+  },
+  "ocr_image": {
+    "texts": [
+      "Hello calibration",
+      "",
+      "Second line"
+    ],
+    "scores": [
+      0.9999903440475464,
+      0.5,
+      0.87
+    ]
+  },
+  "ocr_image_boxes": {
+    "texts": [
+      "Hello calibration",
+      "Second line"
+    ],
+    "scores": [
+      0.99,
+      0.87
+    ],
+    "boxes": [
+      [
+        3,
+        10,
+        120,
+        30
+      ],
+      [
+        3,
+        40,
+        900,
+        60
+      ]
+    ],
+    "width": 400,
+    "height": 300
+  }
+}

@@ -44,6 +44,7 @@ members = [
     "packages/adapters/memfw-adapter-bm25s",
     "packages/adapters/memfw-adapter-qdrant",
     "packages/adapters/memfw-adapter-qmd",
+    "packages/adapters/memfw-adapter-ocr",
 ]
 
 [tool.pytest.ini_options]

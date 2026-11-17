@@ -193,6 +193,27 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   vault-root `corroboration.sqlite3` stays until you delete it by hand (it
   still counts toward the vault's size until you do).
 
+### Added — OCR proxy adapter (MM4, `memfw-adapter-ocr` 0.1.0, off by default)
+
+- New workspace package `packages/adapters/memfw-adapter-ocr`: turns an
+  attachment's original (PDF or image) into a proxy import file of text
+  segments with multimodal locators (PDF points, bottom-left origin; image
+  pixels, top-left origin), `coverage`, `source_sha256`, producer and
+  per-segment confidence when the engine gives one.
+- Engines sit behind the adapter's own `OcrBackend` interface: `mcp` (an OCR
+  server named in the settings, run as a child process over the MCP stdio
+  protocol; sync and async OCR tools, private `out_dir`, timeouts and a page
+  budget), `pdftotext` (text-layer PDFs) or any `module:factory`. Engine paths
+  come only from configuration.
+- Local only, nothing uploaded; only privacy levels in `clearance` (default
+  `public`, `shared`) are handed to an engine; the original's sha256 is checked
+  before and after; the engine reads a private copy.
+- `memfw-ocr-proxy run | check`, and the `ocr` deriver through the
+  `memfw.adapters` entry point (disabled until listed). The output is MM2a's
+  `memfw.proxy` v1 import format, mirrored from MM2a's draft (MM2a is not on
+  `main` yet) and validated with `memfw.ports.proxies` once that exists.
+  memfw does not import the package; default output is unchanged.
+
 ### Added — attachments as observation evidence (MM3)
 
 - `att:<id>[#locator]` evidence is the new `observation` class. A memory whose evidence

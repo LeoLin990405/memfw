@@ -1,0 +1,35 @@
+# memfw-adapter-ocr (MM4): turns an attachment's original (PDF or image) into
+# a text proxy candidate file with locators, by calling a LOCAL OCR engine
+# through the adapter's own OcrBackend interface: an OCR server the operator
+# names, run as a child process over the MCP stdio protocol (primary), or
+# poppler's pdftotext for text-layer PDFs (fallback). Nothing is uploaded.
+# Standard library only; depends on memfw-ports and nothing else of memfw.
+# memfw itself never imports it.
+#
+# Build a wheel:  uv build --wheel --package memfw-adapter-ocr
+[build-system]
+requires = ["hatchling==1.33.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "memfw-adapter-ocr"
+version = "0.1.0"
+description = "Local OCR proxy generator for memfw attachments (MCP stdio OCR server or pdftotext)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+# Symlinks to memfw's own LICENSE and NOTICE (one copy of the text).
+license-files = ["LICENSE", "NOTICE"]
+dependencies = ["memfw-ports==0.3.0"]
+
+[project.scripts]
+memfw-ocr-proxy = "memfw_adapter_ocr.cli:main"
+
+[project.entry-points."memfw.adapters"]
+ocr = "memfw_adapter_ocr:adapter_spec"
+
+[tool.uv.sources]
+memfw-ports = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/memfw_adapter_ocr"]

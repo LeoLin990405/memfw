@@ -89,6 +89,7 @@ MEMBERS = (
     "adapters/memfw-adapter-bm25s",
     "adapters/memfw-adapter-qdrant",
     "adapters/memfw-adapter-qmd",
+    "adapters/memfw-adapter-ocr",
 )
 #: Third-party wheels an adapter needs, by exact pin (the versions uv.lock
 #: resolves and the adapter's pyproject pins), installed before the local
@@ -246,6 +247,7 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
         "memfw-adapter-bm25s",
         "memfw-adapter-qdrant",
         "memfw-adapter-qmd",
+        "memfw-adapter-ocr",
     ):
         _run(uv, "build", "--wheel", "--package", package, "-o", dist)
     wheels = sorted(p.name for p in dist.glob("*.whl"))
@@ -254,6 +256,7 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
     assert wheels == [
         "memfw_adapter_bm25s-0.1.0-py3-none-any.whl",
         "memfw_adapter_deepseek-0.1.1-py3-none-any.whl",
+        "memfw_adapter_ocr-0.1.0-py3-none-any.whl",
         "memfw_adapter_qdrant-0.1.1-py3-none-any.whl",
         "memfw_adapter_qmd-0.1.0-py3-none-any.whl",
         f"memfw_ports-{v}-py3-none-any.whl",
@@ -267,12 +270,22 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
     # -I: no PYTHONPATH, no cwd or script directory on sys.path, so this tree's
     # src/ cannot leak in; the smoke refuses to run if memfw is importable.
     out = _run(
-        python, "-I", SMOKE, "--recall", "--deepseek", "--bm25s", "--qdrant", "--qmd", cwd=tmp_path
+        python,
+        "-I",
+        SMOKE,
+        "--recall",
+        "--deepseek",
+        "--bm25s",
+        "--qdrant",
+        "--qmd",
+        "--ocr",
+        cwd=tmp_path,
     )
     assert "standalone wheel smoke passed" in out
     assert "ok check_model_backend DeepSeekBackend (fake server)" in out
     assert "ok check_recall_provider QmdMemoryProvider + QmdNotesProvider (fake server)" in out
     assert "ok check_recall_provider InMemoryRecallProvider" in out
+    assert "ok check_deriver OcrDeriver (fake engine)" in out
     assert "ok Coordinator.search" in out
     assert "ok check_recall_provider Bm25sProvider" in out
     assert "ok check_recall_provider QdrantProvider (fake server)" in out
@@ -300,10 +313,11 @@ def test_ci_wheel_job_builds_and_smokes_every_adapter_with_the_pins() -> None:
         "memfw-adapter-bm25s",
         "memfw-adapter-qdrant",
         "memfw-adapter-qmd",
+        "memfw-adapter-ocr",
     ):
         assert f"uv build --wheel --package {package} " in ci, package
     assert "bm25s==0.3.16 jieba==0.42.1 PyYAML==6.0.3 numpy==2.4.6" in ci  # CI runs Python 3.11
-    assert "wheel_smoke.py --recall --deepseek --bm25s --qdrant --qmd" in ci
+    assert "wheel_smoke.py --recall --deepseek --bm25s --qdrant --qmd --ocr" in ci
 
 
 def test_qmd_adapter_dependencies_are_pinned_and_installed_first() -> None:
