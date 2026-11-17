@@ -321,6 +321,13 @@ def test_att_evidence_must_resolve(tmp_path: Path) -> None:
             repository.add("x", "y", epistemic="experience", evidence=[bad])
 
 
+def test_missing_attachment_error_says_what_to_do(tmp_path: Path) -> None:
+    repository = _repo(tmp_path)
+    with pytest.raises(IntegrityError, match="memfw attach add") as error:
+        repository.add("x", "y", epistemic="experience", evidence=[f"att:{SAMPLE_ID}"])
+    assert "file:PATH" in str(error.value)
+
+
 def test_unreadable_attachment_record_is_refused(tmp_path: Path) -> None:
     repository = _repo(tmp_path)
     shot = _attach(repository, _original(tmp_path, "s.png", b"png"), "image/png")

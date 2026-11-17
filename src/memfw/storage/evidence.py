@@ -338,7 +338,11 @@ def resolve_attachment_reference(
         )
     record = index.records.get(parsed.attachment_id)
     if record is None:
-        raise IntegrityError(f"evidence {reference!r} names a missing attachment")
+        raise IntegrityError(
+            f"evidence {reference!r} names a missing attachment: register the original "
+            "first (`memfw attach add FILE`, then cite the att: id it prints), or cite "
+            "the file by a raw pointer such as file:PATH"
+        )
     locator: Locator | None = None
     level: ResolutionLevel = "attachment"
     if parsed.locator is not None:
