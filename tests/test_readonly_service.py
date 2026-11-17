@@ -2030,6 +2030,26 @@ def test_stale_read_path_beside_readonly_refuses_to_start(tmp_path: Path) -> Non
     assert "docs/READONLY-SERVICE-UPGRADE.md" in completed.stderr
 
 
+def test_script_refuses_a_stale_pair_of_library_files(tmp_path: Path) -> None:
+    """An older ``readonly.py`` (no version check) beside an older ``read_path.py``."""
+
+    script = _deploy(tmp_path / "remote", "memfw_readonly_service.py")
+    readonly = _DEPLOY_FILES["readonly.py"].read_text(encoding="utf-8")
+    unchecked = readonly.replace(
+        "return _check_read_path(loaded, str(path))", "return loaded"
+    ).replace("return _check_read_path(module, str(module.__file__))", "return module")
+    assert unchecked.count("return _check_read_path") == 0
+    (script.parent / "readonly.py").write_text(unchecked, encoding="utf-8")
+    read_path = _DEPLOY_FILES["read_path.py"].read_text(encoding="utf-8")
+    (script.parent / "read_path.py").write_text(
+        read_path.replace("READ_PATH_VERSION = 2\n", ""), encoding="utf-8"
+    )
+    completed = _run_script(script, "", block=True)
+    assert completed.returncode != 0
+    assert "older than the 2 this script needs" in completed.stderr
+    assert "docs/READONLY-SERVICE-UPGRADE.md" in completed.stderr
+
+
 def test_standalone_copy_searches_without_memfw(tmp_path: Path) -> None:
     """The deployed layout: script, ``readonly.py`` and ``read_path.py`` in one directory."""
 

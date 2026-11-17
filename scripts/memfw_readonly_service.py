@@ -150,9 +150,27 @@ def _load_library() -> Any:
 
 _library = _load_library()
 
+#: The ``read_path.READ_PATH_VERSION`` this script needs. Checked here too, so
+#: an older ``readonly.py`` (which does not check) beside an older
+#: ``read_path.py`` cannot start either.
+REQUIRED_READ_PATH_VERSION = 2
+
+
+def _check_read_path(library: Any) -> Any:
+    module = getattr(library, "read_path", None)
+    version = getattr(module, "READ_PATH_VERSION", 1)
+    if not isinstance(version, int) or version < REQUIRED_READ_PATH_VERSION:
+        raise ImportError(
+            f"memfw read-only service: read_path.py loaded by {library.__file__} is version "
+            f"{version}, older than the {REQUIRED_READ_PATH_VERSION} this script needs; "
+            f"deploy the three files together. See {UPGRADE_DOC} (Deploy)."
+        )
+    return module
+
+
 # The read side lives in ``memfw.index.readonly``. These names keep the ones
 # this script exported before (tests, eval and deploy checks import them).
-read_path = _library.read_path
+read_path = _check_read_path(_library)
 CONTRACT = _library.CONTRACT
 MAX_QUERY_CHARS = _library.MAX_QUERY_CHARS
 MAX_LIMIT = _library.MAX_LIMIT

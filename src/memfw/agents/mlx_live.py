@@ -622,7 +622,10 @@ class LocalMLXJudge(DeterministicJudge):
             ):
                 raise ValueError("local MLX merge pair has invalid targets or fields")
             representative_id, duplicate_ids = _privacy_oriented(
-                representative, cast(list[str], duplicates), known
+                representative,
+                cast(list[str], duplicates),
+                known,
+                getattr(self, "legacy_privacy", None),
             )
             match_basis = basis
             merge_disposition = cast(Literal["retain", "delete"], disposition)

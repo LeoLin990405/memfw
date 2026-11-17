@@ -1572,16 +1572,69 @@ def test_merge_candidates_keep_the_most_private_member() -> None:
     public = _doc("a-public", "the same near duplicate body text", privacy_value="public")
     keyed = public.model_copy(update={"id": "b-keyed"})
     keyed._sensitivity_key = ("private",)
-    (pair,) = DeterministicJudge().find_near_duplicates([public, keyed])
+    judge = DeterministicJudge()
+    # Without the vault's legacy level the judge keeps its order (as on main).
+    (pair,) = judge.find_near_duplicates([public, keyed])
+    assert pair.representative_id == "a-public"
+    judge.legacy_privacy = "shared"
+    (pair,) = judge.find_near_duplicates([public, keyed])
     assert pair.representative_id == "b-keyed" and pair.duplicate_ids == ("a-public",)
     assert pair.proposal.target_ids == ("b-keyed", "a-public")
     plain = _doc("c-public", "other", privacy_value="public")
     known = {doc.id: doc for doc in (public, keyed, plain)}
-    assert _privacy_oriented("a-public", ["c-public", "b-keyed"], known) == (
+    assert _privacy_oriented("a-public", ["c-public", "b-keyed"], known, "public") == (
         "b-keyed",
         ["a-public", "c-public"],
     )
-    assert _privacy_oriented("a-public", ["c-public"], known) == ("a-public", ["c-public"])
+    assert _privacy_oriented("a-public", ["c-public"], known, "public") == (
+        "a-public",
+        ["c-public"],
+    )
+    assert _privacy_oriented("a-public", ["b-keyed"], known, None) == ("a-public", ["b-keyed"])
+
+
+@pytest.mark.parametrize(
+    ("legacy", "a_privacy", "b_privacy", "representative"),
+    [
+        ("public", None, "shared", "b"),  # unset reads public: b is stricter
+        ("public", "shared", None, "a"),  # a is stricter: kept as is
+        ("shared", None, "local-private", "b"),
+        ("shared", "shared", None, "a"),  # tie (unset reads shared): judge's order
+        ("local-private", None, None, "a"),  # same level: an ordinary merge
+    ],
+)
+def test_consolidation_orients_with_the_vaults_legacy_level(
+    tmp_path: Path, legacy: str, a_privacy: str | None, b_privacy: str | None, representative: str
+) -> None:
+    from memfw.agents import DeterministicJudge
+    from memfw.curation.review import _validate_merge
+
+    repository = _private_vault(tmp_path, legacy=legacy)
+    body = "the same near duplicate body text for a consolidation pair"
+    repository.add("dup", body, memory_id="a", privacy=a_privacy)
+    repository.add("dup", body, memory_id="b", privacy=b_privacy)
+    judge = DeterministicJudge()
+    judge.legacy_privacy = repository.legacy_privacy_default()
+    (pair,) = judge.find_near_duplicates(repository.list())
+    assert pair.representative_id == representative
+    # Review reads the same levels, so the oriented pair passes, text copy included.
+    output = dict(pair.proposal.output)
+    _validate_merge(repository, _merge_proposal(output))  # type: ignore[arg-type]
+
+
+def test_consolidation_review_passes_the_legacy_level_to_the_judge(tmp_path: Path) -> None:
+    from memfw.curation.engine import _record_consolidation_review
+
+    repository = _private_vault(tmp_path, legacy="public")
+    body = "the same near duplicate body text for a consolidation pair"
+    repository.add("dup", body, memory_id="a")
+    repository.add("dup", body, memory_id="b", privacy="shared")
+    (proposal_id,) = _record_consolidation_review(repository, repository.list(), BASE)
+    (proposal,) = [
+        item for item in repository.list_proposals(status=None) if item.proposal_id == proposal_id
+    ]
+    assert proposal.output["representative_id"] == "b"
+    assert proposal.target_ids == ("b", "a")
 
 
 def test_an_approved_proposal_may_remove_the_key(tmp_path: Path) -> None:
