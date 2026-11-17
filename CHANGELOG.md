@@ -14,6 +14,30 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 
 ## [Unreleased]
 
+### Fixed — recall reads the meta-index lifecycle; `kh:` note refs resolve
+
+- The recall vault resolver (`VaultIdResolver`, behind every `two_stage`
+  provider) joins documents that carry a `fleet_path` tag to the lifecycle
+  meta-index (`<vault>/status/memory-meta-index.json`, or the
+  `lifecycle_source` passed to `default_resolvers`). Its `lifecycle`,
+  `lifecycle_override`, `superseded_by`, `valid_until`, `valid_to` and
+  `privacy` now reach the strict `FilterPolicy`, so a memory the meta-index
+  marks retired, superseded or expired (or whose expiry does not parse) is
+  dropped, and kept with a label under `include_retired` as documented. A
+  failed join or an unreadable meta-index drops tagged documents under the
+  strict policy (new reason `unjoined`). `compat_fts`, `mode=fts` and the
+  default `two_stage` output are unchanged, as is everything for a vault
+  without imported documents or without a meta-index, or whose meta-index
+  has no such fields.
+- `kh:<path>#<heading>` refs (QMD notes, PageIndex) can resolve to sections
+  of the built-in notes index through the new `NotesSegmentResolver`, with
+  the `notes_search` privacy rules (fail closed on unknown privacy, missing
+  or stale notes, symlinks and path escapes). Sections come back as
+  `RecallResult.segments`, apart from memory hits, and as a `notes` list in
+  `memory_search mode=two_stage` only when there are any. Not registered by
+  default. `SchemePathResolver` is the registration point for an `att:`
+  resolver (MM2b); none is implemented here.
+
 ### Fixed — `/forget` replay after deletion respects clearance
 
 - `POST /forget` (memfw-http/3) records the target memory's effective

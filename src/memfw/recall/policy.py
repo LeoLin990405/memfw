@@ -42,6 +42,7 @@ DROP_REASONS: tuple[str, ...] = (
     "expiry_unparsable",
     "not_yet_valid",
     "archived",
+    "unjoined",
 )
 
 DEFAULT_CLEARANCE: frozenset[str] = frozenset({"none"})
@@ -83,7 +84,8 @@ def classify_privacy(raw: str | None) -> PrivacyClass:
 class MemoryMeta:
     """The metadata the filter reads for one memory.
 
-    A resolver fills this from the vault (and later from the meta-index).
+    A resolver fills this from the vault, plus the meta-index's lifecycle fields
+    when the document joins one (``memfw.recall.builtin.VaultIdResolver``).
     Temporal fields keep their raw form so an unparsable value can be told
     apart from an absent one.
     """
@@ -108,6 +110,15 @@ class MemoryMeta:
     is_stub: bool = False
     layer: str = "current"
     version: int | None = None
+    #: The meta-index join (§3.8) for a document that carries a ``fleet_path``
+    #: tag: ``""`` no join was attempted (no tag, or no meta-index), ``"ok"``
+    #: joined (its lifecycle fields are merged above), ``"unjoined"`` the join
+    #: failed or the meta-index could not be read. Only the strict policy
+    #: reads it: ``unjoined`` is dropped there, whatever ``include_retired``.
+    lifecycle_join: Literal["", "ok", "unjoined"] = ""
+    #: ``valid_to`` from the meta-index item (the vault's is ``valid_to``).
+    #: Strict only, like ``valid_until``: the index clause never sees it.
+    meta_valid_to: TemporalValue = None
 
     def privacy_class(self) -> tuple[PrivacyClass, bool]:
         """Strictest class of the two sources, and whether they disagreed."""
@@ -320,16 +331,22 @@ def _strict_lifecycle(
 ) -> str | None:
     """§5.4: lifecycle, supersession and validity. Unparsable dates fail closed.
 
+    A failed meta-index join (``lifecycle_join == "unjoined"``) is dropped
+    first: its lifecycle is unknown.
+
     ``include_retired`` keeps retired/superseded/expired memories, labelled.
     With ``as_of`` a superseded memory is judged by its validity window at
     that instant instead of being dropped for being superseded today.
     """
 
+    if meta.lifecycle_join == "unjoined":
+        return "unjoined"
     try:
         valid_from = _as_datetime(meta.valid_from)
         created_at = _as_datetime(meta.created_at)
         valid_to = _as_datetime(meta.valid_to)
         valid_until = _as_datetime(meta.valid_until)
+        meta_valid_to = _as_datetime(meta.meta_valid_to)
     except _Unparsable:
         return "expiry_unparsable"
     keep_old = policy.include_retired or policy.include_history
@@ -346,7 +363,7 @@ def _strict_lifecycle(
         return "lifecycle"
     if policy.include_history:
         return None
-    ends = [item for item in (valid_to, valid_until) if item is not None]
+    ends = [item for item in (valid_to, valid_until, meta_valid_to) if item is not None]
     end = min(ends) if ends else None
     if policy.as_of is not None:
         start = valid_from or created_at
@@ -364,6 +381,40 @@ def _strict_lifecycle(
     return None
 
 
+#: MM0 privacy levels (``memfw.ports.privacy.PRIVACY_LEVELS``) → recall classes.
+#: Anything else is ``unknown`` and never admitted.
+_SEGMENT_PRIVACY: dict[str, PrivacyClass] = {
+    "public": "none",
+    "shared": "none",
+    "local-private": "local-private",
+}
+
+
+def segment_verdict(*, source: str, tenant: str, privacy: str, policy: FilterPolicy) -> Verdict:
+    """The filter for a non-memory segment (a note section, later an attachment).
+
+    A segment has no status, lifecycle or validity; its resolver has already
+    applied its own clearance. Here, always (also under ``compat_fts``, whose
+    clearance admits every grantable class): the tenant must match, the MM0
+    ``privacy`` level must map to a class in ``privacy_clearance`` (an
+    unrecognised level never does), and a policy restricted to memory sources
+    (``source`` or ``allowed_sources``) keeps a segment only when it names the
+    segment's own ``source``.
+    """
+
+    if not isinstance(tenant, str) or tenant != policy.tenant:
+        return Verdict("tenant")
+    privacy_class = _SEGMENT_PRIVACY.get(privacy, "unknown")
+    if privacy_class == "unknown" or privacy_class not in policy.privacy_clearance:
+        return Verdict("privacy")
+    if policy.source and source != policy.source:
+        return Verdict("source")
+    if policy.allowed_sources and source not in policy.allowed_sources:
+        return Verdict("source")
+    labels = (f"privacy:{privacy_class}",) if privacy_class != "none" else ()
+    return Verdict(None, labels)
+
+
 __all__ = [
     "DEFAULT_CLEARANCE",
     "ACTIVE_LIFECYCLES",
@@ -378,4 +429,5 @@ __all__ = [
     "classify_privacy",
     "evaluate",
     "parse_clearance",
+    "segment_verdict",
 ]

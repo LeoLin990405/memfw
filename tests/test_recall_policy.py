@@ -243,6 +243,7 @@ def test_every_reason_is_declared() -> None:
         _reason(_meta(valid_from=NOW + timedelta(days=1)), FilterPolicy(as_of=NOW)),
         _reason(_meta(tier="cold")),
         _reason(_meta(lifecycle="archived")),
+        _reason(_meta(lifecycle_join="unjoined")),
     }
     assert reasons <= set(DROP_REASONS)
     # The coordinator reports these two; evaluate() never does.
