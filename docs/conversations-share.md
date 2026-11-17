@@ -341,8 +341,9 @@ combine with `--app`, `--since` and `--archived-only`.
      says `degraded: ["no_embedder"]`; a timeout or error gives
      `embedder_error`.
      **Gate:** summaries are sent only to an embedder that is local (its
-     endpoint host is `localhost`, `127.0.0.0/8` or `::1`, or the provider says
-     `local = True`) or when `vault.yaml` has `conversations: {cloud: true}`,
+     endpoint host is `localhost`, `127.0.0.0/8`, `::1` or `::ffff:127.x`,
+     or the provider says `local = True`; such a request never goes through
+     an environment proxy) or when `vault.yaml` has `conversations: {cloud: true}`,
      the same switch a non-local worker backend needs. Otherwise the list is
      skipped with `degraded: ["semantic_off"]` and the endpoint is never
      contacted (a malformed `cloud` value counts as off);

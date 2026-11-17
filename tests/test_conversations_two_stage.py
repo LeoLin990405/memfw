@@ -383,6 +383,8 @@ def test_embedder_locality() -> None:
     assert embedder_is_local(WordEmbedder("http://localhost:8080/v1/embeddings"))
     assert embedder_is_local(WordEmbedder("http://[::1]:8080/v1"))
     assert embedder_is_local(WordEmbedder("http://127.1.2.3/v1"))
+    assert embedder_is_local(WordEmbedder("http://[::ffff:127.0.0.1]:8080/v1"))
+    assert not embedder_is_local(WordEmbedder("http://[::ffff:10.0.0.1]/v1"))
     assert not embedder_is_local(RemoteEmbedder())
     assert not embedder_is_local(WordEmbedder("http://192.0.2.10/v1"))
     assert not embedder_is_local(WordEmbedder("not a url"))

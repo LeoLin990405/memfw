@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import ipaddress
 import json
 import math
 import threading
@@ -33,8 +32,8 @@ from array import array
 from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Protocol
-from urllib.parse import urlsplit
 
+from memfw.notes.http import is_loopback_url
 from memfw.ports.models import (
     TAG_INTENT_CHARS,
     TAG_ITEM_CHARS,
@@ -205,7 +204,6 @@ EMBED_BUDGET_SECONDS = 8.0
 """Total time one call may spend in the embedder (query plus documents), no retries."""
 EMBED_BATCH = 64
 """Most uncached summaries embedded in one call; the rest wait for a later call."""
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
 
 _cache: OrderedDict[tuple[str, str], bytes] = OrderedDict()
 _cache_bytes = 0
@@ -220,8 +218,9 @@ def embedder_is_local(embedder: Any) -> bool:
     """Whether ``embedder`` keeps text on this machine.
 
     ``local is True`` on the provider, or an ``endpoint`` URL whose host is a
-    loopback name or address. Anything else (no endpoint attribute, another
-    host, an unparseable URL) is not local: the semantic list then needs
+    loopback literal (:func:`memfw.notes.http.is_loopback_url`, the rule under
+    which ``open_http`` also skips any environment proxy). Anything else (no
+    endpoint attribute, another host, an unparseable URL) is not local: the semantic list then needs
     ``conversations.cloud: true``, the switch every non-local backend needs.
     """
 
@@ -230,16 +229,7 @@ def embedder_is_local(embedder: Any) -> bool:
     endpoint = getattr(embedder, "endpoint", None)
     if not isinstance(endpoint, str) or not endpoint:
         return False
-    try:
-        host = (urlsplit(endpoint).hostname or "").lower()
-    except ValueError:
-        return False
-    if host in _LOOPBACK_HOSTS:
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
+    return is_loopback_url(endpoint)
 
 
 def _bounded(embedder: Any) -> Any:
