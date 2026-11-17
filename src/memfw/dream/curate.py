@@ -498,6 +498,16 @@ def _conflict(left: _Features, right: _Features) -> list[str]:
     return reasons
 
 
+def conflict_reasons(left: MemoryDocument, right: MemoryDocument) -> list[str]:
+    """How two memories about the same subject disagree (empty: they do not).
+
+    The same rule ``supersede`` candidates use; the open-question step (U3)
+    reuses it to describe the conflict it turns into a question.
+    """
+
+    return _conflict(_Features(left), _Features(right))
+
+
 def _linked(left: MemoryDocument, right: MemoryDocument) -> bool:
     return left.superseded_by == right.id or right.superseded_by == left.id
 

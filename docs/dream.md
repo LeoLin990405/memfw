@@ -39,6 +39,37 @@ In priority order:
    - `mark-stale`: a memory superseded by another but without `valid_to`, or an
      unreferenced, unconfirmed memory not updated for `--stale-days` (180).
      Nothing is deleted.
+   - `open-question` (U3): every pair `supersede` is proposed for also gets an
+     open-question candidate. `changes.new_memory` is a `type: open-question`
+     memory (`about` the concept, the dream's `tenant`, `open_question.conflicts`
+     the two ids, `question`, and `missing`: what evidence would settle it);
+     `changes.conflicts` repeats the ids. It picks no winner and changes neither
+     memory (their `epistemic`, `status` and `evidence` stay). It passes the
+     open-question write gate as a new document before it is staged (a refused
+     one is listed in `skipped_candidates`). No candidate is proposed for a pair
+     while a current, unresolved open question lists both ids in `conflicts`, or
+     while a staged dream holds an `open-question` candidate for the pair that
+     was not accepted; a pair across tenants is skipped, and so is a pair in
+     which either memory is private in any way (a `sensitivity:*` tag or a
+     `privacy:` tag other than `none`), because the question names both ids and is
+     recalled like any memory. `report.open_questions` (`conflicts`, `proposed`,
+     `deduplicated`, `skipped_private`, `skipped_tenant`) appears only when the
+     dream found a conflict, so a dream without one is byte-identical to before.
+
+     Reviewing it, a human does one of three things:
+     - **accept the question:** `memfw dream accept-question DREAM_ID MEM_A MEM_B
+       --apply` (a dry run without `--apply`) writes the open question as the
+       human through the full write gate (no claim fields; conflicts exist and
+       share the tenant) with `evidence: [dream:DREAM_ID]`, which marks this staged
+       candidate as consumed. It is refused when either memory is no longer
+       current, when an unresolved question for the pair exists, or when the
+       candidate was already accepted. Close it later with
+       `Repository.resolve_open_question`;
+     - **answer and supersede:** apply the `supersede` (or write the answer and
+       supersede the wrong memory); once a memory is superseded the pair no longer
+       conflicts and no question is proposed again;
+     - **reject:** remove the staged concept file. While it stays staged, the
+       pair counts as pending.
 
    How curate compares two memories (no model):
    - **Clauses and negation.** Each clause is read on its own, and a negation

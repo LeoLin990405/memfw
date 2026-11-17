@@ -11,6 +11,27 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
+### Added — conflicts become open-question candidates (U3)
+
+- `memfw dream run`: every pair curate proposes a `supersede` for (two current
+  memories about one concept that disagree) also gets an `open-question`
+  candidate (operation `curate`). `changes.new_memory` is a `type:
+  open-question` memory naming both ids in `conflicts`, `about` the concept,
+  with `missing` saying what evidence would settle it. No winner is picked and
+  neither memory changes; the candidate passes the open-question gate before it
+  is staged. Never a vault write.
+- Dedupe per unordered pair: none while an unresolved open question lists both
+  ids, or while a staged candidate for the pair was not accepted. Same tenant
+  only; a pair with a private memory (any `sensitivity:*`, or a `privacy:` tag
+  other than `none`) is skipped.
+- New `memfw dream accept-question DREAM_ID MEM_A MEM_B [--apply]`
+  (`memfw.dream.questions.accept_question`): the human writes the question
+  through the U1 gate, with `evidence: [dream:DREAM_ID]`. Answer + supersede and
+  reject (remove the staged file) are documented in `docs/dream.md`.
+- `report.open_questions` appears only when a conflict was found; a dream
+  without conflicts is byte-identical to before (harness probe
+  `tests.harness.probes:dream_run`).
+
 ### Added — `memory_context` cache and `if_version` (C3)
 
 - `memory_context(v=2)` takes an optional `if_version` (also

@@ -35,6 +35,8 @@ from .budget import budget_candidates, check_budget
 from .curate import curate
 from .distill import MIN_EVENTS, distill
 from .model import Candidate
+from .questions import ACTION as OPEN_QUESTION_ACTION
+from .questions import check_candidate, conflict_questions, staged_questions
 from .stage import check_dream_id, stage
 from .verify import Judge, cited, is_current, verify
 
@@ -180,11 +182,10 @@ def run_dream(
     if spec is None and configured and options.allow_config_judge:
         spec = str(configured)
     judge = load_judge(spec)
-    documents = [
-        document
-        for document in repository.list()
-        if document.tenant == options.tenant and is_current(document)
+    tenant_documents = [
+        document for document in repository.list() if document.tenant == options.tenant
     ]
+    documents = [document for document in tenant_documents if is_current(document)]
     to_verify: list[MemoryDocument] = (
         sorted(documents, key=lambda item: (-item.reference_count, item.id))
         if options.all_memories
@@ -207,10 +208,21 @@ def run_dream(
         judge=judge,
     )
     curated = curate(documents, now=now, stale_days=options.stale_days)
+    # A conflict curate found also becomes an open-question candidate (U3).
+    # Without a conflict nothing below runs and the output is unchanged.
+    questions: list[Candidate] = []
+    question_stats = None
+    if any(candidate.action == "supersede" for candidate in curated):
+        questions, question_stats = conflict_questions(
+            curated,
+            tenant_documents,
+            tenant=options.tenant,
+            staged=staged_questions(repository.root, tenant=options.tenant),
+        )
     distilled, distill_stats = distill(documents, verified, min_events=options.min_events)
     budget = check_budget(repository.root, config)
     promoted = budget_candidates(budget)
-    candidates = verified + curated + distilled + promoted
+    candidates = verified + curated + questions + distilled + promoted
     candidates.sort(key=lambda item: (item.oid, item.operation, item.action, item.memory_ids))
     # A dream stages proposals, so it may propose at most ``causal=hypothesis``.
     # The shared gate refuses a staged ``causal=verified`` (and any structurally
@@ -220,6 +232,28 @@ def run_dream(
     accepted: list[Candidate] = []
     skipped: list[dict[str, Any]] = []
     for candidate in candidates:
+        if candidate.action == OPEN_QUESTION_ACTION:
+            # A proposed new memory: gated as a new open question (no claim
+            # fields; conflicts exist in its tenant), never against the
+            # memories it names, which it does not change.
+            try:
+                check_candidate(
+                    candidate,
+                    lookup=lambda ref: lookup_current(repository, ref),
+                    actor="mechanism",
+                )
+            except MemfwError as exc:
+                skipped.append(
+                    {
+                        "operation": candidate.operation,
+                        "action": candidate.action,
+                        "memory_ids": list(candidate.memory_ids),
+                        "reason": str(exc),
+                    }
+                )
+                continue
+            accepted.append(candidate)
+            continue
         proposed = {
             key: value for key, value in candidate.changes.items() if key in EPISTEMIC_FIELDS
         }
@@ -267,6 +301,7 @@ def run_dream(
         "distill": distill_stats.as_dict(),
         "candidates": counts,
         "skipped_candidates": skipped,
+        **({"open_questions": question_stats.as_dict()} if question_stats is not None else {}),
         "budget": [
             {"path": item.path, "lines": item.lines, "bytes": item.bytes, "over": item.over}
             for item in budget

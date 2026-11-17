@@ -11,6 +11,7 @@ import typer
 
 from ..core.errors import MemfwError
 from ..history import HistoryError
+from .questions import accept_question
 from .run import MAX_SESSIONS, DreamOptions, run_dream
 from .skills.run import MAX_SESSIONS as SKILL_MAX_SESSIONS
 from .skills.run import SkillOptions, run_skills
@@ -108,6 +109,33 @@ def dream_run(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(2) from exc
     typer.echo(json.dumps(result.as_dict(), ensure_ascii=False, indent=2))
+
+
+@app.command("accept-question")
+def dream_accept_question(
+    dream_id: Annotated[str, typer.Argument(help="staged dream id")],
+    memory_a: Annotated[str, typer.Argument(help="one conflicting memory id")],
+    memory_b: Annotated[str, typer.Argument(help="the other conflicting memory id")],
+    root: Annotated[Path, typer.Option("--root", "-r", help="memfw vault root")] = Path("."),
+    dry_run: Annotated[bool, typer.Option("--dry-run/--apply")] = True,
+) -> None:
+    """Human-accept a staged open-question candidate: write it to the vault.
+
+    Dry run by default; --apply writes the open question as the human. To
+    answer instead, supersede the wrong memory; to reject, remove the staged
+    concept file.
+    """
+
+    from ..core.repository import Repository
+
+    try:
+        result = accept_question(
+            Repository(root), dream_id, [memory_a, memory_b], actor="human", dry_run=dry_run
+        )
+    except (MemfwError, ValueError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(2) from exc
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 @app.command("skills")

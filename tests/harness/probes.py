@@ -463,3 +463,33 @@ def _mcp_all_tools(payload: dict[str, Any], workdir: Path) -> str:
         json.dumps(item, ensure_ascii=False, sort_keys=True, indent=1) for item in sent
     )
     return text.replace(str(root), "<vault>").replace(str(workdir), "<workdir>")
+
+
+def dream_run(payload: dict[str, Any], workdir: Path) -> str:
+    """One staged dream over a small vault; its result and staged files (U3).
+
+    ``payload["memories"]`` is a list of ``[id, title, body, about, tenant]``;
+    ``payload["tenant"]`` the dream's tenant. The server-clock ``recorded_at``
+    of the staged files is masked, and the workdir path replaced.
+    """
+
+    from memfw.core.repository import Repository
+    from memfw.dream import DreamOptions, run_dream
+
+    repository = Repository(workdir / "vault", clock=lambda: T0)
+    repository.init()
+    for memory_id, title, body, about, tenant in payload["memories"]:
+        repository.add(title, body, memory_id=memory_id, about=list(about), tenant=tenant)
+    now = datetime(2026, 3, 1, tzinfo=UTC)
+    result = run_dream(
+        repository.root,
+        now=now,
+        options=DreamOptions(tenant=payload.get("tenant", ""), dream_id="dream-probe"),
+    )
+    staged = repository.root / str(result.staged)
+    files = {}
+    for path in sorted(staged.iterdir()):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        files[path.name] = [line for line in lines if "recorded_at" not in line]
+    text = json.dumps({"result": result.as_dict(), "files": files}, sort_keys=True, indent=1)
+    return text.replace(str(workdir), "<workdir>")
