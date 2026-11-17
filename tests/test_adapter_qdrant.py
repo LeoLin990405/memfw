@@ -14,6 +14,7 @@ import json
 import math
 import re
 import socket
+import sys
 import threading
 import urllib.request
 from collections.abc import Iterator, Sequence
@@ -22,12 +23,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from memfw_adapter_qdrant import SPEC, QdrantProvider, factory
-from memfw_adapter_qdrant import http as qhttp
-from memfw_adapter_qdrant.cli import main as cli_main
-from memfw_adapter_qdrant.embed import EnvEmbedder, embedder_from_env, fingerprint_of
-from memfw_adapter_qdrant.fake import FakeQdrant
-from memfw_adapter_qdrant.sync import point_id, sync
 
 from memfw.core.repository import Repository
 from memfw.index import MemoryIndex
@@ -43,6 +38,22 @@ from memfw.ports import (
 from memfw.ports.testing import check_recall_provider, tree_digest
 from memfw.recall import Coordinator, FilterPolicy
 from memfw.recall.builtin import FtsProvider, default_resolvers
+
+ROOT = Path(__file__).resolve().parents[1]
+ADAPTER_SRC = ROOT / "packages" / "adapters" / "memfw-adapter-qdrant" / "src"
+if str(ADAPTER_SRC) not in sys.path:  # a workspace member; CI installs only memfw[dev]
+    sys.path.insert(0, str(ADAPTER_SRC))
+
+from memfw_adapter_qdrant import SPEC, QdrantProvider, factory  # noqa: E402
+from memfw_adapter_qdrant import http as qhttp  # noqa: E402
+from memfw_adapter_qdrant.cli import main as cli_main  # noqa: E402
+from memfw_adapter_qdrant.embed import (  # noqa: E402
+    EnvEmbedder,
+    embedder_from_env,
+    fingerprint_of,
+)
+from memfw_adapter_qdrant.fake import FakeQdrant  # noqa: E402
+from memfw_adapter_qdrant.sync import point_id, sync  # noqa: E402
 
 FIXTURE = Path(__file__).parent / "fixtures" / "qdrant_contract" / "v1.20.2.json"
 QUERIES = ("homelab backup", "HAL9000 rack", "release notes")
