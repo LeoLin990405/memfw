@@ -11,8 +11,11 @@ What it holds, per build ``idx-<fingerprint>/``:
 
 * bm25s's own score matrix and vocabulary (``*.index.npy``,
   ``vocab.index.json``, ``params.index.json``). The vocabulary keys are
-  **hashed tokens** (``blake2b``, 8 bytes), so no word of any memory is
-  stored in clear; the corpus itself is never saved;
+  **hashed tokens** (``blake2b``, 8 bytes, unsalted), so no word of any
+  memory is stored in clear; the corpus itself is never saved. Hashing is
+  not strong protection: anyone who can read the files can hash a word list
+  and test which words occur. The private directory is the protection;
+  ``local-private`` is not indexed unless the operator adds it;
 * ``docs.json``: the indexed memory ids and their tenants, in matrix order;
 * ``manifest.json``, written last: format, fingerprint, versions, counts.
 

@@ -141,3 +141,70 @@ def test_parse_and_load_directly(tmp_path: Path) -> None:
     repository = _vault(tmp_path)
     loaded = load_adapters(entries, root=repository.root, embedder=None, taken=["fts"])
     assert loaded[0].provider.name == "stub" and loaded[0].weight == 1.0
+
+
+def _access_ids(repository: Repository) -> list[str]:
+    events = (repository.root / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ids = []
+    for line in events:
+        event = json.loads(line)
+        if event.get("kind") == "memory_access":
+            ids.append(str(event.get("details", {}).get("memory_id")))
+    return ids
+
+
+def test_hits_the_clearance_withholds_get_no_access_event(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    path = repository.root / "vault.yaml"
+    path.write_text(
+        path.read_text(encoding="utf-8") + "legacy_privacy_default: public\n", encoding="utf-8"
+    )
+    repository.add(
+        "Private backup",
+        "private homelab backup keys",
+        memory_id="m-priv",
+        tags=["sensitivity:private"],
+    )
+    MemoryIndex(repository.index_path).rebuild(repository)
+    _configure(repository, [{"factory": STUB}])
+    before = len(_access_ids(repository))
+    cleared = build_runtime(repository.root, clearance=frozenset({"public"}), record_access=True)
+    payload = _two_stage(cleared, "private homelab backup keys")
+    shown = [row["id"] for row in payload["results"]]
+    assert "m-priv" not in shown and shown
+    logged = _access_ids(repository)[before:]
+    assert "m-priv" not in logged and set(logged) == set(shown)
+    # Without a clearance nothing changes: every returned hit is logged, as before.
+    open_runtime = build_runtime(repository.root, record_access=True)
+    mark = len(_access_ids(repository))
+    payload = _two_stage(open_runtime, "private homelab backup keys")
+    assert "m-priv" in [row["id"] for row in payload["results"]]
+    assert "m-priv" in _access_ids(repository)[mark:]
+
+
+def test_racing_first_calls_share_one_set_of_adapters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    repository = _vault(tmp_path)
+    _configure(repository, [{"factory": STUB}])
+    runtime = build_runtime(repository.root, record_access=False)
+    gate = threading.Barrier(2)
+    real = stub.factory
+
+    def slow(settings: Any) -> Any:
+        gate.wait(timeout=5)  # both callers are inside a factory at once: no lock held
+        return real(settings)
+
+    monkeypatch.setattr(stub, "factory", slow)
+    results: list[Any] = []
+    threads = [
+        threading.Thread(target=lambda: results.append(runtime.recall_adapters(repository)))
+        for _ in range(2)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+    assert len(results) == 2 and results[0] is results[1]

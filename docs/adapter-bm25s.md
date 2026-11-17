@@ -74,9 +74,10 @@ A disposable projection outside the vault, keyed like the usage store:
 `<data_dir>/<key>/idx-<fingerprint>/`, where `<key>` is the first 24 hex digits of the sha256 of
 the vault's resolved path. Directories are 0700 and files 0600; a symlinked directory is
 refused. The bm25s vocabulary holds **hashed tokens** (blake2b, 8 bytes) and the corpus is never
-saved, so no word of a memory is stored in clear (hashing is not encryption: a dictionary of
-guesses can be checked against it, which is why the directory is private and
-`local-private` is off by default). `docs.json` holds the indexed ids and tenants.
+saved, so no word of a memory is stored in clear. **Hashing is not strong protection:** the
+hashes are unsalted, so anyone who can read the files can hash a word list and test which
+words occur. The private directory (owned by you, 0700, refused otherwise) is the protection,
+and `local-private` is not indexed unless you add it to `clearance`. `docs.json` holds the indexed ids and tenants.
 
 The fingerprint covers the index format, tokenizer, bm25s version and parameters, the clearance,
 `vault.yaml` and every memory file's size, mtime, ctime and inode. A search that sees a new

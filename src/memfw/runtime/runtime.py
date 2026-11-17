@@ -99,12 +99,18 @@ class RecallOutcome:
 ACCESS_ERROR = "access_not_recorded"
 
 
-def _touch_returned(repository: Repository, memory_ids: Sequence[str]) -> tuple[str, ...]:
+def _touch_returned(
+    repository: Repository,
+    memory_ids: Sequence[str],
+    keep: Callable[[MemoryDocument], bool] | None = None,
+) -> tuple[str, ...]:
     """Warm and access-log the hits ``recall`` returns, best effort.
 
     Per returned id, in hit order, as the direct hybrid path does per hit: a
     cold or stub memory is warmed (``autowarm``), then one ``memory_access``
-    event (``operation: two_stage_retrieve``) is appended. A failure (for
+    event (``operation: two_stage_retrieve``) is appended. ``keep`` (the
+    interface's privacy clearance, when one is set) skips a hit the caller
+    will never be shown: it is neither warmed nor logged. A failure (for
     example a read-only ``events.jsonl``) never drops a hit; it is reported
     as ``ACCESS_ERROR`` once.
     """
@@ -113,6 +119,8 @@ def _touch_returned(repository: Repository, memory_ids: Sequence[str]) -> tuple[
     for memory_id in dict.fromkeys(memory_ids):
         try:
             document = repository.get(memory_id)
+            if keep is not None and not keep(document):
+                continue
             if document.is_stub or document.tier == Tier.COLD:
                 repository.autowarm(memory_id, actor="mechanism")
             repository.capture_event(
@@ -649,23 +657,31 @@ class Runtime:
         unreadable ``vault.yaml`` adds none and is read again next time (fewer
         providers is the closed side). A malformed entry or an adapter that
         cannot be built raises ``RecallAdapterError`` every time (fail closed).
+
+        Factories run outside the lock, so a slow one never blocks another
+        caller; concurrent first calls may each build the adapters, and the
+        first set stored is the one every caller uses (the others are dropped).
+        Factories should therefore be cheap: no network or heavy I/O, which
+        belongs in ``available()``/``search()``.
         """
 
         with self._recall_adapters_lock:
             if self._recall_adapters is not None:
                 return self._recall_adapters
-            try:
-                config = repository.read_config()
-            except (MemfwError, OSError, ValueError):
-                return ()
-            entries = parse_entries(config)
-            loaded = (
-                load_adapters(entries, root=repository.root, embedder=self.embedder, taken=taken)
-                if entries
-                else ()
-            )
-            self._recall_adapters = loaded
-            return loaded
+        try:
+            config = repository.read_config()
+        except (MemfwError, OSError, ValueError):
+            return ()
+        entries = parse_entries(config)
+        loaded = (
+            load_adapters(entries, root=repository.root, embedder=self.embedder, taken=taken)
+            if entries
+            else ()
+        )
+        with self._recall_adapters_lock:
+            if self._recall_adapters is None:
+                self._recall_adapters = loaded
+            return self._recall_adapters
 
     def recall(
         self,
@@ -779,7 +795,10 @@ class Runtime:
         )
         errors: tuple[str, ...] = ()
         if self.record_access():
-            errors = _touch_returned(repository, [hit.memory_id for hit in result.hits])
+            # The rows are cleared later (``_cleared_rows``); a hit the
+            # clearance withholds must not feed access or tier signals either.
+            keep = None if self.clearance is None else self.privacy_admits
+            errors = _touch_returned(repository, [hit.memory_id for hit in result.hits], keep)
         answered = set(result.labels.providers)
         seen = {name: captured[name] for name in list(captured) if name in answered}
         return RecallOutcome(result=result, observed=seen, errors=errors)

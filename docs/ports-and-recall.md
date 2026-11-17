@@ -708,7 +708,10 @@ runtime:
   provider from `MEMFW_EMBEDDING_*`, or `None`), which `options` may not set. The result must
   satisfy `RecallProvider` and have a name no other provider uses. Built providers are kept for
   the Runtime's life (restart to pick up a change), so an adapter keeps its index or
-  connection between calls. At most 8 adapters.
+  connection between calls. At most 8 adapters. Factories run outside the Runtime's lock and
+  may run more than once when first calls race (the first result is kept), so a factory should
+  only check settings and build objects; network or heavy I/O belongs in `available()` and
+  `search()`, which the coordinator bounds by the provider's budget.
 - **Fail closed.** A malformed section or entry, a module that cannot be imported, a factory
   that raises, a result that is not a provider or a taken name raise `RecallAdapterError`
   (a `ValueError`) with one fixed code: `bad_config`, `bad_entry`, `bad_factory`,
@@ -721,6 +724,9 @@ runtime:
   other providers answer (compat framework T7).
 - **Rows.** An adapter hit has no index row, so it is built from the vault document (§4.1
   Rows) and still passes the server's tenant, source and clearance checks.
+- **Access events and clearance.** With a server clearance (`MEMFW_MCP_CLEARANCE`), a hit the
+  clearance withholds is neither warmed nor given a `memory_access` event, for any provider,
+  since its row is never shown. Without a clearance nothing changes.
 - **Adapters.** [`memfw-adapter-bm25s`](adapter-bm25s.md) (in-process BM25 over memories).
 
 ### 4.2 MCP `memory_context` `v=2` (ContextPack)

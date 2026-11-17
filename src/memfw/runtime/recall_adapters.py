@@ -16,8 +16,12 @@ The factory is called with one mapping: the entry's ``options`` plus two keys
 the runtime fills in, ``vault`` (the vault root, a string) and ``embedder``
 (the runtime's embedding provider, the ``MEMFW_EMBEDDING_*`` one, or
 ``None``). ``options`` may not set them. It must return a ``RecallProvider``
-whose name is not taken. The kernel never imports an adapter by name: the
-module comes only from this operator setting, never from a request.
+whose name is not taken. A factory should be cheap (check settings, build
+objects): it runs on the first ``two_stage`` call, possibly more than once
+when calls race, and network or heavy I/O belongs in ``available()`` and
+``search()``, which the coordinator bounds by the provider's budget. The
+kernel never imports an adapter by name: the module comes only from this
+operator setting, never from a request.
 
 Fails closed: a malformed section or an adapter that cannot be loaded raises
 ``RecallAdapterError`` (a ``ValueError`` with a fixed ``code``), so
