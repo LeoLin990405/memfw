@@ -438,6 +438,10 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   `memfw recover` finishes an interrupted purge or rolls back an interrupted
   relink. `purge --orphans --yes` reclaims unreferenced blobs (blocked while
   a committed record is unreadable).
+- The embedded quota total is now the larger of the log total and the
+  stored blob files' sizes, so orphan reuse and detach/re-add cycles cannot
+  bypass `attachments_max_total_bytes`; log compaction keeps `heir` and
+  `projection`.
 - `memfw attach scan ROOT:[DIR]` is a dry-run inventory (counts, sizes, media
   types, likely-private by path, already registered, refused symlinks/names;
   `--hash` adds duplicate sha256 counts) that writes nothing.

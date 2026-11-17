@@ -177,8 +177,11 @@ original's `size` and whether it stored new bytes (`blob: new`) or reused a
 stored blob (`blob: shared`), so an add parses no record and its cost does
 not grow with the number of attachments. A log with an `attach` event from
 before these fields falls back to the sizes (`lstat`) of the files in the
-vault's blob directory. A blob left by an interrupted add (an orphan) that a
-later add of the same bytes reuses is not counted.
+vault's blob directory. Otherwise the total is the larger of the log total
+and those file sizes (one `lstat` per stored blob, no record parsed), so
+orphans count and no cycle of interrupted adds, re-adds of the same bytes
+(`blob: shared`) and detaches can push the bytes on disk past the limit.
+Log compaction keeps `size`, `blob` and `heir`.
 
 ## Events
 

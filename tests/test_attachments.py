@@ -1126,14 +1126,17 @@ def test_total_of_a_log_without_sizes_falls_back_to_the_stored_blobs(tmp_path: P
     # Mixed: one event without size is enough to fall back.
     mixed = [event("a", {"storage": "embedded", "size": 6, "blob": "new"}), legacy[1]]
     assert embedded_total(mixed, store) == 9
-    # Shared and referenced events add nothing; config events are skipped.
+    # Shared and referenced events add nothing; config events are skipped. The
+    # blob files (9 bytes) bound the log total (6) from below.
     current = [
         event("a", {"storage": "embedded", "size": 6, "blob": "new"}),
         event("b", {"storage": "embedded", "size": 6, "blob": "shared"}),
         event("c", {"storage": "referenced", "size": 1000}),
         SimpleNamespace(kind=EventKind.CONFIG_CHANGE, memory_id="x", details={}),
     ]
-    assert embedded_total(current, store) == 6
+    assert embedded_total(current, store) == 9
+    bigger = [event("a", {"storage": "embedded", "size": 50, "blob": "new"})]
+    assert embedded_total(bigger, store) == 50
 
 
 def test_stale_stages_are_attributed_to_their_vault(tmp_path: Path) -> None:
@@ -1233,17 +1236,20 @@ def test_log_compaction_keeps_the_quota_log_derived(
     with _file(tmp_path, "o.txt", b"orphan bytes").open("rb") as stream:
         store.link(_stage(repository, stream))
     assert store.stored_bytes() == 18
-    assert embedded_total(repository.events(), store) == 6
+    assert embedded_total(repository.events(), store) == 18
     repository.compact_log(keep_recent=1)
     attach = [event for event in repository.events() if event.kind == EventKind.ATTACH]
     assert [event.details for event in attach] == [
         {"storage": "embedded", "size": 6, "blob": "new"},
         {"storage": "embedded", "size": 6, "blob": "shared"},
     ]
-    with monkeypatch.context() as patch:
-        patch.setattr(BlobStore, "stored_bytes", lambda self: pytest.fail("fell back to lstat"))
-        assert embedded_total(repository.events(), store) == 6
-        # A 4-byte add still fits after compaction.
+    from memfw.attachments.store import blob_owners
+
+    # Still log-derived (not the legacy fallback) after compaction.
+    sizes, owners, legacy = blob_owners(repository.events())
+    assert not legacy and sum(sizes[owner] for owner in owners) == 6
+    # The orphan counts toward the quota (max of log and disk): 18 of 10.
+    with pytest.raises(ValueError, match="attachments_max_total_bytes"):
         repository.add_attachment(_file(tmp_path, "c.txt", b"abcd"))
 
 
@@ -1270,10 +1276,35 @@ def test_malformed_size_or_blob_falls_back_to_the_stored_blobs(tmp_path: Path) -
         {"storage": "embedded", "size": 6, "blob": None},
     ):
         assert embedded_total([event(details)], store) == 6, details
-    # A well-formed shared event alone counts nothing (no lstat).
-    assert embedded_total([event({"storage": "embedded", "size": 6, "blob": "shared"})], store) == 0
+    # A well-formed shared event alone counts nothing; the stored blob still does.
+    assert embedded_total([event({"storage": "embedded", "size": 6, "blob": "shared"})], store) == 6
 
 
 def test_stage_tag_is_16_hex() -> None:
     tag = blobs_module.vault_stage_tag(Path("/some/vault"))
     assert len(tag) == 16 and int(tag, 16) >= 0
+
+
+def test_orphans_and_detach_readd_cycles_cannot_bypass_the_quota(tmp_path: Path) -> None:
+    repository = _repo(tmp_path)
+    config = repository.read_config()
+    config.update(attachments_max_total_bytes=10)
+    repository.configure(config)
+    repository.ensure_vault_id()
+    store = repository.attachment_blob_store(create=True)
+    assert store is not None
+    # Interrupted adds left 8 bytes of orphans; re-adding them is "shared".
+    for name, data in (("o1.txt", b"1234"), ("o2.txt", b"5678")):
+        with _file(tmp_path, name, data).open("rb") as stream:
+            store.link(_stage(repository, stream))
+        for _ in range(3):
+            record = repository.add_attachment(_file(tmp_path, name, data)).record
+            repository.detach_attachment(record.id)
+    attach = [event for event in repository.events() if event.kind == EventKind.ATTACH]
+    assert {event.details["blob"] for event in attach} == {"shared"}
+    # The log counts 0, the disk 8: a 4-byte add does not fit, a 2-byte one does.
+    with pytest.raises(ValueError, match="attachments_max_total_bytes"):
+        repository.add_attachment(_file(tmp_path, "new.txt", b"abcd"))
+    repository.add_attachment(_file(tmp_path, "ok.txt", b"ab"))
+    with pytest.raises(ValueError, match="attachments_max_total_bytes"):
+        repository.add_attachment(_file(tmp_path, "one.txt", b"z"))

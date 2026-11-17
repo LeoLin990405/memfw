@@ -267,14 +267,21 @@ def embedded_total(events: Iterable[Event], store: BlobStore) -> int:
     :func:`blob_owners`; a purge that keeps a shared blob passes it on). A log with
     a committed ``attach`` event that predates ``details.size`` (or carries a
     malformed ``size`` / ``blob``) falls back to
-    the sizes (``lstat``) of the files in the blob directory. Neither way
-    parses a record, so the cost of an add does not grow with record parses.
+    the sizes (``lstat``) of the files in the blob directory; otherwise the
+    larger of the log total and those sizes is used (orphans count). Neither
+    way parses a record, so the cost of an add does not grow with record
+    parses (the ``lstat`` pass is one call per stored blob).
     """
 
+    stored = store.stored_bytes()
     sizes, owners, legacy = blob_owners(events)
     if legacy:
-        return store.stored_bytes()
-    return sum(sizes[identifier] for identifier in owners)
+        return stored
+    # The log never counts bytes no committed ``attach`` stored as new (an
+    # orphan an interrupted add left, then re-added as "shared"; detach and
+    # re-add cycles over such blobs). The files on disk bound it from below,
+    # so the quota can never be bypassed that way.
+    return max(sum(sizes[identifier] for identifier in owners), stored)
 
 
 def _vault_id(host: RepositoryHost) -> str | None:

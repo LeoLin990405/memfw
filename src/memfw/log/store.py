@@ -1074,6 +1074,9 @@ _SUMMARY_DETAIL_KEYS = frozenset(
         # Attachment quota accounting (memfw.attachments.store.embedded_total).
         "size",
         "blob",
+        "heir",
+        # Event-log forward-compat marker on non-memory kinds.
+        "projection",
         "before_config_hash",
         "after_config_hash",
         "target_snapshot_hash_mode",
