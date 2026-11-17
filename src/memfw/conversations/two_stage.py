@@ -218,8 +218,9 @@ def embedder_is_local(embedder: Any) -> bool:
     """Whether ``embedder`` keeps text on this machine.
 
     ``local is True`` on the provider, or an ``endpoint`` URL whose host is a
-    loopback literal (:func:`memfw.notes.http.is_loopback_url`, the rule under
-    which ``open_http`` also skips any environment proxy). Anything else (no
+    canonical loopback literal (:func:`memfw.notes.http.is_loopback_url`, the
+    strict privacy rule; ``open_http`` goes direct for these and a few more
+    forms of this host). Anything else (no
     endpoint attribute, another host, an unparseable URL) is not local: the semantic list then needs
     ``conversations.cloud: true``, the switch every non-local backend needs.
     """

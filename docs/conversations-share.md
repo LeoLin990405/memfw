@@ -342,8 +342,8 @@ combine with `--app`, `--since` and `--archived-only`.
      `embedder_error`.
      **Gate:** summaries are sent only to an embedder that is local (its
      endpoint host is `localhost`, `127.0.0.0/8`, `::1` or `::ffff:127.x`,
-     or the provider says `local = True`; such a request never goes through
-     an environment proxy) or when `vault.yaml` has `conversations: {cloud: true}`,
+     or the provider says `local = True`; the strict, canonical rule; such a
+     request never goes through an environment proxy) or when `vault.yaml` has `conversations: {cloud: true}`,
      the same switch a non-local worker backend needs. Otherwise the list is
      skipped with `degraded: ["semantic_off"]` and the endpoint is never
      contacted (a malformed `cloud` value counts as off);
