@@ -14,6 +14,22 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 
 ## [Unreleased]
 
+### Added — Qdrant recall adapter
+
+- `packages/adapters/memfw-adapter-qdrant` 0.1.0 (wheel `memfw_adapter_qdrant`):
+  a semantic `RecallProvider` over a Qdrant **v1.20.x** service (Apache-2.0),
+  REST with the standard library (no `qdrant-client`). Loopback only unless
+  `allow_remote: true`; loopback requests never use `HTTP(S)_PROXY`;
+  redirects refused; API key from `api_key_env` only. Queries are embedded
+  with memfw's own embedder (`MEMFW_EMBEDDING_*`, no new model) and ask for
+  `with_payload: ["memory_id", "tenant"]`, `with_vector: false`.
+  `memfw-adapter-qdrant sync` writes only `public`/`shared` memories (a
+  `clearance` with `local-private` is refused), stores no text and deletes
+  points that are no longer sendable. Off by default (`runtime.recall.adapters`);
+  `available()` reports `unreachable` and friends so the coordinator degrades
+  to FTS (T7). Contract tests replay recorded v1.20.2 exchanges and use a
+  loopback fake; no Qdrant in CI (`docs/adapter-qdrant.md`).
+
 ### Added — bm25s recall adapter and operator-configured recall adapters
 
 - `vault.yaml` `runtime.recall.adapters` (off by default): a list of

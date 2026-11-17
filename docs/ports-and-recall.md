@@ -101,6 +101,7 @@ do not contain `memfw/__init__.py`, so this does not affect them.
 | `memfw-recall` | 0.3.0 | `RecallProvider` | 1 |
 | `memfw-adapter-deepseek` | 0.1.1 | `ModelBackend` | 1 |
 | `memfw-adapter-bm25s` | 0.1.0 | `RecallProvider` | 1 |
+| `memfw-adapter-qdrant` | 0.1.0 | `RecallProvider` | 1 |
 <!-- port-versions:end -->
 
 - **Wheels only.** `uv build --wheel --package memfw-ports` (and `memfw-recall`). An sdist is

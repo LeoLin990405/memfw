@@ -27,6 +27,7 @@ CONSUMES = {
     "memfw-recall": {"RecallProvider"},
     "memfw-adapter-deepseek": {"ModelBackend"},
     "memfw-adapter-bm25s": {"RecallProvider"},
+    "memfw-adapter-qdrant": {"RecallProvider"},
 }
 
 

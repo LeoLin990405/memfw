@@ -2,7 +2,7 @@
 
 Run it with the interpreter of a venv that has the wheels and NOT memfw:
 
-    python -I tests/standalone/wheel_smoke.py [--recall] [--deepseek] [--bm25s]
+    python -I tests/standalone/wheel_smoke.py [--recall] [--deepseek] [--bm25s] [--qdrant]
 
 It refuses to run when ``memfw`` is importable, imports the wheels, and runs
 the contract kit (``memfw_ports.testing``) against the reference
@@ -11,7 +11,10 @@ implementations on a throwaway vault. With ``--recall`` it also runs
 ``--deepseek`` the ``memfw-adapter-deepseek`` wheel's backend passes
 ``check_model_backend`` against its loopback fake (no network); with ``--bm25s``
 the ``memfw-adapter-bm25s`` wheel's provider passes ``check_recall_provider``
-on a throwaway vault (index outside it, under the temporary root). Prints one
+on a throwaway vault (index outside it, under the temporary root); with
+``--qdrant`` the ``memfw-adapter-qdrant`` wheel's provider syncs a throwaway
+vault into its loopback ``FakeQdrant`` and passes ``check_recall_provider``.
+Prints one
 ``ok`` line per check and exits non-zero on the first failure. Standard
 library only; not collected by pytest (``tests/test_standalone_ports_wheel.py``
 drives it).
@@ -271,6 +274,57 @@ def _bm25s(root: Path) -> None:
     _ok("check_recall_provider Bm25sProvider")
 
 
+def _qdrant(root: Path) -> None:
+    """The Qdrant adapter wheel over the memfw-ports wheel, against its loopback fake only."""
+
+    import memfw_ports.types
+    from memfw_adapter_qdrant import _ports as seam
+    from memfw_adapter_qdrant import factory
+    from memfw_adapter_qdrant.fake import FakeQdrant
+    from memfw_adapter_qdrant.sync import sync
+    from memfw_ports.testing import check_recall_provider, tree_digest
+
+    leaked = sorted(m for m in sys.modules if m == "memfw" or m.startswith("memfw."))
+    assert not leaked, leaked
+    assert seam.Candidate is memfw_ports.types.Candidate, seam.Candidate
+    _ok("import memfw_adapter_qdrant (ports from memfw_ports)")
+
+    class Letters:
+        """26 buckets, one per letter: enough to rank the fixture memories."""
+
+        dimension = 26
+        fingerprint = "smoke-letters"
+
+        def embed(self, texts: Sequence[str], *, role: str = "document") -> list[list[float]]:
+            out = []
+            for text in texts:
+                vector = [float(text.lower().count(chr(97 + i))) for i in range(26)]
+                out.append(vector if any(vector) else [1.0] * 26)
+            return out
+
+    vault = _write_vault(root / "qdrant")
+    with (vault / "vault.yaml").open("a", encoding="utf-8") as handle:
+        handle.write("legacy_privacy_default: public\n")
+    before = tree_digest(vault)
+    with FakeQdrant() as fake:
+        provider = factory({"vault": str(vault), "url": fake.url, "embedder": Letters()})
+        report = sync(provider)
+        assert report.upserted == len(MEMORIES) - 1, report  # m-priv never sent
+        sent = {p["payload"]["memory_id"] for p in fake.collections["memfw"]["points"].values()}
+        assert "m-priv" not in sent, sent
+        seen = check_recall_provider(
+            provider,
+            queries=["homelab backup", "HAL9000 rack"],
+            vault=vault,
+            tenant_of=lambda candidate: TENANTS.get(candidate.ref, ""),
+        )
+        assert seen["homelab backup"], seen
+        alpha = check_recall_provider(provider, queries=["homelab backup"], tenant="alpha")
+        assert [c.ref for c in alpha["homelab backup"]] == ["m-alpha"], alpha
+    assert tree_digest(vault) == before
+    _ok("check_recall_provider QdrantProvider (fake server)")
+
+
 def main(argv: list[str]) -> int:
     if importlib.util.find_spec("memfw") is not None:
         print("memfw is importable here; run this in a venv without memfw", file=sys.stderr)
@@ -284,6 +338,8 @@ def main(argv: list[str]) -> int:
             _deepseek()
         if "--bm25s" in argv:
             _bm25s(root)
+        if "--qdrant" in argv:
+            _qdrant(root)
     print("standalone wheel smoke passed")
     return 0
 

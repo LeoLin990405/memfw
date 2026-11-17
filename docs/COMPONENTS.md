@@ -137,6 +137,15 @@ privacy level is in its `clearance` (default `public,shared`), into a private di
 the vault (`~/.local/share/memfw/adapters/bm25s/`). memfw never imports it. See
 [`adapter-bm25s.md`](adapter-bm25s.md).
 
+## Qdrant recall adapter
+
+`packages/adapters/memfw-adapter-qdrant` (wheel `memfw_adapter_qdrant`, version 0.1.0) is a
+semantic `RecallProvider` over a Qdrant v1.20.x service the operator runs, bound to loopback with
+telemetry off (`QDRANT__TELEMETRY_DISABLED=true`). It embeds queries with memfw's own embedder
+and asks for memory ids only. It is **off by default**; `memfw-adapter-qdrant sync` sends only
+`public`/`shared` memories, never `local-private`, and stores no text. memfw never imports it. See
+[`adapter-qdrant.md`](adapter-qdrant.md).
+
 
 ## Corroboration projection
 
