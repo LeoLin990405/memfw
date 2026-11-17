@@ -67,7 +67,10 @@ The entries after this summary give the details, newest first.
   memfw MCP server (MM0). A top-level `sensitivity:` key is read the same at
   every exit and kept on rewrite (#69). Fail-closed fixes: privacy and
   lifecycle tags in the strict policy, supersede keeps the tenant and scope.
-- **Security and integrity (#35 audit).** Tenant-exact `/related` and MCP
+- **Security and integrity.** Requests to a loopback or this-host service
+  (local embeddings, the local relevance judge, model helpers) never go
+  through an environment proxy, and the judge no longer follows redirects
+  (#74). From the #35 audit: tenant-exact `/related` and MCP
   reads, `MEMFW_ALLOWED_SOURCES` on every MCP read, history tools honouring
   opt-out and `can_read`, the service bind guard and `/stage` tenant binding
   (S1–S9); vault integrity fixes (frontmatter ending only at a closing `---`,
