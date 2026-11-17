@@ -47,6 +47,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import stat
 import threading
 import time
@@ -672,6 +673,9 @@ def _scan_notes(root: Path) -> tuple[dict[str, str], frozenset[str]]:
 
 
 _FRONT_KEYS = frozenset({"privacy", "sensitivity", "tags", "tag"})
+#: Lines of a note without frontmatter searched for a stray privacy key.
+_HEAD_LINES = 20
+_PRIVACY_HINT = re.compile(r"^\s*[-*>#]*\s*[\"']?(privacy|sensitivity)[\"']?\s*:", re.IGNORECASE)
 _UNKNOWN = "\0unknown"
 
 
@@ -693,14 +697,24 @@ def _frontmatter(lines: list[str]) -> tuple[dict[str, Any], int]:
 
     A deliberately small reader (this adapter is stdlib only): scalars, inline
     ``[a, b]`` lists and block ``- a`` lists. A form it cannot read, or a key
-    given twice, makes ``privacy`` unknown, which no clearance admits.
+    given twice, makes ``privacy`` unknown, which no clearance admits. So
+    does anything that looks like an attempt at privacy metadata this reader
+    would otherwise miss: a ``---`` block that never closes or does not start
+    on the first line, or a ``privacy:`` / ``sensitivity:`` line among the
+    first ``_HEAD_LINES`` lines of a note without frontmatter.
     """
 
+    if lines:
+        lines = [lines[0].removeprefix("\ufeff"), *lines[1:]]
     if not lines or lines[0].strip() != "---":
+        head = lines[:_HEAD_LINES]
+        first = next((line.strip() for line in head if line.strip()), "")
+        if first == "---" or any(_PRIVACY_HINT.match(line) for line in head):
+            return {"privacy": _UNKNOWN}, 0
         return {}, 0
     end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
     if end is None:
-        return {}, 0
+        return {"privacy": _UNKNOWN}, 0  # an unterminated block: unreadable
     found: dict[str, Any] = {}
     current: str | None = None
     for raw in lines[1:end]:
@@ -804,7 +818,8 @@ class QmdNotesProvider(_QmdProvider):
         try:
             if path.stat().st_size > MAX_NOTE_BYTES:
                 return None
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+            text = path.read_text(encoding="utf-8-sig", errors="replace")
+            lines = text.splitlines(keepends=True)
         except OSError:
             return None
         front, body_start = _frontmatter(lines)

@@ -399,6 +399,29 @@ def test_manifest_is_reread_when_the_generation_changes(
     assert provider.projection_version == "tree-next"
 
 
+def test_a_repeated_manifest_document_is_not_trusted(fake: FakeQmd, tmp_path: Path) -> None:
+    """The same id twice (one entry looser than the other): dropped, never the looser one."""
+
+    entry = {"id": "m-a", "path": "memories/m-a.md"}
+    docs = [
+        {**entry, "meta": {"privacy_class": "local-private", "tenant": ""}},
+        {**entry, "meta": {"privacy_class": "none", "tenant": ""}},
+        {"id": "m-b", "path": "memories/m-b.md", "meta": {"privacy_class": "none", "tenant": ""}},
+    ]
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {"schema_version": 1, "tree": "t", "documents": docs, "lifecycle_source_status": "ok"}
+        ),
+        encoding="utf-8",
+    )
+    fake.results = lambda arguments: [
+        {"file": "memfw-memory/memories/m-a.md", "score": 0.9, "line": 1},
+        {"file": "memfw-memory/memories/m-b.md", "score": 0.8, "line": 1},
+    ]
+    assert [c.ref for c in _search(_memory(manifest, fake.url), "q")] == ["m-b"]
+
+
 def test_handelize_collisions_in_the_manifest_are_dropped(fake: FakeQmd, tmp_path: Path) -> None:
     """``m_a`` and ``m-a`` share the stored name ``memories/m-a.md``: neither is returned."""
 
@@ -472,6 +495,30 @@ def test_notes_never_follow_symlinks(fake: FakeQmd, tmp_path: Path) -> None:
     link_root.symlink_to(root, target_is_directory=True)
     assert _notes(fake.url, link_root).available().reason == "no_notes_root"
     assert _notes(fake.url, tmp_path / "absent").available().reason == "no_notes_root"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("\ufeff---\nprivacy: shared\n---\n# H\n", "shared"),  # BOM is not a reason to drop
+        ("---\nprivacy: shared\n# never closed\n", "unknown"),
+        ("\n---\nprivacy: shared\n---\n# H\n", "unknown"),  # block not on line 1
+        ("# Title\n\nprivacy: public\n", "unknown"),  # a stray key in the head
+        ("# Title\n\n> Sensitivity: private\n", "unknown"),
+        ("# Title\n\nbody\n", "shared"),  # nothing: the legacy level
+    ],
+)
+def test_frontmatter_fails_closed_on_unusual_heads(text: str, expected: str) -> None:
+    found, _start = _frontmatter(text.splitlines(keepends=True))
+    assert metadata_level(found, "shared") == expected
+
+
+def test_a_bom_note_is_read_like_one_without(fake: FakeQmd, tmp_path: Path) -> None:
+    root = tmp_path / "kh"
+    root.mkdir()
+    (root / "bom.md").write_bytes("\ufeff---\nprivacy: shared\n---\n# H\n\nx\n".encode())
+    fake.results = lambda arguments: [{"file": "knowledge-hub/bom.md", "score": 0.5, "line": 6}]
+    assert [c.ref for c in _search(_notes(fake.url, root), "q")] == ["kh:bom.md#H"]
 
 
 FRONTMATTER_CASES = [
