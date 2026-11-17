@@ -37,7 +37,14 @@ from memfw.ports.context import (
 )
 from memfw.ports.types import PATH_REF_RE
 
-from .core import CORE_SLOT, Keep, build_core_slot, estimate_tokens, limit_chars
+from .core import (
+    CORE_SLOT,
+    CoreCandidates,
+    Keep,
+    build_core_slot,
+    estimate_tokens,
+    limit_chars,
+)
 
 HANDOFF_SLOT = "handoff"
 TOPICS_SLOT = "topics"
@@ -136,24 +143,29 @@ def slots_request(v: int, slots: object) -> tuple[str, ...]:
 
 @dataclass(frozen=True, slots=True)
 class CoreSlotProvider:
-    """The ``core`` slot (anchors, then procedural memories) of one vault and caller."""
+    """The ``core`` slot (anchors, then procedural memories) of one vault and caller.
+
+    ``candidates`` (default: ``select_core`` over ``repository.list()``) is
+    where the slot's selection starts; the runtime injects a cached one (C3).
+    """
 
     repository: Repository
     keep: Keep
     name: str = CORE_SLOT
+    candidates: CoreCandidates | None = None
 
     def build(self, request: SlotRequest) -> ContextSlot:
-        return _vault_read(
-            self.repository,
-            lambda: build_core_slot(
-                self.repository, keep=self.keep, limit_tokens=request.limit_tokens
-            ),
-        )
+        return _vault_read(self.repository, lambda: self.build_raw(request))
 
     def build_raw(self, request: SlotRequest) -> ContextSlot:
         """``build`` without the reason mapping: vault errors propagate as in C1."""
 
-        return build_core_slot(self.repository, keep=self.keep, limit_tokens=request.limit_tokens)
+        return build_core_slot(
+            self.repository,
+            keep=self.keep,
+            limit_tokens=request.limit_tokens,
+            candidates=self.candidates,
+        )
 
 
 def cut_items(name: str, items: Sequence[ContextItem], limit_tokens: int) -> ContextSlot:

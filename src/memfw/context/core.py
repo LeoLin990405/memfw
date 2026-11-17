@@ -28,11 +28,16 @@ from typing import Any
 from memfw.core.errors import MemfwError
 from memfw.core.models import Layer, MemoryDocument
 from memfw.core.repository import Repository
-from memfw.ports.context import ContextEntry, ContextPack, ContextSlot
+from memfw.ports.context import PACK_VERSION_RE, ContextEntry, ContextPack, ContextSlot
 from memfw.ports.types import MEMORY_ID_RE
 
 #: Whether the caller may see one memory (tenant, source, privacy, ...).
 Keep = Callable[[MemoryDocument], bool]
+#: ``(repository, keep) -> the core slot's candidates``: ``select_core`` over the
+#: whole vault, in slot order. The default (``core_candidates``) reads
+#: ``repository.list()``; the composition root may inject one that serves the
+#: same list from a cache of ids (C3, ``memfw.runtime.context_cache``).
+CoreCandidates = Callable[[Repository, Keep], list[MemoryDocument]]
 
 #: ``memory_context`` ``policy`` values.
 CONTEXT_POLICIES: tuple[str, ...] = ("compat_fts", "strict")
@@ -80,18 +85,38 @@ def context_request(v: object, policy: object) -> tuple[int, str]:
     return v, policy
 
 
+def if_version_request(v: int, if_version: object) -> str | None:
+    """Validate ``memory_context`` ``if_version`` (after ``context_request`` checked ``v``).
+
+    ``None`` or ``""`` means absent. Otherwise only for ``v=2``, and it must be
+    a ``pack_version`` (64 lowercase hex characters): anything else raises
+    ``ValueError`` before the vault is read.
+    """
+
+    if if_version is None or if_version == "":
+        return None
+    if v != 2:
+        raise ValueError("if_version only applies to v=2")
+    if not isinstance(if_version, str) or not PACK_VERSION_RE.fullmatch(if_version):
+        raise ValueError("if_version must be a pack_version (64 lowercase hex characters)")
+    return if_version
+
+
 def _is_core(document: MemoryDocument) -> bool:
     return document.layer == Layer.ANCHOR or bool(document.anchor) or document.type == "procedural"
+
+
+def is_core_shaped(document: MemoryDocument) -> bool:
+    """A memory the ``core`` slot considers before ``keep``: no ``valid_to``, an
+    anchor or a procedural memory. Depends on the memory's file only."""
+
+    return document.valid_to is None and _is_core(document)
 
 
 def select_core(documents: Sequence[MemoryDocument], keep: Keep) -> list[MemoryDocument]:
     """The slot's memories in slot order. ``documents`` is the whole vault."""
 
-    selected = [
-        document
-        for document in documents
-        if document.valid_to is None and _is_core(document) and keep(document)
-    ]
+    selected = [document for document in documents if is_core_shaped(document) and keep(document)]
     selected.sort(
         key=lambda document: (
             0 if document.layer == Layer.ANCHOR or document.anchor else 1,
@@ -194,21 +219,39 @@ def _snapshot(
     return parsed, "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
-def build_core_slot(repository: Repository, *, keep: Keep, limit_tokens: int) -> ContextSlot:
-    """The ``core`` slot of ``build_core_pack`` (see there), without the pack around it."""
+def core_candidates(repository: Repository, keep: Keep) -> list[MemoryDocument]:
+    """The default ``CoreCandidates``: ``select_core`` over ``repository.list()``."""
+
+    return select_core(repository.list(), keep)
+
+
+def build_core_slot(
+    repository: Repository,
+    *,
+    keep: Keep,
+    limit_tokens: int,
+    candidates: CoreCandidates | None = None,
+) -> ContextSlot:
+    """The ``core`` slot of ``build_core_pack`` (see there), without the pack around it.
+
+    ``candidates`` (default ``core_candidates``) gives the selection the slot
+    starts from; whatever it returns is re-read from the vault and selected
+    again with ``keep`` before anything is carried.
+    """
 
     budget = limit_chars(limit_tokens)
-    candidates = select_core(repository.list(), keep)
+    candidates_of = candidates if candidates is not None else core_candidates
+    pool = candidates_of(repository, keep)
     hashes: dict[str, str] = {}
     snapshots: list[MemoryDocument] = []
-    for document in candidates:
+    for document in pool:
         snapshot = _snapshot(repository, document)
         if snapshot is None:
             continue
         hashes[snapshot[0].id] = snapshot[1]
         snapshots.append(snapshot[0])
     selected = select_core(snapshots, keep)
-    skipped = len(candidates) - len(selected)
+    skipped = len(pool) - len(selected)
     cut = _cut(selected, budget)
     entries = tuple(
         ContextEntry(
@@ -276,11 +319,15 @@ __all__ = [
     "CONTEXT_POLICIES",
     "CONTEXT_VERSIONS",
     "CORE_SLOT",
+    "CoreCandidates",
     "build_core_pack",
     "build_core_slot",
     "context_request",
+    "core_candidates",
     "core_context_v1",
     "estimate_tokens",
+    "if_version_request",
+    "is_core_shaped",
     "limit_chars",
     "select_core",
 ]

@@ -156,6 +156,7 @@ class Gateway(
                 v=args.get("v"),
                 policy=args.get("policy"),
                 slots=args.get("slots"),
+                if_version=args.get("if_version"),
             ),
             "memory_status": lambda _args: self.status(),
             "dream_run": lambda args: self.dream_run(

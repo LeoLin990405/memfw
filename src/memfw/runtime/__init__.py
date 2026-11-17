@@ -12,6 +12,8 @@ build the ``memfw.context`` core slot with the visibility predicate
 composes the other slots (``Runtime.context_slot_provider``): ``handoff``
 reads the conversation share as the calling app, ``topics`` the concept
 catalogue (``context_sources``), so ``memfw.context`` imports neither.
+C3 adds the ``core`` slot's id cache (``context_cache.ContextCache``, one per
+Runtime unless injected or disabled), which never changes the output.
 
 A3b moves the rest of the MCP server's wiring here: ``resolve_settings``
 (explicit values, else ``MEMFW_*``, the embedder included),

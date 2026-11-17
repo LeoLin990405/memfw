@@ -598,7 +598,10 @@ to earlier versions: `limit_tokens`, `used_chars`, `entries`.
   change (`updated_at`, `strength`, `reference_count`, ...) also changes the key, even when the
   carried text is the same: expect that churn when caching (C3). `ContextPack` rejects a
   `pack_version` that does not match its slots.
-  TODO (C3): the design also puts the projection version into `pack_version`; C1 does not yet.
+  The design also named a projection version; C3 checked that none is needed: every slot is
+  built from what it reads at call time (memory files, concept files, the conversation share)
+  and each entry's hash covers that content, so a projection rebuild that changes nothing a
+  slot carries leaves the key as it is, and one that does changes it (§4.4).
 - **Contract kit.** `check_context_pack(pack, *, slots=None, max_tokens=None, forbidden=())`
   (in `memfw.ports.testing`) checks the type, the recomputed version, `overflow ==
   len(truncated_ids)`, at most one partial entry, which must be the last carried entry and be
@@ -662,6 +665,38 @@ topics)` otherwise; the input is not echoed).
   `-32602` (fail closed). An unknown URI is error `-32002`, a missing or non-string `uri`
   `-32602`, a failure `-32603` with the client-safe message.
   `initialize` advertises `capabilities.resources = {"listChanged": false}`.
+
+### 4.4 Context cache and `if_version` (C3)
+
+- **`if_version`.** `memory_context(v=2, if_version="<pack_version>")` (and
+  `memfw://context/<slot>?if_version=<pack_version>`, alone or with `policy=` in either
+  order, joined by `&`) still builds the pack from the vault. When its `pack_version` is the
+  one given, the reply is `{"v": 2, "limit_tokens", "pack_version", "policy", "generated_at",
+  "unchanged": true}` with no `slots`; otherwise the full pack plus `"unchanged": false`.
+  `if_version` must be 64 lowercase hex characters and applies to `v=2` only (checked before
+  the vault is opened); `""` or absent means no check, and then the reply has no `unchanged`
+  key, byte-identical to C2. In a resource query an empty, invalid or repeated `if_version`
+  is `-32602`.
+- **Cache.** `memfw.runtime.context_cache.ContextCache` (one per `Runtime`; inject one with
+  `build_runtime(context_cache=...)`, disable with `context_cache=False`) holds, per `(tenant,
+  policy, slot, scope)` (scope: vault root and allowed sources), only the ids and frontmatter
+  versions of the `core` slot's pool (core-shaped memories, `is_core_shaped`, visible to the
+  tenant and sources) and a vault fingerprint: no body, title or query. It is bounded (LRU,
+  256 entries by default), per process and thread-safe; `stats()` reports hits, misses and size.
+- **Invalidation.** The fingerprint is a sha256 over the stat (inode, size, mtime and ctime in
+  nanoseconds) of every `memories/*.md`, `events.jsonl`, `vault.yaml` and the
+  pending-transaction marker. Any vault write (it appends an event), a hand-placed, removed or
+  edited memory file (ctime moves even when mtime is set back) or a config change
+  (`conversation_share` included) makes the next call a miss, which reads the whole vault as
+  before. A projection rebuild touches none of these and cannot change the `core` slot.
+- **Hit.** The pooled memories are re-read from the vault and filtered again with the call's
+  own policy at the call's `now` (a `strict` validity window that opens later is honoured, a
+  memory made private is dropped); a pooled file that is missing, unreadable or at another
+  version falls back to a full build. The slot is then built exactly as without the cache, so
+  a hit returns the same pack and `pack_version` as a fresh build.
+- **Not cached.** `handoff` and `topics` are rebuilt on every call: re-reading and re-filtering
+  them is their whole build (the conversation share applies `conversation_share` per call;
+  topic counts need every visible memory). `v=1` never uses the cache.
 
 ## 5. Adapter rules
 

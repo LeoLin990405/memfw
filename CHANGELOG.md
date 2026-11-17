@@ -11,6 +11,24 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
+### Added — `memory_context` cache and `if_version` (C3)
+
+- `memory_context(v=2)` takes an optional `if_version` (also
+  `memfw://context/<slot>?if_version=`): when the freshly built pack has that
+  `pack_version` the reply is the pack header with `unchanged: true` and no
+  slots; otherwise the full pack with `unchanged: false`. Without it the output
+  is byte-identical to before.
+- New `memfw.runtime.context_cache.ContextCache` (bounded LRU, per process,
+  thread-safe; on by default, `build_runtime(context_cache=False)` disables
+  it, an instance can be injected). It caches only the ids and versions of the
+  `core` slot's pool per `(tenant, policy, slot, scope)`, valid while a stat
+  fingerprint of the memory files, `events.jsonl` and `vault.yaml` is
+  unchanged; on a hit the memories are re-read from the vault and filtered
+  again, so the pack and `pack_version` equal a fresh build. `handoff` and
+  `topics` are not cached. `memfw.context` gains the `CoreCandidates` seam
+  (`CoreSlotProvider(candidates=...)`), `is_core_shaped`, `select_core` and
+  `if_version_request`.
+
 ### Added — concept taxonomy and relation-type table (K1, K2)
 
 - Concept files may carry an optional `broader: [<oid>, ...]` (parents).

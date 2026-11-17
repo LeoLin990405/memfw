@@ -1,4 +1,4 @@
-"""``Runtime`` and ``build_runtime``: recall (A3a), context (C1, C2) and tool (A3b) wiring."""
+"""``Runtime`` and ``build_runtime``: recall (A3a), context (C1-C3) and tool (A3b) wiring."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from memfw.context import (
     assemble_pack,
     context_request,
     core_context_v1,
+    if_version_request,
     slots_request,
 )
 from memfw.core.errors import MemfwError
@@ -30,6 +31,7 @@ from memfw.core.repository import Repository
 from memfw.ports.context import ContextPack, ContextSlotProvider, SlotRequest
 from memfw.recall.coordinator import InflightRegistry
 
+from .context_cache import ContextCache, cached_core_candidates
 from .context_sources import concept_catalogue, share_feed
 from .index import ensure_search_index
 
@@ -118,6 +120,11 @@ class Runtime:
     of this Runtime: a hung provider holds at most ``max_inflight`` worker
     threads per Runtime, not one per call, and while it hangs every later call
     on this Runtime (from any tool) reports that provider as ``busy``.
+
+    ``context_cache`` (C3): ``True`` (default) gives this Runtime its own
+    ``ContextCache``; ``False`` or ``None`` disables caching; a
+    ``ContextCache`` instance is used as given (it may be shared). The cache
+    never changes ``memory_context`` output (see ``context_cache``).
     """
 
     def __init__(
@@ -130,6 +137,7 @@ class Runtime:
         entity_enabled: bool,
         provider_timeout: float = TWO_STAGE_PROVIDER_TIMEOUT,
         total_timeout: float = TWO_STAGE_TOTAL_TIMEOUT,
+        context_cache: ContextCache | bool | None = True,
     ) -> None:
         self.root = root
         self.tenant = tenant
@@ -142,6 +150,8 @@ class Runtime:
         #: Slot builds still running after their deadline, per slot name (C2).
         self.context_inflight = SlotInflight()
         self.context_slot_timeouts = dict(CONTEXT_SLOT_TIMEOUTS)
+        #: The ``core`` slot's id cache (C3), or None when disabled.
+        self.context_cache: ContextCache | None = _context_cache(context_cache)
 
     def ensure_index(self, repository: Repository | None = None) -> None:
         """Rebuild the memory index when it is stale (see ``ensure_search_index``).
@@ -636,21 +646,38 @@ class Runtime:
 
         return slots_request(v, slots)
 
+    @staticmethod
+    def context_if_version_request(v: int, if_version: object) -> str | None:
+        """Validate ``memory_context`` ``if_version`` for version ``v`` (see ``memfw.context``)."""
+
+        return if_version_request(v, if_version)
+
     def context_slot_provider(
-        self, name: str, repository: Repository, *, keep: Keep, app: str
+        self, name: str, repository: Repository, *, keep: Keep, app: str, policy_name: str = ""
     ) -> ContextSlotProvider:
         """The provider of slot ``name`` for one call (a seam for tests).
 
-        ``core`` reads the caller's ``repository``; ``handoff`` reads the
-        conversation share as ``app`` (``conversation_share`` applies);
-        ``topics`` reads the concept catalogue and counts the memories ``keep``
-        keeps, on its own ``Repository`` of the same root (the slots run in
-        parallel).
+        ``core`` reads the caller's ``repository``, its selection served from
+        ``context_cache`` when there is one and ``policy_name`` is given (C3);
+        ``handoff`` reads the conversation share as ``app``
+        (``conversation_share`` applies); ``topics`` reads the concept
+        catalogue and counts the memories ``keep`` keeps, on its own
+        ``Repository`` of the same root (the slots run in parallel). Only
+        ``core`` is ever cached.
         """
 
         root = repository.root
         if name == CORE_SLOT:
-            return CoreSlotProvider(repository, keep)
+            if self.context_cache is None or not policy_name:
+                return CoreSlotProvider(repository, keep)
+            candidates = cached_core_candidates(
+                self.context_cache,
+                tenant=self.tenant,
+                policy=policy_name,
+                allowed_sources=tuple(self.allowed_sources),
+                visible=self._visible,
+            )
+            return CoreSlotProvider(repository, keep, candidates=candidates)
         if name == HANDOFF_SLOT:
             return HandoffSlotProvider(share_feed(root, app))
         if name == TOPICS_SLOT:
@@ -686,7 +713,10 @@ class Runtime:
         if not names or any(name not in SLOT_NAMES for name in names):
             raise ValueError("unknown slot")
         providers = [
-            self.context_slot_provider(name, repository, keep=keep, app=app) for name in names
+            self.context_slot_provider(
+                name, repository, keep=keep, app=app, policy_name=policy_name
+            )
+            for name in names
         ]
         request = SlotRequest(limit_tokens=int(limit_tokens), policy=policy_name, now=moment)
         if names == DEFAULT_SLOTS:
@@ -704,6 +734,16 @@ class Runtime:
             default_timeout=max(self.context_slot_timeouts.values(), default=3.0),
             inflight=self.context_inflight,
         )
+
+
+def _context_cache(value: ContextCache | bool | None) -> ContextCache | None:
+    if value is True:
+        return ContextCache()
+    if value is False or value is None:
+        return None
+    if not isinstance(value, ContextCache):
+        raise TypeError("context_cache must be a ContextCache, True, False or None")
+    return value
 
 
 def _plain_message(message: str, root: Path) -> str:
@@ -745,6 +785,7 @@ def build_runtime(
     entity_enabled: bool = False,
     provider_timeout: float = TWO_STAGE_PROVIDER_TIMEOUT,
     total_timeout: float = TWO_STAGE_TOTAL_TIMEOUT,
+    context_cache: ContextCache | bool | None = True,
 ) -> Runtime:
     """The default assembly: today's behaviour, no ``runtime:`` config yet.
 
@@ -761,6 +802,7 @@ def build_runtime(
         entity_enabled=entity_enabled,
         provider_timeout=provider_timeout,
         total_timeout=total_timeout,
+        context_cache=context_cache,
     )
 
 
