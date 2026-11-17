@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -125,46 +126,53 @@ _U2_LABELS_DESCRIPTION = (
 COUNTS = ("count", "apps", "sessions", "first_seen", "last_seen")
 
 
-def without_u5_changes(new: str) -> str:
-    """``new`` (this tree's probe output) with exactly the changes U5 makes undone.
+def without_u5_changes(
+    new: str, *, labelled: Callable[[dict[str, Any]], bool], required: bool = True
+) -> tuple[str, list[dict[str, Any]]]:
+    """``new`` (a probe output) with exactly the changes U5 makes undone, and what was removed.
 
     1. ``tools/list``: the ``memory_search`` ``labels`` description mentions
        ``corroboration`` (put back to the U2 text);
-    2. ``memory_search`` rows carry ``corroboration`` (only with
-       ``labels=true``, which the tests that call this check): removed. The
-       probe vaults have no projection, so the values are degraded ones.
+    2. the rows of a ``memory_search`` response that ``labelled(response)``
+       says answered a ``labels: true`` call carry ``corroboration``: removed
+       (with ``required``, the default for this tree's output, each row must
+       have it; the base ref's rows may lack it). ``corroboration`` anywhere
+       else fails.
 
-    A base ref that already has U5 compares unchanged, since the probe output
-    of both trees goes through the same undo.
+    Applied to both trees' output: a base ref that already has U5 compares
+    unchanged.
     """
 
     messages = _messages(new)
     assert _render(messages) == new, "the probe output does not round-trip"
     changed = copy.deepcopy(messages)
-
-    def strip(value: Any) -> None:
-        if isinstance(value, dict):
-            rows = value.get("results")
-            if isinstance(rows, list):
-                for row in rows:
-                    if isinstance(row, dict) and "corroboration" in row:
-                        dropped = row.pop("corroboration")
-                        assert set(dropped) in ({"degraded"}, set(COUNTS)), dropped
-            for item in value.values():
-                strip(item)
-        elif isinstance(value, list):
-            for item in value:
-                strip(item)
-
+    dropped: list[dict[str, Any]] = []
     for item in changed:
         result = item.get("result") if isinstance(item, dict) else None
         if not isinstance(result, dict):
+            assert "corroboration" not in json.dumps(item), item
             continue
         for tool in result.get("tools") or []:
             if tool.get("name") == "memory_search":
                 tool["inputSchema"]["properties"]["labels"]["description"] = _U2_LABELS_DESCRIPTION
-        strip(result)
-    return _render(changed)
+        if labelled(item):
+            for block in result.get("content") or []:
+                text = block.get("text")
+                if isinstance(text, dict) and isinstance(text.get("results"), list):
+                    for row in text["results"]:
+                        if not required and "corroboration" not in row:
+                            continue
+                        value = row.pop("corroboration")
+                        assert set(value) in ({"degraded"}, set(COUNTS)), value
+                        dropped.append(value)
+        assert '"corroboration"' not in json.dumps(item), item
+    return _render(changed), dropped
+
+
+def _all_tools_labelled(item: dict[str, Any]) -> bool:
+    from tests.harness.probes import LABELS_ID
+
+    return item.get("id") == LABELS_ID
 
 
 @pytest.mark.skipif(
@@ -200,13 +208,16 @@ def test_all_tools_byte_identical_to_base_ref() -> None:
         variants,
         old_ref=os.environ["MEMFW_ARCH_BASE_REF"],
     )
+    removed = 0
     for result in results:
-        expected = byte_identical.Comparison(
-            payload=result.payload,
-            old=without_u5_changes(with_expected_c2_changes(result.old)),
-            new=without_u5_changes(result.new),
+        old, _ = without_u5_changes(
+            with_expected_c2_changes(result.old), labelled=_all_tools_labelled, required=False
         )
+        new, dropped = without_u5_changes(result.new, labelled=_all_tools_labelled)
+        removed += len(dropped)
+        expected = byte_identical.Comparison(payload=result.payload, old=old, new=new)
         assert expected.identical, f"{result.payload}:\n{expected.diff[:4000]}"
+    assert removed, "labels=true calls must carry corroboration"
 
 
 def test_mcp_search_policies_are_the_runtime_ones() -> None:
@@ -236,6 +247,21 @@ def _stable_search_payloads() -> list[dict[str, Any]]:
                         }
                     )
     payloads += [
+        {
+            "arguments": {"query": "service port", "mode": mode, "labels": True},
+            "corroboration": True,
+        }
+        for mode in ("fts", "hybrid", "multihop", "two_stage")
+    ]
+    payloads += [
+        {"arguments": {"query": "service port", "mode": "two_stage", "labels": True}},
+        {
+            "arguments": {"query": "service port", "mode": "two_stage", "labels": True},
+            "open_question": True,
+            "corroboration": True,
+            "embedder": True,
+        },
+        {"arguments": {"query": "service port", "mode": "fts"}, "corroboration": True},
         {"arguments": {"query": "port", "mode": "two_stage", "policy": "strict"}},
         {
             "arguments": {"query": "port", "mode": "two_stage", "policy": "strict"},
@@ -275,11 +301,16 @@ def test_memory_search_stable_byte_identical_to_base_ref() -> None:
     )
     for result in results:
         # U5: ``labels=true`` rows gain ``corroboration``; nothing else may differ.
-        expected = byte_identical.Comparison(
-            payload=result.payload,
-            old=without_u5_changes(result.old),
-            new=without_u5_changes(result.new),
+        labels = result.payload["arguments"].get("labels") is True
+        old, _ = without_u5_changes(
+            result.old, labelled=lambda _item, flag=labels: flag, required=False
         )
+        new, dropped = without_u5_changes(result.new, labelled=lambda _item, flag=labels: flag)
+        expected = byte_identical.Comparison(payload=result.payload, old=old, new=new)
         assert expected.identical, f"{result.payload}:\n{expected.diff[:4000]}"
-        if not result.payload["arguments"].get("labels"):
+        if not labels:
             assert result.identical, f"{result.payload}:\n{result.diff[:4000]}"
+        if labels and result.payload.get("corroboration"):
+            # The non-degraded shape is covered: the projection answered.
+            assert dropped and all("count" in value for value in dropped), dropped
+            assert any(value["count"] > 0 for value in dropped), dropped

@@ -232,9 +232,13 @@ rebuild. `first_seen`/`last_seen` use the evidence timestamp, else the carrier's
   `--app`, or the reserved `operator` name over MCP), `share_policy_invalid`,
   `projection_missing` (run `memfw corroboration rebuild`), `projection_unreadable`.
   The projection can be stale until the next rebuild.
-* **Reverse signal: review order.** `memfw corroboration queue [--as-app APP] [--tenant T]`
-  lists the unresolved, current open questions (the ones the U2 labels use) in review
-  order. A memory in a question's `conflicts` is *corroborated* when its visible
+* **Reverse signal: review order.**
+  `memfw corroboration queue [--as-app APP] [--tenant T] [--policy strict|compat_fts]`
+  lists the unresolved, current open questions in review order. It fails closed:
+  `--policy strict` (the default) is the recall strict policy (privacy clearance `none`,
+  status, lifecycle, archive), and both the questions and the conflicts that may add
+  support must pass it, so a private, rejected or archived question is never listed and a
+  private conflict never moves one; `compat_fts` is the explicit wider opt-in. A memory in a question's `conflicts` is *corroborated* when its visible
   corroboration names at least 2 distinct apps. Order: more corroborated conflicts first,
   then more support (the sum of their `count`s), then older (`created_at`), then id. Each
   row carries `priority: {corroborated_conflicts, support}`. Corroboration is trimmed to

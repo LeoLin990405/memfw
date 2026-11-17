@@ -2247,20 +2247,31 @@ def corroboration_queue(
         typer.Option("--as-app", help="Caller app; corroboration is trimmed to what it may read"),
     ] = OPERATOR,
     tenant: Annotated[str, typer.Option("--tenant", help="Tenant of the questions")] = "",
+    policy: Annotated[
+        str,
+        typer.Option(
+            "--policy",
+            help="strict (default: drops private, rejected, archived) or compat_fts",
+        ),
+    ] = "strict",
     root: Annotated[Path, typer.Option("--root", "-r", help="memfw vault (read only)")] = Path("."),
 ) -> None:
     """Open-question review queue: questions whose conflicts are corroborated come first.
 
     Order: more corroborated conflicts (>= 2 distinct visible apps), then more
     support, then older, then id. Without the projection the order is oldest
-    first and ``corroboration.degraded`` says why. Never writes the vault.
+    first and ``corroboration.degraded`` says why. ``--policy strict`` (the
+    default) lists, and counts support from, only memories the strict recall
+    policy keeps. Never writes the vault.
     """
     from .runtime import build_runtime
 
     repository = _repo(root)
     runtime = build_runtime(repository.root, tenant=tenant)
     try:
-        payload = runtime.open_question_queue(repository, app=as_app, allow_operator=True)
+        payload = runtime.open_question_queue(
+            repository, app=as_app, policy_name=policy, allow_operator=True
+        )
     except (MemfwError, OSError, ValueError) as exc:
         _projection_fail(exc)
         return

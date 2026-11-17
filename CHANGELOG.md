@@ -21,7 +21,9 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   `labels` the output is byte-identical.
 - `memfw corroboration queue` lists unresolved open questions in review order: questions
   whose `conflicts` include a memory corroborated by at least 2 visible apps come first
-  (rule in `memfw.recall.priority`, shipped in the `memfw-recall` wheel). Read-only.
+  (rule in `memfw.recall.priority`, shipped in the `memfw-recall` wheel). Read-only and
+  fail-closed: `--policy strict` (default) filters both the questions and the conflicts
+  that add support (no private, rejected or archived memory is listed or counted).
 - Deferred: promotion candidates and ranking weights (need evaluation and approval).
 
 ### Added — conflicts become open-question candidates (U3)

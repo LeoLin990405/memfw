@@ -14,6 +14,7 @@ from typer.testing import CliRunner
 from memfw.cli import app as cli_app
 from memfw.conversations.policy import SharePolicy
 from memfw.core.epistemic import OPEN_QUESTION_TYPE
+from memfw.core.models import Tier
 from memfw.core.repository import Repository
 from memfw.corroboration import projection_path, rebuild
 from memfw.index import MemoryIndex
@@ -377,3 +378,88 @@ def test_cli_queue(tmp_path: Path) -> None:
     )
     assert grok.exit_code == 0, grok.output
     assert [item["id"] for item in json.loads(grok.output)["questions"]] == ["q-legacy", "q-port"]
+
+
+# --- review order: fail closed (strict policy by default) ------------------------
+
+
+def _hidden_question(repository: Repository, memory_id: str, **kwargs: Any) -> None:
+    repository.add(
+        "Secret question title",
+        "Secret question body.",
+        memory_id=memory_id,
+        memory_type=OPEN_QUESTION_TYPE,
+        about=[PORT],
+        open_question={
+            "question": "Secret question text?",
+            "conflicts": ["m-port-a"],
+            "missing": "secret missing text",
+        },
+        **kwargs,
+    )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"tags": ["privacy:local-private"]},
+        {"tags": ["sensitivity:private"]},
+        {"tags": ["privacy:secret"]},  # unknown privacy: dropped
+        {"tags": ["lifecycle:rejected"]},
+        {"tags": ["lifecycle:archived"]},
+        {"tier": Tier.COLD},  # archived to cold storage
+    ],
+)
+def test_queue_never_lists_private_rejected_or_archived(
+    tmp_path: Path, kwargs: dict[str, Any]
+) -> None:
+    repository = _queue_vault(tmp_path)
+    _hidden_question(repository, "q-hidden", **kwargs)
+    MemoryIndex(repository.index_path).rebuild(repository)
+    for app in ("grok", "claude"):
+        payload = _queue(repository, app)
+        assert sorted(item["id"] for item in payload["questions"]) == ["q-legacy", "q-port"]
+        assert "secret" not in json.dumps(payload).lower(), app
+    runner = CliRunner()
+    result = runner.invoke(cli_app, ["corroboration", "queue", "--root", str(repository.root)])
+    assert result.exit_code == 0, result.output
+    assert "q-hidden" not in result.output
+    # compat_fts is the explicit, wider opt-in (the v1 fts filters only).
+    wide = runner.invoke(
+        cli_app,
+        ["corroboration", "queue", "--policy", "compat_fts", "--root", str(repository.root)],
+    )
+    assert wide.exit_code == 0, wide.output
+    if "tags" in kwargs:
+        assert "q-hidden" in wide.output
+
+
+def test_private_conflict_adds_no_support(tmp_path: Path) -> None:
+    repository = _vault(tmp_path, build=False)
+    repository.add(
+        "Port private",
+        "the service port is 7070",
+        memory_id="m-port-private",
+        about=[PORT],
+        tags=["privacy:local-private"],
+        evidence=EVIDENCE_A,
+    )
+    _question(repository, "q-legacy", "m-legacy")
+    _question(repository, "q-private", "m-port-private")
+    MemoryIndex(repository.index_path).rebuild(repository)
+    rebuild(repository, SharePolicy.from_config(repository.read_config()))
+    payload = _queue(repository, "operator", allow_operator=True)
+    assert [item["id"] for item in payload["questions"]] == ["q-legacy", "q-private"]
+    assert all(item["priority"]["support"] == 0 for item in payload["questions"])
+    wide = _queue(repository, "operator", allow_operator=True, policy_name="compat_fts")
+    assert wide["questions"][0]["id"] == "q-private"  # only the wider policy counts it
+
+
+def test_queue_unknown_policy_fails(tmp_path: Path) -> None:
+    repository = _queue_vault(tmp_path)
+    with pytest.raises(ValueError, match="unknown policy"):
+        _queue(repository, "claude", policy_name="bogus")
+    result = CliRunner().invoke(
+        cli_app, ["corroboration", "queue", "--policy", "bogus", "--root", str(repository.root)]
+    )
+    assert result.exit_code == 2

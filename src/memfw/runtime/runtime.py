@@ -714,33 +714,44 @@ class Runtime:
         repository: Repository,
         *,
         app: str | None,
-        policy_name: str = "compat_fts",
+        policy_name: str = "strict",
         allow_operator: bool = False,
         now: datetime | None = None,
     ) -> dict[str, Any]:
         """The open-question review queue, corroborated conflicts first (U5 reverse signal).
 
-        The questions are the unresolved, current ones ``policy_name`` keeps
-        for this Runtime's tenant and sources (the same set the U2 labels
-        use). Order: ``memfw.recall.priority``, from corroboration trimmed to
-        what ``app`` may read; ``allow_operator`` is for the memfw CLI only.
-        Never writes the vault or the corroboration projection.
+        Fails closed: ``policy_name`` defaults to ``strict`` (privacy clearance
+        ``none``, status, lifecycle, archive), and both the questions and the
+        conflicts that may add support must pass it, so a private, rejected or
+        archived question is never listed and a private conflict never moves
+        one. The questions are the unresolved, current ones the policy keeps
+        for this Runtime's tenant and sources. Order: ``memfw.recall.priority``,
+        from corroboration trimmed to what ``app`` may read; ``allow_operator``
+        is for the memfw CLI only. Never writes the vault or the corroboration
+        projection.
         """
 
         if policy_name not in RECALL_POLICIES:
             raise ValueError("unknown policy")
-        from memfw.recall.builtin import open_questions
+        from memfw.recall import evaluate
+        from memfw.recall.builtin import meta_from_document, open_questions
 
         from .corroboration import open_question_queue
 
         policy = self._filter_policy(policy_name, source="", include_history=False, as_of=None)
         self.ensure_index(repository)
         moment = now if now is not None else datetime.now(UTC)
+
+        def keep(document: MemoryDocument) -> bool:
+            if not self._visible(document):
+                return False
+            return evaluate(meta_from_document(document), policy, now=moment).kept
+
         return open_question_queue(
             repository,
-            open_questions(repository, policy, now=moment),
+            [item for item in open_questions(repository, policy, now=moment) if keep(item)],
             app=app,
-            visible=self._visible,
+            visible=keep,
             allow_operator=allow_operator,
         )
 
