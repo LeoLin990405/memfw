@@ -15,8 +15,13 @@ table, or that two known names map to, is dropped.
 2.5.3 (MIT), checked against outputs of the original in the contract tests;
 no QMD code is included. Unicode categories come from Python's
 ``unicodedata``, which can differ from the JavaScript engine's for code points
-added in newer Unicode versions; such a name either still matches or is
-dropped (never mapped to another file).
+added in newer Unicode versions. A name hit by such a difference usually just
+fails to match and its results are dropped. In principle it could instead
+produce the stored name of a *different* file; the ambiguity check catches
+that only when both files are in the table, so it is not ruled out. The risk
+is limited to names with recently added characters, and every hit is still
+filtered (memory hits by the manifest and the vault; note hits by the note
+file's own privacy level).
 
 :func:`note_ref` builds ``kh:<path>#<heading>`` references. Characters a recall
 reference may not contain (whitespace, controls, quotes, backslash, angle
