@@ -30,6 +30,12 @@ PyYAML 6.0.3 (MIT, to read `vault.yaml` exactly as memfw does).
   setting cannot include `local-private`), stores no text (payload: id, tenant,
   vault key, embedder fingerprint, content hash) and deletes points of
   memories that are no longer sendable.
+- **Remote needs `vault_id`.** A non-loopback `url` needs `allow_remote: true`
+  and a `vault_id` (default: `vault.yaml`'s `vault_id`), so hosts sharing a
+  collection never collide; an `api_key_env` then needs `https`.
+- **Until the next `sync`.** A forgotten or newly private memory's point
+  (vector, ids, hashes) stays in Qdrant until `sync` runs; memfw's forget
+  residue check does not cover external stores.
 - **Off by default.** Enable it in `vault.yaml`:
 
   ```yaml

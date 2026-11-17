@@ -50,7 +50,8 @@ memories:
    (16 hex digits of the embedder fingerprint) and `sha` (hash of tenant and text). **No text is
    stored in Qdrant**; point ids are UUIDv5 of vault key and memory id (idempotent);
 4. deletes this vault's points that are no longer sendable (removed, unreadable, now
-   `local-private` or `unknown`).
+   `local-private` or `unknown`). This runs **first**, right after the listing, so a failing
+   embedder or upsert cannot keep a withdrawn memory in Qdrant.
 
 **Never `local-private`.** Only memories whose level (`memfw.ports.privacy.effective_level`,
 the strictest of the `privacy` field or the vault's `legacy_privacy_default`, the `privacy:`
@@ -90,10 +91,11 @@ Options (anything else is refused):
 | `url` | `http://127.0.0.1:6333` | REST endpoint; `http`/`https`, no path, query or credentials |
 | `allow_remote` | `false` | a host that is not a loopback literal is refused unless `true` |
 | `collection` | `memfw` | collection name (several vaults may share one) |
-| `api_key_env` | none | name of the environment variable holding the API key (sent as `api-key`); the key is never a setting |
+| `api_key_env` | none | name of the environment variable holding the API key (sent as `api-key`); the key is never a setting; a remote URL must then be `https` |
 | `clearance` | `public,shared` | levels to send: `public`, `shared` or both |
 | `timeout_seconds` | 2.0 | per-request timeout (the coordinator's budget still applies) |
 | `name` | `qdrant` | provider name |
+| `vault_id` | `vault.yaml` `vault_id`, else none | key for this vault's points; **required with `allow_remote`** (a shared remote collection must not key by a host path) |
 
 ## The search request
 
@@ -115,6 +117,16 @@ On the literal host of `url`, never DNS, the same rules as memfw's `notes/http.o
 - redirects are refused (urllib would copy the `api-key` header);
 - the URL comes only from configuration, never from a request (SSRF).
 
+## What stays in Qdrant until the next `sync`
+
+Qdrant is an external store that memfw does not write on its own. When a memory is forgotten,
+deleted or made `local-private`, its point (ids, tenant, hashes and its **vector**) stays in the
+collection until the next `memfw-adapter-qdrant sync`, which deletes it before it embeds or
+sends anything else. memfw's forget residue check covers the vault and memfw's own projections,
+not external stores. Run `sync` after a forget or a privacy tightening (or on a schedule), and
+treat the collection as holding whatever the last successful `sync` saw. Searches still never
+return such a point to a caller: every hit is resolved against the vault and filtered again.
+
 ## Degrade (T7)
 
 `available()` checks the vault and the embedder, then `GET /` (version) and
@@ -131,8 +143,9 @@ service is down it reports `unreachable` (`no_collection`, `unauthorized`,
 - **Recorded exchanges.** `tests/fixtures/qdrant_contract/v1.20.2.json` holds the requests and
   responses of the calls above for Qdrant 1.20.2. A replay server answers exactly what was
   recorded; the tests check the adapter's requests against the recorded ones and parse the
-  recorded responses. The fixture was transcribed from the v1.20.2 OpenAPI schema, not captured
-  from a running server; re-record it against a live 1.20.x server before upgrading the pin.
+  recorded responses. **The fixture was transcribed from the v1.20.2 OpenAPI schema, not
+  captured from a running server.** Re-record it against a live 1.20.x server before enabling
+  the adapter on a real vault, and again before upgrading the pin.
 - **Fake server.** `memfw_adapter_qdrant.fake.FakeQdrant` (loopback, exact cosine, keyword
   filters) runs the behaviour tests; one test checks that it answers in the recorded shapes.
 - Covered: the contract kit with the vault byte-identical, the reference-only request, no
