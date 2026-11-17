@@ -82,7 +82,7 @@ def test_known_fixture_coverage_waste_and_tokens(tmp_path: Path) -> None:
 
     assert report["basis"] == {"coverage": "memory_access", "waste": "estimated_from_hits"}
     assert report["sessions"] == {"coverage": 2, "waste": 2, "hits": 5, "hits_dropped": 1}
-    assert report["snapshot"] == {"memories": 8, "visible": 6}
+    assert report["snapshot"] == {"visible": 6}
 
     core = _row(report, "core", 500)
     assert (core["items"], core["tokens"], core["overflow"]) == (3, 110, 0)
@@ -218,7 +218,12 @@ def test_privacy_clearance_and_policy_apply_like_the_slots(tmp_path: Path) -> No
         tenant="beta", slots=("core",), default_slot_caps=(500,), repeats=1, environ={}
     )
     beta = evaluate_snapshot(fixture.vault, options=other)
-    assert beta["snapshot"]["visible"] == 1
+    assert beta["snapshot"] == {"visible": 1}
+    # Nothing tells tenant beta that seven more memories exist.
+    assert "- memories:" not in render_markdown(beta)
+    assert beta["snapshot"] == evaluate_snapshot(
+        known_vault(tmp_path / "bigger", current=True).vault, options=other
+    )["snapshot"]
     assert beta["sessions"]["hits"] == 0 and beta["sessions"]["hits_dropped"] == 6
 
 

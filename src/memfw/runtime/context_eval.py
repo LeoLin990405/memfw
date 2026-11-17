@@ -922,10 +922,9 @@ def _evaluate_copy(
             "limit_tokens": DEFAULT_LIMIT_TOKENS,
             "resident_prefix": "not implemented (C4 decides it with this report)",
         },
-        "snapshot": {
-            "memories": len(documents),
-            "visible": len(visible_documents),
-        },
+        # Visible memories only: a count of all of them would reveal how many the
+        # caller may not see (other tenants, withheld by the clearance).
+        "snapshot": {"visible": len(visible_documents)},
         "basis": {"coverage": coverage_basis, "waste": waste_basis},
         "sessions": {
             "coverage": len(hit_sessions),
@@ -971,7 +970,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         "",
         f"- schema: `{report['schema']}`",
         f"- policy: `{settings['policy']}`; clearance: {_fmt(settings['clearance'])}",
-        f"- memories: {report['snapshot']['memories']} (visible {report['snapshot']['visible']})",
+        f"- visible memories: {report['snapshot']['visible']}",
         f"- coverage basis: `{basis['coverage']}` ({sessions['coverage']} sessions,"
         f" {sessions['hits']} hits, {sessions['hits_dropped']} not visible)",
         f"- waste basis: `{basis['waste']}` ({sessions['waste']} sessions)",
