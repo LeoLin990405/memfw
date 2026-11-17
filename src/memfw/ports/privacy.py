@@ -53,6 +53,29 @@ _TAG_NO_RESTRICTION: Final[frozenset[str]] = frozenset({"", "none", "null"})
 _TAG_SHARED: Final[frozenset[str]] = frozenset({"shared", "fleet"})
 
 
+#: ``vault.yaml`` key: the level stamped on new writes that set none (unset: none stamped).
+NEW_PRIVACY_KEY: Final[str] = "new_privacy_default"
+
+
+def is_looser(after: str, before: str) -> bool:
+    """True when ``after`` admits more readers than ``before`` (``unknown`` is strictest)."""
+
+    return _RANK.get(after, _RANK["unknown"]) < _RANK.get(before, _RANK["unknown"])
+
+
+def imported_value(raw: Any) -> str | None:
+    """A ``privacy`` value carried by a candidate or import: absent → ``None``.
+
+    A present value that is not one of the three levels becomes
+    ``local-private`` (fail closed) instead of an error.
+    """
+
+    if raw is None:
+        return None
+    level = field_level(raw)
+    return LEGACY_PRIVACY_FALLBACK if level == "unknown" else level
+
+
 def privacy_value(raw: Any) -> str | None:
     """A write-side ``privacy`` value in canonical form, or ``None`` when absent.
 
@@ -212,6 +235,7 @@ __all__ = [
     "LEGACY_PRIVACY_FALLBACK",
     "LEGACY_PRIVACY_KEY",
     "MALFORMED_CLEARANCE",
+    "NEW_PRIVACY_KEY",
     "PRIVACY_LEVELS",
     "REMOTE_CLEARANCE",
     "PrivacyLevel",
@@ -219,6 +243,8 @@ __all__ = [
     "clearance_is_valid",
     "effective_level",
     "field_level",
+    "imported_value",
+    "is_looser",
     "legacy_default",
     "legacy_default_from_config",
     "metadata_level",

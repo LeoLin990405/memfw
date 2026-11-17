@@ -37,7 +37,7 @@ from ..ports.privacy import (
 from ..related import RelatedIndex
 from .feedback import FeedbackEvent, FeedbackStore
 from .index import HttpEmbeddingProvider, NoteParseError, NotesIndex, _split_frontmatter
-from .retrieval import HttpRerankerProvider, NotesRetriever, RetrievalConfig
+from .retrieval import HttpRerankerProvider, NotesRetriever, RetrievalConfig, query_coverage
 
 SERVER_INFO = {"name": "memfw-notes", "version": "0.2.0"}
 CLEARANCE_ENV = "MEMFW_NOTES_CLEARANCE"
@@ -178,6 +178,45 @@ class NotesGateway:
             return None
         return path
 
+    def _cleared_hits(
+        self, query: str, result: Any, limit: int, threshold: float | None
+    ) -> tuple[list[Any], int, bool, str]:
+        """Hits, candidate count and abstention as if withheld notes never matched.
+
+        The retriever judged coverage on its own top hit, which may be a
+        withheld note, so the decision is taken again on the visible pool.
+        """
+
+        pool = [hit for hit in (result.candidate_hits or result.hits) if self.admitted(hit.path)]
+        visible = [hit for hit in result.hits if self.admitted(hit.path)]
+        if threshold is None:
+            return visible, len(pool), False, ""
+        if not pool:
+            return [], 0, True, "no candidates"
+        top = pool[0]
+        coverage = query_coverage(query, top.title + " " + top.heading + " " + top.content)
+        if coverage < threshold:
+            return [], len(pool), True, f"top query coverage {coverage:.3f} < {threshold:.3f}"
+        return (visible or pool[:limit]), len(pool), False, ""
+
+    def _status(self) -> dict[str, Any]:
+        """``notes_status``; with a clearance the counts cover only visible notes."""
+
+        status = self.index.status()
+        if self.clearance is None or not status.get("exists"):
+            return status
+        with sqlite3.connect(self.index.db_path) as connection:
+            rows = connection.execute(
+                "SELECT n.path, COUNT(s.id) FROM notes n "
+                "LEFT JOIN sections s ON s.note_id = n.id GROUP BY n.id"
+            ).fetchall()
+        visible = [(str(path), int(count)) for path, count in rows if self.admitted(str(path))]
+        status["notes"] = len(visible)
+        status["sections"] = sum(count for _path, count in visible)
+        # Vector counts are not split per note here; do not report the total.
+        status["vectors"] = None
+        return status
+
     def admitted(self, rel: str) -> bool:
         """Whether the clearance admits the note at ``rel`` (always, without one).
 
@@ -252,7 +291,7 @@ class NotesGateway:
                 ][:limit]
             return {"path": identifier, "related": related}
         if name == "notes_status":
-            return self.index.status()
+            return self._status()
         if name == "notes_get":
             rel = str(args.get("path") or "").strip().lstrip("/")
             if not rel or ".." in Path(rel).parts:
@@ -296,17 +335,24 @@ class NotesGateway:
                 since=args.get("since"),
                 until=args.get("until"),
             )
+            hits = list(result.hits)
+            candidates = result.candidates
+            abstained, abstain_reason = result.abstained, result.abstain_reason
+            if self.clearance is not None:
+                hits, candidates, abstained, abstain_reason = self._cleared_hits(
+                    query, result, limit, retriever.config.min_query_coverage
+                )
             return {
                 "mode": result.mode_used,
                 "degraded": result.degraded,
                 "rewrites": result.rewrites,
                 "errors": result.errors,
-                "candidates": result.candidates,
+                "candidates": candidates,
                 "trace_id": result.trace_id,
                 "task_id": result.task_id,
-                "abstained": result.abstained,
-                "abstain_reason": result.abstain_reason,
-                "results": [hit.as_dict() for hit in result.hits if self.admitted(hit.path)],
+                "abstained": abstained,
+                "abstain_reason": abstain_reason,
+                "results": [hit.as_dict() for hit in hits],
             }
         raise KeyError(name)
 

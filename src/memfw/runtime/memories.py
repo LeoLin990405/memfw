@@ -43,6 +43,7 @@ def stage_remember(
     embedder: Any,
     tags: list[str] | None,
     related: list[str] | None,
+    privacy: str | None = None,
 ) -> dict[str, Any]:
     """Stage one candidate under ``_candidates/remember/`` of ``root``.
 
@@ -66,6 +67,7 @@ def stage_remember(
             tags=list(tags or []),
             related=list(related_ids),
             suggestions=suggestion_rows,
+            privacy=privacy,
         )
         try:
             publish_candidate(root, filename, document)
@@ -90,8 +92,12 @@ def related_memories(
     *,
     tenant: str,
     visible: Any,
+    require: Any = None,
 ) -> dict[str, Any]:
-    """``memory_related``: neighbours of a visible memory, only visible ones."""
+    """``memory_related``: neighbours of a visible memory, only visible ones.
+
+    ``require`` (when given) raises for a memory the caller may not see.
+    """
 
     def same_tenant_neighbour(row: dict[str, Any]) -> bool:
         if str(row.get("source") or "") != "memory":
@@ -103,7 +109,9 @@ def related_memories(
         return bool(visible(neighbour))
 
     document = repository.get(memory_id)
-    if not visible(document):
+    if require is not None:
+        require(document)
+    elif not visible(document):
         raise ValueError("memory is not visible in this tenant")
     bounded = max(1, min(limit, 50))
     rows = RelatedIndex(root / ".memfw-related.sqlite").related(

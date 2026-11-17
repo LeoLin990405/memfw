@@ -437,10 +437,15 @@ def _memory_metadata(
         raise ServiceError(404, "memory not found")
     # Same answer for a memory the clearance withholds: its existence is not
     # revealed either.
-    if clearance is not None and not read_path.admits(
-        clearance, read_path.metadata_level(metadata, _library.vault_legacy_privacy(root))
-    ):
-        raise ServiceError(404, "memory not found")
+    if clearance is not None:
+        try:
+            # Bytes, not ``read_text``: universal newlines would hide CRLF.
+            raw = path.read_bytes().decode("utf-8")
+        except (OSError, UnicodeDecodeError):
+            raw = ""
+        level = _library.metadata_privacy(raw, metadata, _library.vault_legacy_privacy(root))
+        if not read_path.admits(clearance, level):
+            raise ServiceError(404, "memory not found")
     return path, metadata
 
 
@@ -737,7 +742,15 @@ def _validate_stage_payload(payload: dict[str, Any]) -> dict[str, Any]:
         raise _bad_request("related must be an array of strings")
     tenant = _header_text(payload.get("tenant", ""), "tenant")
     source = _header_text(payload.get("source", "conductor"), "source", single_line=True)
+    # Optional privacy level (MM0), carried to the memory by candidate-apply.
+    privacy = payload.get("privacy")
+    if privacy is not None:
+        if read_path.field_level(privacy) == "unknown":
+            raise _bad_request("privacy must be one of: public, shared, local-private")
+        privacy = str(privacy).strip().lower()
+    extra = {"privacy": privacy} if privacy is not None else {}
     return {
+        **extra,
         "proposal_id": proposal_id,
         "title": title,
         "content": content,
@@ -805,6 +818,11 @@ def _candidate_markdown(metadata: dict[str, Any], content: str) -> str:
             }
         ),
     }
+    if metadata.get("privacy") is not None:
+        # MM0: written only when the request set it, so other candidates keep
+        # their bytes.
+        header["privacy"] = metadata["privacy"]
+        header["metadata"]["privacy"] = metadata["privacy"]
     rendered = yaml.dump(
         _single_line(header),
         Dumper=_CandidateDumper,
@@ -858,6 +876,7 @@ def _candidate_key(metadata: dict[str, Any]) -> dict[str, Any]:
         "source": str(metadata.get("source") or ""),
         "tags": [str(item) for item in metadata.get("tags") or []],
         "related": [str(item) for item in metadata.get("related") or []],
+        "privacy": str(metadata.get("privacy") or ""),
     }
 
 
@@ -1005,6 +1024,8 @@ def stage_candidate(root: Path | str, payload: dict[str, Any]) -> dict[str, Any]
         "content_hash": content_hash,
         "authority": False,
     }
+    if values.get("privacy") is not None:
+        header["privacy"] = values["privacy"]
     markdown_text = _candidate_markdown(header, values["content"])
     with _open_candidate_directory(base) as directory_handle:
         published = _publish_candidate(directory_handle.descriptor, candidate_id, markdown_text)

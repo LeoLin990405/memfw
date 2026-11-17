@@ -67,7 +67,12 @@ from .notes.retrieval import Mode
 from .okf import export_okf, validate_okf_bundle
 from .ontology.cli import app as concepts_app
 from .policies import PolicyName
-from .ports.privacy import LEGACY_PRIVACY_KEY, clearance_is_valid, privacy_value
+from .ports.privacy import (
+    LEGACY_PRIVACY_KEY,
+    NEW_PRIVACY_KEY,
+    clearance_is_valid,
+    privacy_value,
+)
 from .projection import ProjectionError, export_projection, load_policy, read_hits
 from .projection import resolve as resolve_hits
 from .projections import ObsidianProjector
@@ -854,6 +859,7 @@ def candidate_apply(
             source=staged.source,
             provenance=candidate_provenance(staged),
             actor="human",
+            privacy=staged.privacy,
         )
         try:
             mark_candidate_applied(staged, document.id)
@@ -2071,6 +2077,27 @@ def okf_export(
     )
 
 
+def _privacy_setting(root: Path, key: str, level: str | None, current: str | None) -> None:
+    """Show (``level`` None) or set one privacy key of ``vault.yaml`` (one config_change)."""
+
+    repository = _repo(root)
+    if level is None:
+        config = _config(repository)
+        typer.echo(json.dumps({key: current, "configured": key in config}, sort_keys=True))
+        return
+    try:
+        value = privacy_value(level)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    config = _config(repository)
+    config[key] = value
+    try:
+        repository.configure(config)
+    except MemfwError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps({key: value, "configured": True}, sort_keys=True))
+
+
 @privacy_app.command("legacy-default")
 def privacy_legacy_default(
     level: Annotated[
@@ -2084,30 +2111,25 @@ def privacy_legacy_default(
     Unset, it is local-private. Setting it rewrites vault.yaml once and records
     one config_change event; memory files are not touched.
     """
-    repository = _repo(root)
-    if level is None:
-        config = _config(repository)
-        typer.echo(
-            json.dumps(
-                {
-                    LEGACY_PRIVACY_KEY: repository.legacy_privacy_default(),
-                    "configured": LEGACY_PRIVACY_KEY in config,
-                },
-                sort_keys=True,
-            )
-        )
-        return
-    try:
-        value = privacy_value(level)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    config = _config(repository)
-    config[LEGACY_PRIVACY_KEY] = value
-    try:
-        repository.configure(config)
-    except MemfwError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    typer.echo(json.dumps({LEGACY_PRIVACY_KEY: value, "configured": True}, sort_keys=True))
+    current = _repo(root).legacy_privacy_default() if level is None else None
+    _privacy_setting(root, LEGACY_PRIVACY_KEY, level, current)
+
+
+@privacy_app.command("new-default")
+def privacy_new_default(
+    level: Annotated[
+        str | None,
+        typer.Argument(help="public, shared or local-private; omit to show the current value"),
+    ] = None,
+    root: Annotated[Path, typer.Option("--root", "-r")] = Path("."),
+) -> None:
+    """Show or set new_privacy_default: the level stamped on new memories that set none.
+
+    Unset (null), new memories carry no privacy field, as before MM0. Setting it
+    rewrites vault.yaml once and records one config_change event.
+    """
+    current = _repo(root).new_privacy_default() if level is None else None
+    _privacy_setting(root, NEW_PRIVACY_KEY, level, current)
 
 
 @okf_app.command("validate")

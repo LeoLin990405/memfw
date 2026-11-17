@@ -100,6 +100,11 @@ TOOLS: list[dict[str, Any]] = [
                 "title": {"type": "string"},
                 "tags": {"type": "array", "items": {"type": "string"}},
                 "related": {"type": "array", "items": {"type": "string"}},
+                "privacy": {
+                    "type": "string",
+                    "enum": ["public", "shared", "local-private"],
+                    "description": "Privacy level the memory gets when a human applies it.",
+                },
             },
             "required": ["content"],
         },

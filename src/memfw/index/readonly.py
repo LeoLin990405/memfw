@@ -161,6 +161,32 @@ def _metadata_from_text(raw: str) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def header_is_mapping(raw: str) -> bool:
+    """True when ``raw`` opens with a frontmatter block that parses to a mapping.
+
+    Anything else (no frontmatter, CRLF line ends, a YAML error, a list or a
+    scalar) means the privacy of the file cannot be read: an exit with a
+    clearance treats it as ``unknown`` and never returns it (MM0).
+    """
+
+    if not raw.startswith("---\n"):
+        return False
+    try:
+        _, header, _ = raw.split("---\n", 2)
+        parsed = yaml.safe_load(header)
+    except (ValueError, yaml.YAMLError):
+        return False
+    return isinstance(parsed, dict)
+
+
+def metadata_privacy(raw: str, metadata: dict[str, Any], legacy: str) -> str:
+    """The level of one memory file's text, ``unknown`` when its header is unreadable."""
+
+    if not header_is_mapping(raw):
+        return "unknown"
+    return str(read_path.metadata_level(metadata, legacy))
+
+
 def read_metadata(path: Path) -> dict[str, Any]:
     try:
         return _metadata_from_text(path.read_text(encoding="utf-8"))
@@ -306,11 +332,45 @@ def document_payload(
         "content_hash": "sha256:" + hashlib.sha256(raw).hexdigest(),
         "provenance": str(metadata.get("provenance") or ""),
         "version": metadata.get("version"),
-        "privacy": read_path.metadata_level(
+        "privacy": metadata_privacy(
+            text,
             metadata,
             legacy_privacy if legacy_privacy is not None else vault_legacy_privacy(root),
         ),
     }
+
+
+def visible_related(
+    root: Path,
+    related: list[str],
+    *,
+    tenant: str,
+    clearance: frozenset[str] | None,
+    legacy_privacy: str,
+    cache: dict[str, bool] | None = None,
+) -> list[str]:
+    """``related`` ids a caller with ``clearance`` may learn about (MM0).
+
+    No clearance returns the list unchanged. Otherwise an id is kept only
+    when it names a memory of ``tenant`` that the clearance admits; a missing
+    or unreadable target is dropped too, so a withheld id is never listed.
+    """
+
+    if clearance is None:
+        return related
+    seen = cache if cache is not None else {}
+    kept: list[str] = []
+    for identifier in related:
+        if identifier not in seen:
+            payload = document_payload(root, identifier, legacy_privacy=legacy_privacy)
+            seen[identifier] = (
+                payload is not None
+                and payload["tenant"] == tenant
+                and bool(read_path.admits(clearance, payload["privacy"]))
+            )
+        if seen[identifier]:
+            kept.append(identifier)
+    return kept
 
 
 # ---------------------------------------------------------------------------
@@ -620,6 +680,7 @@ def _alias_expansion(
     scope: str = "",
     clearance: frozenset[str] | None = None,
     legacy_privacy: str | None = None,
+    related_cache: dict[str, bool] | None = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
     """Fuse alias hits into ``results``. No ``concepts/`` directory costs one stat.
 
@@ -669,7 +730,14 @@ def _alias_expansion(
             "tier": str(meta.get("tier") or ""),
             "layer": str(meta.get("layer") or ""),
             "tenant": payload["tenant"],
-            "related": payload["related"],
+            "related": visible_related(
+                base,
+                payload["related"],
+                tenant=tenant,
+                clearance=clearance,
+                legacy_privacy=legacy_privacy or vault_legacy_privacy(base),
+                cache=related_cache,
+            ),
             "valid_from": optional_text(payload["valid_from"]),
             "valid_to": optional_text(payload["valid_to"]),
             "superseded_by": optional_text(payload["superseded_by"]),
@@ -805,6 +873,7 @@ def search_vault(
         connection.close()
 
     results = []
+    related_cache: dict[str, bool] = {}
     previous_score: float | None = None
     for rank, (row, payload) in enumerate(zip(matched, payloads, strict=True)):
         score, raw_score, _used_bm25 = _score_from_raw(row["raw_score"], rank)
@@ -823,7 +892,14 @@ def search_vault(
             "tier": str(row["tier"]),
             "layer": str(row["layer"]),
             "tenant": payload["tenant"],
-            "related": payload["related"],
+            "related": visible_related(
+                base,
+                payload["related"],
+                tenant=tenant,
+                clearance=cleared,
+                legacy_privacy=legacy_privacy,
+                cache=related_cache,
+            ),
             "valid_from": optional_text(payload["valid_from"]),
             "valid_to": optional_text(payload["valid_to"]),
             "superseded_by": optional_text(payload["superseded_by"]),
@@ -852,6 +928,7 @@ def search_vault(
         scope=scope.strip(),
         clearance=cleared,
         legacy_privacy=legacy_privacy,
+        related_cache=related_cache,
     )
     errors: list[str] = []
     if term_note:

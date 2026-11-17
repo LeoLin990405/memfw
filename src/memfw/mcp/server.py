@@ -159,6 +159,7 @@ class Gateway(
                 str(args.get("title") or "memory"),
                 tags=[str(item) for item in (args.get("tags") or [])],
                 related=[str(item) for item in (args.get("related") or [])],
+                privacy=args.get("privacy"),
             ),
             "memory_related": lambda args: self.related(
                 str(args.get("memory_id") or ""), int(args.get("limit") or 10)

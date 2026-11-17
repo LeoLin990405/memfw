@@ -26,12 +26,12 @@ from memfw.context import (
     if_version_request,
     slots_request,
 )
-from memfw.core.errors import MemfwError
+from memfw.core.errors import MemfwError, NotFoundError
 from memfw.core.models import EventKind, MemoryDocument, Tier
 from memfw.core.repository import Repository
 from memfw.index.readonly import vault_legacy_privacy
 from memfw.ports.context import ContextPack, ContextSlotProvider, SlotRequest
-from memfw.ports.privacy import admits, effective_level
+from memfw.ports.privacy import admits, effective_level, privacy_value
 from memfw.ports.usage import UsageSignal, UsageSink
 from memfw.recall.coordinator import InflightRegistry
 
@@ -216,6 +216,19 @@ class Runtime:
         """
 
         return self._visible(document)
+
+    def require_visible(self, document: MemoryDocument) -> None:
+        """Raise unless the caller may see ``document``.
+
+        A memory the privacy clearance withholds raises the same
+        ``NotFoundError`` as a missing one, so its existence is not revealed;
+        any other rule keeps the tenant message.
+        """
+
+        if not self.privacy_admits(document):
+            raise NotFoundError(f"Memory not found: {document.id}")
+        if not self._visible(document):
+            raise ValueError("memory is not visible in this tenant")
 
     def legacy_privacy(self) -> str:
         """The vault's ``legacy_privacy_default``, re-read when ``vault.yaml`` changes."""
@@ -407,10 +420,16 @@ class Runtime:
         *,
         tags: list[str] | None,
         related: list[str] | None,
+        privacy: str | None = None,
     ) -> dict[str, Any]:
-        """Stage ``content`` as a candidate under ``_candidates/remember/`` (no authority)."""
+        """Stage ``content`` as a candidate under ``_candidates/remember/`` (no authority).
+
+        ``privacy`` (MM0) must be one of the three levels when given.
+        """
 
         from .memories import REMEMBER_MAX_BYTES, stage_remember
+
+        checked_privacy = privacy_value(privacy)
 
         if len(content.encode("utf-8")) > REMEMBER_MAX_BYTES:
             raise ValueError("content exceeds 64 KiB")
@@ -427,6 +446,7 @@ class Runtime:
             embedder=self.embedder,
             tags=tags,
             related=related,
+            privacy=checked_privacy,
         )
 
     def related(self, repository: Repository, memory_id: str, limit: int) -> dict[str, Any]:
@@ -435,7 +455,13 @@ class Runtime:
         from .memories import related_memories
 
         return related_memories(
-            self.root, repository, memory_id, limit, tenant=self.tenant, visible=self._visible
+            self.root,
+            repository,
+            memory_id,
+            limit,
+            tenant=self.tenant,
+            visible=self._visible,
+            require=self.require_visible,
         )
 
     def status(self, repository: Repository) -> dict[str, Any]:

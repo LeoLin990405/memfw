@@ -36,6 +36,34 @@ systemctl --user daemon-reload
 systemctl --user restart memfw-readonly
 ```
 
+### Privacy clearance (MM0)
+
+Deploy the three files **together**, from one revision. Since MM0 the script
+and `readonly.py` call privacy helpers that live in `read_path.py`
+(`metadata_level`, `parse_clearance`, `admits`, ...); a stale `read_path.py`
+beside a new `readonly.py` fails every `/search` and `/related` with a 500.
+
+`MEMFW_READONLY_CLEARANCE` (or `--clearance`) lists the privacy levels the
+service may return: any of `public`, `shared`, `local-private`, comma
+separated. Unset, nothing is filtered (the behaviour before MM0). A malformed
+value stops the service at startup.
+
+A clearance must ship together with the served vault's privacy defaults.
+A memory with no `privacy` field has the level `legacy_privacy_default` from
+that vault's `vault.yaml`, `local-private` when unset. So
+`MEMFW_READONLY_CLEARANCE=public,shared` on a vault that does not set it
+hides every memory written before MM0. Before turning the clearance on:
+
+```sh
+memfw privacy legacy-default shared --root <served vault>   # old memories stay served
+memfw privacy new-default shared --root <served vault>      # optional: stamp new writes
+```
+
+`new_privacy_default` stamps a level on new memories that set none (unset:
+no field is written, as before MM0). Tags still apply on top of both:
+`sensitivity:private` or `privacy:local-private` makes a memory
+`local-private`, so such memories stop being served under `public,shared`.
+
 ## Check a URL
 
 `check_readonly_contract(url)` performs one `GET /health`. Pass either the

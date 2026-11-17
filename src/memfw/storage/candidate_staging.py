@@ -72,11 +72,14 @@ def candidate_document(
     suggestions: list[dict[str, Any]],
     source: str = "candidate",
     extra: dict[str, Any] | None = None,
+    privacy: str | None = None,
 ) -> str:
     """Frontmatter `candidate-apply` can read: hash is sha256 of the body.
 
     ``extra`` adds top-level keys after the standard ones (an Ingestor's own
-    provenance block); it may not replace a standard key.
+    provenance block); it may not replace a standard key. ``privacy`` (MM0)
+    is written only when given, so other candidates keep their bytes;
+    ``candidate-apply`` carries it to the memory.
     """
     content_hash = body_content_hash(text)
     # The candidate is recorded now; ``recorded_at`` is the TTL clock.
@@ -112,6 +115,9 @@ def candidate_document(
         "authority": False,
         "metadata": metadata,
     }
+    if privacy is not None:
+        metadata["privacy"] = privacy
+        header["privacy"] = privacy
     for key, value in (extra or {}).items():
         if key in header:
             raise ValueError(f"extra key {key!r} would replace a candidate field")

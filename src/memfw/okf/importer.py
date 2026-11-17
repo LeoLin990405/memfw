@@ -40,6 +40,7 @@ from yaml.nodes import Node
 
 from memfw.core.errors import MemfwError
 from memfw.core.repository import Repository
+from memfw.ports.privacy import imported_value
 from memfw.storage.candidate_files import (
     candidate_is_expired,
     read_candidate,
@@ -430,6 +431,20 @@ class _Planned:
     document: str
 
 
+def _imported_privacy(raw_memfw: Any) -> str | None:
+    """``memfw.privacy`` of an imported concept (MM0), carried to the candidate.
+
+    Absent → ``None`` (the vault's defaults apply when a human applies it).
+    Present but not one of the three levels → ``local-private``: an untrusted
+    bundle can never loosen what it does not spell correctly.
+    """
+
+    if not isinstance(raw_memfw, dict) or "privacy" not in raw_memfw:
+        return None
+    value = imported_value(raw_memfw.get("privacy"))
+    return value if value is not None else "local-private"
+
+
 def _render(
     rel: str,
     front: dict[str, Any],
@@ -473,6 +488,7 @@ def _render(
         suggestions=[],
         source=source,
         extra={"okf_import": provenance},
+        privacy=_imported_privacy(raw_memfw),
     )
     size = len(document.encode("utf-8"))
     if size > MAX_RENDERED_BYTES:

@@ -88,7 +88,8 @@ def with_expected_c2_changes(old: str) -> str:
     1. ``initialize`` advertises ``capabilities.resources = {"listChanged": false}``;
     2. ``tools/list``: ``memory_context`` gains the optional ``slots`` property
        (C2) and the optional ``if_version`` property (C3), the current
-       schema's. Nothing else may differ.
+       schema's; ``memory_remember`` gains the optional ``privacy``
+       property (MM0). Nothing else may differ.
 
     Idempotent: a base ref that already has C2 (or C3) is left as it is.
     """
@@ -98,6 +99,8 @@ def with_expected_c2_changes(old: str) -> str:
     slots = next(tool for tool in schema.TOOLS if tool["name"] == "memory_context")
     slots_property = slots["inputSchema"]["properties"]["slots"]
     if_version_property = slots["inputSchema"]["properties"]["if_version"]
+    remember_tool = next(tool for tool in schema.TOOLS if tool["name"] == "memory_remember")
+    privacy_property = remember_tool["inputSchema"]["properties"]["privacy"]
     changed = copy.deepcopy(messages)
     seen = {"initialize": 0, "tools/list": 0}
     for item in changed:
@@ -111,6 +114,9 @@ def with_expected_c2_changes(old: str) -> str:
             tool = next(tool for tool in result["tools"] if tool["name"] == "memory_context")
             tool["inputSchema"]["properties"]["slots"] = slots_property
             tool["inputSchema"]["properties"]["if_version"] = if_version_property
+            # MM0: ``memory_remember`` gains the optional ``privacy`` property.
+            remember = next(tool for tool in result["tools"] if tool["name"] == "memory_remember")
+            remember["inputSchema"]["properties"]["privacy"] = privacy_property
             seen["tools/list"] += 1
     assert seen == {"initialize": 1, "tools/list": 1}, seen
     return _render(changed)

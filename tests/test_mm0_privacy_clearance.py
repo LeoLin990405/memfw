@@ -21,7 +21,7 @@ from typer.testing import CliRunner
 
 import scripts.memfw_readonly_service as service
 from memfw.cli import app
-from memfw.core.errors import IntegrityError
+from memfw.core.errors import IntegrityError, NotFoundError
 from memfw.core.models import EventKind, MemoryDocument
 from memfw.core.repository import Repository
 from memfw.index import MemoryIndex, read_path
@@ -554,9 +554,16 @@ def test_memfw_mcp_get_related_context_status_leak_nothing(
     monkeypatch.setenv("MEMFW_MCP_CLEARANCE", REMOTE)
     gateway = Gateway(root, entity_enabled=False)
     for withheld in WITHHELD:
-        with pytest.raises(ValueError):
+        # The same error as a missing memory: existence is not revealed.
+        with pytest.raises(NotFoundError) as caught:
             gateway.get(withheld)
-        with pytest.raises(ValueError):
+        missing = pytest.raises(NotFoundError)
+        with missing as absent:
+            gateway.get("no-such-memory")
+        assert str(caught.value).replace(withheld, "X") == str(absent.value).replace(
+            "no-such-memory", "X"
+        )
+        with pytest.raises(NotFoundError):
             gateway.related(withheld)
     assert gateway.get("m-public")["id"] == "m-public"
     related = gateway.related("m-public", limit=50)
@@ -574,3 +581,308 @@ def test_memfw_mcp_without_clearance_serves_private_memories(tmp_path: Path) -> 
     gateway = Gateway(root, entity_enabled=False)
     assert gateway.get("m-private")["id"] == "m-private"
     assert sum(gateway.status()["layers"].values()) == len(CASES)
+
+
+# ---------------------------------------------------------------------------
+# Review fixes (PR #62 round 2)
+# ---------------------------------------------------------------------------
+
+
+def _private_vault(tmp_path: Path, *, legacy: str = "shared") -> Repository:
+    repository = Repository(tmp_path / "vault")
+    repository.init()
+    config = repository.read_config()
+    config[privacy.LEGACY_PRIVACY_KEY] = legacy
+    repository.configure(config)
+    return repository
+
+
+def test_supersede_keeps_privacy(tmp_path: Path) -> None:
+    repository = _private_vault(tmp_path)
+    repository.add("secret", "zebracorn plan", memory_id="old", privacy="local-private")
+    new = repository.supersede("old", "secret v2", "zebracorn plan v2", memory_id_new="new")
+    assert new.privacy == "local-private"
+    MemoryIndex(repository.index_path).rebuild(repository)
+    found = search_vault(repository.root, "zebracorn", limit=50, clearance=REMOTE)
+    assert _leaks(found) == 0
+    # An unset predecessor stays unset, never stamped with a looser new default.
+    repository.add("legacy", "plain", memory_id="legacy")
+    config = repository.read_config()
+    config[privacy.NEW_PRIVACY_KEY] = "public"
+    repository.configure(config)
+    successor = repository.supersede("legacy", "legacy v2", "plain v2", memory_id_new="legacy2")
+    assert successor.privacy is None
+    # A human may override it explicitly.
+    override = repository.supersede(
+        "new", "v3", "zebracorn v3", memory_id_new="v3", overrides={"privacy": "shared"}
+    )
+    assert override.privacy == "shared"
+
+
+@pytest.mark.parametrize(
+    ("start", "change"),
+    [
+        ({"privacy": "local-private"}, {"privacy": "public"}),
+        ({"tags": ["sensitivity:private"], "privacy": "public"}, {"tags": []}),
+        ({"tags": ["privacy:local-private"]}, {"tags": ["other"]}),
+        ({"privacy": "local-private"}, {"privacy": None}),  # legacy is shared here
+        ({"privacy": "public", "tags": ["sensitivity:secret"]}, {"tags": []}),
+    ],
+)
+def test_non_human_writes_cannot_loosen_field_or_tags(
+    tmp_path: Path, start: dict, change: dict
+) -> None:
+    repository = _private_vault(tmp_path)
+    repository.add("x", "body", memory_id="x", **start)
+    with pytest.raises(IntegrityError, match="loosen"):
+        repository.update("x", actor="mechanism", **change)
+    repository.update("x", actor="human", **change)
+
+
+def test_non_human_writes_may_tighten(tmp_path: Path) -> None:
+    repository = _private_vault(tmp_path)
+    repository.add("x", "body", memory_id="x", privacy="public")
+    repository.update("x", actor="mechanism", tags=["sensitivity:private"])
+    repository.update("x", actor="mechanism", privacy="local-private", tags=[])
+    assert repository.get("x").privacy == "local-private"
+
+
+def test_rollback_restores_unset_privacy(tmp_path: Path) -> None:
+    repository = _private_vault(tmp_path)
+    repository.add("x", "body", memory_id="x")
+    repository.update("x", privacy="local-private")
+    update = next(event for event in repository.events() if event.kind == EventKind.UPDATE)
+    repository.rollback(update.event_id)
+    assert repository.get("x").privacy is None
+    assert "privacy" not in (repository.memories_dir / "x.md").read_text(encoding="utf-8")
+
+
+def test_recall_strict_reads_the_privacy_field(tmp_path: Path) -> None:
+    from memfw.recall import FilterPolicy, evaluate
+    from memfw.recall.builtin import meta_from_document
+
+    rules = FilterPolicy()
+    for document, _admitted in CASES:
+        verdict = evaluate(meta_from_document(document), rules, now=BASE)
+        expected = privacy.effective_level(document.privacy, document.tags, legacy="public")
+        assert verdict.kept == (expected in {"public", "shared"}), document.id
+    root = _vault(tmp_path / "vault")
+    gateway = Gateway(root, entity_enabled=False)
+    found = gateway.search("corpus keyword", limit=50, mode="two_stage", policy="strict")
+    assert "m-private" not in {row["id"] for row in found["results"]}
+    assert "m-unknown" not in {row["id"] for row in found["results"]}
+    assert _leaks(gateway.context(4000, v=2, policy="strict")) == 0
+
+
+def test_recall_parity_with_ports_for_the_strict_table() -> None:
+    """The third classification table (recall) agrees with ports (legacy = public)."""
+
+    from memfw.recall.builtin import meta_from_document
+
+    to_recall = {"public": "none", "shared": "none", "local-private": "local-private"}
+    for value, tags in itertools.product(FIELD_VALUES, TAG_SETS):
+        if value == "":
+            continue  # blank field: recall's "no restriction", ports' unknown
+        document = _doc("p", "b", privacy_value=value, tags=tags)
+        recall_class, _mismatch = meta_from_document(document).privacy_class()
+        level = privacy.effective_level(value, tags, legacy="public")
+        assert recall_class == to_recall.get(level, "unknown"), (value, tags)
+
+
+def test_open_question_labels_respect_the_field(tmp_path: Path) -> None:
+    root = _vault(tmp_path / "vault")
+    gateway = Gateway(root, entity_enabled=False)
+    repository = Repository(root)
+    ids = [document.id for document, _ in CASES]
+    labels = gateway.runtime.open_question_labels(
+        repository,
+        ids,
+        policy_name="strict",
+        source="",
+        include_history=False,
+        as_of=None,
+        scope="",
+    )
+    # Strict drops what the field (or a tag) makes local-private or unknown.
+    assert not set(labels) & {"m-private", "m-unknown", "m-tagged", "m-ptag"}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "---\r\nprivacy: public\r\nid: bad\r\n---\r\n\r\ncorpus keyword zebracorn\r\n",
+        "---\n- not\n- a mapping\n---\n\ncorpus keyword zebracorn\n",
+        "---\nprivacy: [unclosed\n---\n\ncorpus keyword zebracorn\n",
+        "corpus keyword zebracorn without frontmatter\n",
+    ],
+)
+def test_unreadable_headers_are_unknown(tmp_path: Path, text: str) -> None:
+    from memfw.index.readonly import document_payload
+
+    root = _vault(tmp_path / "vault", legacy="shared")
+    (root / "memories" / "bad.md").write_text(text, encoding="utf-8", newline="")
+    payload = document_payload(root, "bad")
+    assert payload is not None and payload["privacy"] == "unknown"
+    with pytest.raises(ServiceError) as caught:
+        related_vault(root, "bad", clearance=REMOTE)
+    assert caught.value.status == 404
+
+
+def test_http_related_ids_in_search_results_are_filtered(tmp_path: Path) -> None:
+    root = tmp_path / "vault"
+    repository = Repository(root)
+    repository.init()
+    (root / "memories").mkdir(exist_ok=True)
+    linked = MemoryDocument(
+        id="m-link",
+        title="corpus link",
+        body="corpus keyword linked",
+        privacy="public",
+        related=["m-public", "m-private", "m-missing"],
+        created_at=BASE,
+        updated_at=BASE,
+    )
+    for document in (linked, *(case for case, _ in CASES)):
+        (root / "memories" / f"{document.id}.md").write_bytes(
+            MarkdownStorageMixin.render(document).encode("utf-8")
+        )
+    MemoryIndex(repository.index_path).rebuild(repository)
+    found = search_vault(root, "corpus link", limit=50, clearance=REMOTE)
+    row = next(item for item in found["results"] if item["id"] == "m-link")
+    assert row["related"] == ["m-public"]
+    plain = search_vault(root, "corpus link", limit=50)
+    row = next(item for item in plain["results"] if item["id"] == "m-link")
+    assert row["related"] == ["m-public", "m-private", "m-missing"]
+
+
+def test_new_privacy_default_is_stamped_only_when_set(tmp_path: Path) -> None:
+    root = tmp_path / "vault"
+    repository = Repository(root)
+    repository.init()
+    assert repository.add("a", "b", memory_id="a").privacy is None
+    with pytest.raises(IntegrityError):
+        repository.configure({**repository.read_config(), "new_privacy_default": "open"})
+    runner = CliRunner()
+    changed = runner.invoke(app, ["privacy", "new-default", "local-private", "--root", str(root)])
+    assert changed.exit_code == 0, changed.output
+    assert Repository(root).new_privacy_default() == "local-private"
+    assert Repository(root).add("c", "d", memory_id="c").privacy == "local-private"
+    assert Repository(root).add("e", "f", memory_id="e", privacy="public").privacy == "public"
+    shown = runner.invoke(app, ["privacy", "new-default", "--root", str(root)])
+    assert json.loads(shown.output) == {"new_privacy_default": "local-private", "configured": True}
+
+
+def _apply(root: Path, candidate: Path) -> str:
+    runner = CliRunner()
+    result = runner.invoke(app, ["candidate-apply", str(candidate), "--root", str(root), "--apply"])
+    assert result.exit_code == 0, result.output
+    return json.loads(result.output)["memory_id"]
+
+
+def test_memory_remember_carries_privacy_to_the_memory(tmp_path: Path) -> None:
+    root = tmp_path / "vault"
+    Repository(root).init()
+    gateway = Gateway(root, entity_enabled=False)
+    staged = gateway.remember("zebracorn note", "secret", privacy="Local-Private")
+    candidate = root / staged["staged_candidate"]
+    assert 'privacy: "local-private"' in candidate.read_text(encoding="utf-8")
+    memory_id = _apply(root, candidate)
+    assert Repository(root).get(memory_id).privacy == "local-private"
+    with pytest.raises(ValueError):
+        gateway.remember("x", "y", privacy="open")
+    plain = gateway.remember("plain note", "plain")
+    assert "privacy" not in (root / plain["staged_candidate"]).read_text(encoding="utf-8")
+
+
+def test_http_stage_carries_privacy(tmp_path: Path) -> None:
+    root = tmp_path / "vault"
+    Repository(root).init()
+    result = service.stage_candidate(
+        root,
+        {"proposal_id": "p1", "title": "t", "content": "zebracorn", "privacy": "local-private"},
+    )
+    memory_id = _apply(root, root / result["path"])
+    assert Repository(root).get(memory_id).privacy == "local-private"
+    with pytest.raises(ServiceError) as caught:
+        service.stage_candidate(
+            root, {"proposal_id": "p2", "title": "t", "content": "x", "privacy": "open"}
+        )
+    assert caught.value.status == 400
+
+
+def test_unknown_candidate_privacy_fails_closed(tmp_path: Path) -> None:
+    from memfw.storage.candidate_files import read_candidate
+    from memfw.storage.candidate_staging import candidate_document
+
+    path = tmp_path / "c.md"
+    path.write_text(
+        candidate_document(
+            title="t",
+            text="b",
+            proposal_id="p",
+            tenant="",
+            tags=[],
+            related=[],
+            suggestions=[],
+            privacy="secret",
+        ),
+        encoding="utf-8",
+    )
+    assert read_candidate(path).privacy == "local-private"
+
+
+def test_okf_round_trip_keeps_local_private(tmp_path: Path) -> None:
+    from memfw.okf.importer import import_okf
+
+    source = tmp_path / "source"
+    repository = Repository(source)
+    repository.init()
+    repository.add("secret", "zebracorn round trip", memory_id="s", privacy="local-private")
+    repository.add("open", "public round trip", memory_id="p", privacy="public")
+    export_okf(source, tmp_path / "bundle")
+    target = tmp_path / "target"
+    Repository(target).init()
+    import_okf(tmp_path / "bundle", target, dry_run=False)
+    applied = {}
+    for candidate in sorted((target / "_candidates" / "remember").glob("*.md")):
+        memory_id = _apply(target, candidate)
+        document = Repository(target).get(memory_id)
+        applied[document.body.strip()] = document.privacy
+    assert applied["zebracorn round trip"] == "local-private"
+    assert applied["public round trip"] == "public"
+
+
+def test_okf_import_unknown_privacy_becomes_local_private(tmp_path: Path) -> None:
+    from memfw.okf.importer import _imported_privacy
+
+    assert _imported_privacy({"privacy": "Everyone"}) == "local-private"
+    assert _imported_privacy({"privacy": None}) == "local-private"
+    assert _imported_privacy({"privacy": "SHARED"}) == "shared"
+    assert _imported_privacy({}) is None
+
+
+def test_notes_status_and_abstention_follow_the_clearance(tmp_path: Path) -> None:
+    root, db = _notes(tmp_path)
+    gateway = NotesGateway(root, db, clearance=REMOTE)
+    status = json.loads(_call(gateway, "notes_status", {})["content"][0]["text"])
+    assert status["notes"] == 2
+    assert NotesGateway(root, db).call("notes_status", {})["notes"] == 5
+
+    class _Result:
+        def __init__(self, hits: list) -> None:
+            self.hits = hits
+            self.candidate_hits = hits
+
+    from memfw.notes.index import NoteHit
+
+    private_hit = NoteHit("prv.md", "Corpus", "Corpus", "corpus keyword zebracorn", 1.0, 1, "fts")
+    public_hit = NoteHit("pub.md", "Other", "Other", "unrelated words", 0.5, 2, "fts")
+    hits, count, abstained, reason = gateway._cleared_hits(
+        "corpus keyword", _Result([private_hit, public_hit]), 10, 0.5
+    )
+    # Coverage is judged on the top *visible* hit, not the withheld one.
+    assert abstained and hits == [] and count == 1
+    assert "zebracorn" not in reason
+    none_left = gateway._cleared_hits("corpus keyword", _Result([private_hit]), 10, 0.5)
+    assert none_left == ([], 0, True, "no candidates")
+    assert gateway._cleared_hits("q", _Result([private_hit]), 10, None) == ([], 0, False, "")

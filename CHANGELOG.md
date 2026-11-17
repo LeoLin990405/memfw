@@ -37,8 +37,27 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   notes MCP server `--clearance` / `MEMFW_NOTES_CLEARANCE` (plus
   `--legacy-privacy-default`; search, get, related and traces, read from the
   note file), and the memfw MCP server `MEMFW_MCP_CLEARANCE` (search in every
-  mode, get, related, context, status). Leak tests:
+  mode, get, related, context, status; a withheld memory raises the same
+  not-found error as a missing one). HTTP `/search` rows list only `related`
+  ids the clearance admits; a memory file whose frontmatter does not parse to
+  a mapping (CRLF, YAML error, none at all) is `unknown`. Leak tests:
   `tests/test_mm0_privacy_clearance.py`.
+- Writes keep the level: `supersede` inherits `privacy` (a human may
+  override it), `rollback` restores an unset field, and without a human
+  decision an update may not loosen the effective level (field and
+  `privacy:`/`sensitivity:` tags together). The recall strict policy reads the
+  field too (strictest of field and tags).
+- New `vault.yaml` key `new_privacy_default` and
+  `memfw privacy new-default [LEVEL]`: when set, new memories that set no
+  level get it; unset, nothing is stamped (as before).
+- Privacy travels through staged candidates: `memory_remember` (new optional
+  `privacy` argument), HTTP `/stage` (optional `privacy`), `candidate-apply`,
+  and `memfw okf import`, which honours `memfw.privacy` (an unrecognised
+  value becomes `local-private`). Export → import keeps `local-private`.
+- notes MCP under a clearance: abstention is judged on visible notes and
+  `notes_status` counts only visible notes.
+- `docs/READONLY-SERVICE-UPGRADE.md`: deploy the three service files together
+  and pair `MEMFW_READONLY_CLEARANCE` with the vault's privacy defaults.
 
 ### Added — settled ingest and archive state (M3e-a)
 

@@ -190,7 +190,13 @@ class RepositoryHost(Protocol):
         group_key: str | None = None,
         manually_marked: bool = False,
         open_question: OpenQuestion | builtins.dict[str, Any] | None = None,
+        privacy: str | None = None,
+        _stamp_privacy_default: bool = True,
     ) -> MemoryDocument: ...
+
+    def legacy_privacy_default(self) -> str: ...
+
+    def new_privacy_default(self) -> str | None: ...
 
     def add_many(
         self, documents: builtins.list[dict[str, Any]]
