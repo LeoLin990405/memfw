@@ -9,7 +9,12 @@ from memfw.core.repository import Repository
 from memfw.ports.claims import ClaimStager, ClaimVerifier
 
 from .adapter import SqliteStoreSource, checked_location, store_ingestor, store_path
-from .backends import ModelBackend, configured_backend, configured_backfill_days
+from .backends import (
+    ModelBackend,
+    configured_backend,
+    configured_backfill_days,
+    configured_replan_limit,
+)
 from .policy import SharePolicy
 from .share import ConversationShare
 from .store import ConversationError, ConversationSource
@@ -87,4 +92,5 @@ def open_worker(
         backfill_days=(
             configured_backfill_days(config) if backfill_days is None else backfill_days
         ),
+        replan_limit=configured_replan_limit(config),
     )

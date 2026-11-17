@@ -138,8 +138,10 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   adapter being available; otherwise the run is `degraded` (no fallback). A
   non-local `--backend` (and `memfw handoff --summarize`) also needs
   `conversations.cloud: true`; `--allow-cloud` can only narrow it. A new prompt
-  version re-plans only new, changed or last-30-days sessions (wider only with
-  `conversations.backfill_days` / `--backfill-days`), newest first.
+  version re-plans only new, changed or last-30-days sessions, and at most the
+  newest 1000 already-processed ones (wider only with
+  `conversations.backfill_days` / `--backfill-days` or
+  `conversations.replan_limit`; held-back sessions are reported), newest first.
   `memfw conversations status` shows the configured backend's state.
   `memory_claims` stays extractive. Worker state gains `summaries.tags`,
   `jobs.prompt_version` and `jobs.session_ts` (additive migration; existing

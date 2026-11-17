@@ -114,6 +114,7 @@ conversations:
   backend: "memfw_adapter_deepseek:factory"
   cloud: true                 # required: the adapter is not local
   backfill_days: 30           # optional; see "Re-runs" below
+  replan_limit: 1000          # optional; see "Re-runs" below
   options:                    # optional; every key has a default
     model: deepseek-chat
     max_run_tokens: 400000
@@ -137,8 +138,9 @@ The tag schema (validated, lower-cased and length-capped by memfw, then
 redacted again; any value outside the vocabulary, an unknown key, or a
 secret-shaped value drops the whole reply, which is retried next run; every
 string is redacted *before* it is lower-cased or cut, so a key or PEM header
-cannot hide by changing shape; a `project` or `components` item that is a URL
-or an absolute path also drops the reply):
+cannot hide by changing shape; a `project` or `components` item that looks
+like a URL, a path or a host (any `/` or `\`, `~`, `..`, a scheme such as
+`https:`, `file:` or `mailto:`, or a leading `www.`) also drops the reply):
 
 ```json
 {"summary": "<= 2 sentences",
@@ -217,8 +219,16 @@ episodes keep their vocabulary.
   unchanged sessions updated within the last 30 days. Older, unchanged
   history is not re-processed unless asked for: `conversations.backfill_days`
   in `vault.yaml` or `--backfill-days N` widens the window (a backfill costs
-  money; size it first). `conv-v2` jobs run newest session first
-  (`jobs.session_ts`), so new sessions never wait behind a backfill. `conv-v1`
+  money; size it first). On top of that, at most 1000 already-processed
+  sessions (the newest 1000 in the store, the M3d pilot size) are ever
+  re-planned by default; `conversations.replan_limit` sets another cap, and
+  an explicit `backfill_days` without `replan_limit` lifts it. Sessions never
+  planned before (new ones) are always planned and do not count. A run that
+  held sessions back reports `replan_held_back: N` (absent when 0, so
+  `conv-v1` reports are unchanged). `conv-v2` jobs run newest session first
+  (`jobs.session_ts`, which a reused chunk takes over from its session's newest
+  plan), and a page of jobs that are all waiting on others is skipped rather
+  than ending the run, so new sessions never wait behind a backfill. `conv-v1`
   rows are kept, and switching back re-uses the `conv-v1` work already done.
 - **Testing.** The adapter ships `memfw_adapter_deepseek.fake.FakeDeepSeek`, a
   loopback-only fake of the endpoint. memfw's tests run the shared

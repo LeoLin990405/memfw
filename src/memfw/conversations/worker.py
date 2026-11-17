@@ -93,6 +93,9 @@ BACKEND_STOPS = ("backend_budget", "backend_unavailable", "backend_deadline")
 DEFAULT_LOOKBACK_DAYS = 30.0
 """Under a new prompt version, unchanged sessions older than this are not re-planned
 (a backfill needs ``conversations.backfill_days`` or ``--backfill-days``)."""
+DEFAULT_REPLAN_LIMIT = 1_000
+"""Under a new prompt version, only the newest this many sessions may be re-planned
+(the M3d pilot size); ``backfill_days`` lifts the cap, ``replan_limit`` sets it."""
 
 Judge = Callable[[str, str], str]
 
@@ -154,12 +157,18 @@ class RunReport:
     """Dream ids staged earlier for apps that are now excluded: review or reject them."""
     stopped: str = ""
     errors: dict[str, int] = field(default_factory=dict)
+    replan_held_back: int = 0
+    """Already-processed sessions a new prompt version did not re-plan this run (older
+    than the lookback, or past the re-plan cap). Reported only when not 0."""
 
     def bump(self, table: dict[str, int], key: str) -> None:
         table[key] = table.get(key, 0) + 1
 
     def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        out = asdict(self)
+        if not out["replan_held_back"]:
+            del out["replan_held_back"]  # conv-v1 runs keep their exact report shape
+        return out
 
 
 def _digest(*parts: Any) -> str:
@@ -510,6 +519,7 @@ class ConversationWorker:
         monotonic: Callable[[], float] = time.monotonic,
         claims_backend: ModelBackend | None = None,
         backfill_days: float | None = None,
+        replan_limit: int | None = None,
     ) -> None:
         # Claims are verified and staged through ports (memfw.ports.claims); the
         # caller injects them (memfw conversations work: memfw.dream.claims).
@@ -539,6 +549,20 @@ class ConversationWorker:
         self.lookback_days = (
             DEFAULT_LOOKBACK_DAYS if backfill_days is None else float(backfill_days)
         )
+        if replan_limit is not None and (
+            isinstance(replan_limit, bool) or not isinstance(replan_limit, int) or replan_limit < 0
+        ):
+            raise ConversationError("replan_limit must be an integer >= 0")
+        # An explicit backfill lifts the default cap; an explicit limit always applies.
+        self.replan_limit: int | None = (
+            replan_limit
+            if replan_limit is not None
+            else None
+            if backfill_days is not None
+            else DEFAULT_REPLAN_LIMIT
+        )
+        self._replan_floor: str | None = None
+        self._held_back = 0
         self._started = 0.0
         self.policy = policy
         self.budgets = budgets or Budgets()
@@ -690,6 +714,8 @@ class ConversationWorker:
         head = min(SCAN_PAGE, budget // 4) if head_quota else 0
         if sessions <= 0 or budget <= 0:
             return
+        self._held_back = 0
+        self._replan_floor = self._newest_floor(exclude)
         key, passes = self._scan_cursor()
         start = self._keyset_offset(exclude, key) if key else 0
         seen: set[tuple[str, str]] = set()
@@ -716,6 +742,7 @@ class ConversationWorker:
             if self._plan(info):
                 state["queued"] += 1
                 report.sessions_queued += 1
+            report.replan_held_back = self._held_back
             return state["queued"] >= quota
 
         def walk(
@@ -874,10 +901,11 @@ class ConversationWorker:
                 row is not None
                 and version != PROMPT_VERSION
                 and str(row["fingerprint"]).split("#", 1)[0] == mark
-                and not self._within_lookback(info)
+                and not self._may_replan(info)
             ):
                 # Planned before under another version and unchanged since: old
                 # history is not re-processed by a new version (that is a backfill).
+                self._held_back += 1
                 return False
             turns = self.source.turns(info.app, info.session_id, start=0, limit=info.turns)
             jobs: list[tuple[str, int, int]] = [
@@ -913,8 +941,12 @@ class ConversationWorker:
                         ts_key(info.updated_at) or "",
                     ),
                 )
-                # A chunk reused from an older fingerprint belongs to the newest one too.
-                connection.execute("UPDATE jobs SET fingerprint = ? WHERE job_id = ?", (mark, key))
+                # A chunk reused from an older fingerprint belongs to the newest one too,
+                # and sorts with it (newest-first order must not strand its session jobs).
+                connection.execute(
+                    "UPDATE jobs SET fingerprint = ?, session_ts = ? WHERE job_id = ?",
+                    (mark, ts_key(info.updated_at) or "", key),
+                )
             # Jobs of an older fingerprint are no longer wanted (an unfinished chunk
             # whose end moved, session-level jobs); failed chunks get a fresh start.
             connection.execute(
@@ -935,17 +967,38 @@ class ConversationWorker:
             )
         return True
 
-    def _within_lookback(self, info: SessionInfo) -> bool:
+    def _newest_floor(self, exclude: tuple[str, ...]) -> str | None:
+        """UTC key of the ``replan_limit``-th newest session (``None``: no cap applies).
+
+        Only sessions at least this new may be re-planned under a new prompt
+        version. The floor only moves forward as sessions arrive, so at most
+        ``replan_limit`` sessions of the history are ever re-planned.
+        """
+
+        if self.prompt_version == PROMPT_VERSION or self.replan_limit is None:
+            return None
+        if self.replan_limit == 0:
+            return "\uffff"  # nothing is new enough
+        page = self.source.sessions(exclude=exclude, limit=1, offset=self.replan_limit - 1)
+        return (ts_key(page[0].updated_at) or "") if page else None
+
+    def _may_replan(self, info: SessionInfo) -> bool:
+        """An unchanged, already-processed session: within the lookback and the cap."""
+
         updated = _parse_ts(info.updated_at)
         if updated is None:
             return False  # unknown activity: not recent
-        return updated >= self.now() - timedelta(days=self.lookback_days)
+        if updated < self.now() - timedelta(days=self.lookback_days):
+            return False
+        floor = self._replan_floor
+        return floor is None or (ts_key(info.updated_at) or "") >= floor
 
     # -- execute ------------------------------------------------------------------------
 
     def _execute(self, report: RunReport, started: float) -> None:
         self._started = started
         sessions_done: set[tuple[str, str]] = set()
+        offset = 0
         while True:
             if self.monotonic() - started > self.budgets.max_seconds:
                 report.stopped = "max_seconds"
@@ -960,16 +1013,23 @@ class ConversationWorker:
                     "SELECT * FROM jobs WHERE status = 'pending' AND tried_run != ?"
                     f" AND prompt_version = ? ORDER BY {first}created_at, app, session_id,"
                     " CASE kind WHEN 'chunk_summary' THEN 0 WHEN 'session_summary' THEN 1"
-                    " WHEN 'memory_claims' THEN 2 ELSE 3 END, chunk_start LIMIT 50",
-                    (report.run_id, self.prompt_version),
+                    " WHEN 'memory_claims' THEN 2 ELSE 3 END, chunk_start LIMIT 50 OFFSET ?",
+                    (report.run_id, self.prompt_version, offset),
                 ).fetchall()
             states = [(row, self._ready(row)) for row in rows]
             runnable = [row for row, state in states if state == "run"]
             skipped = any(state == "skipped" for _row, state in states)
             if not runnable:
                 if skipped:
+                    offset = 0
+                    continue
+                if self.prompt_version != PROMPT_VERSION and len(rows) == 50:
+                    # A full page of waiting jobs: look past it instead of stopping
+                    # (newest-first order can put waiting jobs on top).
+                    offset += len(rows)
                     continue
                 return
+            offset = 0
             progressed = False
             for job in runnable:
                 key = (str(job["app"]), str(job["session_id"]))

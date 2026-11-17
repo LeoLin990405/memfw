@@ -135,9 +135,10 @@ def render_tag_prompt(task: str, data: Mapping[str, Any]) -> tuple[str, str]:
 # -- conv-v2 validation (structure only; the kernel redacts afterwards) -----------------
 
 _SPACE = re.compile(r"\s+")
-#: A URL or an absolute path is not a project or component name (and may point
-#: somewhere private): such an item rejects the reply.
-_LOCATION = re.compile(r"(?i)(?:[a-z][a-z0-9+.-]*://|^www\.|^[/~\\]|^[a-z]:[\\/])")
+#: A URL, a path or a host is not a project or component name (and may point
+#: somewhere private): an item with a path separator, a ``~``, a ``..``, a scheme
+#: (``https:``, ``file:``, ``mailto:`` ...) or a leading ``www.`` rejects the reply.
+_LOCATION = re.compile(r"(?i)(?:[/\\~]|\.\.|^[a-z][a-z0-9+.-]*:|^www\.)")
 
 
 def _clean(value: str, limit: int) -> str:
@@ -165,8 +166,9 @@ def normalize_tags(raw: Any) -> dict[str, Any] | None:
     """The tags in canonical form, or ``None`` when they do not match the schema.
 
     Lower-cased, whitespace collapsed, lists de-duplicated and capped, every
-    key present. A ``project`` or ``components`` item that is a URL or an
-    absolute path rejects the reply. A missing ``task_type`` is ``other`` and a missing ``outcome``
+    key present. A ``project`` or ``components`` item that looks like a URL, a
+    path or a host (``/``, ``\\``, ``~``, ``..``, a scheme, ``www.``) rejects
+    the reply. A missing ``task_type`` is ``other`` and a missing ``outcome`` is
     ``unknown``; a value outside the vocabulary, an unknown key or a wrong
     type rejects the whole reply (dropped, never repaired).
     """

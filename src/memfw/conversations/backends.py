@@ -18,6 +18,7 @@ needs ``--allow-cloud`` (a flag can only narrow the vault's switch)::
       cloud: true          # required for a backend that is not local
       options: {}          # optional, handed to the factory as one mapping
       backfill_days: 30    # optional: how far back a new prompt version re-plans
+      replan_limit: 1000   # optional: at most this many processed sessions re-planned
 
 A configured backend that cannot be used (not importable, not local without
 ``cloud: true``, or unavailable, e.g. no API key) is never replaced by the
@@ -90,6 +91,7 @@ __all__ = [
     "cloud_enabled",
     "configured_backend",
     "configured_backfill_days",
+    "configured_replan_limit",
     "gated_loader",
     "estimate_tokens",
     "load_backend",
@@ -460,6 +462,20 @@ def configured_backfill_days(config: Mapping[str, Any] | None) -> float | None:
     if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw < 0:
         raise ConversationError("conversations.backfill_days must be a number >= 0")
     return float(raw)
+
+
+def configured_replan_limit(config: Mapping[str, Any] | None) -> int | None:
+    """``conversations.replan_limit``: at most this many already-processed sessions
+    (newest first) are re-planned under a new prompt version (``None``: the default,
+    1000, unless ``backfill_days`` is set)."""
+
+    section = _section(config)
+    raw = None if section is None else section.get("replan_limit")
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+        raise ConversationError("conversations.replan_limit must be an integer >= 0")
+    return raw
 
 
 def configured_backend(config: Mapping[str, Any] | None) -> ModelBackend:

@@ -152,6 +152,7 @@ def _worker(
     vault: Path | None = None,
     now: datetime = NOW,
     backfill_days: float | None = None,
+    replan_limit: int | None = None,
     **budgets: Any,
 ) -> ConversationWorker:
     store = tmp_path / "data" / "conversations.sqlite"
@@ -168,6 +169,7 @@ def _worker(
         stager=DreamClaimStager(),
         now=lambda: now,
         backfill_days=backfill_days,
+        replan_limit=replan_limit,
     )
 
 
@@ -459,16 +461,24 @@ def test_home_paths_are_redacted_before_lowercasing() -> None:
         "~/notes",
         "C:\\work",
         "\\\\share\\x",
+        "x.com/a",
+        "evil.example.com/login",
+        "file:secrets",
+        "mailto:someone",
+        "..\\up",
+        "../up",
+        "a\\b",
+        "src/memfw",
+        "go to https://e.example now",
     ],
 )
 def test_urls_and_absolute_paths_are_not_tag_names(item: str) -> None:
     for key in ("project", "components"):
         reply = _v2(**{key: ["memfw", item]})
         assert parse_reply("chunk_summary", reply, prompt_version="conv-v2") is None, (key, item)
-    ok = parse_reply(
-        "chunk_summary", _v2(components=["src/memfw", "a.b"]), prompt_version="conv-v2"
-    )
-    assert ok is not None and ok["tags"]["components"] == ["src/memfw", "a.b"]
+    names = ["memfw", "next.js", "c++", "retry worker"]
+    ok = parse_reply("chunk_summary", _v2(components=names), prompt_version="conv-v2")
+    assert ok is not None and ok["tags"]["components"] == names
 
 
 def test_conv_v1_parsing_is_unchanged() -> None:
@@ -627,6 +637,101 @@ def test_backfill_is_opt_in_and_runs_newest_sessions_first(
     assert back.sessions_queued == 3 and back.jobs.get("chunk_summary:done", 0) == 0
     with pytest.raises(Exception, match="backfill_days"):
         _worker(tmp_path, _backend(fake), backfill_days=-1)
+
+
+def _long_session(app: str, session: str, turns: int, start: int = 0) -> list[dict[str, Any]]:
+    body = "Refactor the retry loop and keep the tests green. " * 80  # ~4000 chars
+    return [
+        turn(
+            app,
+            session,
+            offset,
+            "user" if offset % 2 == 0 else "assistant",
+            body,
+            f"2026-01-05T09:{offset:02d}:00Z",
+        )
+        for offset in range(start, start + turns)
+    ]
+
+
+def test_resumed_sessions_never_stall_newest_first_order(
+    tmp_path: Path, fake: FakeDeepSeek
+) -> None:
+    """20 sessions of 2 chunks, a budget-stopped run, a new turn in each: every later run
+    makes progress until the queue is drained (no page of only-waiting jobs stops it)."""
+
+    store = tmp_path / "data" / "conversations.sqlite"
+    sessions = [f"s-{index:02d}" for index in range(20)]
+    rows = [row for name in sessions for row in _long_session("codex", name, 10)]
+    write_store(store, rows)
+    big = {"max_tokens": 10**8, "max_sessions": 100}
+    fake.default = tag_reply(tokens_in=11_000)  # each chunk call is charged ~11k tokens
+    first = _worker(tmp_path, _backend(fake, max_run_tokens=120_000), config={}, **big).run()
+    assert first.stopped == "backend_budget" and 0 < len(fake.requests) < 40
+    write_store(store, [*rows, *(r for n in sessions for r in _long_session("codex", n, 1, 10))])
+    fake.default = tag_reply()
+    for _ in range(8):
+        before = len(fake.requests)
+        report = _worker(tmp_path, _backend(fake), config={}, **big).run()
+        pending = _rows_of(tmp_path, "SELECT COUNT(*) AS n FROM jobs WHERE status = 'pending'")
+        if pending[0]["n"] == 0:
+            break
+        assert len(fake.requests) > before, report.as_dict()  # never a run that does nothing
+    done = _rows_of(
+        tmp_path,
+        "SELECT COUNT(*) AS n FROM jobs WHERE kind = 'session_summary' AND status = 'done'"
+        " AND fingerprint LIKE '11:%'",
+    )
+    assert done[0]["n"] == 20
+    # A reused chunk sorts with its session's newest jobs.
+    spread = _rows_of(
+        tmp_path,
+        "SELECT session_id, COUNT(DISTINCT session_ts) AS n FROM jobs"
+        " WHERE fingerprint LIKE '11:%' GROUP BY session_id",
+    )
+    assert {row["n"] for row in spread} == {1}
+
+
+def test_replanning_history_is_capped_newest_first(
+    tmp_path: Path, fake: FakeDeepSeek, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from memfw.conversations import worker as worker_module
+
+    _worker(tmp_path, ExtractiveBackend()).run()
+    monkeypatch.setattr(worker_module, "DEFAULT_REPLAN_LIMIT", 2)
+    report = _worker(tmp_path, _backend(fake)).run()
+    # Default cap (2 here, 1000 in production): the newest two of the three sessions.
+    assert report.sessions_queued == 2 and report.as_dict()["replan_held_back"] == 1
+    planned = {
+        row["session_id"]
+        for row in _rows_of(
+            tmp_path, "SELECT DISTINCT session_id FROM jobs WHERE prompt_version = 'conv-v2'"
+        )
+    }
+    assert planned == {"s-gamma", "s-beta"}  # cursor (10:06) and claude (10:05)
+    again = _worker(tmp_path, _backend(fake)).run()
+    assert again.sessions_queued == 0 and again.as_dict()["replan_held_back"] == 1
+    # A new session is always planned, even with the cap at 0.
+    store = tmp_path / "data" / "conversations.sqlite"
+    fresh = [turn("codex", "s-new", 0, "user", "Brand new work.", "2026-01-05T11:30:00Z")]
+    write_store(store, [*_rows(), *fresh])
+    capped = _worker(tmp_path, _backend(fake), replan_limit=0).run()
+    assert capped.sessions_queued == 1 and capped.as_dict()["replan_held_back"] == 1
+    # An explicit backfill lifts the default cap.
+    lifted = _worker(tmp_path, _backend(fake), backfill_days=30).run()
+    assert lifted.sessions_queued == 1 and "replan_held_back" not in lifted.as_dict()
+    with pytest.raises(Exception, match="replan_limit"):
+        _worker(tmp_path, _backend(fake), replan_limit=-1)
+
+
+def test_replan_limit_from_vault_yaml() -> None:
+    from memfw.conversations.backends import configured_replan_limit
+
+    assert configured_replan_limit({}) is None
+    assert configured_replan_limit({"conversations": {"replan_limit": 5000}}) == 5000
+    for bad in (-1, 1.5, True, "all"):
+        with pytest.raises(Exception, match="replan_limit"):
+            configured_replan_limit({"conversations": {"replan_limit": bad}})
 
 
 def test_backfill_days_from_vault_yaml(tmp_path: Path) -> None:
