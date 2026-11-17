@@ -325,7 +325,7 @@ def generate_proxy(
         if not isinstance(result, OcrResult) or result.media != media:
             raise OcrError("bad_result")
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        _remove(tmp)
     _regular(source)
     if sha256_file(source) != sha256:
         raise OcrError("source_changed")
@@ -341,6 +341,16 @@ def generate_proxy(
     )
     check_format(candidate, kind)
     return candidate
+
+
+def _remove(tmp: Path) -> None:
+    """Remove the run's private directory; fail loudly if something keeps writing to it."""
+
+    for _ in range(3):
+        shutil.rmtree(tmp, ignore_errors=True)
+        if not os.path.lexists(tmp):
+            return
+    raise OcrError("workdir_not_clean")
 
 
 def write_proxy(out: Path, candidate: dict[str, Any]) -> Path:

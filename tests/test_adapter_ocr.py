@@ -356,6 +356,25 @@ def test_a_server_that_floods_and_stops_reading_cannot_outlast_the_deadline(
     assert time.monotonic() - started < 8
 
 
+def test_engine_children_are_killed_before_the_workdir_is_removed(
+    tmp_path: Path, pdf: tuple[Path, str]
+) -> None:
+    import time
+
+    path, sha = pdf
+    candidate = _run(_mcp(tmp_path, "spawn"), path, sha)  # leader exits, child ignores SIGTERM
+    assert candidate["segments"]
+    pid = int((tmp_path / "mcp-log.jsonl.worker").read_text(encoding="utf-8"))
+    calls = [c for c in _calls(tmp_path) if c.get("tool") == "pdf_text"]
+    work = Path(calls[0]["arguments"]["out_dir"]).parent
+    time.sleep(0.5)  # a surviving child would recreate its directory by now
+    assert not work.exists() and not work.parent.exists()
+    with pytest.raises(ProcessLookupError):
+        for _ in range(50):
+            os.kill(pid, 0)
+            time.sleep(0.05)
+
+
 def test_child_environment_has_no_proxy_or_credentials(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pdf: tuple[Path, str]
 ) -> None:

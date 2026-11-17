@@ -3,7 +3,7 @@
 Settings come from the environment (the adapter's ``mcp_env``):
 FAKE_MCP_RECORDED (the JSON file), FAKE_MCP_LOG (a JSON-lines log of calls and
 the environment keys it saw), FAKE_MCP_MODE (normal | scan | boxes | escape |
-hang | flood | flood_slow | tool_error | no_async | structured | noise).
+hang | flood | flood_slow | spawn | tool_error | no_async | structured | noise).
 """
 
 import json
@@ -72,6 +72,28 @@ def answer(name, args):
     return {"content": [{"type": "text", "text": json.dumps(payload)}], "isError": False}
 
 
+def spawn_worker(out_dir):
+    """An engine child that ignores SIGTERM and keeps writing into out_dir."""
+
+    import subprocess
+
+    code = (
+        "import os, signal, sys, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "open(sys.argv[2], 'w').write(str(os.getpid()))\n"
+        "for n in range(600):\n"
+        "    os.makedirs(sys.argv[1], exist_ok=True)\n"
+        "    open(os.path.join(sys.argv[1], 'late.txt'), 'w').write(str(n))\n"
+        "    time.sleep(0.05)\n"
+    )
+    pid_file = os.environ["FAKE_MCP_LOG"] + ".worker"
+    subprocess.Popen([sys.executable, "-I", "-c", code, out_dir, pid_file])
+    for _ in range(200):  # answer only once the worker runs
+        if os.path.exists(pid_file) and open(pid_file).read():
+            return
+        time.sleep(0.025)
+
+
 def main():
     log({"env": sorted(os.environ)})
     for line in sys.stdin:
@@ -96,6 +118,8 @@ def main():
             result = {"tools": [{"name": n, "inputSchema": {"type": "object"}} for n in names]}
         elif method == "tools/call":
             params = message["params"]
+            if MODE == "spawn" and params["arguments"].get("out_dir"):
+                spawn_worker(params["arguments"]["out_dir"])
             log({"tool": params["name"], "arguments": params["arguments"]})
             if MODE == "hang":
                 continue

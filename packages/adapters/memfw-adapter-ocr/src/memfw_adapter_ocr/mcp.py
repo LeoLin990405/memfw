@@ -220,7 +220,39 @@ class _Session:
                 }
             )
 
+    def _group_alive(self) -> bool:
+        try:
+            os.killpg(self.proc.pid, 0)
+        except ProcessLookupError:
+            return False
+        except (PermissionError, OSError):
+            return True
+        return True
+
+    def _wait_group(self, seconds: float) -> bool:
+        """Reap the leader and wait until the group is empty; ``True`` when it is."""
+
+        until = time.monotonic() + seconds
+        while True:
+            try:
+                self.proc.wait(timeout=0)
+            except subprocess.TimeoutExpired:
+                pass
+            if not self._group_alive():
+                return True
+            if time.monotonic() >= until:
+                return False
+            time.sleep(0.05)
+
     def close(self) -> None:
+        """Stop the server and everything it started (its whole process group).
+
+        The group is always signalled, even when the leader has already
+        exited, because an engine child (an OCR worker) may outlive it:
+        SIGTERM, then SIGKILL, then a wait until the group is empty.
+        :class:`OcrError` ``mcp_orphans`` if anything is still alive.
+        """
+
         proc = self.proc
         self._closed.set()
         self._watchdog.cancel()
@@ -238,20 +270,32 @@ class _Session:
         except OSError:
             pass
         try:
-            proc.wait(timeout=2)
-            return
+            proc.wait(timeout=2)  # a polite server exits when its stdin closes
         except subprocess.TimeoutExpired:
             pass
+        empty = not self._group_alive()
         for sig in (signal.SIGTERM, signal.SIGKILL):
+            if empty:
+                break
             try:
                 os.killpg(proc.pid, sig)
-            except (ProcessLookupError, PermissionError, OSError):
-                return
+            except ProcessLookupError:
+                empty = True
+                break
+            except (PermissionError, OSError):
+                pass
+            empty = self._wait_group(2.0 if sig == signal.SIGTERM else 5.0)
+        try:
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            pass
+        if proc.stdout is not None:
             try:
-                proc.wait(timeout=3)
-                return
-            except subprocess.TimeoutExpired:
-                continue
+                proc.stdout.close()
+            except OSError:
+                pass
+        if not empty:
+            raise OcrError("mcp_orphans")
 
 
 def child_env(extra: Mapping[str, str] | None, workdir: Path) -> dict[str, str]:
