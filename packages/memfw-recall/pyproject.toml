@@ -1,5 +1,5 @@
 # memfw-recall: the recall coordinator (routing, fusion, filter policy,
-# resolvers, open-question labels) as a standalone wheel, importable as
+# resolvers, open-question labels and review order) as a standalone wheel, importable as
 # ``memfw_recall`` without memfw. It depends on memfw-ports and takes the
 # port names through ``_ports.py``, which picks ``memfw_ports`` here and
 # ``memfw.ports`` inside memfw. ``builtin.py`` (the vault resolver and the
@@ -37,6 +37,7 @@ bypass-selection = true
 "../../src/memfw/recall/fusion.py" = "memfw_recall/fusion.py"
 "../../src/memfw/recall/labels.py" = "memfw_recall/labels.py"
 "../../src/memfw/recall/policy.py" = "memfw_recall/policy.py"
+"../../src/memfw/recall/priority.py" = "memfw_recall/priority.py"
 "../../src/memfw/recall/resolve.py" = "memfw_recall/resolve.py"
 "../../src/memfw/recall/routing.py" = "memfw_recall/routing.py"
 "py.typed" = "memfw_recall/py.typed"

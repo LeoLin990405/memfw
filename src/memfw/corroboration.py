@@ -2,8 +2,9 @@
 
 A rebuildable SQLite file derived from the vault (design U4). It is never the
 authority for anything: it can be deleted and rebuilt, it never writes back
-into the vault, and it never changes ``epistemic`` or ``status``. Nothing else
-in memfw reads it yet (U5 decides how it is used, default off).
+into the vault, and it never changes ``epistemic`` or ``status``. U5 reads it
+(``memfw.runtime.corroboration``) only to display it and to order the
+open-question review queue; it changes no ranking.
 
 **What is counted.** A *mention* of memory ``M`` is one ``conv:APP:SESSION@OFFSET``
 reference (the M2 conversation store's namespace) carried by one of:

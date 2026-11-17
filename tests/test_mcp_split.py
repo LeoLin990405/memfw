@@ -115,6 +115,58 @@ def with_expected_c2_changes(old: str) -> str:
     return _render(changed)
 
 
+#: ``memory_search`` ``labels`` description before U5 added ``corroboration``.
+_U2_LABELS_DESCRIPTION = (
+    "Add recall_labels (open_question:<id>, conflicted) to every row of the fts, hybrid, "
+    "vector and multihop modes. mode=two_stage always has them."
+)
+
+
+COUNTS = ("count", "apps", "sessions", "first_seen", "last_seen")
+
+
+def without_u5_changes(new: str) -> str:
+    """``new`` (this tree's probe output) with exactly the changes U5 makes undone.
+
+    1. ``tools/list``: the ``memory_search`` ``labels`` description mentions
+       ``corroboration`` (put back to the U2 text);
+    2. ``memory_search`` rows carry ``corroboration`` (only with
+       ``labels=true``, which the tests that call this check): removed. The
+       probe vaults have no projection, so the values are degraded ones.
+
+    A base ref that already has U5 compares unchanged, since the probe output
+    of both trees goes through the same undo.
+    """
+
+    messages = _messages(new)
+    assert _render(messages) == new, "the probe output does not round-trip"
+    changed = copy.deepcopy(messages)
+
+    def strip(value: Any) -> None:
+        if isinstance(value, dict):
+            rows = value.get("results")
+            if isinstance(rows, list):
+                for row in rows:
+                    if isinstance(row, dict) and "corroboration" in row:
+                        dropped = row.pop("corroboration")
+                        assert set(dropped) in ({"degraded"}, set(COUNTS)), dropped
+            for item in value.values():
+                strip(item)
+        elif isinstance(value, list):
+            for item in value:
+                strip(item)
+
+    for item in changed:
+        result = item.get("result") if isinstance(item, dict) else None
+        if not isinstance(result, dict):
+            continue
+        for tool in result.get("tools") or []:
+            if tool.get("name") == "memory_search":
+                tool["inputSchema"]["properties"]["labels"]["description"] = _U2_LABELS_DESCRIPTION
+        strip(result)
+    return _render(changed)
+
+
 @pytest.mark.skipif(
     not os.environ.get("MEMFW_ARCH_BASE_REF"),
     reason="opt-in (slow): set MEMFW_ARCH_BASE_REF to compare every MCP tool against that ref",
@@ -150,7 +202,9 @@ def test_all_tools_byte_identical_to_base_ref() -> None:
     )
     for result in results:
         expected = byte_identical.Comparison(
-            payload=result.payload, old=with_expected_c2_changes(result.old), new=result.new
+            payload=result.payload,
+            old=without_u5_changes(with_expected_c2_changes(result.old)),
+            new=without_u5_changes(result.new),
         )
         assert expected.identical, f"{result.payload}:\n{expected.diff[:4000]}"
 
@@ -220,4 +274,12 @@ def test_memory_search_stable_byte_identical_to_base_ref() -> None:
         old_ref=os.environ["MEMFW_ARCH_BASE_REF"],
     )
     for result in results:
-        assert result.identical, f"{result.payload}:\n{result.diff[:4000]}"
+        # U5: ``labels=true`` rows gain ``corroboration``; nothing else may differ.
+        expected = byte_identical.Comparison(
+            payload=result.payload,
+            old=without_u5_changes(result.old),
+            new=without_u5_changes(result.new),
+        )
+        assert expected.identical, f"{result.payload}:\n{expected.diff[:4000]}"
+        if not result.payload["arguments"].get("labels"):
+            assert result.identical, f"{result.payload}:\n{result.diff[:4000]}"

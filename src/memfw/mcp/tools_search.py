@@ -72,5 +72,6 @@ class SearchTools(GatewayBase):
             policy=policy,
             labels=labels,
             client_message=_client_message,
+            app=self.app,
         )
         return result

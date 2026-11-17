@@ -11,6 +11,19 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
+### Added — corroboration display and the open-question review order (U5, part 1)
+
+- MCP `memory_search` with `labels: true` adds `corroboration`
+  (`{count, apps, sessions, first_seen, last_seen}`) to every row in every mode,
+  `two_stage` included, trimmed to the server app's `can_read` (computed in
+  `memfw.runtime.corroboration`). It is `{"degraded": CODE}` when it cannot be shown
+  (no caller app, invalid share policy, missing or unreadable projection). Without
+  `labels` the output is byte-identical.
+- `memfw corroboration queue` lists unresolved open questions in review order: questions
+  whose `conflicts` include a memory corroborated by at least 2 visible apps come first
+  (rule in `memfw.recall.priority`, shipped in the `memfw-recall` wheel). Read-only.
+- Deferred: promotion candidates and ranking weights (need evaluation and approval).
+
 ### Added — conflicts become open-question candidates (U3)
 
 - `memfw dream run`: every pair curate proposes a `supersede` for (two current
@@ -76,6 +89,7 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   are unchanged (byte-identical probe against `MEMFW_ARCH_BASE_REF`). memfw
   0.2.0 keeps `broader` but lints it as `unknown_relation`; see
   [docs/ontology.md](docs/ontology.md#compatibility).
+||||||| parent of d381eed (U5a: corroboration on recall rows (labels=true) and the open-question review order)
 
 ### Added — `memory_used` usage signal (C5) and no vault writes mid-session (C6)
 

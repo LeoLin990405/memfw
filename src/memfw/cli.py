@@ -2238,3 +2238,30 @@ def corroboration_show(
         return
     payload = {"id": memory_id, "corroboration": answer[memory_id].as_dict()}
     typer.echo(json.dumps(payload, ensure_ascii=False))
+
+
+@corroboration_app.command("queue")
+def corroboration_queue(
+    as_app: Annotated[
+        str,
+        typer.Option("--as-app", help="Caller app; corroboration is trimmed to what it may read"),
+    ] = OPERATOR,
+    tenant: Annotated[str, typer.Option("--tenant", help="Tenant of the questions")] = "",
+    root: Annotated[Path, typer.Option("--root", "-r", help="memfw vault (read only)")] = Path("."),
+) -> None:
+    """Open-question review queue: questions whose conflicts are corroborated come first.
+
+    Order: more corroborated conflicts (>= 2 distinct visible apps), then more
+    support, then older, then id. Without the projection the order is oldest
+    first and ``corroboration.degraded`` says why. Never writes the vault.
+    """
+    from .runtime import build_runtime
+
+    repository = _repo(root)
+    runtime = build_runtime(repository.root, tenant=tenant)
+    try:
+        payload = runtime.open_question_queue(repository, app=as_app, allow_operator=True)
+    except (MemfwError, OSError, ValueError) as exc:
+        _projection_fail(exc)
+        return
+    typer.echo(json.dumps(payload, ensure_ascii=False))
