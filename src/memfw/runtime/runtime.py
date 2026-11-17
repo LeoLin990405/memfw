@@ -1,4 +1,4 @@
-"""``Runtime`` and ``build_runtime``: recall, context (C1-C3), tool and usage (C5) wiring."""
+"""``Runtime`` and ``build_runtime``: recall, context (C1-C3, U6), tool and usage (C5) wiring."""
 
 from __future__ import annotations
 
@@ -11,11 +11,13 @@ from typing import TYPE_CHECKING, Any
 
 from memfw.context import (
     CORE_SLOT,
+    CURRENT_SLOT,
     DEFAULT_SLOTS,
     HANDOFF_SLOT,
     SLOT_NAMES,
     TOPICS_SLOT,
     CoreSlotProvider,
+    CurrentSlotProvider,
     HandoffSlotProvider,
     Keep,
     SlotInflight,
@@ -63,7 +65,12 @@ RECALL_POLICIES = ("compat_fts", "strict")
 
 #: Per-slot deadline of ``memory_context`` (seconds from the start of the call).
 #: A slot that misses it is returned as ``degraded: timeout``.
-CONTEXT_SLOT_TIMEOUTS: dict[str, float] = {CORE_SLOT: 10.0, HANDOFF_SLOT: 3.0, TOPICS_SLOT: 3.0}
+CONTEXT_SLOT_TIMEOUTS: dict[str, float] = {
+    CORE_SLOT: 10.0,
+    HANDOFF_SLOT: 3.0,
+    TOPICS_SLOT: 3.0,
+    CURRENT_SLOT: 10.0,
+}
 
 #: What one provider's ``observe`` hook recorded: its raw index rows keyed by
 #: memory id, and its raw page payloads.
@@ -153,6 +160,7 @@ class Runtime:
         record_access: bool | None = None,
         usage_sink: UsageSink | None = None,
         clearance: frozenset[str] | None = None,
+        context_current: bool | None = None,
     ) -> None:
         self.root = root
         self.tenant = tenant
@@ -175,6 +183,7 @@ class Runtime:
         # ``runtime:`` decides, read once on first use (``options``).
         self._usage_signal = usage_signal
         self._record_access = record_access
+        self._context_current = context_current
         self._usage_sink = usage_sink
         self._options: RuntimeOptions | None = None
         self._options_lock = threading.Lock()
@@ -267,12 +276,14 @@ class Runtime:
     # --- runtime options and memory_used (C5, C6) ------------------------------
 
     def options(self) -> RuntimeOptions:
-        """The usage and record-access switches (``memfw.runtime.usage``).
+        """The usage, record-access and ``current`` slot switches (``memfw.runtime.usage``).
 
         Explicit values (``build_runtime`` arguments, i.e. ``MEMFW_USAGE_SIGNAL``
-        and ``MEMFW_RECORD_ACCESS``) win; for one left ``None`` the vault's
-        ``runtime:`` section decides. A successful read is kept for the
-        Runtime's life; ``vault.yaml`` is not read when both are explicit. No
+        and ``MEMFW_RECORD_ACCESS``, and ``context_current``) win; for one left
+        ``None`` the vault's ``runtime:`` section decides (``current_ttl_days``
+        always comes from it). A successful read is kept for the Runtime's
+        life; ``vault.yaml`` is not read when the first two are explicit and
+        ``context_current`` is ``False``. No
         vault, or an unreadable ``vault.yaml``, fails closed (usage off, access
         not recorded) and is not cached: the next use reads again.
         """
@@ -281,7 +292,12 @@ class Runtime:
             if self._options is not None:
                 return self._options
             from_vault, cacheable = RuntimeOptions(), True
-            if self._usage_signal is None or self._record_access is None:
+            # ``current_ttl_days`` has no override: an enabled slot needs the vault's.
+            if (
+                self._usage_signal is None
+                or self._record_access is None
+                or self._context_current is not False
+            ):
                 try:
                     repository: Repository | None = self.open_repository()
                 except (MemfwError, OSError, ValueError):
@@ -294,6 +310,12 @@ class Runtime:
                 record_access=(
                     from_vault.record_access if self._record_access is None else self._record_access
                 ),
+                context_current=(
+                    from_vault.context_current
+                    if self._context_current is None
+                    else self._context_current
+                ),
+                current_ttl_days=from_vault.current_ttl_days,
             )
             if cacheable:
                 self._options = options
@@ -896,11 +918,30 @@ class Runtime:
 
         return core_context_v1(repository, keep=self._visible, limit_tokens=limit_tokens)
 
-    @staticmethod
-    def context_slots_request(v: int, slots: object) -> tuple[str, ...]:
-        """Validate ``memory_context`` ``slots`` for version ``v`` (see ``memfw.context``)."""
+    def context_current_enabled(self) -> bool:
+        """Whether the ``current`` slot exists (U6, ``runtime.context.current``; default off)."""
 
-        return slots_request(v, slots)
+        return self.options().context_current
+
+    def context_slot_names(self) -> tuple[str, ...]:
+        """The slots ``memory_context`` knows: ``SLOT_NAMES``, plus ``current`` when enabled."""
+
+        if self.context_current_enabled():
+            return (*SLOT_NAMES, CURRENT_SLOT)
+        return SLOT_NAMES
+
+    def context_slots_request(self, v: int, slots: object) -> tuple[str, ...]:
+        """Validate ``memory_context`` ``slots`` for version ``v`` (see ``memfw.context``).
+
+        ``current`` is a known name only while it is enabled; off, it is
+        refused with the same message as before U6.
+        """
+
+        # The options are read only for a request that names a slot outside
+        # ``SLOT_NAMES``: every request valid before U6 takes the same path.
+        if not isinstance(slots, list) or all(name in SLOT_NAMES for name in slots):
+            return slots_request(v, slots)
+        return slots_request(v, slots, self.context_slot_names())
 
     @staticmethod
     def context_if_version_request(v: int, if_version: object) -> str | None:
@@ -918,8 +959,10 @@ class Runtime:
         ``handoff`` reads the conversation share as ``app``
         (``conversation_share`` applies); ``topics`` reads the concept
         catalogue and counts the memories ``keep`` keeps, on its own
-        ``Repository`` of the same root (the slots run in parallel). Only
-        ``core`` is ever cached.
+        ``Repository`` of the same root (the slots run in parallel);
+        ``current`` (U6) reads its own ``Repository`` too, with the vault's
+        ``current_ttl_days``. Only ``core`` is ever cached: ``current`` depends
+        on the clock, so a cached selection could serve an expired memory.
         """
 
         root = repository.root
@@ -938,6 +981,10 @@ class Runtime:
             return HandoffSlotProvider(share_feed(root, app))
         if name == TOPICS_SLOT:
             return TopicsSlotProvider(Repository(root), keep, lambda: concept_catalogue(root))
+        if name == CURRENT_SLOT:
+            return CurrentSlotProvider(
+                Repository(root), keep, ttl_days=self.options().current_ttl_days
+            )
         raise ValueError("unknown slot")
 
     def context_pack(
@@ -961,12 +1008,14 @@ class Runtime:
         busy from an earlier call is returned ``degraded`` (the rest are not
         affected). The default ``("core",)`` alone runs inline with C1's error
         behaviour: a vault error raises. ``app`` is the calling app, for ``handoff``.
+        ``current`` is known only while ``context_current_enabled()``.
         """
 
         moment = now if now is not None else datetime.now(UTC)
         keep = self.context_keep(policy_name, now=moment)
         names = tuple(slots)
-        if not names or any(name not in SLOT_NAMES for name in names):
+        known = SLOT_NAMES if set(names) <= set(SLOT_NAMES) else self.context_slot_names()
+        if not names or any(name not in known for name in names):
             raise ValueError("unknown slot")
         providers = [
             self.context_slot_provider(
@@ -1051,6 +1100,7 @@ def build_runtime(
     record_access: bool | None = None,
     usage_sink: UsageSink | None = None,
     clearance: frozenset[str] | None = None,
+    context_current: bool | None = None,
 ) -> Runtime:
     """The default assembly: today's behaviour unless a switch is set.
 
@@ -1060,6 +1110,7 @@ def build_runtime(
     ``usage_signal`` and ``record_access`` left ``None`` are read from the
     vault's ``runtime:`` section (``memfw.runtime.usage``); ``usage_sink``
     replaces the sink ``memory_used`` writes to (a seam for tests and adapters).
+    ``context_current`` left ``None`` is ``runtime.context.current`` (U6).
     """
 
     return Runtime(
@@ -1075,6 +1126,7 @@ def build_runtime(
         record_access=record_access,
         usage_sink=usage_sink,
         clearance=clearance,
+        context_current=context_current,
     )
 
 

@@ -729,6 +729,47 @@ topics)` otherwise; the input is not echoed).
   `-32602`, a failure `-32603` with the client-safe message.
   `initialize` advertises `capabilities.resources = {"listChanged": false}`.
 
+### 4.3a The `current` slot (U6, off by default)
+
+`current` is short-lived resident context, kept apart from `core` (identity and standing
+rules): the active ticket, today's meeting, this week's task. It is quickly replaced, so every
+entry has a lifetime.
+
+- **Switch.** `vault.yaml` `runtime: {context: {current: true}}` (no environment variable;
+  `build_runtime(context_current=...)` overrides it). Read once with the other `runtime:`
+  switches (§4.5); a value that is not a boolean is off. Off (the default): `current` is an
+  unknown slot exactly as before (`unknown slot (known: core, handoff, topics)`),
+  `tools/list` is `TOOLS` byte for byte, `resources/list` is the three C2 resources and
+  `memfw://context/current` is `-32002`. On: the `memory_context` `slots` enum gains
+  `current`, `resources/list` gains `memfw://context/current` (last), and the slot can be
+  requested. It is never in the default slot list, so `memory_context` without `slots` (v1 or
+  v2) is byte-identical either way.
+- **Which memories.** Tagged `current` (any case; a tag, so no memory file or schema change;
+  the `layer` field cannot be used because `current` is already every memory's default layer),
+  not superseded, and valid at the call's `now`: `valid_from` absent or `<= now`; with
+  `valid_to`, `now < valid_to`; without it, `now < created_at + current_ttl_days`. The TTL is
+  `runtime.context.current_ttl_days` (an integer from 0 to 365, default 7); any other value
+  fails closed to 0, so only memories with an explicit `valid_to` count.
+- **TTL anchor.** `created_at`, which no write changes after `add`. `updated_at` is not used:
+  mechanical writes (tier changes, autowarm, strength, privacy re-classing) refresh it and
+  would bring an expired memory back. To keep a memory current longer, set its `valid_to`.
+  A `created_at` more than 5 minutes after `now` (a skewed clock, a hand-edited date) would
+  never expire, so such a memory is not current.
+- **Timestamps.** `valid_from` and `valid_to` must include a timezone
+  (`valid_to: 2026-11-20T00:00:00Z`). A naive value makes the memory file unparseable, and the
+  slot skips it like any unreadable memory.
+- **Visibility.** The call's `keep`, exactly as for `core`: tenant and sources (`compat_fts`),
+  the recall strict policy (`strict`), and the MM0 clearance on both. The resource defaults to
+  `compat_fts`, like `core`; `?policy=strict` narrows it.
+- **Order and budget.** Newest first (`created_at` descending, then id). `ContextEntry` values
+  with `core`'s character budget and overflow rules (at most one memory cut part-way, the rest
+  in `truncated_ids`); each entry comes from one fresh read of its file and is checked again at
+  the same `now`. Deadline 10 s, like `core`.
+- **Not cached.** Validity depends on the clock, so a cached selection could serve a memory
+  that expired after it was built. The slot is rebuilt on every call and never touches
+  `ContextCache`. `pack_version` covers it like any slot, and an expiry changes the selection,
+  so `if_version` then reports `unchanged: false`.
+
 ### 4.4 Context cache and `if_version` (C3)
 
 - **`if_version`.** `memory_context(v=2, if_version="<pack_version>")` (and
@@ -809,7 +850,7 @@ neither appends to the event chain. Reads keep it as follows:
 
 | Call | Writes the vault? |
 |---|---|
-| `memory_context` (v1, v2, every slot) and `memfw://context/*` | never |
+| `memory_context` (v1, v2, every slot, `current` included) and `memfw://context/*` | never |
 | `memory_search` `fts`, `multihop` | never |
 | `memory_used` | never (writes only its store outside the vault) |
 | `memory_search` `hybrid`, `vector` | by default yes: one `memory_access` event per returned hit, and a cold or stub hit is warmed (autowarm: `tier_change`/`memory_restore` events, the memory file, history and archive change). Off with `record_access: false` |

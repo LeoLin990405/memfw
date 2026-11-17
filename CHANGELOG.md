@@ -14,6 +14,19 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 
 ## [Unreleased]
 
+### Added — `current` context slot (U6, off by default)
+
+- `memory_context(v=2, slots=["current"])` and `memfw://context/current`: short-lived
+  context (active ticket, meeting, current task) kept apart from `core`. Memories tagged
+  `current` that are valid now (`valid_from`/`valid_to`, else a TTL of
+  `runtime.context.current_ttl_days`, default 7, from `created_at`, which mechanical
+  writes never refresh; a `created_at` more than 5 minutes in the future is not current),
+  not superseded, newest first, with `core`'s budget, overflow and visibility (policy, tenant, sources, MM0
+  clearance). New `memfw.context.CurrentSlotProvider`. Never cached, so an expired memory is
+  never served. Enabled by `vault.yaml` `runtime.context.current: true`; off, `tools/list`,
+  `resources/list` and every pack are byte-identical and the slot is unknown. See
+  `docs/ports-and-recall.md` §4.3a.
+
 ## [0.3.0] — 2026-11-17
 
 The second numbered release: a layered core behind swappable ports, recall and

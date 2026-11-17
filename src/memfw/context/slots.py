@@ -45,12 +45,16 @@ from .core import (
     estimate_tokens,
     limit_chars,
 )
+from .current import CURRENT_SLOT
 
 HANDOFF_SLOT = "handoff"
 TOPICS_SLOT = "topics"
 #: Every slot ``memory_context`` knows, in the order ``resources/list`` shows them.
 SLOT_NAMES: tuple[str, ...] = (CORE_SLOT, HANDOFF_SLOT, TOPICS_SLOT)
 DEFAULT_SLOTS: tuple[str, ...] = (CORE_SLOT,)
+#: Slots that exist only when the vault enables them (U6: ``runtime.context.current``).
+#: Off, they are unknown exactly as before: not accepted, not listed.
+OPTIONAL_SLOTS: tuple[str, ...] = (CURRENT_SLOT,)
 
 #: Reason codes of a degraded slot.
 DEGRADED_TIMEOUT = "timeout"
@@ -115,11 +119,12 @@ def _vault_read(repository: Repository, build: Callable[[], ContextSlot]) -> Con
         raise
 
 
-def slots_request(v: int, slots: object) -> tuple[str, ...]:
+def slots_request(v: int, slots: object, known: Sequence[str] = SLOT_NAMES) -> tuple[str, ...]:
     """Validate ``memory_context`` ``slots`` (after ``context_request`` checked ``v``).
 
     ``None`` is the default ``["core"]``. Otherwise a non-empty list of known
     slot names without repeats, kept in the caller's order; only for ``v=2``.
+    ``known`` is ``SLOT_NAMES`` plus the enabled ``OPTIONAL_SLOTS``.
     """
 
     if slots is None:
@@ -130,9 +135,9 @@ def slots_request(v: int, slots: object) -> tuple[str, ...]:
         raise ValueError("slots must be a non-empty list of slot names")
     if any(not isinstance(name, str) for name in slots):
         raise ValueError("slots must be a non-empty list of slot names")
-    unknown = [name for name in slots if name not in SLOT_NAMES]
+    unknown = [name for name in slots if name not in known]
     if unknown:
-        raise ValueError(f"unknown slot (known: {', '.join(SLOT_NAMES)})")
+        raise ValueError(f"unknown slot (known: {', '.join(known)})")
     if len(set(slots)) != len(slots):
         raise ValueError("slots must not repeat a name")
     return tuple(slots)
@@ -445,6 +450,7 @@ __all__ = [
     "DEGRADED_UNAVAILABLE",
     "DEGRADED_VAULT_ERROR",
     "HANDOFF_SLOT",
+    "OPTIONAL_SLOTS",
     "SLOT_NAMES",
     "TOPICS_SLOT",
     "CoreSlotProvider",

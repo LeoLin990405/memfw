@@ -1,4 +1,8 @@
-"""``memory_context`` and the ``memfw://context/<slot>`` resources, built by the Runtime."""
+"""``memory_context`` and the ``memfw://context/<slot>`` resources, built by the Runtime.
+
+U6: the optional ``current`` slot is listed (``tools/list`` slots enum,
+``resources/list``) and readable only while the vault enables it.
+"""
 
 from __future__ import annotations
 
@@ -10,8 +14,12 @@ from memfw.mcp.schema import (
     CONTEXT_POLICIES,
     CONTEXT_RESOURCE_PREFIX,
     CONTEXT_SLOTS,
+    CURRENT_CONTEXT_SLOT,
+    CURRENT_RESOURCE,
+    CURRENT_RESOURCE_POLICY,
     RESOURCE_POLICIES,
     RESOURCES,
+    memory_context_tool_with_current,
 )
 
 
@@ -71,10 +79,28 @@ class ContextTools(GatewayBase):
             payload["unchanged"] = False
         return payload
 
-    def resources(self) -> list[dict[str, Any]]:
-        """``resources/list``."""
+    def context_current_enabled(self) -> bool:
+        """The ``current`` slot exists (U6; the Runtime decides, default off)."""
 
-        return RESOURCES
+        return self.runtime.context_current_enabled()
+
+    def tools(self) -> list[dict[str, Any]]:
+        """``tools/list``: unchanged unless ``current`` is enabled, which adds it to ``slots``."""
+
+        tools: list[dict[str, Any]] = super().tools()  # type: ignore[misc]
+        if not self.context_current_enabled():
+            return tools
+        return [
+            memory_context_tool_with_current(tool) if tool["name"] == "memory_context" else tool
+            for tool in tools
+        ]
+
+    def resources(self) -> list[dict[str, Any]]:
+        """``resources/list``: ``RESOURCES``, plus ``memfw://context/current`` when enabled."""
+
+        if not self.context_current_enabled():
+            return RESOURCES
+        return [*RESOURCES, CURRENT_RESOURCE]
 
     def read_resource(self, uri: str) -> dict[str, Any] | None:
         """``resources/read``: one slot's v=2 pack, or ``None`` for an unknown URI.
@@ -87,17 +113,22 @@ class ContextTools(GatewayBase):
         fail closed. Without ``policy=`` the policy is
         ``RESOURCE_POLICIES`` for the slot: ``strict`` for ``topics`` (its counts
         would otherwise include local-private memories), ``compat_fts`` for the
-        others. The same caller as ``memory_context`` (app, tenant, sources)
-        and the default budget.
+        others (``current`` included). The same caller as ``memory_context``
+        (app, tenant, sources) and the default budget. ``memfw://context/current``
+        is a known URI only while the slot is enabled (U6); off, it is
+        ``None`` (resource not found), as before.
         """
 
         if not uri.startswith(CONTEXT_RESOURCE_PREFIX):
             return None
         rest = uri[len(CONTEXT_RESOURCE_PREFIX) :]
         slot, has_query, query = rest.partition("?")
-        if slot not in CONTEXT_SLOTS:
+        if slot in CONTEXT_SLOTS:
+            policy = RESOURCE_POLICIES[slot]
+        elif slot == CURRENT_CONTEXT_SLOT and self.context_current_enabled():
+            policy = CURRENT_RESOURCE_POLICY
+        else:
             return None
-        policy = RESOURCE_POLICIES[slot]
         if_version: str | None = None
         if has_query:
             params = _resource_query(query)
