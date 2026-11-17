@@ -27,6 +27,7 @@ from day7_bootstrap import paired_stratified_bootstrap
 
 from memfw.core.repository import Repository
 from memfw.curation.engine import enforce_budget
+from memfw.notes.http import open_http
 from memfw.policies import PolicyName
 from memfw.stats.keyness import tokenize
 
@@ -89,9 +90,7 @@ def _post_json(url: str, payload: dict[str, Any], timeout: float | None = None) 
             headers={"Content-Type": "application/json"},
         )
         try:
-            with urllib.request.urlopen(  # noqa: S310
-                request, timeout=timeout or REQUEST_TIMEOUT_SECONDS
-            ) as response:
+            with open_http(request, timeout=timeout or REQUEST_TIMEOUT_SECONDS) as response:
                 return json.loads(response.read().decode("utf-8"))
         except (TimeoutError, OSError) as error:
             last = error
@@ -101,7 +100,7 @@ def _post_json(url: str, payload: dict[str, Any], timeout: float | None = None) 
 
 def ollama_digests(base_url: str, models: Sequence[str]) -> dict[str, str | None]:
     base = require_loopback(base_url)
-    with urllib.request.urlopen(f"{base}/api/tags", timeout=30) as response:  # noqa: S310
+    with open_http(urllib.request.Request(f"{base}/api/tags"), timeout=30) as response:
         tags = json.loads(response.read().decode("utf-8"))
     found = {row.get("name"): row.get("digest") for row in tags.get("models", [])}
     return {model: found.get(model) or found.get(f"{model}:latest") for model in models}
