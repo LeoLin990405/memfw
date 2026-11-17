@@ -62,7 +62,13 @@ def access(repository: Repository, memory_id: str, at: datetime, **extra: str) -
     )
 
 
-def known_vault(tmp_path: Path, *, events: bool = True) -> Fixture:
+#: 15 characters: the ``current`` slot's one carried memory (4 tokens).
+TICKET = "Ticket 42 open."
+
+
+def known_vault(
+    tmp_path: Path, *, events: bool = True, current: bool = False, current_on: bool = False
+) -> Fixture:
     """The hand-worked fixture (see ``test_context_eval.py`` for the numbers).
 
     Visible (clearance ``public,shared``): ``a-1`` (anchor, 20 chars),
@@ -72,6 +78,12 @@ def known_vault(tmp_path: Path, *, events: bool = True) -> Fixture:
     and ``m-t`` (tenant ``beta``). Access sessions (``events``): S1 at T0 =
     {m-a, a-1, m-p}, S2 two hours later = {m-c, m-b, p-2}, plus one
     ``memory_access`` that is not a search (ignored).
+
+    ``current`` adds two memories tagged ``current``: ``c-1`` (created a day
+    before T0, inside the 7-day TTL) and ``c-old`` (created 30 days before
+    T0, its ``updated_at`` refreshed a day before T0 by a mechanical write:
+    the TTL is anchored on ``created_at``, so it is expired), and puts
+    ``c-1`` in S2. ``current_on`` also sets ``runtime.context.current: true``.
     """
 
     clock = _Clock(T0 - timedelta(days=1))
@@ -93,18 +105,27 @@ def known_vault(tmp_path: Path, *, events: bool = True) -> Fixture:
         "Private", BODY, memory_id="m-p", about=["concept:backup"], privacy="local-private"
     )
     repository.add("Other tenant", BODY, memory_id="m-t", about=["concept:port"], tenant="beta")
+    if current:
+        repository.add("Ticket", TICKET, memory_id="c-1", tags=["current"])
+        clock.now = T0 - timedelta(days=30)
+        repository.add("Old ticket", BODY, memory_id="c-old", tags=["current"])
+        clock.now = T0 - timedelta(days=1)
+        repository.update("c-old", actor="mechanism", strength=0.9)
     _concept(repository.root, "concept:port", "Service port")
     _concept(repository.root, "concept:backup", "Backup")
     conversations = write_store(tmp_path / "stores" / "conversations.sqlite", standard_rows())
     config = repository.read_config()
     config["conversation_share"] = {"enabled": True}
     config["legacy_privacy_default"] = "shared"
+    if current_on:
+        config["runtime"] = {"context": {"current": True}}
     repository.configure(config)
     if events:
         for offset, memory_id in enumerate(("m-a", "a-1", "m-p")):
             access(repository, memory_id, T0 + timedelta(minutes=offset))
         later = T0 + timedelta(hours=2)
-        for offset, memory_id in enumerate(("m-c", "m-b", "p-2")):
+        second = ("m-c", "m-b", "p-2", "c-1") if current else ("m-c", "m-b", "p-2")
+        for offset, memory_id in enumerate(second):
             access(repository, memory_id, later + timedelta(minutes=offset))
         repository.capture_event(
             EventKind.MEMORY_ACCESS,

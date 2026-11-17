@@ -1,8 +1,10 @@
 """C4: evaluate the session-start context pack on a read-only vault snapshot.
 
 ``memfw eval context`` runs this. It measures, per slot (``core``,
-``handoff``, ``topics`` and ``current`` when the build has it) and for the
-pack as a whole:
+``handoff``, ``topics`` and ``current``) and for the pack as a whole.
+``current`` (U6) is measured only when the snapshot's ``vault.yaml`` enables
+it (``runtime.context.current``) or ``--current`` simulates that switch
+(``settings.current_simulated``); otherwise it is one ``unavailable`` row:
 
 **coverage**
     Of the memories the session's searches returned later, the share that
@@ -79,6 +81,7 @@ from pathlib import Path
 from typing import Any
 
 from memfw.context import (
+    CURRENT_SLOT,
     HANDOFF_SLOT,
     SLOT_NAMES,
     TOPICS_SLOT,
@@ -95,13 +98,10 @@ from .runtime import RECALL_POLICIES, Runtime, build_runtime
 from .settings import resolve_settings
 
 SCHEMA = "memfw.context_eval/1"
-#: The slot U6 adds when it is merged and enabled; evaluated when the build knows it.
-CURRENT_SLOT = "current"
-#: The slots evaluated by default, in pack order.
-EVAL_SLOTS: tuple[str, ...] = (
-    *SLOT_NAMES,
-    *(() if CURRENT_SLOT in SLOT_NAMES else (CURRENT_SLOT,)),
-)
+#: The slots evaluated by default, in pack order. ``current`` (U6) is
+#: ``unavailable`` unless the snapshot's ``vault.yaml`` enables it
+#: (``runtime.context.current``) or ``EvalOptions.current`` simulates it.
+EVAL_SLOTS: tuple[str, ...] = (*SLOT_NAMES, CURRENT_SLOT)
 #: Slots whose items point at memories (topics, sessions) instead of carrying them.
 POINTER_SLOTS = frozenset({HANDOFF_SLOT, TOPICS_SLOT})
 #: ``memory_context``'s default ``limit_tokens`` (unchanged by this evaluation).
@@ -161,6 +161,8 @@ class EvalOptions:
     repeats: int = DEFAULT_REPEATS
     session_gap_minutes: float = DEFAULT_SESSION_GAP_MINUTES
     now: datetime | None = None
+    #: Simulate ``runtime.context.current: true`` (``--current``); off, the vault decides.
+    current: bool = False
     #: An explicit (real) environment for the settings fallback; ``None`` reads ``os.environ``.
     environ: Mapping[str, str] | None = None
 
@@ -546,7 +548,8 @@ def _provider(
 ) -> Any:
     """The real provider of slot ``name``; ``None`` when this build has no such slot.
 
-    ``handoff`` reads the given conversation store (read-only) through the
+    ``current`` is ``None`` (unavailable) unless the runtime enables it, as
+    ``memory_context`` refuses it then. ``handoff`` reads the given conversation store (read-only) through the
     conversation share, never the store ``vault.yaml`` names: without
     ``conversations`` it is ``unavailable``.
     """
@@ -565,6 +568,8 @@ def _provider(
         return HandoffSlotProvider(
             share_feed(repository.root, app, source=SqliteStoreSource(conversations))
         )
+    if name == CURRENT_SLOT and not runtime.context_current_enabled():
+        return None
     try:
         return runtime.context_slot_provider(
             name, repository, keep=keep, app=app, policy_name=policy
@@ -775,6 +780,8 @@ def _evaluate_copy(
         usage_signal=False,
         record_access=False,
         clearance=settings.clearance,
+        # ``--current`` simulates the vault switch; otherwise ``vault.yaml`` decides.
+        context_current=True if options.current else None,
     )
     repository = runtime.open_repository()
     documents = repository.list()
@@ -859,6 +866,8 @@ def _evaluate_copy(
             "allowed_sources": len(settings.allowed_sources),
             "app_bound": bool(app),
             "slots": list(options.slots),
+            "current_enabled": runtime.context_current_enabled(),
+            "current_simulated": options.current,
             "unavailable_slots": [name for name in options.slots if not caps_of[name]],
             "resident_caps": sorted(set(options.resident_caps)),
             "seed": options.seed,

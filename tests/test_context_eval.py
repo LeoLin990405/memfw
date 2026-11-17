@@ -17,6 +17,7 @@ The numbers of ``known_vault`` are worked out by hand (see the fixture):
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -42,7 +43,7 @@ from memfw.runtime.context_eval import (
     synthetic_queries,
     waste_counts,
 )
-from tests.context_eval_fixtures import BODY, LONG, known_vault, random_vault
+from tests.context_eval_fixtures import BODY, LONG, TICKET, known_vault, random_vault
 from tests.conversation_fixtures import isolated_home  # noqa: F401  (fixture)
 
 pytestmark = pytest.mark.usefixtures("isolated_home")
@@ -147,23 +148,60 @@ def test_handoff_without_a_store_is_unavailable(tmp_path: Path) -> None:
     assert row["resident"] == ["core", "topics"]
 
 
-def test_unknown_slot_is_one_unavailable_row_outside_the_sweep(tmp_path: Path) -> None:
-    fixture = known_vault(tmp_path)
-    options = EvalOptions(
-        clearance="public,shared",
-        slots=("core", "current"),
-        default_slot_caps=(25, 500),
-        resident_caps=(1000,),
-        repeats=1,
-        environ={},
+CURRENT = EvalOptions(
+    clearance="public,shared",
+    slots=("core", "current"),
+    default_slot_caps=(25, 500),
+    resident_caps=(1000,),
+    repeats=1,
+    environ={},
+)
+
+
+def test_current_is_unavailable_while_the_vault_has_it_off(tmp_path: Path) -> None:
+    fixture = known_vault(tmp_path, current=True)
+    report = evaluate_snapshot(fixture.vault, options=CURRENT)
+
+    assert report["settings"]["unavailable_slots"] == ["current"]
+    assert (report["settings"]["current_enabled"], report["settings"]["current_simulated"]) == (
+        False,
+        False,
     )
+    rows = [row for row in report["slots"] if row["slot"] == "current"]
+    assert len(rows) == 1 and rows[0]["available"] is False and rows[0]["coverage"] is None
+    assert all("current" not in row["slot_caps"] for row in report["sweep"])
+    assert len(report["sweep"]) == 2
+
+
+@pytest.mark.parametrize("how", ["vault", "flag"])
+def test_current_slot_hand_computed(tmp_path: Path, how: str) -> None:
+    # c-1 (15 chars, 4 tokens) is current; c-old's TTL ran out from its created_at
+    # although a mechanical write refreshed its updated_at. Hits: S1 = {m-a, a-1},
+    # S2 = {m-c, m-b, p-2, c-1}: 6 in all. current covers c-1: 1/6; c-1 is
+    # unused in S1: waste 1/2.
+    fixture = known_vault(tmp_path, current=True, current_on=how == "vault")
+    options = CURRENT if how == "vault" else replace(CURRENT, current=True)
     report = evaluate_snapshot(fixture.vault, options=options)
 
-    if "current" in report["settings"]["unavailable_slots"]:
-        rows = [row for row in report["slots"] if row["slot"] == "current"]
-        assert len(rows) == 1 and rows[0]["available"] is False
-        assert all("current" not in row["slot_caps"] for row in report["sweep"])
-    assert len(report["sweep"]) >= 2
+    settings = report["settings"]
+    assert settings["unavailable_slots"] == []
+    assert (settings["current_enabled"], settings["current_simulated"]) == (True, how == "flag")
+    assert report["sessions"] == {"coverage": 2, "waste": 2, "hits": 6, "hits_dropped": 1}
+    assert len(TICKET) == 15
+    for cap in (25, 500):
+        row = _row(report, "current", cap)
+        assert row["available"] is True and row["degraded"] is None
+        assert (row["items"], row["tokens"], row["overflow"]) == (1, 4, 0)
+        assert (row["coverage"], row["covered_hits"], row["coverage_kind"]) == (
+            0.166667,
+            1,
+            "direct",
+        )
+        assert (row["waste"], row["unused_item_sessions"]) == (0.5, 1)
+    whole = _sweep(report, 1000, core=500, current=500)
+    assert whole["resident"] == ["core", "current"]
+    assert whole["tokens"] == 110 + 4
+    assert whole["coverage"] == whole["coverage_direct"] == 0.5
 
 
 def test_privacy_clearance_and_policy_apply_like_the_slots(tmp_path: Path) -> None:
@@ -424,3 +462,17 @@ def test_cli_writes_json_and_markdown(tmp_path: Path) -> None:
     )
     assert refused.exit_code != 0
     assert not (fixture.vault / "r").exists()
+
+
+def test_cli_current_flag_simulates_the_slot(tmp_path: Path) -> None:
+    fixture = known_vault(tmp_path, current=True)
+    base = ["eval", "context", str(fixture.vault), "--clearance", "public,shared"]
+    base += ["--slots", "core,current", "--slot-caps", "500", "--resident-caps", "1000"]
+    base += ["--repeats", "1", "--json"]
+    runner = CliRunner()
+    off = json.loads(runner.invoke(app, base).output)
+    on = json.loads(runner.invoke(app, [*base, "--current"]).output)
+    assert off["settings"]["unavailable_slots"] == ["current"]
+    assert on["settings"]["unavailable_slots"] == []
+    assert on["settings"]["current_simulated"] is True
+    assert _row(on, "current", 500)["items"] == 1

@@ -2322,6 +2322,13 @@ def eval_context(
     now: Annotated[
         str | None, typer.Option("--now", help="ISO instant (default: the snapshot's latest)")
     ] = None,
+    current: Annotated[
+        bool,
+        typer.Option(
+            "--current",
+            help="Simulate runtime.context.current: true (default: the snapshot's vault.yaml)",
+        ),
+    ] = False,
     out: Annotated[
         Path | None,
         typer.Option("--out", help="Directory for context-eval.json and context-eval.md"),
@@ -2380,6 +2387,7 @@ def eval_context(
         repeats=repeats,
         session_gap_minutes=session_gap,
         now=moment,
+        current=current,
     )
     outputs = [out / "context-eval.json", out / "context-eval.md"] if out else []
     try:

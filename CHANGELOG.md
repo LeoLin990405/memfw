@@ -52,8 +52,8 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 
 - **C4 context pack evaluation** (`memfw eval context SNAPSHOT`): coverage,
   waste, P50/P95 latency and token cost of the `memory_context` slots
-  (`core`, `handoff`, `topics`, and `current` when the build has it) and of
-  the whole pack, swept over per-slot caps and simulated resident-prefix caps
+  (`core`, `handoff`, `topics`, and `current` when the snapshot enables it or
+  `--current` simulates it) and of the whole pack, swept over per-slot caps and simulated resident-prefix caps
   (default 1000/2000/4000/6000). Runs the real slot providers on a private
   copy of a read-only snapshot (refuses one that needs `memfw recover` or an
   output inside it; fails if the snapshot or a store changes during the run);

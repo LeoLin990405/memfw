@@ -171,8 +171,12 @@ defaults (2000-token budget, per-slot caps, a resident-prefix cap) can be set
 from data. It changes no default; any change still needs the report and an
 explicit approval.
 
-**What it measures**, per slot (`core`, `handoff`, `topics`, and `current`
-when the build has that slot) and for the pack:
+**What it measures**, per slot (`core`, `handoff`, `topics`, `current`) and
+for the pack. `current` (U6) is measured only when the snapshot's `vault.yaml`
+enables it (`runtime.context.current: true`) or `--current` simulates that
+switch; the report's `settings` records `current_enabled` and
+`current_simulated`. Otherwise `current` is one `available: false` row, as
+`memory_context` refuses the slot then.
 
 - *coverage*: of the memories a session's searches returned, the share already
   in the opening pack. `core` covers a memory by carrying it (`direct`);
