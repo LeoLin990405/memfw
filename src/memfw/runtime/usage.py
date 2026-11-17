@@ -21,8 +21,9 @@ its ``slots`` enum and served as ``memfw://context/current``. Off,
 ``tools/list``, ``resources/list`` and every pack are byte-identical and the
 slot is unknown. ``runtime.context.current_ttl_days`` (an integer, 0 to
 ``MAX_CURRENT_TTL_DAYS``, default ``DEFAULT_CURRENT_TTL_DAYS``) is the lifetime
-of a ``current`` memory without ``valid_to``; any other value fails closed to 0
-(only memories with an explicit ``valid_to`` count).
+of a ``current`` memory without ``valid_to``, counted from its ``created_at``
+(mechanical writes refresh ``updated_at``, never ``created_at``); any other
+value fails closed to 0 (only memories with an explicit ``valid_to`` count).
 
 A set variable wins over ``vault.yaml`` (``1``/``true``/``yes``/``on`` or
 ``0``/``false``/``no``/``off``; any other value refuses to start). The

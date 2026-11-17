@@ -747,13 +747,21 @@ entry has a lifetime.
 - **Which memories.** Tagged `current` (any case; a tag, so no memory file or schema change;
   the `layer` field cannot be used because `current` is already every memory's default layer),
   not superseded, and valid at the call's `now`: `valid_from` absent or `<= now`; with
-  `valid_to`, `now < valid_to`; without it, `now < updated_at + current_ttl_days`. The TTL is
+  `valid_to`, `now < valid_to`; without it, `now < created_at + current_ttl_days`. The TTL is
   `runtime.context.current_ttl_days` (an integer from 0 to 365, default 7); any other value
   fails closed to 0, so only memories with an explicit `valid_to` count.
+- **TTL anchor.** `created_at`, which no write changes after `add`. `updated_at` is not used:
+  mechanical writes (tier changes, autowarm, strength, privacy re-classing) refresh it and
+  would bring an expired memory back. To keep a memory current longer, set its `valid_to`.
+  A `created_at` more than 5 minutes after `now` (a skewed clock, a hand-edited date) would
+  never expire, so such a memory is not current.
+- **Timestamps.** `valid_from` and `valid_to` must include a timezone
+  (`valid_to: 2026-11-20T00:00:00Z`). A naive value makes the memory file unparseable, and the
+  slot skips it like any unreadable memory.
 - **Visibility.** The call's `keep`, exactly as for `core`: tenant and sources (`compat_fts`),
   the recall strict policy (`strict`), and the MM0 clearance on both. The resource defaults to
   `compat_fts`, like `core`; `?policy=strict` narrows it.
-- **Order and budget.** Newest first (`updated_at` descending, then id). `ContextEntry` values
+- **Order and budget.** Newest first (`created_at` descending, then id). `ContextEntry` values
   with `core`'s character budget and overflow rules (at most one memory cut part-way, the rest
   in `truncated_ids`); each entry comes from one fresh read of its file and is checked again at
   the same `now`. Deadline 10 s, like `core`.

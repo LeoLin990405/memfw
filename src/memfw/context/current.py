@@ -13,16 +13,23 @@ Which memories feed it (``is_current``):
   field is no help here because ``current`` is already every memory's default
   layer;
 - valid at ``now``: ``valid_from`` absent or ``<= now``; with ``valid_to``,
-  ``now < valid_to``; without it, ``now < updated_at + ttl_days`` (the TTL,
+  ``now < valid_to``; without it, ``now < created_at + ttl_days`` (the TTL,
   ``DEFAULT_CURRENT_TTL_DAYS`` unless the vault sets
   ``runtime.context.current_ttl_days``). A TTL of 0 means only memories with
-  an explicit ``valid_to`` count;
+  an explicit ``valid_to`` count. The TTL is anchored on ``created_at``, which
+  no write ever changes after ``add``: ``updated_at`` is not usable, because
+  mechanical writes (tier changes, autowarm, strength, privacy re-classing)
+  refresh it and would bring an expired memory back. To extend a memory, set
+  its ``valid_to``. A ``created_at`` more than ``CLOCK_SKEW`` after ``now``
+  (a skewed clock, a hand-edited date) would never expire, so such a memory
+  is not current;
 - not superseded (``superseded_by`` unset): a replaced task is not current;
 - kept by ``keep``, the call's visibility predicate (tenant, sources, privacy
   clearance and, under ``strict``, the recall strict policy), exactly as for
   ``core``.
 
-Order: newest first (``updated_at`` descending, then id). Budget and overflow
+Order: newest first (``created_at`` descending, then id), on the same anchor
+so maintenance never reorders the slot. Budget and overflow
 are ``core``'s: the same character budget, at most one memory cut part-way
 (the last carried), the rest listed in ``truncated_ids``. Each entry is built
 from one fresh read of its file (body, version and ``content_hash`` from the
@@ -48,10 +55,12 @@ from .core import Keep, _cut, _snapshot, estimate_tokens, limit_chars
 CURRENT_SLOT = "current"
 #: The tag that puts a memory in the ``current`` slot.
 CURRENT_TAG = "current"
-#: Lifetime of a ``current`` memory without ``valid_to``, from its ``updated_at``.
+#: Lifetime of a ``current`` memory without ``valid_to``, from its ``created_at``.
 DEFAULT_CURRENT_TTL_DAYS = 7
 #: Upper bound accepted for ``runtime.context.current_ttl_days``.
 MAX_CURRENT_TTL_DAYS = 365
+#: How far a TTL anchor (``created_at``) may lie after ``now`` and still count.
+CLOCK_SKEW = timedelta(minutes=5)
 
 
 def has_current_tag(document: MemoryDocument) -> bool:
@@ -67,13 +76,16 @@ def is_current(document: MemoryDocument, *, now: datetime, ttl_days: int) -> boo
         return False
     if document.valid_to is not None:
         return now < document.valid_to
-    return now < document.updated_at + timedelta(days=max(0, ttl_days))
+    anchor = document.created_at
+    if anchor > now + CLOCK_SKEW:
+        return False
+    return now < anchor + timedelta(days=max(0, ttl_days))
 
 
 def select_current(
     documents: Sequence[MemoryDocument], keep: Keep, *, now: datetime, ttl_days: int
 ) -> list[MemoryDocument]:
-    """The slot's memories, newest first (``updated_at`` descending, then id)."""
+    """The slot's memories, newest first (``created_at`` descending, then id)."""
 
     selected = [
         document
@@ -81,7 +93,7 @@ def select_current(
         if is_current(document, now=now, ttl_days=ttl_days) and keep(document)
     ]
     selected.sort(key=lambda document: document.id)
-    selected.sort(key=lambda document: document.updated_at, reverse=True)
+    selected.sort(key=lambda document: document.created_at, reverse=True)
     return selected
 
 
@@ -143,6 +155,7 @@ class CurrentSlotProvider:
 
 
 __all__ = [
+    "CLOCK_SKEW",
     "CURRENT_SLOT",
     "CURRENT_TAG",
     "DEFAULT_CURRENT_TTL_DAYS",

@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from memfw.context import (
+    CLOCK_SKEW,
     CURRENT_SLOT,
     DEFAULT_CURRENT_TTL_DAYS,
     SLOT_NAMES,
@@ -18,7 +19,7 @@ from memfw.context import (
     is_current,
     select_current,
 )
-from memfw.core.models import Layer, MemoryDocument
+from memfw.core.models import Layer, MemoryDocument, Tier
 from memfw.core.repository import Repository
 from memfw.mcp import schema
 from memfw.mcp.server import TOOLS, Gateway
@@ -102,13 +103,13 @@ def test_newest_first_and_only_tagged_memories(tmp_path: Path) -> None:
     assert slot.overflow == 0 and slot.skipped == 0
 
 
-def _doc(memory_id: str, updated: datetime, **extra: Any) -> MemoryDocument:
+def _doc(memory_id: str, created: datetime, **extra: Any) -> MemoryDocument:
     return MemoryDocument(
         id=memory_id,
         title=memory_id,
         tags=extra.pop("tags", ["current"]),
-        created_at=T0,
-        updated_at=updated,
+        created_at=created,
+        updated_at=extra.pop("updated_at", created),
         body="b",
         **extra,
     )
@@ -126,7 +127,9 @@ def test_validity_window_and_ttl() -> None:
 
     assert current(T0)
     assert current(T0 + timedelta(days=7) - timedelta(seconds=1))
-    assert not current(T0 + timedelta(days=7))  # TTL expired (now < updated_at + ttl)
+    assert not current(T0 + timedelta(days=7))  # TTL expired (now < created_at + ttl)
+    # updated_at is not the anchor: a later write never extends the lifetime.
+    assert not current(T0 + timedelta(days=8), updated_at=T0 + timedelta(days=7, hours=1))
     assert not current(T0 + timedelta(days=2), ttl=1)
     assert not current(T0, ttl=0)  # no implicit lifetime
     # valid_to governs when set, past the TTL too; it is exclusive.
@@ -157,9 +160,65 @@ def test_valid_to_and_valid_from_through_the_runtime(tmp_path: Path) -> None:
     repository.update("c-new", valid_from=T0 + timedelta(days=3))
     assert _ids(_pack(repository, now=NOW)) == ["c-old"]
     late = T0 + timedelta(days=20)
-    # c-old outlives the TTL through valid_to; c-new's TTL counts from its update.
+    # c-old outlives the TTL through valid_to; c-new's TTL has run out.
     assert _ids(_pack(repository, now=late)) == ["c-old"]
     assert _ids(_pack(repository, now=T0 + timedelta(days=31))) == []
+
+
+def _clocked(tmp_path: Path) -> tuple[Repository, _Clock]:
+    clock = _Clock(T0)
+    repository = Repository(tmp_path / "vault", clock=clock)
+    repository.init()
+    repository.add("Ticket", "Working on ticket ABC-1", memory_id="c-1", tags=["current"])
+    config = repository.read_config()
+    config["runtime"] = {"context": {"current": True}}
+    repository.configure(config)
+    return repository, clock
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"tier": Tier.COLD},
+        {"strength": 0.9},
+        {"reference_count": 3},
+        {"privacy": "shared"},
+    ],
+)
+def test_expired_stays_expired_after_a_mechanical_write(
+    tmp_path: Path, change: dict[str, Any]
+) -> None:
+    repository, clock = _clocked(tmp_path)
+    assert _ids(_pack(repository, now=T0 + timedelta(days=6))) == ["c-1"]
+    clock.moment = T0 + timedelta(days=30)
+    actor = "human" if "privacy" in change else "mechanism"
+    repository.update("c-1", actor=actor, **change)
+    assert repository.get("c-1").updated_at == clock.moment  # the write did refresh it
+    assert _ids(_pack(repository, now=T0 + timedelta(days=31))) == []
+
+
+def test_a_human_body_edit_does_not_extend_but_valid_to_does(tmp_path: Path) -> None:
+    repository, clock = _clocked(tmp_path)
+    clock.moment = T0 + timedelta(days=6)
+    repository.update("c-1", body="Still on ABC-1, now in review")
+    assert _ids(_pack(repository, now=T0 + timedelta(days=8))) == []
+    repository.update("c-1", valid_to=T0 + timedelta(days=14))
+    assert _ids(_pack(repository, now=T0 + timedelta(days=8))) == ["c-1"]
+
+
+def test_a_future_anchor_is_not_current() -> None:
+    def current(created: datetime) -> bool:
+        return is_current(_doc("c-1", created), now=NOW, ttl_days=7)
+
+    assert not current(datetime(2099, 1, 1, tzinfo=UTC))
+    assert not current(NOW + CLOCK_SKEW + timedelta(seconds=1))
+    assert current(NOW + CLOCK_SKEW)  # small skew is tolerated
+    # An explicit valid_to still governs (the anchor is not used).
+    assert is_current(
+        _doc("c-1", datetime(2099, 1, 1, tzinfo=UTC), valid_to=NOW + timedelta(days=1)),
+        now=NOW,
+        ttl_days=7,
+    )
 
 
 @pytest.mark.parametrize(

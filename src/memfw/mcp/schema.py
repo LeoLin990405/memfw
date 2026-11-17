@@ -400,7 +400,7 @@ CURRENT_RESOURCE: dict[str, Any] = {
     "name": f"context/{CURRENT_CONTEXT_SLOT}",
     "description": (
         "Short-lived context: memories tagged current that are valid now (valid_to, "
-        "else a TTL from updated_at), newest first (memory_context v=2, slot current)."
+        "else a TTL from created_at), newest first (memory_context v=2, slot current)."
     ),
     "mimeType": "application/json",
 }

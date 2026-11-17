@@ -29,6 +29,7 @@ from .core import (
     select_core,
 )
 from .current import (
+    CLOCK_SKEW,
     CURRENT_SLOT,
     CURRENT_TAG,
     DEFAULT_CURRENT_TTL_DAYS,
@@ -58,6 +59,7 @@ from .slots import (
 )
 
 __all__ = [
+    "CLOCK_SKEW",
     "CONTEXT_POLICIES",
     "CONTEXT_VERSIONS",
     "CORE_SLOT",
