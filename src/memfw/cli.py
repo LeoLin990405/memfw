@@ -69,6 +69,7 @@ from .ontology.cli import app as concepts_app
 from .policies import PolicyName
 from .projection import ProjectionError, export_projection, load_policy, read_hits
 from .projection import resolve as resolve_hits
+from .projections import ObsidianProjector
 from .related import RelatedIndex
 from .retrieval import VaultRetriever
 from .stats import measure_runtime
@@ -92,6 +93,7 @@ projection_app = typer.Typer(
 corroboration_app = typer.Typer(
     help="Corroboration projection: which apps/sessions independently mention a memory"
 )
+project_app = typer.Typer(help="Read-only human-facing projections of the vault (rebuildable)")
 app.add_typer(index_app, name="index")
 app.add_typer(corroboration_app, name="corroboration")
 app.add_typer(okf_app, name="okf")
@@ -111,6 +113,7 @@ app.add_typer(experience_app, name="experience")
 app.add_typer(eval_app, name="eval")
 app.add_typer(projection_app, name="projection")
 app.add_typer(conversations_app, name="conversations")
+app.add_typer(project_app, name="project")
 app.command("handoff")(handoff_command)
 capture_app.command(name="confirm")(confirm_command)
 
@@ -2214,6 +2217,45 @@ def corroboration_rebuild(
         return
     path = projection_path(repository.root).relative_to(repository.root).as_posix()
     typer.echo(json.dumps({"path": path, **counts}, ensure_ascii=False))
+
+
+@project_app.command("obsidian")
+def project_obsidian(
+    out: Annotated[Path, typer.Option("--out", help="Board directory (outside the vault)")],
+    root: Annotated[Path, typer.Option("--root", "-r", help="memfw vault (read only)")] = Path("."),
+    clearance: Annotated[
+        str | None,
+        typer.Option(
+            "--clearance",
+            help="Comma list of public, shared, local-private (default: public,shared)",
+        ),
+    ] = None,
+    tenant: Annotated[
+        str, typer.Option("--tenant", help='The one tenant to project (default: "")')
+    ] = "",
+) -> None:
+    """Write a read-only Obsidian board (pages, links, Bases views); the vault is only read."""
+    try:
+        projector = ObsidianProjector(clearance=clearance, tenant=tenant)
+        corroboration_path = projection_path(root.expanduser())
+        if corroboration_path.is_file():
+            repository = _repo(root)
+            rules = _share_rules(repository)
+
+            def lookup(ids: Any) -> dict[str, int]:
+                answer = corroboration_for(
+                    ids, caller_app=OPERATOR, rules=rules, path=corroboration_path
+                )
+                return {key: value.count for key, value in answer.items()}
+
+            projector.corroboration = lookup
+        result = projector.build(root, out)
+    except (MemfwError, CorroborationError, OSError, ValueError) as exc:
+        _projection_fail(exc)
+        return
+    for name in result.edited:
+        typer.echo(f"warning: hand-edited generated file overwritten: {name}", err=True)
+    typer.echo(json.dumps(result.as_dict(), ensure_ascii=False))
 
 
 @corroboration_app.command("show")

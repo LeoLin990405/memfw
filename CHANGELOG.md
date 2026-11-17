@@ -11,6 +11,29 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
+### Added — read-only Obsidian projection (O1a)
+
+- New `memfw project obsidian --out <dir> [--root <vault>] [--clearance
+  public,shared] [--tenant <t>]` writes an Obsidian board: `memories/<id>.md`,
+  `questions/<id>.md` (open questions), `concepts/<name>.md` (from `about`),
+  wikilinks for `about`, supersede (both directions), open-question
+  `conflicts`/`resolved_by`, Bases views in `boards/*.base`, and
+  `.memfw-obsidian/manifest.json` (sha256 per file). See
+  [docs/obsidian-projection.md](docs/obsidian-projection.md).
+- `memfw.projections.ObsidianProjector` (new unit `memfw.projections`, layer
+  `L1-projection`) implements the L0 `Projector` port and passes
+  `check_projector`. Default clearance `public,shared`; `unknown` privacy is
+  never exported; hidden memories leave no page, link, backlink, count or
+  concept page. One tenant per run (default `""`).
+- Deterministic: no run timestamps in any file, stable names and order, so the
+  output can be committed to git and diffs show only memory changes; unchanged
+  files are not rewritten. A rebuild deletes or overwrites only files listed in
+  the previous manifest, reports hand-edited ones, and refuses an unlisted file
+  at a generated path. The vault is only read; the output may not be inside,
+  equal to or contain the vault, or be a symlink.
+- Off by default: nothing runs unless the command is invoked; no other
+  command's output changes.
+
 ### Added — corroboration display and the open-question review order (U5, part 1)
 
 - MCP `memory_search` with `labels: true` adds `corroboration`
@@ -91,6 +114,7 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   are unchanged (byte-identical probe against `MEMFW_ARCH_BASE_REF`). memfw
   0.2.0 keeps `broader` but lints it as `unknown_relation`; see
   [docs/ontology.md](docs/ontology.md#compatibility).
+||||||| parent of 1fc513f (O1a: read-only Obsidian projection (memfw project obsidian))
 
 ### Added — `memory_used` usage signal (C5) and no vault writes mid-session (C6)
 

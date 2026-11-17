@@ -110,6 +110,8 @@ UNITS: Final[dict[str, str]] = {
     "memfw.corroboration": "L1-projection",
     # Disposable usage signals (C5 ``memory_used``); never written to the vault.
     "memfw.usage": "L1-projection",
+    # Human-facing board projections (O1a Obsidian); read-only on the vault.
+    "memfw.projections": "L1-projection",
     # --- L1 read paths over the projections.
     "memfw.retrieval": "L1-read",
     "memfw.memory_hybrid": "L1-read",
@@ -159,6 +161,7 @@ SAME_LAYER_ALLOWED: Final[dict[tuple[str, str], str]] = {
     ("memfw.notes", "memfw.index"): "notes index reuses FTS term building",
     ("memfw.related", "memfw.entities"): "entity overlap is one relatedness signal",
     ("memfw.related", "memfw.notes"): "relatedness edges over notes",
+    ("memfw.projections", "memfw.projection"): "board pages reuse the privacy classification",
     # Read paths.
     ("memfw.memory_hybrid", "memfw.retrieval"): "hybrid route falls back to retrieval",
     # The recall adapter module is the designed bridge into recall's core.

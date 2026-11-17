@@ -20,7 +20,7 @@ vault facade, assembled from `storage`, `log` and `knowledge` mixins), `memfw.co
 | 1 | `L2-kernel-model` | `memfw.core` (models, errors, epistemic, context), `budget`, `policies` |
 | 2 | `L2-kernel-parts` | `storage`, `log`, `knowledge`, `permissions`, `core.policies`, `agents`, `layers`, `ontology`, `tiers` |
 | 3 | `L2-vault` | `memfw.core.repository` |
-| 4 | `L1-projection` | `index`, `stats`, `entities`, `related`, `related_annotation`, `projection`, `notes`, `history` |
+| 4 | `L1-projection` | `index`, `stats`, `entities`, `related`, `related_annotation`, `projection`, `projections`, `notes`, `history` |
 | 5 | `L1-read` | `retrieval`, `memory_hybrid` |
 | 6 | `L3-capability` | `recall`, `recall.builtin`, `capture`, `conversations`, `dream`, `curation`, `handoff`, `okf`, `experience`, `export`, `code_retrieval`, `memory_eval` |
 | 7 | `L4-runtime` | `memfw.runtime` (the composition root: recall, context and MCP tool wiring) |
