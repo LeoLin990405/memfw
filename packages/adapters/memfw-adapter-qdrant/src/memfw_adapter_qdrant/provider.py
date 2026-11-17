@@ -4,9 +4,10 @@ A ``RecallProvider`` (``memfw.ports``): it embeds the query with memfw's own
 embedder (``embed``), asks Qdrant for the nearest points of this vault, this
 embedder and the caller's tenant, and returns ``memory_id`` refs with
 Qdrant's scores and ``why: semantic``. The request asks for the reference
-fields only (``with_payload: ["memory_id", "tenant"]``) and no vectors
-(``with_vector: false``); the response is data, and a point that does not
-carry a valid id of the caller's tenant is dropped.
+fields only (``with_payload: ["memory_id", "tenant", "vault", "embedder"]``)
+and no vectors (``with_vector: false``); the response is data, and a point
+that does not carry a valid id of the caller's tenant, this vault and this
+embedder is dropped.
 
 What Qdrant holds comes from ``sync`` (``memfw-adapter-qdrant sync``): only
 memories whose privacy level the ``clearance`` admits, and ``clearance`` can
@@ -79,7 +80,7 @@ DEFAULT_COLLECTION: Final = "memfw"
 DEFAULT_CLEARANCE: Final = "public,shared"
 MAX_QUERY_CHARS: Final = 512
 #: The payload fields a search asks for: references only.
-SEARCH_PAYLOAD: Final = ("memory_id", "tenant")
+SEARCH_PAYLOAD: Final = ("memory_id", "tenant", "vault", "embedder")
 #: How long a successful availability check is reused, in seconds.
 AVAILABILITY_TTL: Final = 30.0
 KNOWN: Final = frozenset(
@@ -304,7 +305,12 @@ class QdrantProvider:
             memory_id = payload.get("memory_id")
             if not isinstance(memory_id, str) or not MEMORY_ID_RE.fullmatch(memory_id):
                 continue
-            if payload.get("tenant") != tenant or memory_id in seen:
+            if (
+                payload.get("tenant") != tenant
+                or payload.get("vault") != self.vault_key
+                or payload.get("embedder") != fingerprint
+                or memory_id in seen
+            ):
                 continue  # never trust the service with isolation
             if not isinstance(score, (int, float)) or not math.isfinite(score):
                 continue

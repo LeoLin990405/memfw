@@ -173,6 +173,12 @@ def _search(provider: QdrantProvider, query: str, tenant: str = "", limit: int =
     return [candidate.ref for candidate in found]
 
 
+def vault_key_of(repository: Repository) -> str:
+    from memfw_adapter_qdrant.vault import points_key
+
+    return points_key(repository.root)
+
+
 def _stored_ids(fake: FakeQdrant) -> set[str]:
     return {point["payload"]["memory_id"] for point in fake.collections["memfw"]["points"].values()}
 
@@ -220,7 +226,8 @@ def test_search_asks_for_references_only_and_never_sends_the_query_text(
     (query,) = [r for r in fake.requests if r["path"].endswith("/points/query")]
     body = query["body"]
     assert set(body) == {"query", "limit", "filter", "with_payload", "with_vector"}
-    assert body["with_payload"] == ["memory_id", "tenant"] and body["with_vector"] is False
+    assert body["with_payload"] == ["memory_id", "tenant", "vault", "embedder"]
+    assert body["with_vector"] is False
     assert body["filter"] == {
         "must": [
             {"key": "vault", "match": {"value": provider.vault_key}},
@@ -525,10 +532,43 @@ def test_the_response_is_data(tmp_path: Path) -> None:
         {"id": 7, "version": 1, "score": True, "payload": {"memory_id": "m-release", "tenant": ""}},
         "junk",
     ]
+    embedder = WordsEmbedder()
+    mine = {"vault": vault_key_of(repository), "embedder": fingerprint_of(embedder)}
+    for point in points:
+        if isinstance(point, dict) and isinstance(point.get("payload"), dict):
+            point["payload"].update(mine)
+    points.insert(
+        0,
+        {
+            "id": 8,
+            "version": 1,
+            "score": 0.99,
+            "payload": {
+                "memory_id": "m-hal",
+                "tenant": "",
+                "vault": "0" * 24,
+                "embedder": mine["embedder"],
+            },
+        },
+    )
+    points.insert(
+        0,
+        {
+            "id": 9,
+            "version": 1,
+            "score": 0.98,
+            "payload": {
+                "memory_id": "m-release",
+                "tenant": "",
+                "vault": mine["vault"],
+                "embedder": "x",
+            },
+        },
+    )
     server = _serve(200, {"result": {"points": points}, "status": "ok", "time": 0.001})
     try:
         url = f"http://127.0.0.1:{server.server_address[1]}"
-        provider = factory({"vault": str(repository.root), "url": url, "embedder": WordsEmbedder()})
+        provider = factory({"vault": str(repository.root), "url": url, "embedder": embedder})
         assert _search(provider, "homelab") == ["m-backup"]
     finally:
         server.shutdown()

@@ -99,9 +99,9 @@ Options (anything else is refused):
 
 `POST /collections/{collection}/points/query` with the query vector, `limit`, a `must` filter
 on `vault`, `embedder` and the caller's `tenant` (exact), `with_payload: ["memory_id",
-"tenant"]` and `with_vector: false` (the REST name of "no vectors"). The response is data: a
-point without a valid memory id, of another tenant, with a non-numeric score or seen twice is
-dropped. Every candidate is then resolved against the vault and filtered by the coordinator's
+"tenant", "vault", "embedder"]` and `with_vector: false` (the REST name of "no vectors"). The
+response is data: a point without a valid memory id, of another tenant, vault or embedder,
+with a non-numeric score or seen twice is dropped. Every candidate is then resolved against the vault and filtered by the coordinator's
 policy (validity, lifecycle, `as_of`, source, privacy) and by the MCP server's clearance.
 
 ## Network rules

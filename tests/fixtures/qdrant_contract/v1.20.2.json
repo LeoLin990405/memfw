@@ -317,7 +317,9 @@
           },
           "with_payload": [
             "memory_id",
-            "tenant"
+            "tenant",
+            "vault",
+            "embedder"
           ],
           "with_vector": false
         }
@@ -332,7 +334,9 @@
               "score": 0.99999994,
               "payload": {
                 "memory_id": "m-backup",
-                "tenant": ""
+                "tenant": "",
+                "vault": "0123456789abcdef01234567",
+                "embedder": "fedcba9876543210"
               }
             },
             {
@@ -341,7 +345,9 @@
               "score": 0.8660254,
               "payload": {
                 "memory_id": "m-hal",
-                "tenant": ""
+                "tenant": "",
+                "vault": "0123456789abcdef01234567",
+                "embedder": "fedcba9876543210"
               }
             }
           ]

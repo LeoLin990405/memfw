@@ -4,7 +4,7 @@ A `RecallProvider` for the memfw recall coordinator backed by a
 [Qdrant](https://github.com/qdrant/qdrant) service you run yourself, pinned to
 the **v1.20.x** server line. It embeds the query with memfw's own embedder
 (`MEMFW_EMBEDDING_*`; no new model), asks Qdrant over REST for the nearest
-points of this vault and tenant with `with_payload: ["memory_id", "tenant"]`
+points of this vault and tenant with `with_payload: ["memory_id", "tenant", "vault", "embedder"]`
 and `with_vector: false`, and returns memory ids and scores only. Import it as
 `memfw_adapter_qdrant`.
 
