@@ -70,7 +70,9 @@ memfw-pageindex list --index-dir DIR
   privacy level is the strictest of `--privacy` (default `local-private`) and
   the note's own frontmatter, read like the kernel's `metadata_level`:
   `privacy`, every `privacy:*` / `sensitivity:*` tag and a top-level
-  `sensitivity`. The frontmatter is parsed with `yaml.safe_load` and the level
+  `sensitivity`. The frontmatter block is split exactly as memfw's notes
+  index splits it (first line `---`, closed only by the next `---` line; a
+  `...` line does not close it), parsed with `yaml.safe_load`, and the level
   is `memfw.ports.privacy.metadata_level` of it; a YAML error, an unclosed
   block, frontmatter that is not a mapping, or a `tags` that is not a list
   makes the note `local-private`.

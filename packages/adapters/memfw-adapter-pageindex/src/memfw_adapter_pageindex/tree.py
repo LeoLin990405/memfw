@@ -233,19 +233,26 @@ def _open_inside(root: Path, rel: str) -> bytes:
 PRIVACY_KEYS = ("privacy", "tags", "sensitivity")
 
 
-def _frontmatter_block(lines: list[str]) -> tuple[str | None, int, bool]:
+def _frontmatter_block(text: str) -> tuple[str | None, int, bool]:
     """``(frontmatter text or None, first body line index, malformed)``.
 
-    A note's frontmatter opens with a first line that is exactly ``---`` and
-    closes with the next line that is ``---`` or ``...``. An opening line
-    without a close is malformed (the privacy reader then fails closed).
+    The same split as memfw's notes index (``memfw.notes.index._split_frontmatter``):
+    the text must start with ``---`` and its first line be ``---`` (surrounding
+    whitespace ignored); the block closes at the next line that is ``---``
+    (likewise) and at nothing else (a ``...`` line does not close it). Lines
+    split like ``str.splitlines``. An opening line without a close is
+    malformed: the notes index would read no frontmatter at all, the privacy
+    reader here fails closed instead.
     """
 
+    if not text.startswith("---"):
+        return None, 0, False
+    lines = text.splitlines(keepends=True)
     if not lines or lines[0].strip() != "---":
         return None, 0, False
     for index in range(1, len(lines)):
-        if lines[index].strip() in ("---", "..."):
-            return "\n".join(lines[1:index]), index + 1, False
+        if lines[index].strip() == "---":
+            return "".join(lines[1:index]), index + 1, False
     return None, 0, True
 
 
@@ -261,7 +268,7 @@ def note_level(text: str, operator: str) -> str:
     list, or any unrecognised value.
     """
 
-    block, _, malformed = _frontmatter_block(text.splitlines())
+    block, _, malformed = _frontmatter_block(text)
     if malformed:
         return "local-private"
     if block is None:
@@ -285,7 +292,7 @@ def markdown_structure(text: str) -> list[dict[str, Any]]:
     """PageIndex-shaped nodes from ATX headings (outside fenced code), no text."""
 
     lines = text.splitlines()
-    _, start, _ = _frontmatter_block(lines)
+    _, start, _ = _frontmatter_block(text)
     roots: list[dict[str, Any]] = []
     stack: list[tuple[int, dict[str, Any]]] = []
     fence: str | None = None

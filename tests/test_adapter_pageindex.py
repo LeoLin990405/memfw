@@ -410,6 +410,131 @@ def test_private_forms_never_reach_a_cloud_backend(tmp_path: Path) -> None:
     assert "Drift open" in sent and "secret" not in sent
 
 
+# The reviewer's frontmatter sweep (re-review of #85): every form is checked
+# against memfw's own notes split (memfw.notes.index._split_frontmatter) plus
+# metadata_level; the adapter must never come out less private.
+_LP = "privacy: local-private\n"
+_SWEEP_FM = {
+    "noindent_list": "tags:\n- privacy:local-private\n",
+    "dq_key": '"privacy": local-private\n',
+    "sq_key": "'privacy': local-private\n",
+    "esc_x79": '"tags": ["privac\\x79:local-private"]\n',
+    "esc_key_x79": '"privac\\x79": local-private\n',
+    "esc_key_u": '"sensitivit\\u0079": private\n',
+    "flow_map": "{privacy: local-private}\n",
+    "flow_map_ml": "{tags: [a,\n privacy:local-private]}\n",
+    "qkey": "? privacy\n: local-private\n",
+    "merge_inline": "<<: {privacy: local-private}\n",
+    "merge_anchor": "base: &b {privacy: local-private}\n<<: *b\n",
+    "merge_list": "a: &a {x: 1}\nb: &b {sensitivity: private}\n<<: [*a, *b]\n",
+    "str_tag_key": "!!str privacy: local-private\n",
+    "str_tag_val": "privacy: !!str local-private\n",
+    "sens_str": "sensitivity: private\n",
+    "sens_upper": "sensitivity: PRIVATE\n",
+    "sens_list": "sensitivity: [public, private]\n",
+    "sens_map": "sensitivity: {a: b}\n",
+    "sens_int": "sensitivity: 3\n",
+    "tag_upper_priv": "tags: [PRIVACY:LOCAL-PRIVATE]\n",
+    "tag_mixed_sens": "tags: [Sensitivity:Private]\n",
+    "tag_priv_unknown": "tags: [privacy:secret]\n",
+    "privacy_upper": "privacy: LOCAL-PRIVATE\n",
+    "privacy_bogus": "privacy: secret\n",
+    "privacy_int": "privacy: 1\n",
+    "privacy_list": "privacy: [public]\n",
+    "dup_keys": "privacy: local-private\nprivacy: public\n",
+    "dup_keys2": "privacy: public\nprivacy: local-private\n",
+    "dup_tags": "tags: [privacy:local-private]\ntags: [x]\n",
+    "empty_privacy": "privacy:\n",
+    "null_privacy": "privacy: null\n",
+    "tilde_privacy": "privacy: ~\n",
+    "empty_tags": "tags:\n",
+    "null_sens": "sensitivity: null\n",
+    "tags_scalar": "tags: privacy:local-private\n",
+    "tags_map": "tags: {privacy: local-private}\n",
+    "tags_nested": "tags: [[privacy:local-private]]\n",
+    "tags_int_item": "tags: [1, privacy:local-private]\n",
+    "non_mapping_list": "- privacy: local-private\n",
+    "non_mapping_scalar": "local-private\n",
+    "yaml_error": "privacy: [local-private\n",
+    "int_key": "1: x\nprivacy: local-private\n",
+    "multi_doc_dashes_inner": "privacy: public\n--- \nprivacy: local-private\n",
+    "block_scalar_dots": "desc: |\n  ...\nprivacy: local-private\n",
+    "block_scalar_dots2": "desc: >\n  ...\nsensitivity: private\n",
+    "quoted_dots_ml": 'desc: "a\n ..."\nprivacy: local-private\n',
+    "doc_end_then_more": "privacy: public\n...\ntags: [privacy:local-private]\n",
+    "deep_nest": "x: " + "[" * 200 + "]" * 200 + "\n" + _LP,
+}
+
+SWEEP_CASES = {k: f"---\n{v}---\n# Secret heading\n" for k, v in _SWEEP_FM.items()}
+SWEEP_CASES.update(
+    {
+        "bom": "﻿---\n" + _LP + "---\n# Secret heading\n",
+        "crlf": "---\r\n" + _LP.replace("\n", "\r\n") + "---\r\n# Secret heading\r\n",
+        "crlf_list": "---\r\ntags:\r\n- privacy:local-private\r\n---\r\n# Secret\r\n",
+        "cr_only": "---\r" + _LP.replace("\n", "\r") + "---\r# Secret heading\r",
+        "unterminated": "---\n" + _LP + "# Secret heading\n",
+        "dots_term": "---\n" + _LP + "...\n# Secret heading\n",
+        "dots_term_public_then": "---\nprivacy: public\n...\n" + _LP + "---\n# Secret\n",
+        "open_trailing_ws": "--- \n" + _LP + "---\n# Secret\n",
+        "open_with_comment": "--- # c\n" + _LP + "---\n# Secret\n",
+        "leading_blank": "\n---\n" + _LP + "---\n# Secret\n",
+        "empty_block": "---\n---\n# Secret\n",
+        "ls_sep": "--- " + _LP + "---\n# Secret\n",
+        "nel_sep": "---\x85privacy: local-private\x85---\n# Secret\n",
+        "vt_ff": "---\x0c\n" + _LP + "---\n# Secret\n",
+        "close_indented": "---\n" + _LP + "  ---\n# Secret\n",
+    }
+)
+
+
+@pytest.mark.parametrize("operator", ["public", "shared"])
+@pytest.mark.parametrize("name", sorted(SWEEP_CASES))
+def test_sweep_matches_the_notes_split_and_is_never_less_private(operator: str, name: str) -> None:
+    from memfw_adapter_pageindex.tree import _frontmatter_block, note_level
+
+    from memfw.notes.index import NoteParseError, _split_frontmatter
+    from memfw.ports.privacy import metadata_level, strictest
+
+    text = SWEEP_CASES[name]
+    rank = {"public": 0, "shared": 1, "local-private": 2}
+    try:
+        meta, _, body_line = _split_frontmatter(text)
+        kernel = strictest([operator, metadata_level(meta, legacy=operator)])
+    except (NoteParseError, RecursionError):
+        kernel, body_line = "local-private", None
+    kernel = kernel if kernel in rank else "local-private"
+    assert rank[note_level(text, operator)] >= rank[kernel], (name, operator)
+    _, start, malformed = _frontmatter_block(text)
+    if body_line is not None and not malformed:
+        assert start == body_line, name  # the same block as the notes index
+
+
+DOTS_LEAKS = {
+    "blockdots.md": "---\ndesc: |\n  ...\nprivacy: local-private\n---\n# S-blockdots LEAK\n",
+    "blockdots2.md": "---\ndesc: >\n  ...\nsensitivity: private\n---\n# S-blockdots2 LEAK\n",
+    "docend.md": "---\nprivacy: public\n...\ntags: [privacy:local-private]\n---\n# S-docend LEAK\n",
+}
+
+
+@pytest.mark.parametrize("operator", ["public", "shared"])
+def test_dot_lines_do_not_end_the_frontmatter(tmp_path: Path, operator: str) -> None:
+    root = tmp_path / "kh"
+    root.mkdir()
+    index = tmp_path / "index"
+    for name, text in DOTS_LEAKS.items():
+        (root / name).write_text(text, encoding="utf-8")
+        tree = build_markdown_tree(root, f"kh:{name}", privacy=operator)
+        assert tree["privacy"] == "local-private", name
+        write_tree(index, tree)
+    (root / "open.md").write_text("---\nprivacy: public\n---\n# S-control\n", encoding="utf-8")
+    write_tree(index, build_markdown_tree(root, "kh:open.md", privacy=operator))
+    cloud = RecordedBackend('{"node_ids": []}', local=False)
+    provider = _provider(index, cloud, cloud=True)
+    provider.search("s", limit=5, budget=RecallBudget(), tenant="", as_of=None)
+    sent = [n["title"] for c in cloud.calls for d in c[1]["documents"] for n in d["nodes"]]
+    assert sent == ["S-control"]
+
+
 def test_markdown_paths_are_confined(tmp_path: Path) -> None:
     root = _kh(tmp_path)
     outside = tmp_path / "outside.md"
