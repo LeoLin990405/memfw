@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
+import re
 import threading
 import urllib.error
 import urllib.request
@@ -1256,6 +1258,38 @@ def _raw_exchange(port: int, raw: bytes) -> bytes:
     return b"\r\n".join(lines) + separator + body
 
 
+#: ``"score"`` / ``"raw_score"``: FTS floats, whose last bits differ between
+#: SQLite builds and platforms.
+_SCORE_FIELD = re.compile(rb'"(score|raw_score)": (-?[0-9][0-9.eE+-]*)')
+
+
+def _portable_response(response: bytes, name: str) -> tuple[bytes, bytes, list[float]]:
+    """Head and body with the two platform-dependent parts made comparable.
+
+    * the reason phrase is dropped (``413`` is ``Request Entity Too Large``
+      before Python 3.13 and ``Content Too Large`` from 3.13 on); the
+      protocol and the status code stay;
+    * every ``score`` / ``raw_score`` number is replaced by a placeholder and
+      returned, so the caller checks it is close (relative 1e-9) to its
+      golden counterpart; ``Content-Length`` is re-stated for the normalized
+      body after checking it matched the real one.
+
+    Every other byte, headers included, is compared exactly.
+    """
+
+    head, _, body = response.partition(b"\r\n\r\n")
+    lines = head.split(b"\r\n")
+    protocol, code, *_reason = lines[0].split(b" ", 2)
+    lines[0] = protocol + b" " + code
+    scores = [float(match.group(2)) for match in _SCORE_FIELD.finditer(body)]
+    normalized = _SCORE_FIELD.sub(rb'"\1": "<score>"', body)
+    for index, line in enumerate(lines):
+        if line.lower().startswith(b"content-length:"):
+            assert int(line.split(b":", 1)[1]) == len(body), name
+            lines[index] = b"Content-Length: " + str(len(normalized)).encode()
+    return b"\r\n".join(lines), normalized, scores
+
+
 @pytest.mark.parametrize("name", sorted(RAW_CASES))
 @pytest.mark.parametrize("explicit_v2", [False, True], ids=["bare", "explicit-v2"])
 def test_v2_raw_bytes_equal_the_pre_v3_service(
@@ -1279,8 +1313,11 @@ def test_v2_raw_bytes_equal_the_pre_v3_service(
         _raw_exchange(port, _raw_request(previous, explicit_v2=explicit_v2))
     got = _raw_exchange(port, _raw_request(name, explicit_v2=explicit_v2))
     expected = (RAW_V2_FIXTURES / f"{name}.response.http").read_bytes()
-    got_head, _, got_body = got.partition(b"\r\n\r\n")
-    want_head, _, want_body = expected.partition(b"\r\n\r\n")
+    got_head, got_body, got_scores = _portable_response(got, name)
+    want_head, want_body, want_scores = _portable_response(expected, name)
+    assert len(got_scores) == len(want_scores), name
+    for left, right in zip(got_scores, want_scores, strict=True):
+        assert math.isclose(left, right, rel_tol=1e-9, abs_tol=1e-15), (name, left, right)
     assert got_body == want_body, name
     got_lines = got_head.split(b"\r\n")
     request_line = (RAW_V2_FIXTURES / f"{name}.request.http").read_bytes().split(b"\r\n", 1)[0]
