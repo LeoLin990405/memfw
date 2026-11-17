@@ -941,8 +941,16 @@ def test_forget_pending_requests_are_capped(
     body = {"request_id": "cap-3", "memory_id": "mem-gamma", "tenant": "tenant-a"}
     status, payload = _v3(httpd, "/forget", body, WRITE_TOKEN)
     assert (status, payload) == (404, NOT_FOUND_V3)
+    # The cap is per tenant: another tenant's queue is its own.
+    body = {"request_id": "cap-0", "memory_id": "mem-gamma", "tenant": "tenant-b"}
+    status, payload = _v3(httpd, "/forget", body, WRITE_TOKEN)
+    assert status == 200 and payload["duplicate"] is False
+    # ... and does not count toward tenant-a's.
+    status, payload = _v3(httpd, "/forget", {**FORGET_OK, "request_id": "cap-2"}, WRITE_TOKEN)
+    assert status == 429
     # Once a human clears one, a new request fits again.
-    next((root / "_candidates" / "forget").glob("forget-*.md")).unlink()
+    prefix = service.forget_candidate_id("tenant-a", "")
+    next((root / "_candidates" / "forget").glob(f"{prefix}*.md")).unlink()
     status, payload = _v3(httpd, "/forget", {**FORGET_OK, "request_id": "cap-2"}, WRITE_TOKEN)
     assert status == 200 and payload["duplicate"] is False
 

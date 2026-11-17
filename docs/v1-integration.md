@@ -483,8 +483,10 @@ only be deleted locally (`memfw delete`), after a human review as always.
   `recorded_at`, `deleted: false`, `authority: false`. The body names the
   memory id only; no memory text is copied. Symlinked directory components
   are refused with 500, as for `/stage`.
-- **Bounded.** At most `MAX_PENDING_FORGET_REQUESTS` (1000) request files
-  wait in `_candidates/forget/`; beyond that a new request is 429
+- **Bounded, per tenant.** At most `MAX_PENDING_FORGET_REQUESTS` (1000)
+  request files of one tenant (those named `forget-<tenant_key>-*`) wait in
+  `_candidates/forget/`, so one tenant cannot fill another's queue; beyond
+  that the tenant's new request is 429
   `too_many_requests` (`too many pending forget requests`) and writes
   nothing, until a human reviews and removes some. Replays of recorded
   requests and the visibility 404 are answered as usual. Concurrent requests

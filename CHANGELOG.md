@@ -61,8 +61,8 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   runs before the duplicate/409 check: another tenant or a lower clearance
   replaying a recorded request gets the same 404; a recorded `request_id`
   reused with a missing, another tenant's or a withheld memory id is that
-  same 404 too, never 409. At most 1000 requests wait
-  for review; beyond that a new one is 429 `too_many_requests`. Tenant binding and the MM0 clearance (sensitivity
+  same 404 too, never 409. At most 1000 requests per tenant
+  wait for review; beyond that the tenant's new one is 429 `too_many_requests`. Tenant binding and the MM0 clearance (sensitivity
   key included) apply to every v3 addition. `memfw forget requests` lists the
   requests; `memfw forget residue <id>` checks, read-only, that a forgotten
   memory is gone from the FTS index, the related, corroboration, usage and

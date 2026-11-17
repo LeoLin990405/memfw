@@ -1238,6 +1238,11 @@ def _existing_forget_request(
         raise ServiceError(409, "request exists with different content")
 
 
+def _forget_tenant_prefix(tenant: str) -> str:
+    tenant_key = hashlib.sha256(tenant.encode("utf-8")).hexdigest()[:16]
+    return f"forget-{tenant_key}-"
+
+
 def forget_candidate_id(tenant: str, request_id: str) -> str:
     """``forget-<tenant key>-<request_id>``: request ids are scoped per tenant.
 
@@ -1247,17 +1252,19 @@ def forget_candidate_id(tenant: str, request_id: str) -> str:
     and the file name carries no tenant name.
     """
 
-    tenant_key = hashlib.sha256(tenant.encode("utf-8")).hexdigest()[:16]
-    return f"forget-{tenant_key}-{request_id}"
+    return f"{_forget_tenant_prefix(tenant)}{request_id}"
 
 
-def _pending_forget_requests(directory: Path) -> int:
+def _pending_forget_requests(directory: Path, tenant: str) -> int:
+    """Pending requests of ``tenant`` alone: one tenant cannot fill another's queue."""
+
+    prefix = _forget_tenant_prefix(tenant)
     try:
         with os.scandir(directory) as entries:
             return sum(
                 1
                 for entry in entries
-                if entry.name.startswith("forget-")
+                if entry.name.startswith(prefix)
                 and entry.name.endswith(".md")
                 and entry.is_file(follow_symlinks=False)
             )
@@ -1366,10 +1373,11 @@ def forget_request(
     if recorded:
         _existing_forget_request(base, relative, expected)
         return response(True)
-    # A bound on what a write token can pile up for review. Replays above are
-    # still answered; a request beyond the cap writes nothing. Concurrent
-    # requests may pass the count together, so the cap is approximate.
-    if _pending_forget_requests(directory) >= MAX_PENDING_FORGET_REQUESTS:
+    # A per-tenant bound on what a write token can pile up for review.
+    # Replays above are still answered; a request beyond the cap writes
+    # nothing. Concurrent requests may pass the count together, so the cap
+    # is approximate.
+    if _pending_forget_requests(directory, tenant) >= MAX_PENDING_FORGET_REQUESTS:
         raise _forget_queue_full()
     try:
         target_hash = "sha256:" + hashlib.sha256(memory_path.read_bytes()).hexdigest()
