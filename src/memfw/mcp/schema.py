@@ -146,6 +146,14 @@ TOOLS: list[dict[str, Any]] = [
                         "or times out is returned empty with degraded set to a reason code."
                     ),
                 },
+                "if_version": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": (
+                        "v=2 only: the pack_version you already hold. When the pack has not "
+                        "changed the reply is unchanged: true with no slots."
+                    ),
+                },
             },
         },
     },

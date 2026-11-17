@@ -672,7 +672,14 @@ def test_resource_read_of_a_missing_vault_is_an_error(tmp_path: Path) -> None:
 
 def test_tools_list_is_unchanged_but_for_slots() -> None:
     tool = next(tool for tool in TOOLS if tool["name"] == "memory_context")
-    assert sorted(tool["inputSchema"]["properties"]) == ["limit_tokens", "policy", "slots", "v"]
+    # C3 adds the optional ``if_version`` (see tests/test_context_cache.py).
+    assert sorted(tool["inputSchema"]["properties"]) == [
+        "if_version",
+        "limit_tokens",
+        "policy",
+        "slots",
+        "v",
+    ]
     assert tool["inputSchema"]["properties"]["slots"]["default"] == ["core"]
 
 

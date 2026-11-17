@@ -224,7 +224,8 @@ sends every MCP method and all 15 tools (116 messages, error paths included) to 
 vault; `tests/test_mcp_split.py` runs it against `MEMFW_ARCH_BASE_REF` when that is set
 (opt-in, skipped by default). Since C2 the comparison first applies C2's two
 expected changes to the base output (`initialize` advertises `resources`; `memory_context`
-gains the optional `slots` property; `with_expected_c2_changes`), so any other byte still fails.
+gains the optional `slots` property; `with_expected_c2_changes`), and C3's one (the optional
+`if_version` property, applied by the same function), so any other byte still fails.
 
 **A4b (done, with A3b).** Each group reaches its capability through the `Runtime`;
 `memfw.mcp` imports only `memfw.ports`, `memfw.runtime` and itself, and its allowlist entries

@@ -82,19 +82,21 @@ def _render(messages: list[Any]) -> str:
 
 
 def with_expected_c2_changes(old: str) -> str:
-    """``old`` (the base ref's probe output) with exactly the changes C2 makes.
+    """``old`` (the base ref's probe output) with exactly the changes C2 and C3 make.
 
     1. ``initialize`` advertises ``capabilities.resources = {"listChanged": false}``;
     2. ``tools/list``: ``memory_context`` gains the optional ``slots`` property
-       (the current schema's). Nothing else may differ.
+       (C2) and the optional ``if_version`` property (C3), the current
+       schema's. Nothing else may differ.
 
-    Idempotent: a base ref that already has C2 is left as it is.
+    Idempotent: a base ref that already has C2 (or C3) is left as it is.
     """
 
     messages = _messages(old)
     assert _render(messages) == old, "the probe output does not round-trip"
     slots = next(tool for tool in schema.TOOLS if tool["name"] == "memory_context")
     slots_property = slots["inputSchema"]["properties"]["slots"]
+    if_version_property = slots["inputSchema"]["properties"]["if_version"]
     changed = copy.deepcopy(messages)
     seen = {"initialize": 0, "tools/list": 0}
     for item in changed:
@@ -107,6 +109,7 @@ def with_expected_c2_changes(old: str) -> str:
         if item.get("id") == 3 and "tools" in result:
             tool = next(tool for tool in result["tools"] if tool["name"] == "memory_context")
             tool["inputSchema"]["properties"]["slots"] = slots_property
+            tool["inputSchema"]["properties"]["if_version"] = if_version_property
             seen["tools/list"] += 1
     assert seen == {"initialize": 1, "tools/list": 1}, seen
     return _render(changed)
