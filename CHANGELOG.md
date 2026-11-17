@@ -438,6 +438,20 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   `memfw recover` finishes an interrupted purge or rolls back an interrupted
   relink. `purge --orphans --yes` reclaims unreferenced blobs (blocked while
   a committed record is unreadable).
+- **Copies of a vault:** the blob directory carries an owner marker
+  (`.owner`); purge, `purge --orphans`, purge recovery and adds refuse a
+  directory another vault marked (a copy shares `vault_id`), and verify/fsck
+  report `blob_store_foreign_owner`. `memfw attach reown --new-vault-id --yes`
+  splits a copy off (new `vault_id`, blobs copied); `memfw attach reown --yes`
+  re-owns after a move.
+- `fsck` only `lstat`s referenced originals (`fsck --hash-referenced`
+  re-hashes); directory listings are cached per pass. An empty root or one
+  whose every original is gone is `referenced_unavailable`, never missing;
+  `attach_missing` is re-checked under the lock and a new known kind
+  `attach_found` clears it. Roots may not be `/`, home, or contain the vault
+  or blob root; originals with several hard links are refused; purge
+  recovery scrubs SQLite stores like a purge; `scan` walks through
+  `O_NOFOLLOW` directory fds.
 - The embedded quota total is now the larger of the log total and the
   stored blob files' sizes, so orphan reuse and detach/re-add cycles cannot
   bypass `attachments_max_total_bytes`; log compaction keeps `heir` and
@@ -446,7 +460,7 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   types, likely-private by path, already registered, refused symlinks/names;
   `--hash` adds duplicate sha256 counts) that writes nothing.
 - The MM1b event writes (`detach`, `attach_missing`, `attach_relink`,
-  `attach_purge`; known kinds since MM1a) carry `details.projection: "none"`
+  `attach_purge`, known since MM1a, and the new known kind `attach_found`) carry `details.projection: "none"`
   (event-log forward-compat marker) and never a location or name.
   See [`docs/attachments.md`](docs/attachments.md).
 

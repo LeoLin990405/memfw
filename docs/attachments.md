@@ -133,6 +133,8 @@ memfw attach relink ID FILE|ROOT:PATH [--root VAULT]
 memfw attach purge ID [--yes] [--root VAULT]
 memfw attach purge --orphans [--yes] [--root VAULT]
 memfw attach scan ROOT:[DIR]|DIR [--hash] [--root VAULT]
+memfw attach reown [--new-vault-id] [--yes] [--root VAULT]
+memfw fsck [--hash-referenced] [--root VAULT]
 ```
 
 * `add` hashes and copies FILE in 1 MiB chunks, links the blob to its sha256,
@@ -188,9 +190,9 @@ Log compaction keeps `size`, `blob` and `heir`.
 MM1a adds eight event kinds: `attach`, `attach_update`, `detach`,
 `attach_purge`, `attach_missing`, `attach_relink`, `proxy_add`,
 `proxy_supersede`. MM1a writes `attach`; MM1b writes `detach`,
-`attach_missing`, `attach_relink` and `attach_purge`; `attach_update` and the
-proxy kinds are reserved for MM2. All are known, non-memory kinds. The four
-MM1b writes also carry `details.projection: "none"`, the event-log
+`attach_missing`, `attach_relink` and `attach_purge`, plus `attach_found` (added in MM1b); `attach_update` and the
+proxy kinds are reserved for MM2. All are known, non-memory kinds. The MM1b
+writes also carry `details.projection: "none"`, the event-log
 forward-compat marker that lets a reader which does not know a kind skip it
 (harmless for readers that know it).
 
@@ -285,6 +287,7 @@ explicit marker that it never changes memory state:
 | `referenced_modified` | the referenced original's bytes or size differ from the record |
 | `referenced_unsafe` | a component of the location is now a symlink (never followed) |
 | `referenced_unavailable` (warning) | the root is not configured on this host or not mounted |
+| `blob_store_foreign_owner` | the blob directory's owner marker names another vault (this vault is a copy, or moved); see [Copies of a vault](#copies-of-a-vault-and-blob-ownership) |
 | `blob_stage_foreign` (warning) | how many stale staging files under the root belong to other vaults (or carry no tag); not named, never deleted |
 
 * `fsck` only reports attachment problems. It never registers an
@@ -349,8 +352,13 @@ attachments_roots:
 
 * A root name is `[a-z][a-z0-9_-]*` (at most 32), not a reserved word (`att`,
   `file`, `http`, `https`, `sha256`, `mem`, `memory`, `data`, `ftp`, `urn`).
-  A directory is absolute or `~`-prefixed, without `..`, and not inside the
-  vault. Changing the mapping is a `config_change`.
+  A directory is absolute or `~`-prefixed, without `..`; it may not be `/`,
+  the home directory, inside or containing the vault, or containing the blob
+  root (checked when `vault.yaml` is written and again when a root is used).
+  Changing the mapping is a `config_change`.
+* The configured root directory itself is trusted: it is opened as
+  configured (a mount point, or a symlink a human set up such as `/tmp` on
+  macOS); only the components below it must not be symlinks.
 * A reference needs no `vault_id` and no blob store.
 
 ### Path safety
@@ -370,6 +378,9 @@ nothing.
   `O_NOFOLLOW`): a symlink anywhere in the path is refused, whether it points
   out of the root or inside it, and the last component must be a regular file
   (a FIFO or a directory is refused).
+* An original with more than one hard link is refused: a link elsewhere
+  (perhaps outside every root) could change the bytes behind the location
+  without touching any path memfw checks. Reference a copy instead.
 * Each component must match a directory entry **exactly**, case and Unicode
   normalization included. On a case-insensitive filesystem `kh:report.pdf`
   would open `Report.pdf`; memfw refuses it ("no such file"), so a location
@@ -383,11 +394,18 @@ nothing.
 * `verify` reports a referenced original that is gone as `referenced_missing`
   and lists `candidates`: files under the same root with the same size and
   sha256 (one bounded walk per root, symlinks never followed, at most five).
-  It never relinks. A root that is not mounted (or not configured on this
-  host) is `referenced_unavailable`, a warning, not "missing". `fsck` reports
-  the same statuses without searching for candidates.
-* `verify --record-missing` appends one `attach_missing` per newly missing
-  original; `show` and `list` then say `state: missing`.
+  It never relinks. A root that looks unmounted is `referenced_unavailable`,
+  a warning, never "missing": not configured on this host, not a directory,
+  an empty directory (an empty mount point), or every original under it gone
+  (two or more). `fsck` reports the same statuses without searching for
+  candidates, and only `lstat`s referenced originals (exists, regular file,
+  same size) because it holds the vault lock; `fsck --hash-referenced`
+  re-hashes them as `attach verify` always does.
+* `verify --record-missing` records state changes: one `attach_missing` per
+  newly missing original (checked again under the vault lock first, and never
+  for an unmounted root) and one `attach_found` (a known non-memory kind,
+  `details.projection: "none"`) for an original recorded missing that is back
+  at its location; `show` and `list` say `state: missing` in between.
 * `relink ID FILE|ROOT:PATH` (a human command) points the record at the new
   location after checking that the file there has the record's sha256 and
   size; anything else is a different original and is refused. One
@@ -422,6 +440,35 @@ no archive is rewritten. After a purge a full-text search of the vault, the
 blob root and the decompressed archives finds nothing of the attachment
 (`tests/test_attachments_mm1b.py::test_purge_leaves_nothing_behind`); the
 event log keeps only its id.
+
+### Copies of a vault and blob ownership
+
+A vault's blobs live in `<blob root>/<vault_id>`, outside the vault, so a copy
+of the vault (`cp -r`, a filesystem snapshot, a test or eval vault made from
+it) shares its `vault_id` and therefore the **same blob directory**. To keep
+a copy from deleting the original's blobs, the directory carries an owner
+marker (`.owner`: the `vault_id` and the 16-hex tag of the vault's resolved
+path), written by the first write into it:
+
+* purge, `purge --orphans` and the recovery of an interrupted purge delete
+  nothing unless the marker names this vault; the purge plan says
+  `blob: refused_owner`, `attach purge --yes` refuses before writing anything;
+* `attach add` refuses to write into a directory marked by another vault;
+* `verify` / `fsck` report `blob_store_foreign_owner`.
+
+To resolve it:
+
+* **a copy** (snapshot, eval vault, test vault): `memfw attach reown
+  --new-vault-id --yes` in the copy, **before any attachment write**. It
+  writes a new `vault_id` and copies every blob the copy's records name into
+  the copy's own directory; the shared directory is not changed.
+* **the original, moved** to a new path (its tag changed): `memfw attach
+  reown --yes` marks the directory as this vault's again.
+* a directory written before markers existed is marked by its first add (or
+  by `reown --yes`); until then purges refuse.
+
+`memfw eval context` (C4) only reads the vaults it evaluates; it never writes
+attachments or purges.
 
 `purge --orphans [--yes]` removes blobs that no committed record names and
 this vault's stale staging files. It removes no orphan while any committed

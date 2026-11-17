@@ -82,6 +82,8 @@ class EventKind(StrEnum):
     ATTACH_PURGE = "attach_purge"
     ATTACH_MISSING = "attach_missing"
     ATTACH_RELINK = "attach_relink"
+    # MM1b: a referenced original recorded missing was found again.
+    ATTACH_FOUND = "attach_found"
     PROXY_ADD = "proxy_add"
     PROXY_SUPERSEDE = "proxy_supersede"
 
@@ -132,6 +134,7 @@ NON_MEMORY_EVENT_KINDS: frozenset[EventKind] = frozenset(
         EventKind.ATTACH_PURGE,
         EventKind.ATTACH_MISSING,
         EventKind.ATTACH_RELINK,
+        EventKind.ATTACH_FOUND,
         EventKind.PROXY_ADD,
         EventKind.PROXY_SUPERSEDE,
     }
@@ -146,6 +149,7 @@ ATTACHMENT_EVENT_KINDS: frozenset[EventKind] = frozenset(
         EventKind.ATTACH_PURGE,
         EventKind.ATTACH_MISSING,
         EventKind.ATTACH_RELINK,
+        EventKind.ATTACH_FOUND,
     }
 )
 

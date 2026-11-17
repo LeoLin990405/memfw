@@ -316,6 +316,9 @@ class Repository(
         if not isinstance(parsed, dict):
             raise IntegrityError("Vault configuration must be a YAML mapping")
         self._validate_config_mapping(parsed)
+        # The vault-relative checks (roots not containing the vault or the blob
+        # root) need the vault path, which the static validator does not have.
+        validate_attachment_config(parsed, vault=self.root)
         before = self.config_path.read_bytes() if self.config_path.exists() else b""
         if before == candidate:
             return

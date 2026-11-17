@@ -25,20 +25,22 @@ from __future__ import annotations
 
 import hashlib
 import os
-import sqlite3
+import uuid
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from memfw.core.errors import IntegrityError, MemfwError, NotFoundError
 from memfw.core.models import Event, EventKind
 from memfw.storage.transactions import _serialized
 
-from .blobs import BlobLocationError, hash_stream
+from .blobs import REOWN_HINT, BlobLocationError, BlobOwnerError, hash_stream, stage_blob
 from .locations import Location, location_for_path, looks_like_location, open_location
 from .records import AttachmentRecord, check_attachment_id, render_record
+from .scrub import scrub_stores, vault_sqlite_stores
 from .store import (
     PREVIOUS_SUFFIX,
+    VAULT_ID_KEY,
     _committed_embedded_shas,
     _load_committed,
     _load_record,
@@ -49,6 +51,7 @@ from .store import (
     blob_owners,
     blob_store,
     committed_records,
+    referenced_missing_now,
 )
 
 if TYPE_CHECKING:
@@ -67,8 +70,6 @@ IRRECOVERABLE_COPIES: Final = (
 #: tells a reader which does not know the kind that it projects onto nothing
 #: (harmless for readers that know it; see the event-log forward-compat scheme).
 NO_PROJECTION: Final = {"projection": "none"}
-#: Record fields searched for in SQLite stores after a purge (only values this long).
-_MIN_NEEDLE: Final = 6
 
 
 @dataclass(frozen=True)
@@ -145,62 +146,6 @@ def _target(text: str | Path, roots: dict[str, Path]) -> Location:
     return location_for_path(Path(text), roots)
 
 
-def _vault_sqlite_stores(host: RepositoryHost) -> list[Path]:
-    """SQLite databases in the vault (not their ``-wal``/``-shm``), the index first."""
-
-    found: list[Path] = []
-    for path in sorted(host.root.rglob("*")):
-        name = path.name
-        if not path.is_file() or path.is_symlink():
-            continue
-        if name.endswith(("-wal", "-shm", "-journal")):
-            continue
-        try:
-            with path.open("rb") as stream:
-                header = stream.read(16)
-        except OSError:
-            continue
-        if header == b"SQLite format 3\0":
-            found.append(path)
-    index = Path(host.index_path)
-    found.sort(key=lambda item: (item != index, item.as_posix()))
-    return found
-
-
-def _needles(record: AttachmentRecord | None) -> list[bytes]:
-    if record is None:
-        return []
-    values = [record.original_name, record.note, record.origin, record.rights]
-    if record.location is not None:
-        values.append(record.location.partition(":")[2])
-    return [
-        value.encode("utf-8")
-        for value in values
-        if isinstance(value, str) and len(value.strip()) >= _MIN_NEEDLE
-    ]
-
-
-def _store_contains(path: Path, needles: list[bytes]) -> bool:
-    for candidate in (path, Path(f"{path}-wal")):
-        try:
-            data = candidate.read_bytes()
-        except OSError:
-            continue
-        if any(needle in data for needle in needles):
-            return True
-    return False
-
-
-def _vacuum(path: Path) -> None:
-    connection = sqlite3.connect(path, timeout=5)
-    try:
-        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        connection.execute("VACUUM")
-        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    finally:
-        connection.close()
-
-
 class AttachmentLifecycleMixin:
     """Detach, relink, missing and purge (``AttachmentStoreMixin`` holds add/read/verify)."""
 
@@ -231,17 +176,22 @@ class AttachmentLifecycleMixin:
 
     @_serialized
     def record_missing_attachments(self: RepositoryHost, attachment_ids: list[str]) -> list[str]:
-        """Append ``attach_missing`` for each referenced id not already missing. Returns those."""
+        """Append ``attach_missing`` for each referenced id still missing. Returns those.
+
+        Each original is checked again under the vault lock: one that is back,
+        or whose root is not mounted (missing, empty or unconfigured), gets no
+        event. See :meth:`record_found_attachments` for the way back.
+        """
 
         states = attachment_states(self.events())
         written: list[str] = []
         for attachment_id in attachment_ids:
             identifier = check_attachment_id(attachment_id)
             state = states.get(identifier)
-            if state is None or state.committed_hash is None or state.missing:
+            if state is None or state.committed_hash is None or state.missing or state.detached:
                 continue
             record = _load_record(self, identifier, state.committed_hash)
-            if record.storage != "referenced":
+            if record.storage != "referenced" or referenced_missing_now(self, record) is not True:
                 continue
             self._append_event(
                 EventKind.ATTACH_MISSING,
@@ -253,6 +203,87 @@ class AttachmentLifecycleMixin:
             state.missing = True
             written.append(identifier)
         return written
+
+    @_serialized
+    def record_found_attachments(self: RepositoryHost) -> list[str]:
+        """Append ``attach_found`` for each attachment recorded missing whose original is back.
+
+        "Back" means present at its location again (checked under the vault
+        lock; the bytes are compared by ``verify``). Returns those ids.
+        """
+
+        states = attachment_states(self.events())
+        written: list[str] = []
+        for identifier, state in states.items():
+            if state.committed_hash is None or not state.missing:
+                continue
+            record = _load_record(self, identifier, state.committed_hash)
+            if record.storage != "referenced" or referenced_missing_now(self, record) is not False:
+                continue
+            self._append_event(
+                EventKind.ATTACH_FOUND,
+                identifier,
+                actor="human",
+                after_hash=state.committed_hash,
+                details=dict(NO_PROJECTION),
+            )
+            written.append(identifier)
+        return written
+
+    # -- blob directory ownership ----------------------------------------------------
+
+    @_serialized
+    def reown_blob_store(
+        self: RepositoryHost, *, new_vault_id: bool = False, confirm: bool = False
+    ) -> dict[str, Any]:
+        """Make this vault's blob directory its own again (needs ``confirm``).
+
+        * default: mark ``<blob root>/<vault_id>`` as this vault's (the vault
+          moved to a new path, or the directory predates owner markers);
+        * ``new_vault_id``: for a copy of a vault (snapshot, eval vault). A new
+          ``vault_id`` is written and every blob this vault's committed
+          records name is **copied** from the shared directory into the new
+          one, which is marked as this vault's. The shared directory is not
+          changed, so the original vault keeps all of its blobs.
+        """
+
+        if not confirm:
+            raise IntegrityError("reown changes which vault may delete blobs; confirm it")
+        old = blob_store(self)
+        if not new_vault_id:
+            if old is None:
+                raise IntegrityError("vault has no vault_id; nothing to re-own")
+            if old.owner_status() == "absent":
+                old.ensure()
+            else:
+                old.write_owner()
+            return {"vault_id": old.directory.name, "copied": 0, "missing": []}
+        committed = committed_records(self.events())
+        shas = _committed_embedded_shas(self, committed)
+        if shas is None:
+            raise IntegrityError("a committed record is missing or unreadable; fix it first")
+        config = self.read_config()
+        config[VAULT_ID_KEY] = str(uuid.uuid4())
+        cast(Any, self).configure(config)
+        new = blob_store(self, create=True)
+        assert new is not None
+        copied = 0
+        missing: list[str] = []
+        for sha in sorted(shas):
+            source = None if old is None else old.path_for(sha)
+            if source is None or not source.is_file() or source.is_symlink():
+                missing.append(sha)
+                continue
+            with source.open("rb") as stream:
+                staged = stage_blob(
+                    new.directory.parent, stream, vault=self.root, max_bytes=1 << 62
+                )
+            try:
+                new.link(staged)
+            finally:
+                staged.discard()
+            copied += 1
+        return {"vault_id": new.directory.name, "copied": copied, "missing": missing}
 
     @_serialized
     def relink_attachment(
@@ -382,6 +413,12 @@ class AttachmentLifecycleMixin:
                 )
             elif store is None or not store.has(record.sha256):
                 blob = "absent"
+            elif store.owner_status() != "own":
+                blob = "refused_owner"
+                notices.append(
+                    "the blob directory is not marked as this vault's (a copy of a vault "
+                    f"shares its vault_id), so nothing is purged; {REOWN_HINT}"
+                )
             else:
                 blob = "delete"
         if cited or mentioned:
@@ -389,9 +426,7 @@ class AttachmentLifecycleMixin:
                 "memories cite this attachment; purge does not change them: review "
                 + ", ".join(cited + mentioned)
             )
-        stores = tuple(
-            path.relative_to(self.root).as_posix() for path in _vault_sqlite_stores(self)
-        )
+        stores = tuple(path.relative_to(self.root).as_posix() for path in vault_sqlite_stores(self))
         return PurgePlan(
             attachment_id=identifier,
             storage=storage,
@@ -416,6 +451,11 @@ class AttachmentLifecycleMixin:
             raise IntegrityError("purge is a hard delete; it needs an explicit confirmation")
         events = self.events()
         plan = AttachmentLifecycleMixin.attachment_purge_plan(self, attachment_id, events=events)
+        if plan.blob == "refused_owner":
+            raise BlobOwnerError(
+                "the blob directory is not marked as this vault's; nothing was purged; "
+                + REOWN_HINT
+            )
         identifier = plan.attachment_id
         state = attachment_states(events)[identifier]
         path = _record_path(self, identifier)
@@ -449,6 +489,7 @@ class AttachmentLifecycleMixin:
         except BlobLocationError:
             store = None
         if plan.blob == "delete" and record is not None and store is not None:
+            store.require_owner()
             if _remove_blob(store, record.sha256):
                 result.removed.append("blob")
         for candidate in (path, path.with_name(path.name + PREVIOUS_SUFFIX)):
@@ -457,26 +498,10 @@ class AttachmentLifecycleMixin:
                 result.removed.append(candidate.relative_to(self.root).as_posix())
         if store is not None:
             result.removed.extend(store.reclaim_stale_stages())
-        # The memory index is disposable: drop it so no page keeps the text.
-        for suffix in ("", "-wal", "-shm"):
-            index = Path(f"{self.index_path}{suffix}")
-            if index.exists():
-                index.unlink()
-                result.removed.append(index.relative_to(self.root).as_posix())
-        needles = _needles(record)
-        if needles:
-            for database in _vault_sqlite_stores(self):
-                if not _store_contains(database, needles):
-                    continue
-                name = database.relative_to(self.root).as_posix()
-                try:
-                    _vacuum(database)
-                except sqlite3.Error:
-                    result.still_containing.append(name)
-                    continue
-                result.vacuumed.append(name)
-                if _store_contains(database, needles):
-                    result.still_containing.append(name)
+        scrubbed = scrub_stores(self, record)
+        result.removed.extend(scrubbed.removed)
+        result.vacuumed.extend(scrubbed.vacuumed)
+        result.still_containing.extend(scrubbed.still_containing)
         return result
 
     def attachment_orphan_plan(self: RepositoryHost) -> OrphanPlan:
@@ -490,6 +515,10 @@ class AttachmentLifecycleMixin:
         if store is None:
             return OrphanPlan((), ())
         stages = tuple(store.stale_stages())
+        if store.owner_status() not in {"own", "absent"}:
+            return OrphanPlan(
+                (), stages, blocked=f"the blob directory is not this vault's; {REOWN_HINT}"
+            )
         shas = _committed_embedded_shas(self, committed)
         if shas is None:
             return OrphanPlan(
@@ -509,6 +538,8 @@ class AttachmentLifecycleMixin:
         store = blob_store(self)
         if store is None:
             return plan
+        if plan.orphans:
+            store.require_owner()
         for sha in plan.orphans:
             _remove_blob(store, sha)
         reclaimed = tuple(store.reclaim_stale_stages())

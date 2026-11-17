@@ -62,8 +62,14 @@ def _check_root_name(name: Any) -> str:
     return name
 
 
-def validate_roots_config(raw: Mapping[str, Any], *, vault: Path | None = None) -> None:
-    """Check ``attachments_roots`` in a ``vault.yaml`` mapping (absent is fine)."""
+def validate_roots_config(
+    raw: Mapping[str, Any], *, vault: Path | None = None, blob_root: Path | None = None
+) -> None:
+    """Check ``attachments_roots`` in a ``vault.yaml`` mapping (absent is fine).
+
+    A root may not be ``/``, the home directory, inside or containing the vault,
+    or containing the blob root (``vault`` / ``blob_root`` when known).
+    """
 
     if ROOTS_KEY not in raw:
         return
@@ -79,11 +85,19 @@ def validate_roots_config(raw: Mapping[str, Any], *, vault: Path | None = None) 
             raise IntegrityError(f"{ROOTS_KEY}.{name} must be an absolute or ~-prefixed path")
         if ".." in PurePosixPath(directory).parts:
             raise IntegrityError(f"{ROOTS_KEY}.{name} must not contain '..'")
+        root = Path(directory).expanduser().resolve()
+        if root == Path(root.anchor) or root == Path.home().resolve():
+            raise IntegrityError(f"{ROOTS_KEY}.{name} must not be / or the home directory")
         if vault is not None:
-            root = Path(directory).expanduser().resolve()
             vault_root = vault.expanduser().resolve()
             if root == vault_root or vault_root in root.parents:
                 raise IntegrityError(f"{ROOTS_KEY}.{name} must not be inside the vault")
+            if root in vault_root.parents:
+                raise IntegrityError(f"{ROOTS_KEY}.{name} must not contain the vault")
+        if blob_root is not None:
+            blobs = blob_root.expanduser().resolve()
+            if root == blobs or root in blobs.parents:
+                raise IntegrityError(f"{ROOTS_KEY}.{name} must not contain the blob root")
 
 
 def configured_roots(config: Mapping[str, Any]) -> dict[str, Path]:
@@ -195,20 +209,31 @@ def location_for_path(path: Path, roots: Mapping[str, Path]) -> Location:
     return Location(name, check_relative("/".join(relative)))
 
 
-def _exact_entry(directory_fd: int, name: str) -> bool:
+#: One directory listing per directory (``(st_dev, st_ino)``) for one pass.
+ListingCache = dict[tuple[int, int], frozenset[str]]
+
+
+def _exact_entry(directory_fd: int, name: str, cache: ListingCache | None) -> bool:
     """``name`` is spelled exactly as a directory entry (case and normalization)."""
 
-    return name in os.listdir(directory_fd)
+    if cache is None:
+        return name in os.listdir(directory_fd)
+    info = os.fstat(directory_fd)
+    key = (info.st_dev, info.st_ino)
+    names = cache.get(key)
+    if names is None:
+        names = cache[key] = frozenset(os.listdir(directory_fd))
+    return name in names
 
 
-def open_location(location: Location, roots: Mapping[str, Path]) -> tuple[int, os.stat_result]:
-    """Open the regular file at ``location`` read-only, walking from its root without symlinks.
+def _walk_to(
+    location: Location, roots: Mapping[str, Path], cache: ListingCache | None
+) -> tuple[int, os.stat_result]:
+    """(fd of the last component's directory, ``lstat`` of the last component).
 
-    Returns ``(fd, fstat)``; the caller closes ``fd``. Raises
-    ``FileNotFoundError`` when a component is absent (also when only a
-    different spelling exists: the location is then missing, not
-    redirected), ``LocationError`` for a symlink, a non-regular file or an
-    unconfigured root.
+    The configured root itself is trusted (a mount point or a symlink a human
+    configured, such as ``/tmp`` on macOS, is followed); every component below
+    it is opened with ``O_NOFOLLOW``. The caller closes the fd.
     """
 
     root = roots.get(location.root)
@@ -222,40 +247,80 @@ def open_location(location: Location, roots: Mapping[str, Path]) -> tuple[int, o
         raise FileNotFoundError(f"attachments root {location.root!r} is not available") from None
     try:
         for index, part in enumerate(location.parts):
-            last = index == len(location.parts) - 1
-            if not _exact_entry(current, part):
+            if not _exact_entry(current, part, cache):
                 raise FileNotFoundError(f"{location}: no such file")
             info = os.lstat(part, dir_fd=current)
             if stat.S_ISLNK(info.st_mode):
                 raise LocationError(f"{location}: refusing a symlink in the path")
-            if not last:
-                if not stat.S_ISDIR(info.st_mode):
-                    raise FileNotFoundError(f"{location}: no such file")
-                following = os.open(part, os.O_RDONLY | directory_flag | nofollow, dir_fd=current)
-                os.close(current)
-                current = following
-                continue
-            if not stat.S_ISREG(info.st_mode):
-                raise LocationError(f"{location}: only regular files can be referenced")
-            # O_NONBLOCK: a FIFO swapped in after the lstat does not hang the open.
-            handle = os.open(part, os.O_RDONLY | nofollow | os.O_NONBLOCK, dir_fd=current)
-            opened = os.fstat(handle)
-            if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino) or not stat.S_ISREG(
-                opened.st_mode
-            ):
-                os.close(handle)
-                raise LocationError(f"{location}: the file changed while it was being opened")
-            os.set_blocking(handle, True)
-            return handle, opened
+            if index == len(location.parts) - 1:
+                return current, info
+            if not stat.S_ISDIR(info.st_mode):
+                raise FileNotFoundError(f"{location}: no such file")
+            following = os.open(part, os.O_RDONLY | directory_flag | nofollow, dir_fd=current)
+            os.close(current)
+            current = following
     except OSError as exc:
+        os.close(current)
         if isinstance(exc, FileNotFoundError):
             raise
         if exc.errno in {getattr(os, "ELOOP", -1), getattr(os, "ENOTDIR", -1)}:
             raise LocationError(f"{location}: refusing a symlink in the path") from None
         raise
-    finally:
+    except BaseException:
         os.close(current)
-    raise LocationError(f"{location}: empty location")  # pragma: no cover - parts is non-empty
+        raise
+    os.close(current)  # pragma: no cover - parts is non-empty
+    raise LocationError(f"{location}: empty location")  # pragma: no cover
+
+
+def stat_location(
+    location: Location, roots: Mapping[str, Path], *, cache: ListingCache | None = None
+) -> os.stat_result:
+    """``lstat`` of the regular file at ``location`` (same rules as :func:`open_location`)."""
+
+    directory, info = _walk_to(location, roots, cache)
+    os.close(directory)
+    if not stat.S_ISREG(info.st_mode):
+        raise LocationError(f"{location}: only regular files can be referenced")
+    return info
+
+
+def open_location(
+    location: Location, roots: Mapping[str, Path], *, cache: ListingCache | None = None
+) -> tuple[int, os.stat_result]:
+    """Open the regular file at ``location`` read-only, walking from its root without symlinks.
+
+    Returns ``(fd, fstat)``; the caller closes ``fd``. Raises
+    ``FileNotFoundError`` when a component is absent (also when only a
+    different spelling exists: the location is then missing, not
+    redirected), ``LocationError`` for a symlink, a non-regular file or an
+    unconfigured root. ``cache`` shares directory listings across calls.
+    """
+
+    directory, info = _walk_to(location, roots, cache)
+    try:
+        if not stat.S_ISREG(info.st_mode):
+            raise LocationError(f"{location}: only regular files can be referenced")
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        try:
+            # O_NONBLOCK: a FIFO swapped in after the lstat does not hang the open.
+            handle = os.open(
+                location.name, os.O_RDONLY | nofollow | os.O_NONBLOCK, dir_fd=directory
+            )
+        except OSError as exc:
+            if exc.errno == getattr(os, "ELOOP", -1):
+                raise LocationError(f"{location}: refusing a symlink in the path") from None
+            raise
+        opened = os.fstat(handle)
+        if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino) or not stat.S_ISREG(
+            opened.st_mode
+        ):
+            os.close(handle)
+            raise LocationError(f"{location}: the file changed while it was being opened")
+        os.set_blocking(handle, True)
+        return handle, opened
+    finally:
+        os.close(directory)
 
 
 @dataclass(frozen=True)
@@ -285,63 +350,95 @@ def walk_root(
 ) -> Iterator[TreeFile]:
     """Every regular file under ``<root>/<start>``; symlinks are counted and never followed.
 
-    Names that a location could not hold (backslash, control characters) are
-    counted in ``stats.unsafe_names`` and skipped. Read-only.
+    Each directory is opened with ``O_NOFOLLOW`` relative to its parent's fd
+    and listed through that fd, so a directory swapped for a symlink while
+    walking is not entered. Names that a location could not hold (backslash,
+    control characters) are counted in ``stats.unsafe_names`` and skipped.
+    Read-only.
     """
 
     root = roots.get(root_name)
     if root is None:
         raise LocationError(f"attachments root {root_name!r} is not configured on this host")
     stats = stats if stats is not None else WalkStats()
-    base = root.joinpath(*start)
-    # The start directory itself must be reachable without a symlink.
-    probe = root
-    for part in start:
-        probe = probe / part
-        if probe.is_symlink():
-            raise LocationError(f"{root_name}:{'/'.join(start)}: refusing a symlink in the path")
-    if not base.is_dir():
-        raise FileNotFoundError(f"{root_name}:{'/'.join(start)}: no such directory")
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    directory_flag = getattr(os, "O_DIRECTORY", 0)
+    flags = os.O_RDONLY | directory_flag | nofollow
+    label = f"{root_name}:{'/'.join(start)}"
+    try:
+        base = os.open(root, os.O_RDONLY | directory_flag)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"{label}: no such directory") from None
+    try:
+        for part in start:
+            if part not in os.listdir(base):
+                raise FileNotFoundError(part)
+            if stat.S_ISLNK(os.lstat(part, dir_fd=base).st_mode):
+                raise LocationError(f"{label}: refusing a symlink in the path")
+            following = os.open(part, flags, dir_fd=base)
+            os.close(base)
+            base = following
+    except FileNotFoundError:
+        os.close(base)
+        raise FileNotFoundError(f"{label}: no such directory") from None
+    except NotADirectoryError:
+        os.close(base)
+        raise FileNotFoundError(f"{label}: no such directory") from None
+    except BaseException:
+        os.close(base)
+        raise
     seen = 0
-    pending: list[tuple[Path, tuple[str, ...]]] = [(base, start)]
-    while pending:
-        directory, prefix = pending.pop()
-        try:
-            entries = sorted(os.scandir(directory), key=lambda entry: entry.name, reverse=True)
-        except OSError:
-            stats.unreadable_dirs += 1
-            continue
-        for entry in entries:
-            seen += 1
-            if max_entries is not None and seen > max_entries:
-                stats.truncated = True
-                return
+    pending: list[tuple[int, tuple[str, ...]]] = [(base, start)]
+    try:
+        while pending:
+            directory, prefix = pending.pop()
             try:
-                info = entry.stat(follow_symlinks=False)
+                with os.scandir(directory) as iterator:
+                    entries = sorted(iterator, key=lambda entry: entry.name, reverse=True)
+                for entry in entries:
+                    seen += 1
+                    if max_entries is not None and seen > max_entries:
+                        stats.truncated = True
+                        return
+                    try:
+                        info = os.lstat(entry.name, dir_fd=directory)
+                    except OSError:
+                        stats.other += 1
+                        continue
+                    if stat.S_ISLNK(info.st_mode):
+                        stats.symlinks += 1
+                        continue
+                    parts = (*prefix, entry.name)
+                    try:
+                        check_relative("/".join(parts))
+                    except LocationError:
+                        stats.unsafe_names += 1
+                        continue
+                    if stat.S_ISDIR(info.st_mode):
+                        try:
+                            child = os.open(entry.name, flags, dir_fd=directory)
+                        except OSError:
+                            stats.unreadable_dirs += 1
+                            continue
+                        pending.append((child, parts))
+                    elif stat.S_ISREG(info.st_mode):
+                        yield TreeFile(Location(root_name, parts), info.st_size)
+                    else:
+                        stats.other += 1
             except OSError:
-                stats.other += 1
-                continue
-            if stat.S_ISLNK(info.st_mode):
-                stats.symlinks += 1
-                continue
-            parts = (*prefix, entry.name)
-            try:
-                check_relative("/".join(parts))
-            except LocationError:
-                stats.unsafe_names += 1
-                continue
-            if stat.S_ISDIR(info.st_mode):
-                pending.append((Path(entry.path), parts))
-            elif stat.S_ISREG(info.st_mode):
-                yield TreeFile(Location(root_name, parts), info.st_size)
-            else:
-                stats.other += 1
+                stats.unreadable_dirs += 1
+            finally:
+                os.close(directory)
+    finally:
+        for directory, _ in pending:
+            os.close(directory)
 
 
 __all__ = [
     "RESERVED_ROOT_NAMES",
     "ROOTS_KEY",
     "Location",
+    "ListingCache",
     "LocationError",
     "TreeFile",
     "WalkStats",
@@ -350,6 +447,7 @@ __all__ = [
     "location_for_path",
     "looks_like_location",
     "open_location",
+    "stat_location",
     "validate_roots_config",
     "walk_root",
 ]

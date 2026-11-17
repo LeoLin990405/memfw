@@ -207,7 +207,10 @@ def verify(
         bool,
         typer.Option(
             "--record-missing",
-            help="Append an attach_missing event for each referenced original found gone",
+            help=(
+                "Record state changes: attach_missing for originals found gone, "
+                "attach_found for missing ones that are back"
+            ),
         ),
     ] = False,
     no_candidates: Annotated[
@@ -229,6 +232,7 @@ def verify(
             attachment_ids or None, candidates=not no_candidates
         )
         recorded: list[str] = []
+        found: list[str] = []
         if record_missing:
             gone = [
                 str(problem.attachment_id)
@@ -236,6 +240,7 @@ def verify(
                 if problem.status == "referenced_missing"
             ]
             recorded = repository.record_missing_attachments(gone) if gone else []
+            found = repository.record_found_attachments()
     except MemfwError as exc:
         _fail(exc)
         return
@@ -248,6 +253,7 @@ def verify(
     }
     if record_missing:
         payload["recorded_missing"] = recorded
+        payload["recorded_found"] = found
     _dump(payload)
     if failing:
         raise typer.Exit(code=1)
@@ -326,6 +332,43 @@ def purge(
         _dump(plan)
     except (MemfwError, OSError) as exc:
         _fail(exc)
+
+
+@app.command("reown")
+def reown(
+    root: Root = Path("."),
+    new_vault_id: Annotated[
+        bool,
+        typer.Option(
+            "--new-vault-id",
+            help="For a copy of a vault: new vault_id, blobs copied into its own directory",
+        ),
+    ] = False,
+    yes: Annotated[bool, typer.Option("--yes", help="Confirm")] = False,
+) -> None:
+    """Make the vault's blob directory its own (after a move), or split a copy off (--new-vault-id).
+
+    A copy of a vault (cp -r, a snapshot, an eval vault) shares its vault_id and
+    so its blob directory; run `attach reown --new-vault-id --yes` in the copy
+    before any attachment write. Without --yes nothing is written.
+    """
+    repository = _repo(root)
+    if not yes:
+        store = repository.attachment_blob_store()
+        _dump(
+            {
+                "owner": store.owner_status() if store is not None else "absent",
+                "changed": False,
+                "confirm": "rerun with --yes",
+            }
+        )
+        return
+    try:
+        result = repository.reown_blob_store(new_vault_id=new_vault_id, confirm=True)
+    except (MemfwError, OSError) as exc:
+        _fail(exc)
+        return
+    _dump({**result, "changed": True})
 
 
 @app.command("scan")

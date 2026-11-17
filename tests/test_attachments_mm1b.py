@@ -156,7 +156,7 @@ def test_audio_and_video_default_to_a_reference_inside_a_root(tmp_path: Path) ->
 
 
 def test_roots_config_is_validated(tmp_path: Path) -> None:
-    repository = _repo(tmp_path)
+    repository = _repo(tmp_path / "nest")
     for value in (
         "not a mapping",
         {"Upper": "/data"},
@@ -173,12 +173,25 @@ def test_roots_config_is_validated(tmp_path: Path) -> None:
         config["attachments_roots"] = value
         with pytest.raises(IntegrityError):
             repository.configure(config)
-    # A root inside the vault is refused when it is used.
-    config = repository.read_config()
-    config["attachments_roots"] = {"in": str(repository.root / "inside")}
-    repository.configure(config)
+    # Relative to the vault, the home directory and the blob root: refused when
+    # configured, and (for a hand-edited vault.yaml) when used.
+    for value, message in (
+        ({"in": str(repository.root / "inside")}, "inside the vault"),
+        ({"up": str(tmp_path / "nest")}, "contain the vault"),
+        ({"slash": "/"}, "/ or the home"),
+        ({"home": "~"}, "/ or the home"),
+        ({"local": str(Path.home() / ".local")}, "contain the blob root"),
+    ):
+        config = repository.read_config()
+        config["attachments_roots"] = value
+        with pytest.raises(IntegrityError, match=message):
+            repository.configure(config)
     (repository.root / "inside").mkdir()
     (repository.root / "inside" / "x.txt").write_bytes(b"x")
+    text = repository.config_path.read_text()
+    repository.config_path.write_text(
+        text + f"attachments_roots:\n  in: {repository.root / 'inside'}\n"
+    )
     with pytest.raises(IntegrityError, match="inside the vault"):
         repository.add_attachment(repository.root / "inside" / "x.txt", reference=True)
 
@@ -715,3 +728,199 @@ def test_event_log_never_names_a_location(tmp_path: Path) -> None:
     assert yaml.safe_load(repository.config_path.read_text())["attachments_roots"] == {
         "kh": str(root)
     }
+
+
+# --- review follow-ups: copies, fsck cost, unmounted roots, hard links ----------------
+
+
+def _copy_vault(repository: Repository, target: Path) -> Repository:
+    import shutil
+
+    shutil.copytree(repository.root, target, symlinks=True)
+    return Repository(target, clock=lambda: NOW)
+
+
+def test_a_copied_vault_never_deletes_the_originals_blobs(tmp_path: Path) -> None:
+    from memfw.attachments.blobs import BlobOwnerError
+
+    live, _ = _kh(tmp_path)
+    kept = live.add_attachment(_outside_file(tmp_path, "a.txt", b"live blob A")).record
+    store = live.attachment_blob_store()
+    assert store is not None and store.owner_status() == "own"
+    copy = _copy_vault(live, tmp_path / "snapshot")
+    # The copy shares the vault_id, so it sees the same blob directory, but not as its own.
+    copy_store = copy.attachment_blob_store()
+    assert copy_store is not None and copy_store.directory == store.directory
+    assert copy_store.owner_status() == "foreign"
+    # An orphan the copy cannot tell apart from its own.
+    with _outside_file(tmp_path, "b.txt", b"live blob B").open("rb") as stream:
+        orphan = blobs_module.stage_blob(
+            store.directory.parent, stream, vault=live.root, max_bytes=100
+        )
+    store.link(orphan)
+    statuses = [p.status for p in copy.verify_attachments()[1]]
+    assert "blob_store_foreign_owner" in statuses
+    assert copy.attachment_purge_plan(kept.id).blob == "refused_owner"
+    with pytest.raises(BlobOwnerError):
+        copy.purge_attachment(kept.id, confirm=True)
+    assert copy.attachment_orphan_plan().blocked
+    assert copy.purge_orphan_blobs(confirm=True).orphans == ()
+    with pytest.raises(BlobOwnerError):
+        copy.add_attachment(_outside_file(tmp_path, "c.txt", b"written by the copy"))
+    assert store.has(kept.sha256) and store.has(orphan.sha256)
+    # Recovery in the copy of a purge committed in the copy does not delete either.
+    with copy._locked():
+        copy._append_event(EventKind.ATTACH_PURGE, kept.id, actor="human", details={})
+    copy._atomic_write(copy.pending_path, b'{"operation": "purge_attachment", "targets": []}')
+    copy.recover_pending()
+    assert store.has(kept.sha256)
+    # Splitting a (fresh) copy off: new vault_id, blobs copied, then it may purge its own.
+    copy = _copy_vault(live, tmp_path / "eval-copy")
+    assert _cli("attach", "reown", "--new-vault-id", "-r", str(copy.root)).exit_code == 0
+    assert copy.attachment_blob_store().owner_status() == "foreign"  # type: ignore[union-attr]
+    done = _cli("attach", "reown", "--new-vault-id", "--yes", "-r", str(copy.root))
+    assert done.exit_code == 0, done.output
+    assert json.loads(done.output)["copied"] == 1
+    own = copy.attachment_blob_store()
+    assert own is not None and own.directory != store.directory
+    assert own.owner_status() == "own"
+    assert copy.verify_attachments()[1] == []
+    copy.purge_attachment(kept.id, confirm=True)
+    assert not own.has(kept.sha256)
+    # The live vault is untouched and clean (B is its orphan).
+    assert store.has(kept.sha256) and store.has(orphan.sha256)
+    assert [p.status for p in live.verify_attachments()[1]] == ["blob_orphan"]
+
+
+def test_a_moved_vault_reowns_its_blob_directory(tmp_path: Path) -> None:
+    live, _ = _kh(tmp_path)
+    record = live.add_attachment(_outside_file(tmp_path, "a.txt", b"moved")).record
+    (tmp_path / "vault").rename(tmp_path / "moved-vault")
+    moved = Repository(tmp_path / "moved-vault", clock=lambda: NOW)
+    store = moved.attachment_blob_store()
+    assert store is not None and store.owner_status() == "foreign"
+    assert "blob_store_foreign_owner" in [p.status for p in moved.verify_attachments()[1]]
+    assert _cli("attach", "reown", "--yes", "-r", str(moved.root)).exit_code == 0
+    assert store.owner_status() == "own"
+    assert moved.verify_attachments()[1] == []
+    moved.purge_attachment(record.id, confirm=True)
+    assert not store.has(record.sha256)
+
+
+def test_fsck_only_stats_referenced_originals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from memfw.attachments import store as store_module
+
+    repository, root = _kh(tmp_path)
+    vault = str(repository.root)
+    record = repository.add_attachment("kh:papers/a.pdf", reference=True).record
+    for index in range(5):
+        (root / "papers" / f"extra-{index}.pdf").write_bytes(f"extra {index}".encode())
+        repository.add_attachment(f"kh:papers/extra-{index}.pdf", reference=True)
+    original = (root / "papers" / "a.pdf").read_bytes()
+    # Same size, different bytes: only a hash sees it.
+    (root / "papers" / "a.pdf").write_bytes(bytes(reversed(original)))
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            store_module, "hash_stream", lambda *a: pytest.fail("fsck hashed an original")
+        )
+        assert repository.fsck() == []
+    rows = json.loads(_cli("fsck", "--hash-referenced", "-r", vault).output)
+    assert [(row["memory_id"], row["kind"]) for row in rows] == [
+        (record.id, "attachment_referenced_modified")
+    ]
+    # A size change is seen without hashing.
+    (root / "papers" / "a.pdf").write_bytes(original + b"!")
+    assert [row["kind"] for row in repository.fsck()] == ["attachment_referenced_modified"]
+    # One directory listing per directory for the whole pass.
+    calls = {"n": 0}
+    real = os.listdir
+
+    def counted(path: Any = ".") -> list[str]:
+        calls["n"] += 1
+        return real(path)
+
+    from memfw.attachments import locations as locations_module
+
+    monkeypatch.setattr(locations_module.os, "listdir", counted)
+    repository.verify_attachments(candidates=False)
+    assert calls["n"] == 2  # the root and papers/, not one per original
+
+
+def test_an_empty_or_all_missing_root_is_unavailable_and_missing_clears(tmp_path: Path) -> None:
+    repository, root = _kh(tmp_path)
+    vault = str(repository.root)
+    first = repository.add_attachment("kh:papers/a.pdf", reference=True).record
+    second = repository.add_attachment("kh:papers/b.pdf", reference=True).record
+    # An empty mount point: everything unavailable, nothing recorded missing.
+    hidden = tmp_path / "hidden-tree"
+    root.rename(hidden)
+    root.mkdir()
+    result = _cli("attach", "verify", "--record-missing", "-r", vault)
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert {p["status"] for p in payload["problems"]} == {"referenced_unavailable"}
+    assert payload["recorded_missing"] == []
+    # Every original under the root gone (the root is not empty): also unavailable.
+    (root / "unrelated.txt").write_bytes(b"x")
+    assert {p.status for p in repository.verify_attachments()[1]} == {"referenced_unavailable"}
+    # Re-checked under the lock: an original that is there is never recorded missing.
+    (root / "unrelated.txt").unlink()
+    root.rmdir()
+    hidden.rename(root)
+    assert repository.record_missing_attachments([first.id]) == []
+    # One really missing: recorded, then cleared when it is back.
+    moved = root / "papers" / "a.pdf"
+    moved.rename(root / "a-away.pdf")
+    recorded = json.loads(_cli("attach", "verify", "--record-missing", "-r", vault).output)
+    assert recorded["recorded_missing"] == [first.id]
+    assert repository.attachment_state_map()[first.id].label == "missing"
+    (root / "a-away.pdf").rename(moved)
+    back = json.loads(_cli("attach", "verify", "--record-missing", "-r", vault).output)
+    assert back["recorded_found"] == [first.id] and back["problems"] == []
+    assert repository.attachment_state_map()[first.id].label == "active"
+    found = [event for event in repository.events() if event.kind == EventKind.ATTACH_FOUND]
+    assert [(event.memory_id, event.details) for event in found] == [
+        (first.id, {"projection": "none"})
+    ]
+    assert repository.attachment_state_map()[second.id].label == "active"
+
+
+def test_hard_linked_originals_are_refused(tmp_path: Path) -> None:
+    repository, root = _kh(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    os.link(root / "papers" / "a.pdf", outside / "elsewhere.pdf")
+    with pytest.raises(LocationError, match="hard links"):
+        repository.add_attachment("kh:papers/a.pdf", reference=True)
+    assert repository.attachment_ids() == []
+
+
+def test_recover_scrubs_stores_like_a_purge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sqlite3
+
+    repository, _ = _kh(tmp_path)
+    name = f"{MARKER}-recovered.txt"
+    record = repository.add_attachment(_outside_file(tmp_path, name, b"bytes")).record
+    database = repository.root / "derived.sqlite3"
+    connection = sqlite3.connect(database)
+    connection.execute("CREATE TABLE t (v TEXT)")
+    connection.execute("INSERT INTO t VALUES (?)", (name * 50,))
+    connection.commit()
+    connection.execute("DELETE FROM t")
+    connection.commit()
+    connection.close()
+    assert MARKER.encode() in database.read_bytes()  # freed pages still hold it
+
+    def crash(*args: Any, **kwargs: Any) -> bool:
+        raise OSError("simulated crash after the purge event")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(lifecycle_module, "_remove_blob", crash)
+        with pytest.raises(OSError, match="simulated"):
+            repository.purge_attachment(record.id, confirm=True)
+    repository.recover_pending()
+    assert MARKER.encode() not in database.read_bytes()

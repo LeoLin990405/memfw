@@ -38,6 +38,7 @@ from memfw.storage.transactions import _serialized
 
 from .blobs import (
     DEFAULT_BLOB_ROOT,
+    REOWN_HINT,
     BlobLocationError,
     BlobStore,
     StagedBlob,
@@ -45,12 +46,14 @@ from .blobs import (
     stage_blob,
 )
 from .locations import (
+    ListingCache,
     Location,
     LocationError,
     configured_roots,
     location_for_path,
     looks_like_location,
     open_location,
+    stat_location,
     validate_roots_config,
     walk_root,
 )
@@ -67,6 +70,7 @@ from .records import (
     render_record,
 )
 from .scan import scan_root
+from .scrub import scrub_stores
 
 if TYPE_CHECKING:
     from memfw.core.context import RepositoryHost
@@ -94,7 +98,7 @@ ROOTS_HINT: Final = "attachments_roots in vault.yaml"
 PREVIOUS_SUFFIX: Final = ".prev"
 
 
-def validate_attachment_config(raw: dict[str, Any]) -> None:
+def validate_attachment_config(raw: dict[str, Any], *, vault: Path | None = None) -> None:
     """Check the attachment keys of a ``vault.yaml`` mapping (absent keys are fine)."""
 
     vault_id = raw.get(VAULT_ID_KEY)
@@ -115,7 +119,7 @@ def validate_attachment_config(raw: dict[str, Any]) -> None:
         value = raw.get(key)
         if key in raw and (isinstance(value, bool) or not isinstance(value, int) or value < 1):
             raise IntegrityError(f"{key} must be a positive integer")
-    validate_roots_config(raw)
+    validate_roots_config(raw, vault=vault, blob_root=_blob_root(raw))
 
 
 def _config_int(config: dict[str, Any], key: str, default: int) -> int:
@@ -196,6 +200,8 @@ def attachment_states(events: Iterable[Event]) -> dict[str, AttachmentState]:
             state.detached = True
         elif event.kind == EventKind.ATTACH_MISSING:
             state.missing = True
+        elif event.kind == EventKind.ATTACH_FOUND:
+            state.missing = False
         elif event.kind == EventKind.ATTACH_PURGE:
             state.committed_hash = None
             state.purged = True
@@ -464,9 +470,17 @@ class AttachmentStoreMixin:
         """Hash the original in place (no copy) and commit a referenced record."""
 
         try:
-            handle, _ = open_location(location, roots)
+            handle, info = open_location(location, roots)
         except FileNotFoundError:
             raise ValueError(f"no such file: {location}") from None
+        if info.st_nlink > 1:
+            os.close(handle)
+            # A hard link elsewhere (perhaps outside every root) can change the
+            # bytes behind the location without touching any path memfw checks.
+            raise LocationError(
+                f"{location}: refusing a file with {info.st_nlink} hard links; "
+                "reference a copy with a single link"
+            )
         with os.fdopen(handle, "rb") as stream:
             sha256, size = hash_stream(stream)
         result: AttachResult = cast(Any, self).add_reference_record(
@@ -624,6 +638,7 @@ class AttachmentStoreMixin:
         *,
         events: list[Event] | None = None,
         candidates: bool = True,
+        hash_referenced: bool = True,
     ) -> tuple[list[str], list[AttachmentProblem]]:
         """Re-hash records, blobs and referenced originals. Returns (checked ids, problems).
 
@@ -633,6 +648,8 @@ class AttachmentStoreMixin:
         with ``candidates`` the same root tree is searched for files with the
         same sha256, which are suggested for ``attach relink`` (never relinked
         here). A detached referenced attachment's original is not checked.
+        Without ``hash_referenced`` referenced originals are only ``lstat``-ed
+        (exists, regular, same size): what ``fsck`` does by default.
         ``events`` is the event log when the caller has already read it.
         """
 
@@ -692,8 +709,12 @@ class AttachmentStoreMixin:
                     if record.storage == "referenced" and not states[record.id].detached
                 ],
                 candidates=candidates,
+                hash_files=hash_referenced,
+                states=states,
             )
         )
+        if store is not None and store.owner_status() == "foreign":
+            problems.append(AttachmentProblem(None, "blob_store_foreign_owner", message=REOWN_HINT))
         for record in records:
             if record.storage != "embedded":
                 continue
@@ -771,8 +792,13 @@ class AttachmentStoreMixin:
                     )
         return wanted, problems
 
-    def attachment_fsck_issues(self: RepositoryHost) -> list[dict[str, str | None]]:
+    def attachment_fsck_issues(
+        self: RepositoryHost, *, hash_referenced: bool = False
+    ) -> list[dict[str, str | None]]:
         """``fsck`` rows for attachments; empty (and no I/O past the log) without any.
+
+        Referenced originals are only ``lstat``-ed unless ``hash_referenced``
+        (``fsck`` holds the vault lock; ``attach verify`` always re-hashes).
 
         A vault "has attachments" once it has a record file, an ``attach``
         event or a ``vault_id`` (an add may have stopped before its record).
@@ -782,7 +808,9 @@ class AttachmentStoreMixin:
         events = self.events()
         if not has_records and not committed_records(events) and _vault_id(self) is None:
             return []
-        _, problems = AttachmentStoreMixin.verify_attachments(self, events=events, candidates=False)
+        _, problems = AttachmentStoreMixin.verify_attachments(
+            self, events=events, candidates=False, hash_referenced=hash_referenced
+        )
         return [
             {
                 "memory_id": problem.attachment_id,
@@ -833,7 +861,13 @@ class AttachmentStoreMixin:
             if _is_attachment_name(path.stem) and path.stem in states and states[path.stem].purged
         ]
         if purged:
-            store = blob_store(self)
+            try:
+                store = blob_store(self)
+            except BlobLocationError:
+                store = None
+            # A copy of the vault shares its vault_id: never delete another's blobs.
+            if store is not None and store.owner_status() not in {"own", "absent"}:
+                store = None
             shared = _committed_embedded_shas(self, committed)
             for path in purged:
                 parsed: AttachmentRecord | None
@@ -849,8 +883,8 @@ class AttachmentStoreMixin:
                     and parsed.sha256 not in shared
                 ):
                     _remove_blob(store, parsed.sha256)
-            for suffix in ("", "-wal", "-shm"):
-                Path(f"{self.index_path}{suffix}").unlink(missing_ok=True)
+                # The same scrub a normal purge runs (index dropped, stores VACUUMed).
+                scrub_stores(self, parsed)
         for path in sorted(directory.glob("*.md")):
             if _is_attachment_name(path.stem) and path.stem not in committed:
                 path.unlink()
@@ -913,7 +947,7 @@ def _new_id(host: RepositoryHost, events: Iterable[Event]) -> str:
 def _checked_roots(host: RepositoryHost, config: dict[str, Any]) -> dict[str, Path]:
     """The configured roots; one inside the vault is refused (``IntegrityError``)."""
 
-    validate_roots_config(config, vault=host.root)
+    validate_roots_config(config, vault=host.root, blob_root=_blob_root(config))
     return configured_roots(config)
 
 
@@ -925,9 +959,20 @@ def attachment_roots(host: RepositoryHost) -> dict[str, Path]:
 
 
 def _check_references(
-    host: RepositoryHost, records: list[AttachmentRecord], *, candidates: bool
+    host: RepositoryHost,
+    records: list[AttachmentRecord],
+    *,
+    candidates: bool,
+    hash_files: bool = True,
+    states: dict[str, AttachmentState] | None = None,
 ) -> list[AttachmentProblem]:
-    """Re-hash each referenced original in place; suggest candidates for missing ones."""
+    """Check each referenced original in place; suggest candidates for missing ones.
+
+    ``hash_files`` re-hashes; otherwise only ``lstat`` (exists, regular file,
+    same size). A root whose every lookup fails (two or more originals) or
+    that is an empty directory is treated as not mounted: every original
+    under it is ``referenced_unavailable``, never ``referenced_missing``.
+    """
 
     if not records:
         return []
@@ -938,12 +983,19 @@ def _check_references(
             AttachmentProblem(record.id, "referenced_unavailable", record.sha256, message=str(exc))
             for record in records
         ]
+    cache: ListingCache = {}
     problems: list[AttachmentProblem] = []
     missing: list[tuple[AttachmentRecord, Location]] = []
+    seen: dict[str, int] = {}
     for record in records:
         location = Location.parse(str(record.location))
+        seen[location.root] = seen.get(location.root, 0) + 1
         try:
-            handle, info = open_location(location, roots)
+            if hash_files:
+                handle, info = open_location(location, roots, cache=cache)
+            else:
+                info = stat_location(location, roots, cache=cache)
+                handle = None
         except FileNotFoundError as exc:
             if location.root in roots and roots[location.root].is_dir():
                 missing.append((record, location))
@@ -958,12 +1010,16 @@ def _check_references(
             status = "referenced_unavailable" if location.root not in roots else "referenced_unsafe"
             problems.append(AttachmentProblem(record.id, status, record.sha256, message=str(exc)))
             continue
-        with os.fdopen(handle, "rb") as stream:
-            if info.st_size != record.size:
-                actual: str | None = None
-                size = info.st_size
-            else:
-                actual, size = hash_stream(stream)
+        actual: str | None = record.sha256
+        size = info.st_size
+        if handle is not None:
+            with os.fdopen(handle, "rb") as stream:
+                if info.st_size != record.size:
+                    actual = None
+                else:
+                    actual, size = hash_stream(stream)
+        elif info.st_size != record.size:
+            actual = None
         if actual != record.sha256:
             problems.append(
                 AttachmentProblem(
@@ -975,8 +1031,20 @@ def _check_references(
                     message=f"size {size} != {record.size}" if size != record.size else "",
                 )
             )
-    found = _find_candidates(missing, roots) if candidates and missing else {}
+    unmounted = _unmounted_roots(missing, seen, roots)
+    real = [(record, location) for record, location in missing if location.root not in unmounted]
+    found = _find_candidates(real, roots) if candidates and real else {}
     for record, location in missing:
+        if location.root in unmounted:
+            problems.append(
+                AttachmentProblem(
+                    record.id,
+                    "referenced_unavailable",
+                    record.sha256,
+                    message=f"{location.root}: {unmounted[location.root]}",
+                )
+            )
+            continue
         problems.append(
             AttachmentProblem(
                 record.id,
@@ -987,6 +1055,56 @@ def _check_references(
             )
         )
     return problems
+
+
+def _unmounted_roots(
+    missing: list[tuple[AttachmentRecord, Location]],
+    seen: dict[str, int],
+    roots: dict[str, Path],
+) -> dict[str, str]:
+    """Roots that look unmounted: an empty directory, or every lookup (two or more) failed."""
+
+    gone: dict[str, int] = {}
+    for _, location in missing:
+        gone[location.root] = gone.get(location.root, 0) + 1
+    unmounted: dict[str, str] = {}
+    for root_name, count in gone.items():
+        try:
+            empty = not any(os.scandir(roots[root_name]))
+        except OSError:
+            empty = True
+        if empty:
+            unmounted[root_name] = "the root is an empty directory (not mounted?)"
+        elif count >= 2 and count == seen.get(root_name):
+            unmounted[root_name] = "every original under the root is gone (not mounted?)"
+    return unmounted
+
+
+def referenced_missing_now(host: RepositoryHost, record: AttachmentRecord) -> bool | None:
+    """Re-check one referenced original: ``True`` missing, ``False`` present, ``None`` unknown.
+
+    ``None`` when the root is not configured, not a directory or empty (not
+    mounted), or the location is refused; used under the vault lock before
+    the missing state changes.
+    """
+
+    try:
+        roots = attachment_roots(host)
+    except IntegrityError:
+        return None
+    location = Location.parse(str(record.location))
+    root = roots.get(location.root)
+    if root is None or not root.is_dir():
+        return None
+    try:
+        if not any(os.scandir(root)):
+            return None
+        stat_location(location, roots)
+    except FileNotFoundError:
+        return True
+    except (OSError, LocationError):
+        return None
+    return False
 
 
 def _find_candidates(
@@ -1076,6 +1194,7 @@ __all__ = [
     "AttachmentState",
     "attachment_roots",
     "attachment_states",
+    "referenced_missing_now",
     "blob_owners",
     "blob_store",
     "committed_records",
