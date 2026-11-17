@@ -28,6 +28,8 @@ and nothing else of memfw; memfw never imports this package. Import name
   live 2.5.3 server over a throwaway synthetic index (no embeddings, so lexical
   answers only; text fields redacted). Run the contract tests, and re-record against the new version with
   `python -m memfw_adapter_qmd.record`, before upgrading QMD.
+- Attribution: `memfw_adapter_qmd/THIRD_PARTY.md` (shipped in the wheel) carries
+  QMD's MIT notice.
 - No QMD code is included or vendored. The adapter talks to a separately
   running `qmd mcp --http` server. `memfw_adapter_qmd.paths.handelize`
   re-implements QMD's published path-normalisation rule so results can be

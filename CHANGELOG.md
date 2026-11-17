@@ -193,7 +193,8 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   returned. Loopback endpoint by default, proxy bypass for loopback, no
   redirects. When QMD is unavailable or times out the coordinator reports it
   degraded and FTS answers. memfw does not import it; with no adapter config
-  nothing changes.
+  nothing changes. QMD's MIT notice ships in the wheel
+  (`memfw_adapter_qmd/THIRD_PARTY.md`).
 - Contract tests replaying fixtures recorded from a live QMD 2.5.3 over a
   throwaway synthetic index (`tests/fixtures/qmd_contract/`, lexical only:
   no embeddings; CI uses a loopback fake, no real QMD), the

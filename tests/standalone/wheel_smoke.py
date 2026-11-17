@@ -339,7 +339,11 @@ def _qmd(root: Path) -> None:
     from memfw_ports.types import Candidate
 
     assert seam.Candidate is Candidate, seam.Candidate
-    _ok("import memfw_adapter_qmd (ports from memfw_ports)")
+    from importlib.resources import files
+
+    notice = files("memfw_adapter_qmd").joinpath("THIRD_PARTY.md").read_text(encoding="utf-8")
+    assert "MIT License" in notice and "github.com/tobi/qmd" in notice, notice[:200]
+    _ok("import memfw_adapter_qmd (ports from memfw_ports, QMD notice shipped)")
     manifest = root / "qmd-manifest.json"
     documents = [
         {"id": "m-a", "path": "memories/m-a.md", "meta": {"privacy_class": "none", "tenant": ""}},

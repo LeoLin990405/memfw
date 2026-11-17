@@ -852,6 +852,8 @@ def test_package_metadata_entry_points_and_isolation() -> None:
         "qmd": "memfw_adapter_qmd:MEMORY_SPEC",
         "qmd-notes": "memfw_adapter_qmd:NOTES_SPEC",
     }
+    notice = (ADAPTER_SRC / "memfw_adapter_qmd" / "THIRD_PARTY.md").read_text(encoding="utf-8")
+    assert "MIT License" in notice and "Copyright (c) 2024-2026 Tobi Lutke" in notice
     readme = (ADAPTER / "README.md").read_text(encoding="utf-8")
     assert "MIT" in readme and QMD_VERSION in readme
     # The adapter imports nothing of memfw but the ports, and memfw never imports it.
