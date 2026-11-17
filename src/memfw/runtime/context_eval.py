@@ -45,17 +45,18 @@ and every one after it are "demoted" (they would be a catalogue line and a
 cover nothing in that row. Nothing here changes a default: the evaluation
 only reports numbers for the defaults to be decided on.
 
-**Read-only.** The snapshot is never opened in place. The evaluation
-refuses a snapshot that would need ``memfw recover`` (a pending transaction
-or event append), one that contains a symlink, and an output path inside it, copies it once into a private
-temporary directory (without its search index and lock file) and runs every
-provider and search there; the copy is deleted afterwards. The snapshot, the
-conversation store and the usage store (with their ``-wal``, ``-shm`` and
-``-journal`` sidecars) are fingerprinted (path, size, mtime) before and
-after; a change fails the run (``SnapshotChanged``) and no report is
-returned. The stores are never opened where they are: each is copied with
-its present sidecars into the private directory (a WAL store's last writes
-may be only in its ``-wal``) and the copy is opened read-only (``mode=ro``).
+**Read-only.** The snapshot is never opened in place. The evaluation refuses
+a snapshot that would need ``memfw recover`` (a pending transaction or event
+append), one that contains a symlink, and an output path inside it, copies
+it once into a private temporary directory (without its search index and
+lock file) and runs every provider and search there; the copy is deleted
+afterwards. The snapshot, the conversation store and the usage store (with
+their ``-wal``, ``-shm`` and ``-journal`` sidecars) are fingerprinted (path,
+size, mtime) before and after; a change fails the run (``SnapshotChanged``)
+and no report is returned. The stores are never opened where they are: each
+is copied with its present sidecars into the private directory (a WAL
+store's last writes may be only in its ``-wal``) and the copy is opened
+read-only (``mode=ro``).
 
 **Privacy.** The report holds counts, ratios, token estimates, timings,
 slot names and cap values only: no memory body, title, query text, session
@@ -615,11 +616,12 @@ def _provider(
     """The real provider of slot ``name``; ``None`` when this build has no such slot.
 
     ``current`` is ``None`` (unavailable) unless the runtime enables it, as
-    ``memory_context`` refuses it then. ``handoff`` reads the given conversation store (read-only) through the
-    conversation share, never the store ``vault.yaml`` names: without
-    ``conversations`` it is ``unavailable``. Model summaries come from
-    ``state`` (a private copy of ``--state``) or, without it, from nowhere:
-    the worker state ``vault.yaml`` names is never read.
+    ``memory_context`` refuses it then. ``handoff`` reads the given
+    conversation store (read-only) through the conversation share, never the
+    store ``vault.yaml`` names: without ``conversations`` it is
+    ``unavailable``. Model summaries come from ``state`` (a private copy of
+    ``--state``) or, without it, from nowhere: the worker state ``vault.yaml``
+    names is never read.
     """
 
     if name == HANDOFF_SLOT:
