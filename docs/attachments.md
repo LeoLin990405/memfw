@@ -417,9 +417,11 @@ nothing.
 `purge ID` is the hard delete and needs `--yes`. Without it the plan is
 printed and nothing is written:
 
-* `cited_by` (memories whose `evidence` cites `att:ID`) and `mentioned_by`
+* `cited_by` (memories whose `evidence` names the attachment, by every pointer
+  the MM3 gate counts: `att:ID`, its hash, its blob path, its location) and `mentioned_by`
   (memories whose title or body mention `att:ID`). Purge never changes a
-  memory: a human decides what to do with them. (There are no proxies yet;
+  memory: a human decides what to do with them; after the purge `fsck`
+  reports each pointer left dangling (`evidence_attachment_invalid`). (There are no proxies yet;
   proxy text quoted in memory bodies is listed once MM2 adds proxies.)
 * `blob`: `delete`, `keep_shared` (the notice says how many other
   attachments still use the same blob: **the original is not deleted**),

@@ -362,15 +362,15 @@ class AttachmentLifecycleMixin:
         except (IntegrityError, NotFoundError):
             record = None
         reference = f"att:{identifier}"
-        cited: list[str] = []
-        mentioned: list[str] = []
-        for document in self.list():
-            if any(
-                item == reference or item.startswith(reference + "#") for item in document.evidence
-            ):
-                cited.append(document.id)
-            elif reference in document.body or reference in document.title:
-                mentioned.append(document.id)
+        # Every pointer the MM3 gate treats as naming the attachment (att:, its
+        # hash, its blob path, its location), plus plain mentions in the text.
+        cited = cast(Any, self).attachment_citations(identifier)
+        mentioned = [
+            document.id
+            for document in self.list()
+            if document.id not in cited
+            and (reference in document.body or reference in document.title)
+        ]
         notices: list[str] = []
         shared: list[str] = []
         heir: str | None = None

@@ -477,7 +477,7 @@ def _grep(paths: list[Path], needle: bytes) -> list[str]:
 def test_purge_needs_confirmation_and_lists_citing_memories(tmp_path: Path) -> None:
     repository, _ = _kh(tmp_path)
     vault = str(repository.root)
-    record = repository.add_attachment(_outside_file(tmp_path, "scan.png", b"bytes")).record
+    record = repository.add_attachment(_outside_file(tmp_path, "scan.pdf", b"%PDF bytes")).record
     repository.add(
         "Cites it", "Seen on the scan.", memory_id="m-cites", evidence=[f"att:{record.id}#page=1"]
     )
@@ -558,7 +558,11 @@ def test_purge_leaves_nothing_behind(tmp_path: Path, private_home: Path) -> None
     ]
     assert repository.get("m-cites").evidence == [f"att:{embedded.id}"]
     assert repository.attachment_ids() == []
-    assert repository.fsck() == []
+    # The citing memory was listed before the purge and is left to a human;
+    # fsck now reports its dangling pointer (MM3), and nothing else.
+    assert [(row["memory_id"], row["kind"]) for row in repository.fsck()] == [
+        ("m-cites", "evidence_attachment_invalid")
+    ]
     assert repository.verify_attachments() == ([], [])
     with pytest.raises(NotFoundError):
         repository.get_attachment(embedded.id)
