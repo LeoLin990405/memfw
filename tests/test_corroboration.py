@@ -32,6 +32,17 @@ from memfw.dream.stage import stage
 from memfw.ports.claims import ClaimEvidence, StagedClaim
 
 T0 = datetime(2026, 3, 1, 12, 0, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """The projection lives under the home directory: give every test its own."""
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    return home
+
+
 SHARE: dict[str, Any] = {
     "conversation_share": {
         "enabled": True,
@@ -361,7 +372,9 @@ def test_temp_file_is_created_exclusively(tmp_path: Path, monkeypatch: pytest.Mo
     repository = _vault(tmp_path)
     repository.add(LONG, "body", evidence=["conv:claude:p1@1"])
     monkeypatch.setattr(corroboration.secrets, "token_hex", lambda _n: "fixed")
-    planted = repository.root / ".corroboration.sqlite3.fixed.tmp"
+    target = projection_path(repository.root)
+    target.parent.mkdir(parents=True)
+    planted = target.with_name(f".{target.name}.fixed.tmp")
     planted.write_bytes(b"planted")
     with pytest.raises(FileExistsError):
         rebuild(repository, _rules(repository))
@@ -603,7 +616,7 @@ def test_cli_rebuild_and_show(tmp_path: Path) -> None:
     built = runner.invoke(app, ["corroboration", "rebuild", "--root", root])
     assert built.exit_code == 0, built.output
     assert json.loads(built.stdout) == {
-        "path": "corroboration.sqlite3",
+        "path": str(projection_path(repository.root)),
         "memories": 1,
         "mentions": 4,
     }

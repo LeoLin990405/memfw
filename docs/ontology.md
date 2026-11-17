@@ -143,6 +143,39 @@ pre-release build, is ignored: `graph rebuild` adds `"legacy_file":
 "edges.sqlite3"` to its answer and prints a one-line note on stderr
 suggesting you delete it. memfw never deletes it.
 
+**Which vault built it.** The file's meta table records the vault's
+identity (`memfw.core.local_data.vault_identity`): its resolved path, its
+`vault_id` from `vault.yaml` when it has one (written on the first attachment
+and never changed), and the hash of its first event (read from the segment
+catalog once the log is compacted, else from the first line of
+`events.jsonl`; the hash covers that event's random id and its timestamp).
+`graph match` refuses a file whose identity does not match the vault — paths
+must be equal, then the `vault_id`s when both sides have one, else the
+first-event hashes — with `edge projection belongs to another vault: rebuild
+it (memfw graph rebuild)`. So deleting a vault and running `memfw init` at
+the same path never lets the new vault read the old vault's edges, even
+before a rebuild. A vault that gets its `vault_id` after a build still
+matches (through its first event); a vault whose event log was empty at
+build time stops matching at its first write, like any stale projection.
+A projection from the release before (schema 1, no identity) is refused as
+"another schema version: rebuild it".
+
+**Moved, symlinked and `$HOME` vaults.** The file is keyed by the vault's
+*resolved* path:
+
+- a vault opened through a symlink uses the same projection as its target
+  (same key, same identity);
+- a moved (or copied) vault has a new key, so it starts with no projection:
+  run `memfw graph rebuild` at the new path. The old file stays where it
+  was, unused, until you delete it;
+- a read-only vault (its `.memfw.lock` cannot be opened) can still be
+  rebuilt: the vault is read without the lock, between two transaction
+  fingerprints, retried up to 3 times if a write lands in between, then the
+  rebuild fails with a "try again" message;
+- a vault rooted at `$HOME` itself cannot have an edge projection: the file
+  would be inside the vault, and `graph rebuild` refuses that. The same holds
+  for the corroboration projection.
+
 **Edges** (`memfw.edges.collect_edges`). One edge per `(relation, source,
 target)`, each with the vault field it came from:
 
@@ -246,9 +279,23 @@ canonical spelling). Examples: `about><about` (memories that share a concept),
 memory on a path is re-read from the live vault and checked against these
 rules with the current `legacy_privacy_default`, and a concept file that
 states a privacy level is re-read too, so a memory deleted or made private
-after the last rebuild is hidden before the next one. A hidden node is absent:
+after the last rebuild is hidden before the next one. A concept node must
+still exist in the vault: a concept file (or a label/alias of one, through
+the alias index), else a value that a memory the caller may see names in
+`about` or `applies_to` (only the memories the projection links to that
+node by `about`/`applies_to` are re-read, each once per match, so the cost
+grows with the node's degree, not the vault). Any other concept node — one only a deleted,
+edited or hidden memory named, or one whose file was removed and that no
+visible memory names — is hidden. A hidden node is absent:
 no path runs through it, it does not use up the fan-out, and a hidden start
 answers exactly like a start that does not exist (no paths, not truncated).
+
+*Known limit:* the store reads a node's neighbours a page at a time, and
+every page after a node's first costs one of the 2000 store queries, also
+when the live check then hides all its rows. A match over a node with many
+thousands of hidden neighbours can therefore run out of queries and report
+`truncated: true` sooner than the visible result alone would explain. It
+reveals no hidden id, and needs that scale to notice.
 
 **Scope.** CLI and runtime (`memfw.runtime.graph`) only. There is no MCP tool:
 the default `tools/list` is unchanged. `multihop` recall does not use these

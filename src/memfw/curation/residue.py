@@ -35,7 +35,10 @@ The memory's *state* decides what counts as residue:
 Stores checked: the FTS index (``index.sqlite3``: ``memory_rows``,
 ``memory_temporal``, ``memory_access``, ``memory_fts``), the related
 projection (``related_items``, ``related_edges`` as source or target), the
-corroboration projection (``corroboration.sqlite3`` ``mentions``), the usage
+corroboration projection (``~/.local/share/memfw/corroboration/<key>.sqlite3``
+``mentions``; a vault-root ``corroboration.sqlite3`` from an earlier release,
+which memfw no longer reads, is checked too when it exists, as
+``corroboration_legacy``), the usage
 projection (``~/.local/share/memfw/usage/<key>.sqlite3`` ``used``) and,
 when a path is given, the entity projection (``entities``). A store whose file
 is missing has nothing to carry and is clean; a file that cannot be read
@@ -64,6 +67,7 @@ import yaml
 
 from ..core.models import EventKind
 from ..core.repository import Repository
+from ..corroboration import legacy_path as corroboration_legacy_path
 from ..corroboration import projection_path as corroboration_path
 from ..usage import projection_path as usage_path
 
@@ -79,6 +83,7 @@ REMEDIES: Final = {
     "index": "memfw index rebuild",
     "related": "memfw memory-related-build",
     "corroboration": "memfw corroboration rebuild",
+    "corroboration_legacy": "delete corroboration.sqlite3 at the vault root (no longer used)",
     "usage": "reset the usage projection (it holds signals only)",
     "entities": "rebuild the entity projection",
     "vault": "memfw fsck",
@@ -317,18 +322,21 @@ def projection_residue(
         related.residue = any(related.rows.values())
     checks.append(related)
 
-    for store, path, queries in (
-        (
-            "corroboration",
-            corroboration_path(repository.root),
-            {"mentions": ("mentions", "memory_id = ?", (memory_id,))},
-        ),
+    mentions = {"mentions": ("mentions", "memory_id = ?", (memory_id,))}
+    stores: list[tuple[str, Path, dict[str, tuple[str, str, tuple[Any, ...]]]]] = [
+        ("corroboration", corroboration_path(repository.root, home=home), mentions),
+    ]
+    legacy = corroboration_legacy_path(repository.root)
+    if legacy.is_file() or legacy.is_symlink():
+        stores.append(("corroboration_legacy", legacy, mentions))
+    stores.append(
         (
             "usage",
             usage_path(repository.root, home=home),
             {"used": ("used", "memory_id = ?", (memory_id,))},
-        ),
-    ):
+        )
+    )
+    for store, path, queries in stores:
         check = _count_rows(path, queries)
         check.store = store
         if check.error is None:

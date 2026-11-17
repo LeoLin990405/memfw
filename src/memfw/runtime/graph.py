@@ -14,7 +14,15 @@ This module picks the store, turns the caller's settings into an
   checked against the three rules above, with the vault's current
   ``legacy_privacy_default``; a concept file that states a privacy level is
   re-read too. A memory that was deleted or made private after the last
-  rebuild is therefore hidden before the next one.
+  rebuild is therefore hidden before the next one. A concept node must still
+  exist in the vault: a concept file (or a label/alias of one, through the
+  alias index), else a value a memory the caller may see names in ``about``
+  or ``applies_to`` (only the memories the projection links to it are
+  re-read, once per match: ``O(degree)``). Any other concept
+  node, such as one only a deleted memory named, is hidden;
+* **which vault**: the projection must have been built from this vault
+  (``memfw.edges.vault_store`` checks the identity it records), else the
+  match fails with "projection belongs to another vault: rebuild".
 
 A hidden node is treated as absent: a path through it is never returned, it
 does not count towards the fan-out, and a start node the caller may not see
@@ -52,7 +60,7 @@ from memfw.ports.patterns import (
     parse_path,
 )
 from memfw.ports.privacy import REMOTE_CLEARANCE, admits, effective_level
-from memfw.ports.projection_store import EdgeScope, ProjectionStore
+from memfw.ports.projection_store import MAX_QUERY_LIMIT, EdgeScope, ProjectionStore
 
 #: The clearance a graph query gets when the caller sets none.
 DEFAULT_CLEARANCE: Final = REMOTE_CLEARANCE
@@ -91,8 +99,12 @@ class _LiveCheck:
         tenant: str,
         clearance: frozenset[str],
         allowed_sources: tuple[str, ...],
+        store: ProjectionStore | None = None,
+        scope: EdgeScope | None = None,
     ) -> None:
         self.repository = repository
+        self.store = store
+        self.scope = scope
         self.tenant = tenant
         self.clearance = clearance
         self.allowed_sources = allowed_sources
@@ -100,12 +112,16 @@ class _LiveCheck:
         self.concepts = load_concepts(repository.root)
         self.aliases = project_aliases(self.concepts)
         self._memories: dict[str, bool] = {}
+        self._documents: dict[str, MemoryDocument | None] = {}
+        self._named: dict[str, bool] = {}
 
     def memory(self, memory_id: str) -> MemoryDocument | None:
-        try:
-            return self.repository.get(memory_id)
-        except (MemfwError, OSError, UnicodeDecodeError, ValueError):
-            return None
+        if memory_id not in self._documents:
+            try:
+                self._documents[memory_id] = self.repository.get(memory_id)
+            except (MemfwError, OSError, UnicodeDecodeError, ValueError):
+                self._documents[memory_id] = None
+        return self._documents[memory_id]
 
     def memory_visible(self, memory_id: str) -> bool:
         if memory_id not in self._memories:
@@ -126,12 +142,62 @@ class _LiveCheck:
         )
         return admits(self.clearance, level)
 
+    def named(self, node: str) -> bool:
+        """Whether a memory the caller may see still names ``node`` in ``about``/``applies_to``.
+
+        Only the memories the projection links to ``node`` by ``about`` or
+        ``applies_to`` are candidates (``O(degree)``, never the whole vault):
+        each is re-read live (cached for the match) and must still carry the
+        value. The first confirmation ends the search. Without a store nothing
+        is confirmed (fail closed).
+        """
+
+        if node in self._named:
+            return self._named[node]
+        found = False
+        if self.store is not None and self.scope is not None:
+            for relation in ("about", "applies_to"):
+                after = None
+                while not found:
+                    page = self.store.query(
+                        self.scope,
+                        node=node,
+                        direction="in",
+                        relations=(relation,),
+                        limit=MAX_QUERY_LIMIT,
+                        after=after,
+                    )
+                    for edge in page:
+                        if edge.source_kind != "memory" or not self.memory_visible(edge.source):
+                            continue
+                        document = self.memory(edge.source)
+                        values = getattr(document, relation, ()) if document else ()
+                        if any(isinstance(v, str) and v.strip() == node for v in values):
+                            found = True
+                            break
+                    if len(page) < MAX_QUERY_LIMIT:
+                        break
+                    after = page[-1].key
+                if found:
+                    break
+        self._named[node] = found
+        return found
+
+    def concept_visible(self, node: str) -> bool:
+        if node in self.concepts:
+            level = concept_level(self.concepts[node])
+            return level is None or admits(self.clearance, level)
+        found = concept_ref(self.concepts, self.aliases, node)
+        if found is not None:
+            return found[1] is None or admits(self.clearance, found[1])
+        # Not a concept of this vault: shown only while a visible memory names it.
+        return self.named(node)
+
     def __call__(self, node: str, kind: str) -> bool:
         if kind == "memory":
             return self.memory_visible(node)
-        if kind == "concept" and node in self.concepts:
-            level = concept_level(self.concepts[node])
-            return level is None or admits(self.clearance, level)
+        if kind == "concept":
+            return self.concept_visible(node)
         return True
 
     def start(self, value: str) -> tuple[str, str]:
@@ -175,8 +241,9 @@ def graph_match(
 ) -> dict[str, Any]:
     """Paths from ``start`` along ``path`` that the caller may see.
 
-    ``store`` defaults to the vault's edge projection; a missing projection
-    raises ``GraphError`` (run ``memfw graph rebuild``). The answer is
+    ``store`` defaults to the vault's edge projection; a missing projection,
+    or one built from another vault, raises ``GraphError`` (run ``memfw graph
+    rebuild``). The answer is
     ``{from, path, paths, truncated}``; ``path`` is the canonical spelling
     (inverse names resolved).
     """
@@ -190,7 +257,10 @@ def graph_match(
     except PatternError as exc:
         raise GraphError(str(exc)) from exc
     scope = EdgeScope(tenant, _clearance(clearance))
-    backend: ProjectionStore = store if store is not None else vault_store(repository)
+    try:
+        backend: ProjectionStore = store if store is not None else vault_store(repository)
+    except MemfwError as exc:
+        raise GraphError(f"vault identity unreadable: {exc}") from exc
     # One read-only connection for the whole match (SQLite store).
     with backend.reading() if isinstance(backend, SqliteProjectionStore) else nullcontext():
         return _match(
@@ -230,6 +300,8 @@ def _match(
         tenant=tenant,
         clearance=scope.clearance,
         allowed_sources=tuple(allowed_sources),
+        store=backend,
+        scope=scope,
     )
     node, kind = check.start(start)
     try:

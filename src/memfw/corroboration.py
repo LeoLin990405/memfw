@@ -55,6 +55,24 @@ under the current share policy: only apps the caller may read (plus its own)
 appear in ``apps`` and in ``count``. Hidden apps are filtered again at read
 time, so a policy tightened after a rebuild still holds.
 
+**Where it lives** (:func:`projection_path`): outside the vault, in memfw's
+local data directory and keyed by the vault (``memfw.core.local_data``, the
+rule the usage and edge projections follow):
+``~/.local/share/memfw/corroboration/<key>.sqlite3``. The file is 0600, a
+directory it creates 0700, and a rebuild refuses any path inside the vault.
+Outside the vault it never counts toward the physical-size budget (which
+drives total-mode budget enforcement, where a hard forget deletes memories)
+or the transaction fingerprint, however many mentions it holds. A
+``corroboration.sqlite3`` left at the vault root by an earlier release is
+ignored (:func:`legacy_path`): ``memfw corroboration rebuild`` notes it and
+nothing deletes it.
+
+**Which vault.** The meta table records the vault identity
+(``memfw.core.local_data.vault_identity``). A reader that passes
+``identity`` to :func:`corroboration_for` refuses a file another vault built
+at the same path ("projection belongs to another vault: rebuild"); every
+memfw reader does.
+
 Rebuilds are deterministic: the same vault gives the same bytes.
 """
 
@@ -74,11 +92,21 @@ from typing import Any, Final, Protocol
 import yaml
 
 from .core.epistemic import _GENERATED_PROVENANCES, EXPERIENCE_POINT_TYPE
+from .core.local_data import (
+    VaultIdentity,
+    ensure_private_dir,
+    projection_file,
+    read_vault,
+    vault_identity,
+)
 from .core.models import EventKind, MemoryDocument
 from .core.repository import Repository
 
-SCHEMA_VERSION: Final = 1
+#: 2: outside the vault, and the meta table records the vault identity.
+SCHEMA_VERSION: Final = 2
 FILENAME: Final = "corroboration.sqlite3"
+#: The ``memfw.core.local_data`` kind: ``~/.local/share/memfw/corroboration/<key>.sqlite3``.
+KIND: Final = "corroboration"
 CLAIMS_REPORT_KIND: Final = "conversation-memory-candidates"
 _DREAM_DIR: Final = Path("_candidates") / "dream"
 _APP = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
@@ -94,6 +122,10 @@ CLAIMS_TENANT: Final = ""
 
 class CorroborationError(ValueError):
     """The projection cannot be built or read (message is safe to show)."""
+
+
+class OtherVaultError(CorroborationError):
+    """The projection file was built from another vault at the same path: rebuild it."""
 
 
 class ShareRules(Protocol):
@@ -139,8 +171,14 @@ class _Mention:
     seen: str | None
 
 
-def projection_path(root: Path | str) -> Path:
-    """Where the projection lives: next to ``index.sqlite3`` at the vault root."""
+def projection_path(root: Path | str, *, home: Path | None = None) -> Path:
+    """Where the vault's projection lives: outside it, under the home directory."""
+
+    return projection_file(root, KIND, home=home)
+
+
+def legacy_path(root: Path | str) -> Path:
+    """Where an earlier release put the projection (the vault root). Never read or deleted."""
 
     return Path(root) / FILENAME
 
@@ -423,20 +461,45 @@ _SCHEMA: Final = (
 )
 
 
-def rebuild(repository: Repository, rules: ShareRules, path: Path | None = None) -> dict[str, int]:
+def rebuild(
+    repository: Repository,
+    rules: ShareRules,
+    path: Path | None = None,
+    *,
+    identity: VaultIdentity | None = None,
+) -> dict[str, int]:
     """Rebuild the projection from the vault; return ``{memories, mentions}``.
 
     Read-only on the vault. Writes a fresh file and renames it into place, so a
-    reader never sees a half-built projection.
+    reader never sees a half-built projection. The vault is read under its
+    lock (unlocked between two fingerprints when the lock file cannot be
+    opened: a read-only vault); the file is written after it is released. ``path`` defaults to
+    :func:`projection_path`; a path inside the vault is refused. ``identity``
+    (default: the vault's, ``vault_identity``) is recorded in the meta table.
     """
 
     target = Path(path) if path is not None else projection_path(repository.root)
-    memories_dir = repository.memories_dir.resolve()
+    vault = repository.root.resolve()
     resolved = target.resolve()
-    if resolved == memories_dir or memories_dir in resolved.parents:
-        raise CorroborationError("refusing to write the projection inside memories/")
-    data = collect(repository, rules)
-    target.parent.mkdir(parents=True, exist_ok=True)
+    if resolved == vault or vault in resolved.parents:
+        raise CorroborationError("refusing to write the corroboration projection inside the vault")
+    if target.is_symlink():
+        raise CorroborationError("refusing a symlinked corroboration projection")
+    # Read under the vault lock (the one writers hold): a rebuild beside a
+    # write sees the vault before or after it, never a pending transaction.
+    # A read-only vault is read unlocked between two fingerprints.
+    stamp, data = read_vault(
+        repository,
+        lambda: (
+            identity if identity is not None else vault_identity(repository),
+            collect(repository, rules),
+        ),
+    )
+    if not target.parent.exists():
+        try:
+            ensure_private_dir(target.parent)
+        except NotADirectoryError as exc:
+            raise CorroborationError(str(exc)) from exc
     temporary = target.with_name(f".{target.name}.{secrets.token_hex(8)}.tmp")
     # Private from the first byte; O_EXCL refuses a planted file or symlink.
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
@@ -453,8 +516,9 @@ def rebuild(repository: Repository, rules: ShareRules, path: Path | None = None)
         with connection:
             for statement in _SCHEMA:
                 connection.execute(statement)
-            connection.execute(
-                "INSERT INTO meta (key, value) VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),)
+            meta = {"schema_version": str(SCHEMA_VERSION), **stamp.meta()}
+            connection.executemany(
+                "INSERT INTO meta (key, value) VALUES (?, ?)", sorted(meta.items())
             )
             for memory_id in sorted(data):
                 for (app, session), (first, last) in sorted(data[memory_id].items()):
@@ -496,17 +560,48 @@ def visible_apps(rules: ShareRules, caller_app: str) -> frozenset[str] | None:
     return own | (frozenset(include) - frozenset(exclude))
 
 
+def _check_meta(connection: sqlite3.Connection, identity: VaultIdentity) -> None:
+    meta = dict(connection.execute("SELECT key, value FROM meta").fetchall())
+    if meta.get("schema_version") != str(SCHEMA_VERSION):
+        raise CorroborationError("corroboration projection has another schema version: rebuild it")
+    reason = identity.mismatch(meta)
+    if reason is not None:
+        raise OtherVaultError(f"corroboration {reason} it (`memfw corroboration rebuild`)")
+
+
+def check_projection(path: Path, identity: VaultIdentity) -> None:
+    """Raise unless the file at ``path`` is this schema and was built from ``identity``'s vault.
+
+    ``OtherVaultError`` for another vault's file, ``CorroborationError`` for
+    another schema version or an unreadable file. A missing file passes.
+    """
+
+    if not Path(path).is_file():
+        return
+    uri = f"{Path(path).resolve().as_uri()}?mode=ro"
+    connection = sqlite3.connect(uri, uri=True)
+    try:
+        _check_meta(connection, identity)
+    except sqlite3.DatabaseError as exc:
+        raise CorroborationError(f"unreadable corroboration projection: {exc}") from exc
+    finally:
+        connection.close()
+
+
 def corroboration_for(
     memory_ids: Iterable[str],
     *,
     caller_app: str,
     rules: ShareRules,
     path: Path,
+    identity: VaultIdentity | None = None,
 ) -> dict[str, Corroboration]:
     """Corroboration per id, trimmed to what ``caller_app`` may read.
 
     An id with nothing visible (or a missing projection file) gets
-    :data:`EMPTY`; the answer never shows that a hidden app exists.
+    :data:`EMPTY`; the answer never shows that a hidden app exists. With
+    ``identity``, a file of another schema version or built from another vault
+    raises ``CorroborationError`` (rebuild it).
     """
 
     wanted = sorted({str(item) for item in memory_ids})
@@ -517,6 +612,8 @@ def corroboration_for(
     uri = f"{Path(path).resolve().as_uri()}?mode=ro"
     connection = sqlite3.connect(uri, uri=True)
     try:
+        if identity is not None:
+            _check_meta(connection, identity)
         placeholders = ",".join("?" for _ in wanted)
         rows = connection.execute(
             "SELECT memory_id, app, session_id, first_seen, last_seen FROM mentions"
@@ -551,12 +648,16 @@ __all__ = [
     "CLAIMS_REPORT_KIND",
     "EMPTY",
     "FILENAME",
+    "KIND",
     "SCHEMA_VERSION",
     "Corroboration",
     "CorroborationError",
+    "OtherVaultError",
     "ShareRules",
+    "check_projection",
     "collect",
     "corroboration_for",
+    "legacy_path",
     "parse_conv_ref",
     "projection_path",
     "rebuild",

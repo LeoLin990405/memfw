@@ -11,11 +11,12 @@ Review kinds:
   a relation the table lets a concept file carry;
 * ``relation_dangling``: a memory's ``about``/``applies_to`` names no concept
   (checked only when the vault has ``concepts/``), or its ``superseded_by``
-  names no memory;
+  names no memory (a ``memory:``/``mem:`` prefix is stripped, as below);
 * ``relation_cross_tenant``: a memory's ``superseded_by``, ``evidence``,
   ``experience.evidence``, ``related``, ``open_question.conflicts`` or
   ``open_question.resolved_by`` names a memory of another tenant (a
-  ``memory:``/``mem:`` prefix is read the way the edge projection reads it). The edge
+  ``memory:``/``mem:`` prefix, in every one of these fields, is stripped the
+  way the edge projection strips it). The edge
   projection (``memfw.edges``, K3) drops such an edge when it is built, and
   its query admits one caller tenant at a time. That is not a promise about
   every exit: each applies its own tenant rule (the plain-file projection,
@@ -60,15 +61,17 @@ def lint_relations(vault: Path, table: RelationTable | None = None) -> list[dict
                         items.append(_item("relation_dangling", memory_id, relation, target))
         successor = meta.get("superseded_by")
         if isinstance(successor, str) and successor.strip():
-            target = successor.strip()
+            target = _bare(successor.strip())
             if target not in tenants:
                 items.append(_item("relation_dangling", memory_id, "superseded_by", target))
             elif tenants[target] != tenant:
                 items.append(_item("relation_cross_tenant", memory_id, "superseded_by", target))
         experience = meta.get("experience")
-        refs = [("evidence", ref) for ref in _strings(meta.get("evidence"))]
+        refs = [("evidence", _bare(ref)) for ref in _strings(meta.get("evidence"))]
         if isinstance(experience, dict):
-            refs.extend(("experience_of", ref) for ref in _strings(experience.get("evidence")))
+            refs.extend(
+                ("experience_of", _bare(ref)) for ref in _strings(experience.get("evidence"))
+            )
         refs.extend(("related", _bare(ref)) for ref in _strings(meta.get("related")))
         question = meta.get("open_question")
         if isinstance(question, dict):

@@ -19,8 +19,10 @@ ranking, an ``epistemic`` value or a question.
 When corroboration cannot be shown the field is ``{"degraded": <code>}`` (no
 counts), never an error: :data:`CALLER_APP_REQUIRED` (no calling app, or the
 reserved operator name over MCP), :data:`SHARE_POLICY_INVALID`,
-:data:`PROJECTION_MISSING` (``memfw corroboration rebuild`` has not run) and
-:data:`PROJECTION_UNREADABLE`.
+:data:`PROJECTION_MISSING` (``memfw corroboration rebuild`` has not run),
+:data:`PROJECTION_OTHER_VAULT` (the file at this vault's projection path was
+built from another vault, e.g. one deleted and re-created at the same path:
+rebuild) and :data:`PROJECTION_UNREADABLE`.
 
 Deferred (need evaluation data and approval first, design U5): promotion
 candidates (``inference`` to ``fact``) and ranking weights.
@@ -34,14 +36,21 @@ from typing import Any, Final
 
 from memfw.conversations.policy import OPERATOR, SharePolicy
 from memfw.core.errors import MemfwError
+from memfw.core.local_data import vault_identity
 from memfw.core.models import MemoryDocument
 from memfw.core.repository import Repository
-from memfw.corroboration import CorroborationError, corroboration_for, projection_path
+from memfw.corroboration import (
+    CorroborationError,
+    OtherVaultError,
+    corroboration_for,
+    projection_path,
+)
 
 CALLER_APP_REQUIRED: Final = "caller_app_required"
 SHARE_POLICY_INVALID: Final = "share_policy_invalid"
 PROJECTION_MISSING: Final = "projection_missing"
 PROJECTION_UNREADABLE: Final = "projection_unreadable"
+PROJECTION_OTHER_VAULT: Final = "projection_other_vault"
 
 #: The review order, as the queue states it.
 QUEUE_RULE: Final = (
@@ -78,8 +87,13 @@ def caller_corroboration(
     if not path.is_file():
         return {}, PROJECTION_MISSING
     try:
-        answer = corroboration_for(memory_ids, caller_app=caller, rules=rules, path=path)
-    except (CorroborationError, OSError, ValueError):
+        identity = vault_identity(repository)
+        answer = corroboration_for(
+            memory_ids, caller_app=caller, rules=rules, path=path, identity=identity
+        )
+    except OtherVaultError:
+        return {}, PROJECTION_OTHER_VAULT
+    except (CorroborationError, MemfwError, OSError, ValueError):
         return {}, PROJECTION_UNREADABLE
     return {memory_id: value.as_dict() for memory_id, value in answer.items()}, None
 
@@ -178,6 +192,7 @@ def open_question_queue(
 __all__ = [
     "CALLER_APP_REQUIRED",
     "PROJECTION_MISSING",
+    "PROJECTION_OTHER_VAULT",
     "PROJECTION_UNREADABLE",
     "QUEUE_RULE",
     "SHARE_POLICY_INVALID",
