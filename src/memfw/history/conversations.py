@@ -741,6 +741,10 @@ class ConversationStore:
                 # A force marker stays: the owed full re-read has not happened yet.
                 if self._note_busy(connection, agent, key, fingerprint) < BUSY_RETRIES:
                     counts.sessions_busy += 1
+                    if forced and key not in self._pending:
+                        # A forced pass (re-label, opt-out change) that found it
+                        # locked: keep a marker so the full re-read still happens.
+                        self._note_force(connection, agent, key)
                     return
                 # Same empty result too often: keep the rows, stop retrying until
                 # the file changes (then the whole session is re-read).
@@ -852,7 +856,8 @@ class ConversationStore:
         so ``activity`` decides and the mtime is only the fallback. An mtime
         beyond now plus :data:`CLOCK_SKEW` is not trusted; with no trusted
         timestamp either, the file's ctime stands in (setting the mtime moves
-        the ctime to the present, so it is not stuck in the future). Unknown
+        the ctime to the present, so it is not stuck in the future; not on
+        Windows, where st_ctime is the creation time). Unknown
         activity (no trusted timestamp, no readable or trusted mtime or ctime)
         is never settled.
         """
@@ -860,11 +865,12 @@ class ConversationStore:
         assert self._settled is not None
         try:
             info: os.stat_result | None = os.stat(locator.path, follow_symlinks=False)
-        except OSError:
+        except (OSError, ValueError):
             info = None
         mtime = self._newest([_file_time(info, "st_mtime")])
-        if mtime is None and info is not None and activity is None:
-            # A future (or unreadable) mtime and no usable timestamp: the ctime.
+        if mtime is None and info is not None and activity is None and os.name != "nt":
+            # A future (or unreadable) mtime and no usable timestamp: the ctime
+            # (inode change time; on Windows st_ctime is the creation time).
             mtime = self._newest([_file_time(info, "st_ctime")])
         shared = "#" in locator.key or getattr(locator, "fingerprint", None) is not None
         if shared:

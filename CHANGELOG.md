@@ -79,9 +79,10 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 ### Fixed — wave 3 wrap-up guards
 
 - New test `tests/test_no_conflict_markers.py`: every git-tracked text file
-  (walked tree without git) must be free of merge-conflict markers (lines
-  starting `<<<<<<< `, `||||||| `, `>>>>>>> `, or exactly `=======`; Markdown
-  setext headings and binary files excepted).
+  (walked tree without git or when git lists nothing) must be free of
+  merge-conflict markers (seven `<`, `|` or `>` alone or before a space, or a
+  line exactly `=======`; Markdown setext headings, binary files and files
+  over 5 MB excepted).
 - Usage projection (`SqliteUsageSink.record`): an index on `at_epoch` (added to
   existing files with `CREATE INDEX IF NOT EXISTS`), and the count retention
   deletes below the `max_rows`-th newest rowid instead of a sorted
@@ -90,10 +91,12 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   user owns is tightened to 0700, not only a new one. Docstring size note
   corrected (about 7.4 MB at the cap, plus the index).
 - Settled history ingest: a forced re-read marker is cleared only after the
-  cursor is saved, so a locator that reads zero rows (busy) keeps its owed
-  re-read; a file whose mtime is in the future and that has no usable
-  timestamps falls back to its ctime instead of staying unsettled until the
-  clock catches up.
+  cursor is saved, and a forced pass (re-label, opt-out change) that finds a
+  locator busy leaves one, so the owed full re-read is not lost; a file whose
+  mtime is in the future and that has no usable timestamps falls back to its
+  ctime (not on Windows, where it is the creation time) instead of staying
+  unsettled until the clock catches up; an unstatable path (a NUL in it)
+  counts as unknown activity instead of failing the session.
 - `DreamOptions`: the `allow_config_judge` docstring is back under its field.
 
 ### Added — settled ingest and archive state (M3e-a)

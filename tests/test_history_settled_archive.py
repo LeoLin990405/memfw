@@ -367,6 +367,24 @@ def test_force_marker_survives_a_busy_read_with_zero_rows(tmp_path: Path) -> Non
     assert _meta(db, "force:fake:") == []
 
 
+def test_optout_forced_pass_on_a_locked_locator_keeps_the_reread(tmp_path: Path) -> None:
+    (tmp_path / "store.db").write_text("db")
+    db = tmp_path / "conv.sqlite"
+    reader = _ToggleReader(NOW - timedelta(hours=2))
+    ConversationStore(db).ingest(reader, [tmp_path])  # stored, opt-out rules recorded
+    # The cwd opt-out rules change (a forced full pass), but the store is locked.
+    changed = ConversationStore(db, optout=OptOut(cwd_globs=("/elsewhere/*",)))
+    reader.empty = True
+    assert changed.ingest(reader, [tmp_path]).sessions_busy == 1
+    assert len(_meta(db, "force:fake:")) == 1
+    # Readable again, unchanged file, no longer a forced pass: still re-read once.
+    reader.empty = False
+    counts = changed.ingest(reader, [tmp_path])
+    assert counts.sessions_read == 1 and counts.sessions_unchanged == 0
+    assert _meta(db, "force:fake:") == []
+    assert changed.ingest(reader, [tmp_path]).sessions_unchanged == 1
+
+
 def test_future_mtime_without_timestamps_falls_back_to_ctime(fx: Fixture) -> None:
     fx.append("s1", "user", "no stamps, clock ahead", None)
     real_now = datetime.now(UTC)
@@ -379,6 +397,31 @@ def test_future_mtime_without_timestamps_falls_back_to_ctime(fx: Fixture) -> Non
     counts = fx.ingest(30, now=real_now + timedelta(hours=1))
     assert counts["sessions_unsettled"] == 0 and counts["records_new"] == 1
     assert fx.archive("s1")["archived"] is True
+
+
+def test_no_ctime_fallback_on_windows(fx: Fixture, monkeypatch: pytest.MonkeyPatch) -> None:
+    # On Windows st_ctime is the creation time: a future mtime stays untrusted.
+    fx.append("s1", "user", "no stamps, clock ahead", None)
+    real_now = datetime.now(UTC)
+    ahead = (real_now + timedelta(days=30)).timestamp()
+    os.utime(fx.path("s1"), (ahead, ahead))
+    locator = SessionLocator("claude", fx.path("s1"), "demo/s1.jsonl", "s1")
+    store = fx.store
+    store._now = real_now + timedelta(hours=1)
+    store._settled = store._now - timedelta(minutes=30)
+    assert store._is_settled(None, locator) is True
+    with monkeypatch.context() as patch:  # undone before the fixtures' teardown
+        patch.setattr(os, "name", "nt")
+        assert store._is_settled(None, locator) is False
+
+
+def test_unstatable_path_is_unknown_not_an_error(tmp_path: Path) -> None:
+    store = ConversationStore(tmp_path / "conv.sqlite")
+    store._now = NOW
+    store._settled = NOW - timedelta(minutes=30)
+    locator = SessionLocator("fake", tmp_path / "bad\0name", "bad#s1", "s1", fingerprint="m1")
+    assert store._is_settled(None, locator) is False
+    assert store._is_settled(NOW - timedelta(hours=1), locator) is True
 
 
 def test_resume_resets_the_settled_marker(fx: Fixture) -> None:
