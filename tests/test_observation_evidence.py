@@ -392,6 +392,20 @@ def _bypass_pointers(repository: Repository, tmp_path: Path) -> tuple[Any, list[
         "data:../elsewhere/copy.png",
         "dataset:./../elsewhere/copy.png",
         f"[the screenshot](att:{shot.id}#bbox=0,0,1,1)",
+        # Re-review M1: digests inside any raw pointer, in any common encoding.
+        "data:sha256=" + base64.b64encode(bytes.fromhex(sha)).decode(),
+        "data:sha256:" + base64.b64encode(bytes.fromhex(sha)).decode(),
+        "data:sha-256=:" + base64.b64encode(bytes.fromhex(sha)).decode() + ":",
+        "result:" + base64.b64encode(bytes.fromhex(sha)).decode(),
+        "test:" + base64.urlsafe_b64encode(bytes.fromhex(sha)).decode().rstrip("="),
+        "data:" + " ".join(sha[i : i + 8] for i in range(0, 64, 8)),
+        "data:" + "-".join(sha[i : i + 4] for i in range(0, 64, 4)),
+        "data:" + "\u2013".join(sha[i : i + 16] for i in range(0, 64, 16)),
+        "data:" + "\u00a0".join(sha[i : i + 16] for i in range(0, 64, 16)),
+        "data:" + "\u2212".join(sha[i : i + 16] for i in range(0, 64, 16)),
+        "data:cafe" + sha,
+        "sha256:" + base64.b64encode(bytes.fromhex(sha)).decode() + "==",
+        "sha256:" + base64.urlsafe_b64encode(bytes.fromhex(sha)).decode() + "=",
         f"see <ATT:{shot.id.upper()}>",
     ]
     return shot, pointers
@@ -431,6 +445,24 @@ def test_kh_pointer_to_a_pdf_cannot_carry_verified(tmp_path: Path) -> None:
             "body",
             epistemic="fact",
             evidence=["kh:Reports/r.pdf", f"att:{report.id}#page=1"],
+        )
+
+
+def test_digest_candidates_change_nothing_unless_they_match(tmp_path: Path) -> None:
+    """Generalised detection: a digest-shaped value that names no original stays raw."""
+
+    repository = _repo(tmp_path)
+    _attach(repository, _original(tmp_path, "s.png", b"png"), "image/png")
+    other = hashlib.sha256(b"unrelated").digest()
+    for pointer in (
+        "data:sha256=" + base64.b64encode(other).decode(),
+        "data:" + " ".join(other.hex()[i : i + 8] for i in range(0, 64, 8)),
+        "result:" + "A" * 120,
+        "dataset:" + "0123456789abcdef" * 8,
+    ):
+        assert gate_evidence_classes(repository, {"evidence": [pointer]}) == {}, pointer
+        assert repository.add("claim", "body", **_verified(evidence=[pointer])).causal == (
+            "verified"
         )
 
 

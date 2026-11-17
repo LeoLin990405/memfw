@@ -123,6 +123,14 @@ observation (fail closed; the error says so). Backlinks never hash files. An ori
 larger than `attachments_max_bytes` (a referenced original, once MM1b adds them) is
 matched only by its registered location, hash or id, never by the content of a copy.
 
+Digest detection is best effort across encodings: in any pointer, hex with separators
+between groups (spaces, NBSP, commas, colons, slashes, hyphens, Unicode dashes and
+minus) and base64/base64url (any padding, as in `sha256=<b64>`, `sha-256=:<b64>:`,
+SRI `sha256-<b64>` or a bare `result:<b64>`) are found and compared with the
+registered originals' hashes; a value that matches no original changes nothing.
+Residual risk: a digest split across several pointers, or encrypted, compressed or
+otherwise transformed, is not detected.
+
 The cap is only as strong as raw pointers are honest: the gate cannot check what a
 `file:` or `dataset:` pointer that names no registered attachment really is, so a
 pointer to a file that does not exist (`file:/nonexistent`) still counts as raw and

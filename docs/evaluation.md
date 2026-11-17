@@ -176,7 +176,9 @@ claim through `Repository.add`. Groups:
   chart on a PDF page, a video keyframe, several observations together);
 * `bypass` — the same original cited without `att:`: `sha256:` (full, uppercase, prefix,
   with U+200B, tabs, commas or a slash inside, base64, base64url), `data:sha256-<b64>`
-  (SRI), relative `data:`/`dataset:` paths, `[text](att:…)` link syntax, `file:` (a copy, the blob, `FILE://localhost`, percent-encoded),
+  (SRI), `data:sha256=<b64>`, `data:sha-256=:<b64>:` (Content-Digest), a bare
+  `result:<b64>`, hex split by spaces/hyphens/dashes/NBSP inside `data:`, extra base64
+  padding, relative `data:`/`dataset:` paths, `[text](att:…)` link syntax, `file:` (a copy, the blob, `FILE://localhost`, percent-encoded),
   `ATT:`/`%61tt:`, the id or hash inside a `result:`/`experiment:` pointer, `kh:` to a PDF;
 * `hygiene` — a missing attachment, a locator that does not fit the media type, an
   inverted time range;

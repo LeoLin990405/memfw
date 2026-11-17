@@ -42,10 +42,18 @@ MIN_SHA_PREFIX: Final = 8
 _ATTACHMENT_ID_RE: Final = re.compile(
     r"att-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
 )
-_HEX64_RE: Final = re.compile(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
 _SCHEME_RE: Final = re.compile(r"^([a-z][a-z0-9+.-]{0,31}):(.*)$", re.DOTALL | re.IGNORECASE)
-#: ``sha256-<base64>`` (Subresource Integrity), anywhere in a pointer.
-_SRI_RE: Final = re.compile(r"sha256-([A-Za-z0-9+/_-]{43}={0,1})")
+#: Characters dropped between hex groups before looking for a 64-hex run:
+#: whitespace (NBSP folds to a space under NFKC), punctuation used as a group
+#: separator, and the Unicode dashes U+2010–U+2015 and minus U+2212.
+_HEX_SEPARATORS: Final = frozenset(
+    " \t\n\r\f\v,;:/\\|._-'\"()[]{}<>" + "".join(chr(c) for c in range(0x2010, 0x2016)) + "\u2212"
+)
+_HEX_RUN_RE: Final = re.compile(r"[0-9a-f]{64,}")
+#: A run of base64/base64url characters long enough to hold a 32-byte digest
+#: (43 characters unpadded).
+_B64_RUN_RE: Final = re.compile(r"[A-Za-z0-9+/_-]{43,}")
+_B64_DIGEST_CHARS: Final = 43
 #: An ``att:`` pointer inside other text (``[shot](att:<id>#bbox=…)``).
 _EMBEDDED_ATT_RE: Final = re.compile(
     r"att:(att-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})"
@@ -278,7 +286,8 @@ def _folded(reference: str) -> str:
 def _digest_from_base64(text: str) -> str | None:
     """The hex of ``text`` read as base64 or base64url, when it decodes to 32 bytes."""
 
-    value = text.strip()
+    # Padding is tolerated in any amount (``…=``, ``…==``) and then redone.
+    value = text.strip().rstrip("=")
     if not value or len(value) > 64:
         return None
     # base64url → base64, then a strict decode (no character is skipped).
@@ -292,18 +301,37 @@ def _digest_from_base64(text: str) -> str | None:
 
 
 def embedded_hashes(reference: str) -> frozenset[str]:
-    """Every sha256 the canonical form carries (lowercase hex).
+    """Every sha256 digest the pointer *could* be spelling (lowercase hex).
 
-    64-hex runs, and ``sha256-<base64>`` tokens (Subresource Integrity, as in
-    ``data:sha256-…``) that decode to 32 bytes.
+    Best effort across encodings, on the canonical form:
+
+    * hex: separators between hex groups are dropped (:data:`_HEX_SEPARATORS`)
+      and every 64-character window of a hex run counts, so
+      ``data:e3b0c442 98fc…``, ``e3b0-c442-…`` and a digest glued to other hex
+      are all found;
+    * base64/base64url: ``=`` is dropped anywhere, and every 43-character
+      window of a base64 run counts when it decodes to 32 bytes, so
+      ``sha256-<b64>`` (SRI), ``sha256=<b64>``, ``sha-256=:<b64>:``
+      (Content-Digest) and a bare ``result:<b64>`` are found.
+
+    The result is a candidate set, not a claim: the caller compares it with
+    the registered originals' hashes, so a candidate that names no original
+    changes nothing. Not found: a digest split across several pointers, or
+    encrypted or otherwise transformed.
     """
 
     canonical = canonical_reference(reference)
-    found = set(_HEX64_RE.findall(canonical.lower()))
-    for token in _SRI_RE.findall(canonical):
-        digest = _digest_from_base64(token)
-        if digest is not None:
-            found.add(digest)
+    found: set[str] = set()
+    compact = "".join(char for char in canonical.lower() if char not in _HEX_SEPARATORS)
+    for match in _HEX_RUN_RE.finditer(compact):
+        run = match.group(0)
+        found.update(run[start : start + 64] for start in range(len(run) - 63))
+    for match in _B64_RUN_RE.finditer(canonical.replace("=", "")):
+        run = match.group(0)
+        for start in range(len(run) - _B64_DIGEST_CHARS + 1):
+            digest = _digest_from_base64(run[start : start + _B64_DIGEST_CHARS])
+            if digest is not None:
+                found.add(digest)
     return frozenset(found)
 
 

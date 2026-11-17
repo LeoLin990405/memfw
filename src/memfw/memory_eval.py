@@ -563,7 +563,8 @@ MULTIMODAL_FIXTURE: Traversable = (
 )
 
 _PLACEHOLDER = re.compile(
-    r"\{(att|id|ID|sha|SHA|sha16|sha_zw|sha_tab|sha_comma|sha_slash|b64|b64url|"
+    r"\{(att|id|ID|sha|SHA|sha16|sha_zw|sha_tab|sha_comma|sha_slash|sha_space|sha_dash|"
+    r"sha_endash|sha_nbsp|b64|b64url|"
     r"file|file_pct|rel|blob):([a-z_]+)\}"
 )
 
@@ -711,6 +712,10 @@ def _multimodal_case(
             "sha_tab": "\t".join(sha[i : i + 16] for i in range(0, 64, 16)),
             "sha_comma": ",".join(sha[i : i + 8] for i in range(0, 64, 8)),
             "sha_slash": sha[:32] + "/" + sha[32:],
+            "sha_space": " ".join(sha[i : i + 8] for i in range(0, 64, 8)),
+            "sha_dash": "-".join(sha[i : i + 4] for i in range(0, 64, 4)),
+            "sha_endash": "\u2013".join(sha[i : i + 16] for i in range(0, 64, 16)),
+            "sha_nbsp": "\u00a0".join(sha[i : i + 16] for i in range(0, 64, 16)),
             "b64": base64.b64encode(bytes.fromhex(sha)).decode("ascii"),
             "b64url": base64.urlsafe_b64encode(bytes.fromhex(sha)).decode("ascii").rstrip("="),
             "rel": f"../copies/{spec['name']}",
