@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from memfw_adapter_bm25s import SPEC, Bm25sProvider, factory, store
 
 from memfw.core.repository import Repository
 from memfw.index import MemoryIndex
@@ -24,7 +23,6 @@ from memfw.ports import (
     AdapterRegistry,
     AdaptersConfig,
     Availability,
-    ProviderUnavailable,
     RecallBudget,
     RecallProvider,
 )
@@ -32,12 +30,16 @@ from memfw.ports.testing import check_recall_provider, tree_digest
 from memfw.recall import Coordinator, FilterPolicy
 from memfw.recall.builtin import FtsProvider, default_resolvers
 from memfw.runtime import build_runtime
-from memfw.runtime.recall_adapters import (
-    AdapterEntry,
-    RecallAdapterError,
-    load_adapters,
-    parse_entries,
-)
+
+ROOT = Path(__file__).resolve().parents[1]
+ADAPTER_SRC = ROOT / "packages" / "adapters" / "memfw-adapter-bm25s" / "src"
+if str(ADAPTER_SRC) not in sys.path:  # a workspace member; CI installs only memfw[dev]
+    sys.path.insert(0, str(ADAPTER_SRC))
+# Its third-party dependencies are not part of a default install: skip without them.
+pytest.importorskip("bm25s")
+pytest.importorskip("jieba")
+
+from memfw_adapter_bm25s import SPEC, Bm25sProvider, factory, store  # noqa: E402
 
 ALL_LEVELS = "public,shared,local-private"
 QUERIES = ("homelab backup", "HAL9000", "迁移 备份", "release notes")
@@ -312,102 +314,5 @@ def test_runtime_wires_bm25s_through_module_factory(tmp_path: Path) -> None:
     loaded = runtime.recall_adapters(repository)
     assert [adapter.provider.name for adapter in loaded] == ["bm25s"]
     assert runtime.recall_adapters(repository) is loaded  # built once per Runtime
-
-
-def test_without_the_setting_two_stage_is_unchanged_and_imports_nothing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    repository = _vault(tmp_path)
-    for name in [name for name in sys.modules if name.startswith("memfw_adapter_bm25s")]:
-        monkeypatch.delitem(sys.modules, name)
-    runtime = build_runtime(repository.root, record_access=False)
-    payload = _two_stage(runtime)
-    assert payload["recall"]["providers"] == ["fts"]
-    assert runtime.recall_adapters(repository) == ()
-    assert not [name for name in sys.modules if name.startswith("memfw_adapter_bm25s")]
-    fts = runtime.search("homelab backup", limit=10, mode="fts")
-    assert [row["id"] for row in payload["results"]] == [row["id"] for row in fts["results"]]
-
-
-class _Down:
-    name = "down"
-    lexical = False
-    projection_version = ""
-
-    def available(self) -> Availability:
-        return Availability.missing("unreachable")
-
-    def search(self, query: str, **kwargs: Any) -> list[Any]:
-        raise ProviderUnavailable("unreachable")
-
-
-def down_factory(settings: Any) -> _Down:
-    assert set(settings) == {"vault", "embedder"}
-    return _Down()
-
-
-def test_a_down_adapter_degrades_and_fts_answers(tmp_path: Path) -> None:
-    repository = _vault(tmp_path)
-    _configure(repository, [{"factory": "tests.test_adapter_bm25s:down_factory"}])
-    payload = _two_stage(build_runtime(repository.root, record_access=False))
-    assert payload["degraded"] is True
-    assert payload["recall"]["degraded"] == {"down": "unavailable:unreachable"}
-    assert payload["recall"]["providers"] == ["fts"]
-    assert [row["id"] for row in payload["results"]][0] == "m-backup"
-
-
-@pytest.mark.parametrize(
-    ("adapters", "code"),
-    [
-        ("memfw_adapter_bm25s:factory", "bad_config"),
-        ([{"factory": "memfw_adapter_bm25s"}], "bad_factory"),
-        ([{"factory": "memfw_adapter_bm25s:factory", "extra": 1}], "bad_entry"),
-        (
-            [{"factory": "memfw_adapter_bm25s:factory", "options": {"vault": "/x"}}],
-            "reserved_option",
-        ),
-        ([{"factory": "memfw_adapter_bm25s:factory", "weight": -1}], "bad_weight"),
-        ([{"factory": "memfw_adapter_bm25s:factory", "timeout_seconds": 0}], "bad_timeout"),
-        ([{"factory": "no_such_module_xyz:factory"}], "not_importable"),
-        ([{"factory": "memfw_adapter_bm25s:factory", "options": {"colour": 1}}], "factory_error"),
-        ([{"factory": "memfw_adapter_bm25s:NAME"}], "not_importable"),
-        (
-            [{"factory": "memfw_adapter_bm25s:factory", "options": {"name": "fts"}}],
-            "duplicate_name",
-        ),
-        (
-            [
-                {"factory": "memfw_adapter_bm25s:factory"},
-                {"factory": "memfw_adapter_bm25s:factory"},
-            ],
-            "duplicate_name",
-        ),
-    ],
-)
-def test_bad_settings_fail_two_stage_closed(tmp_path: Path, adapters: Any, code: str) -> None:
-    repository = _vault(tmp_path)
-    _configure(repository, adapters)
-    runtime = build_runtime(repository.root, record_access=False)
-    with pytest.raises(RecallAdapterError) as caught:
-        _two_stage(runtime)
-    assert caught.value.code == code
-    # Only two_stage uses the adapters; the other modes are unaffected.
-    assert runtime.search("homelab backup", limit=10, mode="fts")["results"]
-
-
-def test_parse_and_load_directly(tmp_path: Path) -> None:
-    assert parse_entries({}) == ()
-    assert parse_entries({"runtime": {"recall": {}}}) == ()
-    entries = parse_entries(
-        {"runtime": {"recall": {"adapters": [{"factory": "memfw_adapter_bm25s:factory"}]}}}
-    )
-    assert entries == (AdapterEntry("memfw_adapter_bm25s:factory"),)
-    repository = _vault(tmp_path)
-    loaded = load_adapters(entries, root=repository.root, embedder=None, taken=["fts"])
-    assert loaded[0].provider.name == "bm25s" and loaded[0].weight == 1.0
-    with pytest.raises(RecallAdapterError, match="not_a_provider"):
-        load_adapters(
-            [AdapterEntry("builtins:dict")],
-            root=repository.root,
-            embedder=None,
-        )
+    # The loader itself (codes, degrade, defaults) is covered without bm25s in
+    # tests/test_runtime_recall_adapters.py.
