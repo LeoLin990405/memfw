@@ -305,6 +305,7 @@ def test_ingest_round_trip_redacts(tmp_path: Path) -> None:
         "tool",
         "assistant",
     ]
+    assert [t["withheld"] for t in stored] == [0, 0, 1, 0, 0, 0]
     assert SECRET not in json.dumps(stored)
     assert "correct-horse-battery-9" not in (
         tmp_path / "store" / "conversations.sqlite"
@@ -399,3 +400,70 @@ def test_subagent_ids_are_qualified_by_parent(tmp_path: Path) -> None:
         "qwen",
         f"{SESSION}:agent-general",
     )
+
+
+def test_credentials_in_every_field_are_withheld(tmp_path: Path) -> None:
+    """A secret in call arguments, a result display or a sub-agent log withholds the turn."""
+
+    from memfw.history.conversations import ConversationStore
+    from memfw.history.sources.base import StoreRoot
+
+    root = tmp_path / ".qwen" / "projects"
+    _write(
+        root / PROJECT / "chats" / f"{SESSION}.jsonl",
+        [
+            _user(0, "set it up"),
+            _record(
+                "assistant",
+                1,
+                message={
+                    "role": "model",
+                    "parts": [
+                        {"text": "Writing the config."},
+                        {
+                            "functionCall": {
+                                "name": "write_file",
+                                "args": {"file_path": "/work/demo/.env", "content": SECRET},
+                            }
+                        },
+                    ],
+                },
+            ),
+            _record(
+                "tool_result",
+                2,
+                message={"role": "user", "parts": [{"functionResponse": {"response": {}}}]},
+                toolCallResult={"resultDisplay": f"wrote {SECRET}"},
+            ),
+            _record(
+                "tool_result",
+                3,
+                message={
+                    "role": "user",
+                    "parts": [{"functionResponse": {"response": {"output": SECRET}}}],
+                },
+            ),
+            _user(4, "thanks"),
+        ],
+    )
+    _write(
+        root / PROJECT / "subagents" / SESSION / "agent-general.jsonl",
+        [_user(0, f"use {SECRET}"), _record("assistant", 1, message={"parts": "ok"})],
+    )
+    store = ConversationStore(tmp_path / "store" / "conversations.sqlite")
+    counts = store.ingest(READER, [StoreRoot(root)])
+    assert counts.sessions_failed == 0
+    main = store.turns("qwen", SESSION)
+    assert [(t["role"], t["withheld"]) for t in main] == [
+        ("user", 0),
+        ("assistant", 1),
+        ("tool", 1),
+        ("tool", 1),
+        ("user", 0),
+    ]
+    assert all(t["text"] == "" and t["tool_calls"] == [] for t in main if t["withheld"])
+    sub = store.turns("qwen", f"{SESSION}:agent-general")
+    assert [(t["role"], t["withheld"]) for t in sub] == [("user", 1), ("assistant", 0)]
+    dump = json.dumps(main + sub)
+    assert SECRET not in dump and "correct-horse-battery-9" not in dump
+    assert counts.records_withheld == 4
