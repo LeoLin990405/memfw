@@ -372,7 +372,7 @@ memfw 分成若干层，只允许向下依赖，并由 CI 强制检查：
 
 ## 📍 现状与边界
 
-发版状态：**v0.3.0**（2026-11-17）。Apache-2.0 许可，在单机上离线运行，没有发布到 PyPI。已经实现：vault 与哈希链事件日志、保留策略与 `10MB` 预算、可重建的 FTS5 索引与读路径（按词匹配、概念别名、多跳）、认知类型、因果分级与经人审核的经验点、带十一个端口和 `memfw.runtime` 组装根的分层内核、`two_stage` 召回、带槽位、资源和 `if_version` 的上下文包 v2、待解问题、召回标签与佐证、概念层级与关系类型表、隐私级别与按需开启的 clearance、MCP 服务、notes 索引与代码检索、只读转录索引、带 14 个 reader 的会话库、跳过进行中会话的 settled 导入、共享与 worker（附一个默认关闭的 DeepSeek 打标签适配器）、交接包、dream（核对、整理、提炼、预算、技能、待解问题候选）、OKF v0.2 导出与导入、Obsidian 投影，以及只读 HTTP 服务（`memfw-http/2`）。逐条变更见 [`CHANGELOG.md`](CHANGELOG.md)。
+发版状态：**v0.3.0**（2026-11-17）。Apache-2.0 许可，在单机上离线运行，没有发布到 PyPI。已经实现：vault 与哈希链事件日志、保留策略与 `10MB` 预算、可重建的 FTS5 索引与读路径（按词匹配、概念别名、多跳）、认知类型、因果分级与经人审核的经验点、带十一个端口和 `memfw.runtime` 组装根的分层内核、`two_stage` 召回、带槽位、资源和 `if_version` 的上下文包 v2、待解问题、召回标签与佐证、概念层级与关系类型表、隐私级别与按需开启的 clearance、MCP 服务、notes 索引与代码检索、只读转录索引、带 15 个 reader 的会话库、跳过进行中会话的 settled 导入、共享与 worker（附一个默认关闭的 DeepSeek 打标签适配器）、交接包、dream（核对、整理、提炼、预算、技能、待解问题候选）、OKF v0.2 导出与导入、Obsidian 投影，以及只读 HTTP 服务（`memfw-http/2`）。逐条变更见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 **升级边界。** `vault.yaml` 仍是 `schema_version: 1`；不带新键的文件解析再渲染后保持原字节。新的 frontmatter（`epistemic`、`causal`、`causal_record`、`limitations`、`experience`、`open_question`、`privacy`、顶层 `sensitivity:`）只在设置时才写出，而 memfw 0.2.0 改写文件时会把它们丢掉，所以共用一个 vault 的机器要一次性全部升级。FTS5 索引是可丢弃的投影，**不会就地迁移**：MCP 服务（`memfw-mcp`）和 `memfw index search` 会在使用前重建过期索引；只读 HTTP 服务从不写盘，所以要把它的三个文件一起部署，并先跑一次 `memfw index rebuild` 再指向升级后的 vault。
 

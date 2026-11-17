@@ -557,7 +557,7 @@ epistemic types, causal grades and reviewed experience points, the layered core 
 ports and the `memfw.runtime` composition root, `two_stage` recall, context packs v2 with
 slots, resources and `if_version`, open questions, recall labels and corroboration, the concept
 taxonomy and relation-type table, privacy levels with opt-in clearance, the MCP servers, the
-notes index and code retrieval, the read-only transcript index, the conversation store with 14
+notes index and code retrieval, the read-only transcript index, the conversation store with 15
 readers, settled ingest, sharing and the worker (with an optional, off-by-default DeepSeek
 tagging adapter), handoff packs, dream (verify, curate, distill, budget, skills, open-question
 candidates), OKF v0.2 export and import, the Obsidian projection and the read-only HTTP service
