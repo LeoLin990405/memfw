@@ -91,7 +91,6 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   are unchanged (byte-identical probe against `MEMFW_ARCH_BASE_REF`). memfw
   0.2.0 keeps `broader` but lints it as `unknown_relation`; see
   [docs/ontology.md](docs/ontology.md#compatibility).
-||||||| parent of d381eed (U5a: corroboration on recall rows (labels=true) and the open-question review order)
 
 ### Added — `memory_used` usage signal (C5) and no vault writes mid-session (C6)
 
