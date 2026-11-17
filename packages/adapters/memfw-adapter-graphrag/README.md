@@ -4,7 +4,7 @@ A memfw `Deriver` over [Microsoft GraphRAG](https://github.com/microsoft/graphra
 offline batch job:
 
 1. `stage_input(projection_generation, vault)` copies the `public` / `shared` documents of a
-   `memfw projection export` generation into `<root>/input/<id>.v<version>.txt` (manifest
+   `memfw projection export` generation into `<root>/input/<id>.v<version>.<hash>.txt` (manifest
    class, file hash and the vault's current privacy are all checked);
 2. `write_settings()` writes `<root>/settings.yaml` from the adapter's own settings (explicit
    literal-loopback `api_base` for both models unless `cloud: true`, CSV tables, fixed

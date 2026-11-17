@@ -47,10 +47,13 @@ from memfw_adapter_graphrag.deriver import (  # noqa: E402
     INPUT_DIR,
     INPUT_INDEX,
     check_endpoint,
+    input_name,
     parse_list,
     read_output,
     render_settings,
 )
+
+from memfw.ports.reference._vault import read_memory  # noqa: E402
 
 FIXTURE = ROOT / "tests" / "fixtures" / "graphrag_contract"
 NOW = datetime(2026, 11, 17, 12, 0, tzinfo=UTC)
@@ -103,11 +106,30 @@ def export(vault: Path, tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def project(tmp_path: Path) -> Path:
+def project(tmp_path: Path, vault: Path) -> Path:
+    """The fixture output, as if indexed from this vault's current m-backup and m-release.
+
+    The fixture titles carry the placeholder hash ``aaaaaaaaaaaa`` for those two
+    documents; the real name holds the hash of the vault file's bytes.
+    """
+
     root = tmp_path / "graphrag"
     root.mkdir()
     shutil.copytree(FIXTURE / "output", root / "output")
+    documents = root / "output" / "documents.csv"
+    text = documents.read_text(encoding="utf-8")
+    for memory_id in ("m-backup", "m-release"):
+        memory = read_memory(vault, memory_id)
+        assert memory is not None
+        text = text.replace(f"{memory_id}.v3.aaaaaaaaaaaa.txt", input_name(memory))
+    documents.write_text(text, encoding="utf-8")
     return root
+
+
+def name_of(vault: Path, memory_id: str) -> str:
+    memory = read_memory(vault, memory_id)
+    assert memory is not None
+    return input_name(memory)
 
 
 class Runner:
@@ -264,9 +286,10 @@ def test_stage_input_copies_only_shareable_documents_from_a_projection(
     assert result.staged == ("m-backup", "m-release")
     assert set(result.skipped) == {"m-private", "m-legacy"}
     files = sorted(p.name for p in (project / INPUT_DIR).iterdir())
-    assert files == [INPUT_INDEX, "m-backup.v3.txt", "m-release.v3.txt"]
-    staged = (project / INPUT_DIR / "m-backup.v3.txt").read_bytes()
-    assert staged == (tree / "files" / "memories" / "m-backup.md").read_bytes()
+    assert files == [INPUT_INDEX, name_of(vault, "m-backup"), name_of(vault, "m-release")]
+    staged = (project / INPUT_DIR / name_of(vault, "m-backup")).read_bytes()
+    # The vault's own bytes, the ones the version and hash in the name label.
+    assert staged == (vault / "memories" / "m-backup.md").read_bytes()
     everything = "".join(p.read_text() for p in (project / INPUT_DIR).iterdir())
     assert PRIVATE_MARKER not in everything
 
@@ -289,6 +312,24 @@ def test_stage_input_rechecks_the_vault_not_just_the_manifest(
     path = vault / "memories" / "m-release.md"
     path.write_text(path.read_text().replace("privacy: shared", "privacy: local-private"))
     assert make(project).stage_input(tree, vault).staged == ("m-backup",)
+
+
+def test_stage_input_refuses_a_projection_older_than_the_vault(
+    vault: Path, project: Path, tmp_path: Path
+) -> None:
+    tree = export(vault, tmp_path)
+    path = vault / "memories" / "m-backup.md"
+    path.write_text(path.read_text().replace("copies the vault", "copies the whole vault"))
+    assert make(project).stage_input(tree, vault).staged == ("m-release",)
+
+
+def test_stage_input_refuses_odd_entries_in_the_input_directory(
+    vault: Path, project: Path, tmp_path: Path
+) -> None:
+    tree = export(vault, tmp_path)
+    (project / INPUT_DIR / "folder.txt").mkdir(parents=True)
+    with pytest.raises(GraphRagError, match="bad_input_dir"):
+        make(project).stage_input(tree, vault)
 
 
 def test_stage_input_refuses_a_root_inside_the_vault(vault: Path, tmp_path: Path) -> None:

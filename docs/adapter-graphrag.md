@@ -23,15 +23,22 @@ memfw projection export --root /srv/vault --out /srv/projection
 ```
 
 `stage_input(<generation dir>, vault)` reads that generation's `manifest.json` and
-`files/memories/<id>.md` and copies a document into `<root>/input/<id>.v<version>.txt` only
-when all three hold:
+`files/memories/<id>.md` and stages a memory as `<root>/input/<id>.v<version>.<hash>.txt` only
+when all of these hold:
 
 - the manifest classes it `privacy_class: none`;
 - its bytes match the manifest's `content_sha256`;
 - the vault, read again now, holds it as `public` or `shared`: the fail-closed reference
   reader classes it `none` and its MM0 level (`memfw.ports.privacy.metadata_level`) is
   `public` or `shared`. A memory with **no `privacy` field** takes the MM0 fallback
-  `local-private` and is not copied; `local-private` and `unknown` never are.
+  `local-private` and is not copied; `local-private` and `unknown` never are;
+- the projection was rendered from the memory's current body (an older export is refused).
+
+What is staged is the vault file's own bytes, not the projection rendering: `<version>` and
+`<hash>` (the first 12 hex digits of their SHA-256) label exactly what GraphRAG indexed, so a
+memory that changes, even one without a version, gets a new name and its old rows drop out of
+every view. Each file is written through a fresh temporary file (`O_EXCL`, `O_NOFOLLOW`); an
+entry named `*.txt` that is not a regular file stops staging (`bad_input_dir`).
 
 The projection export projects every privacy class by default, so this re-check is what keeps
 private memories out; exporting with `--skip-privacy unknown,local-private` as well does no
@@ -82,7 +89,7 @@ The adapter's settings select the CSV table provider; it reads GraphRAG's output
 table counts as empty.
 
 `derive(vault, DeriveRequest(kind, memory_ids))` traces every row back to memories:
-`text_unit_ids` → `text_units.document_id` → `documents.title` (`<id>.v<version>.txt`). A row
+`text_unit_ids` → `text_units.document_id` → `documents.title` (`<id>.v<version>.<hash>.txt`). A row
 is kept only when **every** text unit behind it maps to a memory that is in the request, still
 shareable and still at the version that was indexed; anything that also draws on another
 file, a memory that turned private or a stale version is dropped.

@@ -21,7 +21,7 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   3.3.0 (MIT) as an offline batch `Deriver` (kinds `graph` and `reports`).
   `stage_input` copies only `public`/`shared` documents of a
   `memfw projection export` generation (manifest class, file hash and the
-  vault's current privacy all checked) to `<root>/input/<id>.v<version>.txt`;
+  vault's current privacy all checked) to `<root>/input/<id>.v<version>.<hash>.txt`;
   `run_index` runs `graphrag index` as a subprocess only when called, over a
   `settings.yaml` the adapter writes itself (explicit literal-loopback model
   endpoints unless `cloud: true`, CSV tables, fixed directories; refused if

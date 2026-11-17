@@ -5,7 +5,7 @@ Three steps, each its own call; only the middle one runs GraphRAG:
 1. :meth:`GraphRagDeriver.stage_input` reads a generation written by
    ``memfw projection export`` (its ``manifest.json`` and
    ``files/memories/<id>.md``) and copies the documents that may leave the
-   vault into ``<root>/input/<id>.v<version>.txt``. A document is copied only
+   vault into ``<root>/input/<id>.v<version>.<hash>.txt``. A document is copied only
    when the manifest classes it ``none``, its bytes match the manifest's
    ``content_sha256``, and the vault, read again now, still holds it as
    ``public`` or ``shared`` (:mod:`._select`). The input directory belongs to
@@ -25,7 +25,7 @@ Three steps, each its own call; only the middle one runs GraphRAG:
    ``<root>/output`` into a read-only ``DerivedView``: kind ``graph``
    (entities and relationships) or ``reports`` (community reports). Each row
    is traced back through ``text_unit_ids`` → ``text_units.document_id`` →
-   ``documents.title`` (``<id>.v<version>.txt``) to memories; it is kept only
+   ``documents.title`` (``<id>.v<version>.<hash>.txt``) to memories; it is kept only
    when every memory behind it is in the request, still shareable and still at
    that version. The view cites exactly those memories; caps ``inference`` /
    causal ``association``. :func:`candidates` turns rows into staging
@@ -75,7 +75,7 @@ OUTPUT_DIR = "output"
 LOG_DIR = "logs"
 INPUT_INDEX = ".memfw-input.json"
 #: The input file name this adapter gives a memory, and so GraphRAG's document title.
-TITLE_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_-]{0,127})\.v([0-9]{1,9})\.txt$")
+TITLE_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_-]{0,127})\.v[0-9]{1,9}\.[0-9a-f]{12}\.txt$")
 _MEMORY_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 _ENV_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]{0,63}$")
 #: A list cell as GraphRAG's CSV writer leaves it: a Python or NumPy repr.
@@ -276,6 +276,16 @@ def read_table(directory: Path, name: str) -> list[dict[str, str]]:
         csv.field_size_limit(limit)
 
 
+def input_name(memory: MemoryFile) -> str:
+    """``<id>.v<version>.<sha256(raw)[:12]>.txt``: the staged file, and GraphRAG's document title.
+
+    The hash makes a changed memory a new name even when it carries no version.
+    """
+
+    digest = hashlib.sha256(memory.raw).hexdigest()[:12]
+    return f"{memory.memory_id}.v{memory.version() or 0}.{digest}.txt"
+
+
 def _short(value: Any, limit: int) -> str:
     return " ".join(value.split())[:limit] if isinstance(value, str) else ""
 
@@ -284,7 +294,8 @@ def _short(value: Any, limit: int) -> str:
 class Output:
     """GraphRAG's tables, with every text unit mapped to the memory behind it."""
 
-    unit_memory: Mapping[str, tuple[str, int]]
+    #: text unit id -> (memory id, the input file name it was indexed under)
+    unit_memory: Mapping[str, tuple[str, str]]
     entities: Sequence[Mapping[str, str]]
     relationships: Sequence[Mapping[str, str]]
     communities: Sequence[Mapping[str, str]]
@@ -293,12 +304,13 @@ class Output:
 
 
 def read_output(directory: Path) -> Output:
-    documents: dict[str, tuple[str, int]] = {}
+    documents: dict[str, tuple[str, str]] = {}
     for row in read_table(directory, "documents"):
-        match = TITLE_RE.fullmatch(row.get("title", ""))
+        title = row.get("title", "")
+        match = TITLE_RE.fullmatch(title)
         if match and row.get("id"):
-            documents[row["id"]] = (match.group(1), int(match.group(2)))
-    units: dict[str, tuple[str, int]] = {}
+            documents[row["id"]] = (match.group(1), title)
+    units: dict[str, tuple[str, str]] = {}
     for row in read_table(directory, "text_units"):
         memory = documents.get(row.get("document_id", ""))
         if memory and row.get("id"):
@@ -396,7 +408,7 @@ class _CommunityUnits:
 
 
 def _memories_of(
-    unit_ids: Iterable[str], output: Output, current: Mapping[str, int]
+    unit_ids: Iterable[str], output: Output, current: Mapping[str, str]
 ) -> list[str] | None:
     """Memory ids behind ``unit_ids`` when every unit maps to a requested, current memory."""
 
@@ -413,7 +425,7 @@ def _memories_of(
 
 
 def graph_rows(
-    output: Output, current: Mapping[str, int], *, max_rows: int
+    output: Output, current: Mapping[str, str], *, max_rows: int
 ) -> list[dict[str, Any]]:
     rows: dict[tuple[str, ...], dict[str, Any]] = {}
     for item in output.entities:
@@ -451,7 +463,7 @@ def graph_rows(
 
 
 def report_rows(
-    output: Output, current: Mapping[str, int], *, max_rows: int, max_chars: int
+    output: Output, current: Mapping[str, str], *, max_rows: int, max_chars: int
 ) -> list[dict[str, Any]]:
     """Community reports whose whole community comes from requested, current memories.
 
@@ -525,6 +537,16 @@ def candidates(view: DerivedView) -> list[IngestItem]:
 
 #: ``(argv, env, cwd, timeout, log path) -> exit status``; the one place a process starts.
 ProcessRunner = Callable[[Sequence[str], Mapping[str, str], Path, float, Path], int]
+
+
+def _projects(projected: bytes, memory: MemoryFile) -> bool:
+    """Whether a projection file was rendered from this memory's current body."""
+
+    try:
+        text = projected.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return f"## Body\n{memory.body.strip()}\n" in text
 
 
 def _write_new(directory: Path, name: str, data: bytes) -> None:
@@ -649,30 +671,28 @@ class GraphRagDeriver:
                 and hashlib.sha256(data).hexdigest() == document.get("content_sha256")
                 and memory is not None
                 and is_shareable(memory)
+                and _projects(data, memory)
             )
             if not ok or memory is None or len(wanted) >= self.settings.max_memories:
                 skipped.append(memory_id)
                 continue
-            wanted[memory_id] = (memory, data)
+            # What is staged is the vault's own bytes, the ones its version and
+            # hash label; the projection only decides which memories go.
+            wanted[memory_id] = (memory, memory.raw)
         input_dir = self.root / INPUT_DIR
         if input_dir.is_symlink():
             raise GraphRagError("bad_root")
         input_dir.mkdir(mode=0o700, exist_ok=True)
-        names = {
-            f"{mid}.v{memory.version() or 0}.txt": data for mid, (memory, data) in wanted.items()
-        }
+        names = {input_name(memory): data for memory, data in wanted.values()}
         for existing in input_dir.iterdir():
+            if existing.suffix == ".txt" and (existing.is_symlink() or not existing.is_file()):
+                raise GraphRagError("bad_input_dir")  # e.g. a directory named *.txt
             if existing.name not in names and existing.suffix == ".txt":
                 existing.unlink()
         for name, data in sorted(names.items()):
-            target = input_dir / name
-            if target.is_symlink():
-                target.unlink()
-            temp = input_dir / f".{name}.tmp"
-            temp.write_bytes(data)
-            os.replace(temp, target)
+            _write_new(input_dir, name, data)
         index = {name: hashlib.sha256(data).hexdigest() for name, data in sorted(names.items())}
-        (input_dir / INPUT_INDEX).write_text(json.dumps(index, indent=1) + "\n", encoding="utf-8")
+        _write_new(input_dir, INPUT_INDEX, (json.dumps(index, indent=1) + "\n").encode("utf-8"))
         return StageResult(tuple(wanted), tuple(skipped))
 
     # -- 2. the batch run ------------------------------------------------------------------
@@ -746,7 +766,7 @@ class GraphRagDeriver:
         memories = {m.memory_id: m for m in shareable_memories(vault, request.memory_ids)}
         if not memories:
             raise ValueError("none of the requested memories exists or may leave the vault")
-        current = {memory_id: memory.version() or 0 for memory_id, memory in memories.items()}
+        current = {memory_id: input_name(memory) for memory_id, memory in memories.items()}
         output = read_output(self.root / OUTPUT_DIR)
         if request.kind == "graph":
             rows = graph_rows(output, current, max_rows=self.settings.max_rows)
@@ -831,6 +851,7 @@ __all__ = [
     "render_settings",
     "factory",
     "graph_rows",
+    "input_name",
     "parse_list",
     "read_output",
     "read_table",
