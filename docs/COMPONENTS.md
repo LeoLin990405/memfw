@@ -116,7 +116,7 @@ See [`ports-and-recall.md`](ports-and-recall.md#11-packaging-boundaries).
 
 ## DeepSeek tagging adapter
 
-`packages/adapters/memfw-adapter-deepseek` (wheel `memfw_adapter_deepseek`, version 0.1.0)
+`packages/adapters/memfw-adapter-deepseek` (wheel `memfw_adapter_deepseek`, version 0.1.1)
 implements the `ModelBackend` port with the standard library only. It gives the conversation
 worker a `conv-v2` summary plus tags (project, task type, components, intent, outcome) per
 chunk and session; it extracts no facts or claims. It is **off by default**: the worker uses it

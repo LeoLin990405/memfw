@@ -72,7 +72,7 @@ do not contain `memfw/__init__.py`, so this does not affect them.
 - **memfw does not depend on the wheels.** It still ships `src/memfw/ports` and
   `src/memfw/recall` itself; `import memfw.ports` and every memfw output are unchanged. Making
   memfw depend on `memfw-ports` (and re-export it) is a later step (architecture section 6).
-- **Versions.** Both wheels carry `memfw.ports.PORTS_API_VERSION` (semver, `0.2.0` since C5), and
+- **Versions.** Both wheels carry `memfw.ports.PORTS_API_VERSION` (semver, `0.3.0` since K3 added `ProjectionStore`), and
   `memfw-recall` pins `memfw-ports` to it; a test keeps the three equal. Bump it with every
   change to the ports API (major for a breaking one). The members pin their build backend
   (`hatchling==1.33.0`) and ship memfw's `LICENSE` and `NOTICE` (symlinks in each package
@@ -86,19 +86,20 @@ do not contain `memfw/__init__.py`, so this does not affect them.
 <!-- port-versions:start -->
 | Package | Version | Port | PORT_VERSION |
 |---|---|---|---|
-| `memfw-ports` | 0.2.0 | `RecallProvider` | 1 |
-| `memfw-ports` | 0.2.0 | `Projector` | 1 |
-| `memfw-ports` | 0.2.0 | `Ingestor` | 1 |
-| `memfw-ports` | 0.2.0 | `Deriver` | 1 |
-| `memfw-ports` | 0.2.0 | `Clock` | 1 |
-| `memfw-ports` | 0.2.0 | `IdGen` | 1 |
-| `memfw-ports` | 0.2.0 | `ClaimVerifier` | 1 |
-| `memfw-ports` | 0.2.0 | `ClaimStager` | 1 |
-| `memfw-ports` | 0.2.0 | `ContextSlotProvider` | 1 |
-| `memfw-ports` | 0.2.0 | `UsageSink` | 1 |
-| `memfw-ports` | 0.2.0 | `ModelBackend` | 1 |
-| `memfw-recall` | 0.2.0 | `RecallProvider` | 1 |
-| `memfw-adapter-deepseek` | 0.1.0 | `ModelBackend` | 1 |
+| `memfw-ports` | 0.3.0 | `RecallProvider` | 1 |
+| `memfw-ports` | 0.3.0 | `Projector` | 1 |
+| `memfw-ports` | 0.3.0 | `Ingestor` | 1 |
+| `memfw-ports` | 0.3.0 | `Deriver` | 1 |
+| `memfw-ports` | 0.3.0 | `Clock` | 1 |
+| `memfw-ports` | 0.3.0 | `IdGen` | 1 |
+| `memfw-ports` | 0.3.0 | `ClaimVerifier` | 1 |
+| `memfw-ports` | 0.3.0 | `ClaimStager` | 1 |
+| `memfw-ports` | 0.3.0 | `ContextSlotProvider` | 1 |
+| `memfw-ports` | 0.3.0 | `UsageSink` | 1 |
+| `memfw-ports` | 0.3.0 | `ModelBackend` | 1 |
+| `memfw-ports` | 0.3.0 | `ProjectionStore` | 1 |
+| `memfw-recall` | 0.3.0 | `RecallProvider` | 1 |
+| `memfw-adapter-deepseek` | 0.1.1 | `ModelBackend` | 1 |
 <!-- port-versions:end -->
 
 - **Wheels only.** `uv build --wheel --package memfw-ports` (and `memfw-recall`). An sdist is
@@ -301,6 +302,34 @@ and validates plus redacts again after it; a backend only moves text. Backends o
 answers one JSON object (a `conv-v2` tag task matches the tag schema), token counts are
 non-negative integers, the input is not changed, and a task outside `tasks` raises. See
 `docs/conversations-share.md` for the DeepSeek adapter.
+
+### 2.8 ProjectionStore (K3) and path patterns (K4)
+
+`memfw.ports.projection_store` holds the contract for a rebuildable derived store
+(architecture section 4: `rebuild()`, `version()`, `query()`). Version 1 carries the K3
+typed-edge projection: rows are `Edge` values (relation, both ends with their kind, tenant and
+privacy level, the vault field, validity and the relation's `epistemic_max`). `rebuild(edges)`
+replaces the whole content (duplicate keys or non-`Edge` values raise and keep the old content),
+`version()` is `None` before the first rebuild and then `edge_set_version(edges)` (the same in
+every implementation), and `query(scope, *, node, direction, relations, limit, after=None)`
+returns the edges at `node` that `edge_visible` admits for an `EdgeScope(tenant, clearance)`,
+sorted by key, at most `limit` (1..`MAX_QUERY_LIMIT`). `after` is a keyset cursor (an
+`Edge.key`, normally the last of the previous page): only edges whose key sorts after it come
+back, so a caller pages through a node with more visible edges than one page holds. The
+clearance is required: a store can never be asked for everything, a private or `unknown`
+endpoint hides the edge, and another tenant's endpoint never shows.
+
+Implementations: `memfw.edges.SqliteProjectionStore` (`~/.local/share/memfw/edges/<key>.sqlite3`, outside the vault, mode 0600) and
+`MemoryProjectionStore` in `memfw.ports.reference`. `check_projection_store(store, *, vault=None,
+vault_exclude=(), edges=SAMPLE_EDGES)` is the contract (answers equal the reference `select` for
+every node, direction and `SAMPLE_SCOPES` scope; paging with `after` gives the unpaged answer;
+deletion on rebuild; refusals).
+`PROJECTION_STORE_PORT_VERSION = 1`; the ports API moves to `0.3.0`.
+
+`memfw.ports.patterns` (K4) parses a bounded path (`about>broader*1..2><about`) and matches it
+over any `ProjectionStore` with Cypher-like rules and hard caps (`MAX_DEPTH` 4 hops,
+`MAX_FANOUT`, `MAX_LIMIT`, `MAX_EXPANSIONS`), so every store gives the same paths for the same
+edges. See `docs/ontology.md` (K3, K4).
 
 ## 3. The coordinator pipeline
 

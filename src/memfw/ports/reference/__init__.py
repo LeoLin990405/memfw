@@ -15,6 +15,7 @@ Port                          Reference implementation(s)
 ``ClaimVerifier``             ``KeywordClaimVerifier``
 ``ClaimStager``               ``FileClaimStager``
 ``UsageSink``                 ``NullUsageSink``, ``MemoryUsageSink``
+``ProjectionStore``           ``MemoryProjectionStore``
 ============================  ======================================
 
 ``Clock`` and ``IdGen`` already have two each in ``memfw.ports.clock``.
@@ -33,6 +34,7 @@ from typing import Any
 from ..registry import AdapterRegistry, AdapterSpec, default_registry
 from .claims import FileClaimStager, KeywordClaimVerifier
 from .derivers import ConcatDeriver, TimelineDeriver
+from .edges import MemoryProjectionStore
 from .ingestors import (
     JsonIngestor,
     MarkdownIngestor,
@@ -101,6 +103,7 @@ __all__ = [
     "JsonlProjector",
     "KeywordClaimVerifier",
     "MarkdownIngestor",
+    "MemoryProjectionStore",
     "MemoryUsageSink",
     "MirrorProjector",
     "NullUsageSink",

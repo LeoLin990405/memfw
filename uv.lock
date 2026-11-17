@@ -310,7 +310,7 @@ provides-extras = ["dev", "notes"]
 
 [[package]]
 name = "memfw-adapter-deepseek"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/adapters/memfw-adapter-deepseek" }
 dependencies = [
     { name = "memfw-ports" },
@@ -321,12 +321,12 @@ requires-dist = [{ name = "memfw-ports", editable = "packages/memfw-ports" }]
 
 [[package]]
 name = "memfw-ports"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "packages/memfw-ports" }
 
 [[package]]
 name = "memfw-recall"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "packages/memfw-recall" }
 dependencies = [
     { name = "memfw-ports" },

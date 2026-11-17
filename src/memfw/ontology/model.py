@@ -604,7 +604,10 @@ def _concept_from_entry(entry: dict[str, Any]) -> Concept:
     if not oid:
         raise OntologyError("seed entry has no oid")
     merged = entry.get("merged_into")
-    extras = {"broader": entry["broader"]} if "broader" in entry else {}
+    # Only a well-formed broader (an oid, or a list of oids) is copied: a
+    # malformed one (null, a mapping, a list holding anything but text) is
+    # left out rather than written into the new concept file.
+    extras = {"broader": entry["broader"]} if _seed_broader_ok(entry.get("broader")) else {}
     return Concept(
         oid=oid,
         class_name=str(entry.get("class") or ""),
@@ -615,6 +618,16 @@ def _concept_from_entry(entry: dict[str, Any]) -> Concept:
         merged_into=str(merged) if isinstance(merged, str) and merged else None,
         definition=str(entry.get("definition") or ""),
         extras=extras,
+    )
+
+
+def _seed_broader_ok(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(isinstance(item, str) and item.strip() for item in value)
     )
 
 

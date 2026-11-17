@@ -27,6 +27,7 @@ from memfw.context import (
 from memfw.core.markdown_parse import parse_memory_markdown
 from memfw.core.repository import Repository
 from memfw.dream.claims import DreamClaimStager, DreamClaimVerifier
+from memfw.edges import SqliteProjectionStore
 from memfw.index import MemoryIndex
 from memfw.notes import HashEmbeddingProvider
 from memfw.ports import (
@@ -54,6 +55,7 @@ from memfw.ports.reference import (
     JsonlProjector,
     KeywordClaimVerifier,
     MarkdownIngestor,
+    MemoryProjectionStore,
     MirrorProjector,
     TimelineDeriver,
     items_from_json,
@@ -211,6 +213,15 @@ USAGE_SINKS: dict[str, Callable[[Path], object]] = {
     "memory": lambda _vault: MemoryUsageSink(),
 }
 
+#: ``ProjectionStore`` (K3): the SQLite edge projection and the in-memory reference.
+PROJECTION_STORES: dict[str, Callable[[Path], object]] = {
+    # Outside the vault, as ``memfw graph rebuild`` writes it.
+    "sqlite": lambda vault: SqliteProjectionStore(
+        vault.parent / "edges" / "edges.sqlite3", forbid=vault
+    ),
+    "memory": lambda _vault: MemoryProjectionStore(),
+}
+
 MATRIX: dict[str, dict[str, object]] = {
     "RecallProvider": dict(RECALL),
     "Projector": dict(PROJECTORS),
@@ -222,6 +233,7 @@ MATRIX: dict[str, dict[str, object]] = {
     "ClaimStager": dict(STAGERS),
     "ContextSlotProvider": dict(SLOT_PROVIDERS),
     "UsageSink": dict(USAGE_SINKS),
+    "ProjectionStore": dict(PROJECTION_STORES),
 }
 
 
@@ -922,4 +934,20 @@ def test_usage_sinks_pass_the_same_contract(tmp_path: Path, name: str) -> None:
         vault=repository.root,
         vault_exclude=LOCK,
         stored=stored,
+    )
+
+
+# --- ProjectionStore -----------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", sorted(PROJECTION_STORES))
+def test_projection_stores_pass_the_same_contract(tmp_path: Path, name: str) -> None:
+    from memfw.ports.testing import check_projection_store
+
+    repository = _vault(tmp_path)
+    store = PROJECTION_STORES[name](repository.root)
+    check_projection_store(
+        store,  # type: ignore[arg-type]
+        vault=repository.root,
+        vault_exclude=LOCK,
     )

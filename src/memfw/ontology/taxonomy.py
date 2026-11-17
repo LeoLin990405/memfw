@@ -11,7 +11,11 @@ so a vault without the field gets no new review items:
 * ``broader_dangling``: a parent oid has no concept file;
 * ``broader_merged``: a parent was merged into another concept; ``resolved``
   names the oid to point at instead;
-* ``broader_cycle``: following ``broader`` (through merges) loops back.
+* ``broader_cycle``: following ``broader`` (through merges) loops back. A
+  merged concept's own ``broader`` counts for the concept it was merged into,
+  so a loop through it is found too;
+* ``broader_on_merged``: a concept that was merged into another still carries
+  ``broader``; ``resolved`` names the concept its parents now count for.
 """
 
 from __future__ import annotations
@@ -56,7 +60,12 @@ def lint_taxonomy(concepts: dict[str, Concept]) -> list[dict[str, Any]]:
         if parents is None:
             items.append({"kind": "broader_invalid", "oid": oid, "detail": "broader"})
             continue
-        edges: list[str] = []
+        source = _resolve(oid, concepts)
+        if concept.merged_into:
+            items.append(
+                {"kind": "broader_on_merged", "oid": oid, "detail": "broader", "resolved": source}
+            )
+        edges: list[str] = graph.get(source, [])
         for parent in parents:
             if parent not in concepts:
                 items.append({"kind": "broader_dangling", "oid": oid, "detail": parent})
@@ -71,10 +80,15 @@ def lint_taxonomy(concepts: dict[str, Concept]) -> list[dict[str, Any]]:
                         "resolved": target,
                     }
                 )
+            if target == source and parent != oid:
+                # A self loop made only by following merges (A broader B, B merged
+                # into A; or a merged concept's broader naming its target) is
+                # not a cycle in the taxonomy. A literal ``broader: [self]`` is.
+                continue
             if target not in edges:
                 edges.append(target)
         if edges:
-            graph[oid] = edges
+            graph[source] = edges
     for members in _cycles(graph):
         items.append(
             {

@@ -107,6 +107,9 @@ corroboration_app = typer.Typer(
     help="Corroboration projection: which apps/sessions independently mention a memory"
 )
 project_app = typer.Typer(help="Read-only human-facing projections of the vault (rebuildable)")
+graph_app = typer.Typer(
+    help="Typed-edge projection (K3) and bounded path patterns over it (K4); read only"
+)
 app.add_typer(index_app, name="index")
 app.add_typer(corroboration_app, name="corroboration")
 app.add_typer(okf_app, name="okf")
@@ -129,6 +132,7 @@ app.add_typer(projection_app, name="projection")
 app.add_typer(conversations_app, name="conversations")
 app.add_typer(project_app, name="project")
 app.add_typer(attach_app, name="attach")
+app.add_typer(graph_app, name="graph")
 app.command("handoff")(handoff_command)
 capture_app.command(name="confirm")(confirm_command)
 
@@ -2805,6 +2809,93 @@ def corroboration_queue(
     typer.echo(json.dumps(payload, ensure_ascii=False))
 
 
+# --- graph: K3 edge projection, K4 path patterns -------------------------------
+
+
+@graph_app.command("rebuild")
+def graph_rebuild(
+    root: Annotated[Path, typer.Option("--root", "-r", help="memfw vault (read only)")] = Path("."),
+) -> None:
+    """Rebuild the typed-edge projection (kept outside the vault; the vault is only read)."""
+    from .runtime.graph import rebuild_edge_projection
+
+    repository = _repo(root)
+    try:
+        payload = rebuild_edge_projection(repository)
+    except (MemfwError, OSError, ValueError) as exc:
+        _projection_fail(exc)
+        return
+    typer.echo(json.dumps(payload, ensure_ascii=False))
+    if "legacy_file" in payload:
+        typer.echo(
+            f"note: {payload['legacy_file']} at the vault root is from an earlier build and is"
+            " no longer used; you may delete it (memfw will not).",
+            err=True,
+        )
+
+
+@graph_app.command("match")
+def graph_match_command(
+    start: Annotated[
+        str, typer.Option("--from", help="Start node: a memory id, concept oid or concept label")
+    ],
+    path: Annotated[
+        str,
+        typer.Option(
+            "--path",
+            help="Steps: NAME> forward, <NAME backward, NAME*M..N> M to N hops (at most 4 hops)",
+        ),
+    ],
+    root: Annotated[Path, typer.Option("--root", "-r", help="memfw vault (read only)")] = Path("."),
+    limit: Annotated[int, typer.Option("--limit", help="Paths returned (1..100)")] = 20,
+    fanout: Annotated[
+        int, typer.Option("--fanout", help="Neighbours expanded per node and step (1..200)")
+    ] = 50,
+    acyclic: Annotated[
+        bool, typer.Option("--acyclic", help="Never visit a node twice on one path")
+    ] = False,
+    tenant: Annotated[
+        str, typer.Option("--tenant", help='The one tenant to read (default: "")')
+    ] = "",
+    clearance: Annotated[
+        str | None,
+        typer.Option(
+            "--clearance",
+            help="Comma list of public, shared, local-private (default: public,shared)",
+        ),
+    ] = None,
+    source: Annotated[
+        list[str] | None,
+        typer.Option("--source", help="Only memories from this source (repeatable)"),
+    ] = None,
+) -> None:
+    """Paths from one node along a bounded typed-edge pattern, filtered like every exit."""
+    from .runtime.graph import graph_match
+
+    levels: list[str] | None = None
+    if clearance is not None:
+        if not clearance.strip() or not clearance_is_valid(clearance):
+            raise typer.BadParameter("--clearance must list only public, shared, local-private")
+        levels = [token.strip().lower() for token in clearance.split(",") if token.strip()]
+    repository = _repo(root)
+    try:
+        payload = graph_match(
+            repository,
+            start=start,
+            path=path,
+            tenant=tenant,
+            clearance=levels,
+            allowed_sources=tuple(source or ()),
+            limit=limit,
+            fanout=fanout,
+            acyclic=acyclic,
+        )
+    except (MemfwError, OSError, ValueError) as exc:
+        _projection_fail(exc)
+        return
+    typer.echo(json.dumps(payload, ensure_ascii=False))
+
+
 # --- grouped top-level help ----------------------------------------------------
 
 PANEL_DAILY = "Daily"
@@ -2829,6 +2920,7 @@ HELP_PANELS: dict[str, str] = {
     "layer": PANEL_DAILY,
     "stats": PANEL_DAILY,
     "concepts": PANEL_DAILY,
+    "graph": PANEL_DAILY,
     "memory-related": PANEL_DAILY,
     "handoff": PANEL_DAILY,
     "notes": PANEL_DAILY,

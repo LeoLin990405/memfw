@@ -143,15 +143,22 @@ class TransactionMixin:
             if not path.is_file() or path.name in {".memfw.lock", ".pending.json"}:
                 continue
             relative = path.relative_to(self.root)
-            digest.update(relative.as_posix().encode())
-            digest.update(b"\0")
             try:
-                body = path.read_bytes()
-            except OSError:
+                body: bytes | None = path.read_bytes()
+            except OSError as exc:
+                # An atomic-write temporary (``*.tmp``) renamed or removed by a
+                # concurrent writer after the walk listed it was never part of
+                # the vault's content. Any other vanished file still counts.
+                if isinstance(exc, FileNotFoundError) and path.name.endswith(".tmp"):
+                    continue
                 # A concept anchor that cannot be read must not take the vault
                 # down. Alias expansion reports that failure and keeps FTS.
                 if not relative.parts or relative.parts[0] != "concepts":
                     raise
+                body = None
+            digest.update(relative.as_posix().encode())
+            digest.update(b"\0")
+            if body is None:
                 digest.update(b"unreadable")
                 continue
             digest.update(hashlib.sha256(body).digest())
