@@ -434,9 +434,15 @@ def proxy_log(events: Iterable[Event]) -> ProxyLog:
             if isinstance(by, str) and superseded.get(target) == by:
                 unconfirmed.pop(target, None)
             elif (
-                isinstance(by, str) and by in committed and replaceable(target, attachments.get(by))
+                isinstance(by, str)
+                and by != target
+                and by in committed
+                and by not in superseded
+                and replaceable(target, attachments.get(by))
             ):
-                # A confirmation without the add's details: same rules.
+                # A supersession without the add's details: the target must be
+                # replaceable and the replacement a committed, still active
+                # proxy of the same attachment (never itself).
                 superseded[target] = by
             else:
                 invalid.append((target, by if isinstance(by, str) else ""))
