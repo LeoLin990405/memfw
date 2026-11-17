@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -175,6 +176,15 @@ def without_u5_changes(
     return _render(changed), dropped
 
 
+#: The release bump changes ``serverInfo.version`` (memfw's own version) on purpose; it is the
+#: only handshake field masked before the comparison.
+_SERVER_VERSION = re.compile(r'("serverInfo": \{\s*"name": "memfw",\s*"version": )"[^"]*"')
+
+
+def _without_server_version(rendered: str) -> str:
+    return _SERVER_VERSION.sub(r'\1"<memfw version>"', rendered)
+
+
 def _all_tools_labelled(item: dict[str, Any]) -> bool:
     from tests.harness.probes import LABELS_ID
 
@@ -221,7 +231,11 @@ def test_all_tools_byte_identical_to_base_ref() -> None:
         )
         new, dropped = without_u5_changes(result.new, labelled=_all_tools_labelled)
         removed += len(dropped)
-        expected = byte_identical.Comparison(payload=result.payload, old=old, new=new)
+        expected = byte_identical.Comparison(
+            payload=result.payload,
+            old=_without_server_version(old),
+            new=_without_server_version(new),
+        )
         assert expected.identical, f"{result.payload}:\n{expected.diff[:4000]}"
     assert removed, "labels=true calls must carry corroboration"
 

@@ -9,6 +9,8 @@
 - `notes_get`、`notes_status`；
 - `retrieval_feedback`、`retrieval_trace`。
 
+加上 `--clearance` / `MEMFW_NOTES_CLEARANCE`（配合 `--legacy-privacy-default`）后，所有工具只能看到隐私级别在 clearance 范围内的笔记，级别从笔记文件里读取；`notes_status` 也只统计可见的笔记。不设置就不过滤。
+
 ## 笔记索引
 
 `memfw.notes` 是 Markdown 笔记树的派生 section 级索引。它独立于记忆 vault，且绝不写入笔记：
@@ -63,7 +65,9 @@ memfw code map --db /tmp/memfw-code.sqlite
 2. `src/memfw/index/readonly.py`（查询规则、`search_vault`）；
 3. `src/memfw/index/read_path.py`（读路径共用字段）。
 
-两个库文件只依赖标准库和 PyYAML。脚本按顺序加载读路径：先找旁边的 `readonly.py`，再找仓库里的 `src/memfw/index/`，最后找已安装的 `memfw`，并在日志里写明用了哪一个；三者都没有就报错退出，并指出缺了哪些文件。它从不写盘，所以升级后要先跑一次 `memfw index rebuild`。见 [`READONLY-SERVICE-UPGRADE.md`](READONLY-SERVICE-UPGRADE.md)。
+两个库文件只依赖标准库和 PyYAML。脚本按顺序加载读路径：先找旁边的 `readonly.py`，再找仓库里的 `src/memfw/index/`，最后找已安装的 `memfw`，并在日志里写明用了哪一个；三者都没有就报错退出，并指出缺了哪些文件。`read_path.py` 带有 `READ_PATH_VERSION`（0.3.0 中为 2）；脚本和 `readonly.py` 遇到更旧的副本会拒绝启动，这样只升级了一部分时，启动就会失败，而不是每次 `/search` 都报错。它从不写盘，所以升级后要先跑一次 `memfw index rebuild`。
+
+`--clearance` / `MEMFW_READONLY_CLEARANCE`（例如 `public,shared`）把 `/search` 和 `/related` 限制在这些隐私级别；不设置就不过滤。没有 `privacy` 字段的记忆按 vault 的 `legacy_privacy_default` 处理（没设时是 `local-private`），所以要先设好它，否则旧记忆会全部被挡掉。见 [`READONLY-SERVICE-UPGRADE.md`](READONLY-SERVICE-UPGRADE.md)。
 
 
 ## 独立 wheel：`memfw-ports` 与 `memfw-recall`
@@ -75,7 +79,7 @@ memfw code map --db /tmp/memfw-code.sqlite
 | `memfw-ports`（`packages/memfw-ports`） | `memfw_ports` | 端口协议、值类型、契约测试套件 `memfw_ports.testing`、只依赖标准库的参考实现 |
 | `memfw-recall`（`packages/memfw-recall`） | `memfw_recall` | 召回协调器，不含 memfw 内置的 vault 提供方 |
 
-写适配器的人装上它们就能跑契约检查，不必安装 memfw。两者的版本都跟随 `memfw.ports.PORTS_API_VERSION`（目前是 `0.1.0`）。只提供 wheel（没有 sdist，也不支持 editable 安装），并且**没有发布到 PyPI**：
+写适配器的人装上它们就能跑契约检查，不必安装 memfw。两者的版本都跟随 `memfw.ports.PORTS_API_VERSION`（目前是 `0.2.0`）。只提供 wheel（没有 sdist，也不支持 editable 安装），并且**没有发布到 PyPI**：
 
 ```bash
 uv build --wheel --package memfw-ports
@@ -83,6 +87,11 @@ uv build --wheel --package memfw-recall
 ```
 
 CI 的 `standalone-wheels` 任务会构建两者，装进一个没有 memfw 的全新 venv，再跑 `tests/standalone/wheel_smoke.py`。memfw 本身不依赖它们。在 memfw 进程里请用 `memfw.ports`；`memfw_ports` 是另一份拷贝，它的类和 memfw 的类永远不相等。见 [`ports-and-recall.md`](ports-and-recall.md#11-packaging-boundaries)。
+
+
+## DeepSeek 打标签适配器
+
+`packages/adapters/memfw-adapter-deepseek`（wheel 名 `memfw_adapter_deepseek`，版本 0.1.0）只用标准库实现了 `ModelBackend` 端口。它给会话 worker 提供 `conv-v2` 格式的输出：每个分块和每个会话一段摘要，外加标签（项目、任务类型、组件、意图、结果）；它不抽取事实或论断。它**默认关闭**：只有 `vault.yaml` 里设置了 `conversations: {backend: "memfw_adapter_deepseek:factory", cloud: true}`，并且提供了 `DEEPSEEK_API_KEY`，worker 才会用它；每一轮都有 token 和费用上限。密钥只会发往服务商的 API 地址。memfw 本身从不导入这个适配器；它单独构建成 wheel（`uv build --wheel --package memfw-adapter-deepseek`），没有发布到 PyPI。见 [`conversations-share.md`](conversations-share.md#deepseek-tagging-adapter)。
 
 
 ## 佐证投影
@@ -94,7 +103,12 @@ memfw corroboration rebuild --root ./vault
 memfw corroboration show MEMORY_ID --as-app codex --root ./vault
 ```
 
-`show` 会把结果裁剪到 `--as-app` 可读的应用范围内。默认不启用：没有别的功能读这份投影，MCP 上也还没有。见 [`epistemic-and-experience.md`](epistemic-and-experience.md#corroboration-derived)。
+`show` 会把结果裁剪到 `--as-app` 可读的应用范围内。MCP `memory_search` 加上 `labels: true` 时，会给每一行加上 `corroboration`（`count`、`apps`、`sessions`、`first_seen`、`last_seen`），按服务端应用的 `can_read` 裁剪；无法给出时返回 `{"degraded": CODE}`。不加 `labels` 时输出不变。`memfw corroboration queue` 按审核顺序列出未解决的待解问题：冲突记忆得到至少两个可见应用佐证的排在前面（只读，默认 `--policy strict`）。见 [`epistemic-and-experience.md`](epistemic-and-experience.md#corroboration-derived)。
+
+
+## Obsidian 投影
+
+`memfw project obsidian --out DIR [--root VAULT] [--clearance public,shared] [--tenant T]` 生成一个只读的 Obsidian 看板：每条记忆一页，另有待解问题页和概念页；`about`、取代关系、待解问题的冲突与解答、概念的 `broader` / `narrower` 都写成 wikilink；还有 Bases 视图和一份 sha256 清单。它实现的是 `Projector` 端口。输出是确定性的（不含运行时间戳，顺序稳定），可以提交进 git 做 diff。被 clearance 挡掉的记忆不会留下页面、链接、计数或概念页。vault 只读不写，输出目录不能在 vault 里面，也不能是受保护的路径。重建时只动上一次清单里列出的文件。不运行这个命令就什么都不会发生。见 [`obsidian-projection.md`](obsidian-projection.md)。
 
 
 ## 概念层级与关系类型

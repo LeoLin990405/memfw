@@ -11,6 +11,106 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-11-17
+
+The second numbered release: a layered core behind swappable ports, recall and
+context packs v2, uncertainty as a first-class record, a concept taxonomy,
+per-memory privacy levels with opt-in clearance on every exit, and a settled,
+optionally model-tagged conversation store. New behaviour is off by default or
+additive: with no new flag, setting or `vault.yaml` key, outputs match 0.2.0
+except for the fail-closed fixes listed below. The entries after this summary
+give the details, newest first.
+
+### Summary
+
+- **Architecture, ports and runtime.** Package layers L0 ports → L5 interface,
+  enforced by `tests/test_architecture_layers.py` (shrink-only allowlist, 25
+  entries → 1). `memfw.runtime` is the composition root; the MCP server only
+  parses, calls the Runtime and serialises (A0–A4). Eleven ports in
+  `memfw.ports.PORT_VERSIONS` (`PORTS_API_VERSION` 0.2.0); ten have swap
+  drills with two or more implementations through one contract kit, and
+  `ModelBackend` is checked against the extractive and DeepSeek backends.
+  Standalone `memfw-ports` / `memfw-recall` wheels (0.2.0) are built in CI
+  (A5).
+- **Recall and context.** Opt-in `memory_search mode=two_stage` through the
+  recall coordinator (`compat_fts` or `strict` policy; providers never write
+  the vault). `memory_context v=2` returns a versioned `ContextPack` with
+  `core`, `handoff` and `topics` slots, also served as three MCP resources
+  (C1, C2), with a per-process cache of ids and versions and `if_version`
+  (C3). `memory_used` (C5, off by default) and a session-safe
+  `record_access: false` switch so a session never writes the vault (C6).
+- **Uncertainty.** `type: open-question` memories (U1), `open_question:<id>`
+  and `conflicted` recall labels (U2), the corroboration projection and its
+  display on recall rows plus `memfw corroboration queue` (U4, U5a), and dream
+  turning conflicts into open-question candidates with `dream
+  accept-question` / `reject-question` (U3).
+- **Knowledge structure.** Concept `broader` parents with derived `narrower`
+  (K1) and the versioned relation-type table `ontology/relations.yaml` with
+  `memfw concepts relations` / `lint-relations` (K2).
+- **Privacy.** A `privacy` field (`public`, `shared`, `local-private`), vault
+  defaults `legacy_privacy_default` and `new_privacy_default`, and opt-in
+  clearance on the HTTP service, OKF export, the notes MCP server and the
+  memfw MCP server (MM0). A top-level `sensitivity:` key is read the same at
+  every exit and kept on rewrite (#69). Fail-closed fixes: privacy and
+  lifecycle tags in the strict policy, supersede keeps the tenant and scope,
+  tenant-scoped `/related` and MCP reads.
+- **Conversations.** A DeepSeek `conv-v2` tagging adapter behind the new
+  `ModelBackend` port, **off unless `conversations.cloud: true` and a key are
+  set** (M3a); settled ingest and archive state (`--settled-minutes`, M3e).
+- **CLI.** Open questions from `memfw add` / `update`, `--json` on `list`,
+  `show` and `index search`, grouped `--help` panels, and
+  [`docs/cli-mcp-parity.md`](docs/cli-mcp-parity.md).
+- **Obsidian projection.** `memfw project obsidian` writes a read-only,
+  deterministic Obsidian board (O1a), never touching the vault.
+
+### Compatibility / upgrade notes
+
+- **Upgrade every host that reads or writes a shared vault together.** memfw
+  0.2.0 reads 0.3.0 files without error, but it lists the new frontmatter in
+  `ignored_keys` and **drops it on rewrite**:
+  - the `open_question` block (the memory keeps `type: open-question`; 0.3.0
+    then refuses gated writes to it and `fsck` reports
+    `open_question_missing_block`);
+  - the `privacy` field and a top-level `sensitivity:` key, so a 0.2.0 rewrite
+    loosens a memory to the vault's legacy default.
+
+  Concept files keep `broader` under 0.2.0 (it lints it as
+  `unknown_relation`). 0.2.0 accepts and keeps the new `vault.yaml` keys.
+- **No downgrade after compaction.** Once 0.3.0 compacts a vault's event log,
+  memfw 0.2.0 can no longer read that log. A vault 0.3.0 never compacted stays
+  readable by 0.2.0.
+- **Read-only HTTP service.** Deploy `scripts/memfw_readonly_service.py`,
+  `src/memfw/index/readonly.py` and `src/memfw/index/read_path.py` from the
+  same revision. `read_path.py` now carries `READ_PATH_VERSION = 2`, and the
+  script and `readonly.py` refuse to start with an older sibling. Rebuild the
+  service's mirror index (`memfw index rebuild` on the served root) after the
+  upgrade; the service never writes.
+- **Clearance needs the privacy defaults first.** Setting
+  `MEMFW_READONLY_CLEARANCE=public,shared` (or `--clearance` on OKF export,
+  the notes server or `MEMFW_MCP_CLEARANCE`) on a vault whose memories have no
+  `privacy` field withholds all of them, because a missing field counts as
+  `local-private`. Set `legacy_privacy_default` (and, if new memories should
+  get a level, `new_privacy_default`) with `memfw privacy legacy-default` /
+  `new-default` before enabling a clearance. Unset clearance filters nothing,
+  as in 0.2.0.
+- **Expected stricter output.** Fail-closed fixes can hide rows 0.2.0 showed
+  or keep records 0.2.0 dropped: `privacy:`, `sensitivity:` and `lifecycle:`
+  tags match in any case and the strictest wins under the `strict` policy, an
+  unrecognised privacy value is never admitted under a clearance,
+  `supersede` writes the replacement in the predecessor's tenant, and a hard
+  budget forget never deletes a live supersede chain.
+- **Derived stores.** `corroboration.sqlite3` and the Obsidian output are
+  projections you can delete and rebuild at any time; the `memory_used` store
+  (outside the vault) is disposable. None of them is part of the vault.
+- **Cloud tagging is off.** The DeepSeek adapter is a separate wheel; the
+  conversation worker uses it only with `conversations: {backend, cloud:
+  true}` in `vault.yaml` and `DEEPSEEK_API_KEY` set. Otherwise the worker
+  behaves as in 0.2.0.
+- **Packages.** `memfw` 0.3.0 still ships `memfw.ports` itself and does not
+  depend on `memfw-ports`. `memfw-ports` and `memfw-recall` are 0.2.0
+  (`PORTS_API_VERSION` 0.2.0), `memfw-adapter-deepseek` is 0.1.0. Nothing is
+  published to PyPI.
+
 ### Fixed — loopback requests never go through an environment proxy (security)
 
 - `memfw.notes.http.open_http` (embeddings for notes, memory hybrid search
@@ -283,6 +383,7 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   `topics` are not cached. `memfw.context` gains the `CoreCandidates` seam
   (`CoreSlotProvider(candidates=...)`), `is_core_shaped`, `select_core` and
   `if_version_request`.
+
 ### Added — DeepSeek tagging adapter and conv-v2 tags (M3a)
 
 - New L0 port `memfw.ports.models`: `ModelBackend`, `ModelReply` (moved from

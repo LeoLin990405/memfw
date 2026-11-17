@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-SERVER_INFO = {"name": "memfw", "version": "0.2.0"}
+SERVER_INFO = {"name": "memfw", "version": "0.3.0"}
 PROTOCOL = "2024-11-05"
 INSTRUCTIONS = (
     "memfw exposes a local Markdown memory vault. Use memory_search before answering "
