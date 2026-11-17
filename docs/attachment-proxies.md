@@ -57,7 +57,7 @@ files: `tests/fixtures/proxies/ocr-pdf-v1.json`,
 | `coverage` | yes | `{"status": "full" \| "partial", "detail": "…"}`; a `keyframes` proxy is always `partial` |
 | `segments` | yes | one or more `{"text", "locator"?, "speaker"?, "confidence"?}` |
 | `attachment_id` | no | when present, must be the `ATT-ID` imported into |
-| `producer` | no | `{"tool", "version"}`, `"human"` or `"app-manual:<app>"` |
+| `producer` | no | `{"tool", "version"}`, `"human"` or `"app-manual:<app>"` (every name printable: no control, bidi or invisible format characters) |
 | `created_at` | no | ISO 8601 with a timezone (when the producer ran) |
 | `language` | no | BCP 47 tag (`en`, `zh-Hans`) |
 | `privacy` | no | `public`, `shared` or `local-private` (default `local-private`) |
@@ -70,8 +70,9 @@ Unknown keys (top level, in `coverage`, `source`, `coordinates`, a segment or
 a locator) and duplicate keys are refused, so a typo never passes silently.
 Segment text has `\r\n`, `\r`, U+2028 and U+2029 turned into `\n` and outer
 whitespace stripped; it may not be empty, exceed 65 536 characters, hold any
-other C0/C1 control character (`\t` is kept) or a bidirectional override or
-isolate (U+202A–U+202E, U+2066–U+2069), or contain a line starting with
+other C0/C1 control character (`\t` is kept), a bidirectional override or
+isolate (U+202A–U+202E, U+2066–U+2069) or an invisible mark (U+200B, U+200E,
+U+200F, U+061C, U+FEFF), or contain a line starting with
 `<!-- memfw:segment`. Numbers too large for a float are refused, and so is
 JSON nested too deeply to parse. `speaker` is allowed in transcripts only and is
 never taken as verified. `confidence` is 0..1.
@@ -210,7 +211,10 @@ prints `{"files", "bytes", "max_bytes"}`.
 `prx-*.md`), `proxy_attachment_missing`, `proxy_source_mismatch` and
 `proxy_supersede_missing` (a replacement committed but its `proxy_supersede`
 confirmation was not written, e.g. after a crash; the old proxy is already
-inactive). It never registers an `external_delete` and never
+inactive) and `proxy_supersede_invalid` (a `proxy_add` or `proxy_supersede`
+naming a target that, at that point in the log, was not a committed, still
+active proxy of the same attachment; it is ignored, so a forged or stale
+event never deactivates another proxy). It never registers an `external_delete` and never
 changes a proxy. On a vault without proxies it adds nothing. `memfw recover`
 after an interrupted import removes the uncommitted proxy file.
 

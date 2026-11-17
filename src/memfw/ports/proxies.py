@@ -64,6 +64,9 @@ _ATT_RE: Final = re.compile(
 _LANG_RE: Final = re.compile(r"^[A-Za-z]{2,8}(-[A-Za-z0-9]{1,8})*$")
 _APP_MANUAL_RE: Final = re.compile(r"^app-manual:[^\s\x00-\x1f\x7f]{1,100}$")
 _MARKER_PREFIX: Final = "<!-- memfw:segment"
+#: Invisible format characters that can disguise text: zero-width space,
+#: LRM/RLM, Arabic letter mark, BOM (refused in labels and segment text).
+_INVISIBLE_CHAR: Final = re.compile("[\u200b\u200e\u200f\u061c\ufeff]")
 #: C0 and C1 controls, DEL, bidi embeddings/overrides and isolates (``clean_text``).
 _FORBIDDEN_CHAR: Final = re.compile("[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]")
 
@@ -150,7 +153,10 @@ def _label(value: Any, what: str, *, limit: int = MAX_LABEL_CHARS) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ProxyFormatError(f"{what} must be a non-empty string")
     text = value.strip()
-    if len(text) > limit or any(not char.isprintable() for char in text):
+    if len(text) > limit or any(
+        not char.isprintable() or _FORBIDDEN_CHAR.match(char) or _INVISIBLE_CHAR.match(char)
+        for char in text
+    ):
         raise ProxyFormatError(f"{what} must be at most {limit} printable characters")
     return text
 
@@ -547,6 +553,7 @@ def check_producer(raw: Any) -> str | dict[str, str]:
         return "human"
     if isinstance(raw, str):
         if _APP_MANUAL_RE.fullmatch(raw):
+            _label(raw.split(":", 1)[1], "producer app", limit=100)
             return raw
         raise ProxyFormatError(
             'producer must be {"tool", "version"}, "human" or "app-manual:<app>"'
@@ -565,9 +572,10 @@ def clean_text(value: Any, what: str = "segment text") -> str:
     """A segment's text: newlines normalised, outer whitespace stripped, not empty.
 
     ``\r\n``, ``\r``, U+2028 and U+2029 become ``\n``. Any other C0 or C1
-    control character (``\t`` is kept) and the bidirectional override and
-    isolate characters (U+202A–U+202E, U+2066–U+2069) are refused, so a
-    proxy cannot hide or reorder text when shown.
+    control character (``\t`` is kept), the bidirectional override and
+    isolate characters (U+202A–U+202E, U+2066–U+2069) and the invisible
+    marks U+200B, U+200E, U+200F, U+061C and U+FEFF are refused, so a proxy
+    cannot hide or reorder text when shown.
     """
 
     if not isinstance(value, str):
@@ -583,8 +591,13 @@ def clean_text(value: Any, what: str = "segment text") -> str:
         raise ProxyFormatError(f"{what} is empty")
     if len(text) > MAX_SEGMENT_CHARS:
         raise ProxyFormatError(f"{what} is over {MAX_SEGMENT_CHARS} characters")
-    if any(char not in "\n\t" and _FORBIDDEN_CHAR.match(char) for char in text):
-        raise ProxyFormatError(f"{what} has a control or bidirectional override character")
+    if any(
+        char not in "\n\t" and (_FORBIDDEN_CHAR.match(char) or _INVISIBLE_CHAR.match(char))
+        for char in text
+    ):
+        raise ProxyFormatError(
+            f"{what} has a control, bidirectional override or invisible format character"
+        )
     if any(line.lstrip().startswith(_MARKER_PREFIX) for line in text.split("\n")):
         raise ProxyFormatError(f"{what} contains a memfw segment marker")
     return text

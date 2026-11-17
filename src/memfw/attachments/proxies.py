@@ -364,16 +364,21 @@ def medium_for_name(name: str) -> str:
 class ProxyLog:
     """Proxy state from the event log: committed file hashes, owners, supersessions.
 
-    ``superseded_by`` is authoritative from the replacing ``proxy_add``'s
-    ``details.supersedes``; the ``proxy_supersede`` event that follows only
-    confirms it. ``unconfirmed`` lists replacements whose confirmation is
-    missing (a crash between the two appends), which ``fsck`` reports.
+    ``superseded_by`` comes from the replacing ``proxy_add``'s
+    ``details.supersedes`` (the ``proxy_supersede`` event that follows only
+    confirms it), and only when, at that point in the log, the target is a
+    committed proxy of the same attachment that is still active. Anything
+    else is ignored for state and listed in ``invalid`` (``(event's proxy id,
+    named target)``), which ``fsck`` reports as ``proxy_supersede_invalid``.
+    ``unconfirmed`` lists valid replacements whose confirmation is missing (a
+    crash between the two appends), reported as ``proxy_supersede_missing``.
     """
 
     committed: dict[str, str]
     attachments: dict[str, str]
     superseded_by: dict[str, str]
     unconfirmed: dict[str, str] = field(default_factory=dict)
+    invalid: list[tuple[str, str]] = field(default_factory=list)
 
     def active(self, proxy_id: str) -> bool:
         return proxy_id in self.committed and proxy_id not in self.superseded_by
@@ -384,22 +389,45 @@ def proxy_log(events: Iterable[Event]) -> ProxyLog:
     attachments: dict[str, str] = {}
     superseded: dict[str, str] = {}
     unconfirmed: dict[str, str] = {}
+    invalid: list[tuple[str, str]] = []
+
+    def replaceable(target: str, owner: str | None) -> bool:
+        return (
+            target in committed
+            and owner is not None
+            and attachments.get(target) == owner
+            and target not in superseded
+        )
+
     for event in events:
         if event.kind == EventKind.PROXY_ADD and event.after_hash is not None:
-            committed[event.memory_id] = event.after_hash
             owner = event.details.get("attachment")
-            if isinstance(owner, str):
-                attachments[event.memory_id] = owner
+            owner = owner if isinstance(owner, str) else None
             replaced = event.details.get("supersedes")
             if isinstance(replaced, str):
-                # Authoritative: the replacement says what it supersedes.
-                superseded.setdefault(replaced, event.memory_id)
-                unconfirmed[replaced] = event.memory_id
+                if replaceable(replaced, owner):
+                    superseded[replaced] = event.memory_id
+                    unconfirmed[replaced] = event.memory_id
+                else:
+                    invalid.append((event.memory_id, replaced))
+            elif replaced is not None:
+                invalid.append((event.memory_id, str(replaced)))
+            committed[event.memory_id] = event.after_hash
+            if owner is not None:
+                attachments[event.memory_id] = owner
         elif event.kind == EventKind.PROXY_SUPERSEDE:
+            target = event.memory_id
             by = event.details.get("by")
-            superseded.setdefault(event.memory_id, by if isinstance(by, str) else "")
-            unconfirmed.pop(event.memory_id, None)
-    return ProxyLog(committed, attachments, superseded, unconfirmed)
+            if isinstance(by, str) and superseded.get(target) == by:
+                unconfirmed.pop(target, None)
+            elif (
+                isinstance(by, str) and by in committed and replaceable(target, attachments.get(by))
+            ):
+                # A confirmation without the add's details: same rules.
+                superseded[target] = by
+            else:
+                invalid.append((target, by if isinstance(by, str) else ""))
+    return ProxyLog(committed, attachments, superseded, unconfirmed, invalid)
 
 
 def proxies_dir(host: RepositoryHost) -> Path:
@@ -663,6 +691,10 @@ class ProxyStoreMixin:
         for replaced, by in log.unconfirmed.items():
             # The replacement committed; its proxy_supersede confirmation did not.
             issue(replaced, "supersede_missing", message=by)
+        for proxy_id, target in log.invalid:
+            # A supersession the log cannot honour (unknown, foreign or
+            # already-superseded target): ignored for state.
+            issue(proxy_id, "supersede_invalid", message=target)
         if directory.is_dir():
             tracked = {f"{identifier}.md" for identifier in log.committed}
             for path in sorted(directory.rglob("*")):

@@ -748,3 +748,73 @@ def test_privacy_is_rechecked_under_the_lock(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="less private"):
         repository.add_proxy_record(looser)
     assert _snapshot(repository) == before
+
+
+def test_forged_supersedes_are_ignored_and_reported(tmp_path: Path) -> None:
+    repository = _repo(tmp_path)
+    first_att = _attach(repository, tmp_path)
+    second_att = _attach(repository, tmp_path)
+    mine = repository.import_proxy(first_att, FIXTURES / "ocr-pdf-v1.json")
+    theirs = repository.import_proxy(second_att, FIXTURES / "ocr-pdf-v1.json")
+    replaced = repository.import_proxy(first_att, FIXTURES / "ocr-pdf-v1.json", supersedes=mine.id)
+    forged = [
+        "prx-01a1e931-1818-772b-8713-76e6bea4a716",
+        "prx-01a1e931-1818-772b-8713-76e6bea4a717",
+        "prx-01a1e931-1818-772b-8713-76e6bea4a718",
+    ]
+    with repository._locked():
+        # Names another attachment's proxy.
+        repository._append_event(
+            EventKind.PROXY_ADD,
+            forged[0],
+            actor="human",
+            after_hash="0" * 64,
+            details={"attachment": first_att, "kind": "ocr", "supersedes": theirs.id},
+        )
+        # Names an already-superseded proxy.
+        repository._append_event(
+            EventKind.PROXY_ADD,
+            forged[1],
+            actor="human",
+            after_hash="1" * 64,
+            details={"attachment": first_att, "kind": "ocr", "supersedes": mine.id},
+        )
+        # Names a proxy that does not exist.
+        repository._append_event(
+            EventKind.PROXY_ADD,
+            forged[2],
+            actor="human",
+            after_hash="2" * 64,
+            details={"attachment": first_att, "kind": "ocr", "supersedes": forged[0][:-1] + "9"},
+        )
+    state = repository.proxy_state()
+    assert state.active(theirs.id)
+    assert state.superseded_by[mine.id] == replaced.id
+    assert {(by, target) for by, target in state.invalid} == {
+        (forged[0], theirs.id),
+        (forged[1], mine.id),
+        (forged[2], forged[0][:-1] + "9"),
+    }
+    kinds = [(issue["kind"], issue["memory_id"]) for issue in repository.fsck()]
+    assert ("proxy_supersede_invalid", forged[0]) in kinds
+    assert ("proxy_supersede_invalid", forged[1]) in kinds
+    assert not any(kind == "proxy_supersede_missing" for kind, _ in kinds)
+    assert [row[0] for row in repository.proxy_records(second_att)] == [theirs.id]
+
+
+@pytest.mark.parametrize(
+    "app", ["app-manual:a\x85b", "app-manual:a‮b", "app-manual:a‏b", "app-manual:﻿x"]
+)
+def test_app_manual_producer_names_are_printable(app: str) -> None:
+    payload = _fixture()
+    payload["producer"] = app
+    with pytest.raises(ProxyFormatError):
+        parse_proxy_import(payload, media_type="application/pdf")
+
+
+@pytest.mark.parametrize("char", ["​", "‎", "‏", "؜", "﻿"])
+def test_invisible_marks_are_refused_in_text(char: str) -> None:
+    payload = _fixture()
+    payload["segments"][0]["text"] = f"a{char}b"
+    with pytest.raises(ProxyFormatError, match="invisible"):
+        parse_proxy_import(payload, media_type="application/pdf")
