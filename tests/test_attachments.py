@@ -1274,6 +1274,9 @@ def test_malformed_size_or_blob_falls_back_to_the_stored_blobs(tmp_path: Path) -
         {"storage": "embedded", "size": 6, "blob": "shared?"},
         {"storage": "embedded", "size": 6},
         {"storage": "embedded", "size": 6, "blob": None},
+        # Unhashable values must not raise (TypeError) but fall back too.
+        {"storage": "embedded", "size": 6, "blob": ["new"]},
+        {"storage": "embedded", "size": 6, "blob": {"new": True}},
     ):
         assert embedded_total([event(details)], store) == 6, details
     # A well-formed shared event alone counts nothing; the stored blob still does.

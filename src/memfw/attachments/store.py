@@ -249,6 +249,7 @@ def blob_owners(events: Iterable[Event]) -> tuple[dict[str, int], set[str], bool
                 isinstance(size, bool)
                 or not isinstance(size, int)
                 or size < 0
+                or not isinstance(blob, str)
                 or blob not in {"new", "shared"}
             ):
                 return sizes, owners, True
