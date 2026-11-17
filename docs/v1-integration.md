@@ -437,6 +437,11 @@ Request: `request_id` (required, `^[A-Za-z0-9_-]{1,128}$`, the idempotency
 key), `memory_id` (required, a memory id), `reason` (optional, at most 500
 characters), `source` (optional single line, default `conductor`) and
 `tenant` (bound as on `/stage`: with `MEMFW_TENANT` set, only that tenant).
+Without a `MEMFW_TENANT` binding the body `tenant` is self-asserted: any
+caller holding the write token can name any tenant, exactly as on `/stage`
+and `/search`. Tenant scoping then separates tenants' data, it does not
+authenticate them; bind `MEMFW_TENANT` (one service per tenant) where
+callers must not act for each other.
 
 `memory_id` must match `^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`, the id shape
 `memfw` generates. A memory whose id contains anything else (a `.`, for
