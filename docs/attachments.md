@@ -216,6 +216,8 @@ explicit marker that it never changes memory state:
     when there is at least one;
   * reported by `fsck` as one `unknown_non_memory_events` row per kind (a
     report, not an error; `fsck` changes nothing for it);
+  * reserving its `memory_id`, like a known non-memory kind: a later `add`
+    with that id is refused ("Memory id already used");
   * never acted on by `rollback`: `rollback <event>` refuses it ("rollback
     acts only on memory events") and `--dry-run` reports `available: false`.
 * **Contract for writers after v0.4.0**: a new kind that never changes a
