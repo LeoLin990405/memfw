@@ -11,6 +11,35 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
+### Added — privacy levels and clearance filtering on the exits (MM0)
+
+- `MemoryDocument.privacy`: `public`, `shared` or `local-private` (read
+  case-insensitively). Absent in older files: they parse as `None`, render
+  without the key and dump without it, so their bytes and snapshot hashes do
+  not change. `Repository.add(privacy=...)`, `update(privacy=...)` and
+  `memfw add --privacy` store the lowercase value and refuse anything else;
+  only a human (or an approved proposal) may loosen or clear it.
+- New `memfw.ports.privacy` (stdlib): the level a reader acts on is the
+  strictest of the field (missing → the vault's `legacy_privacy_default`,
+  `local-private` when unset), `privacy:*` tags and `sensitivity:*` tags;
+  unrecognised values are `unknown` and never admitted. A clearance is a set
+  of levels; a malformed one narrows to `public`. `memfw/index/read_path.py`
+  carries a stdlib copy for the HTTP service (parity test-enforced).
+- New `vault.yaml` key `legacy_privacy_default` (validated) and
+  `memfw privacy legacy-default [LEVEL]` to show or set it (one
+  `config_change` event).
+- Opt-in clearance on every exit; **unset means no filtering, exactly as
+  before**: HTTP read-only service `--clearance` / `MEMFW_READONLY_CLEARANCE`
+  (`/search`, `/related`; a withheld source memory answers 404, note
+  neighbours are dropped), `memfw okf export --clearance` (withheld memories
+  are left out; the manifest gains `privacy: {clearance, withheld_count}` only
+  then; a concept carries `memfw.privacy` only when the memory sets it), the
+  notes MCP server `--clearance` / `MEMFW_NOTES_CLEARANCE` (plus
+  `--legacy-privacy-default`; search, get, related and traces, read from the
+  note file), and the memfw MCP server `MEMFW_MCP_CLEARANCE` (search in every
+  mode, get, related, context, status). Leak tests:
+  `tests/test_mm0_privacy_clearance.py`.
+
 ### Added — settled ingest and archive state (M3e-a)
 
 - `memfw history ingest --settled-minutes N` skips transcripts whose last

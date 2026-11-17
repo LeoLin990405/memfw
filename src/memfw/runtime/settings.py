@@ -13,7 +13,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from memfw.ports.privacy import parse_clearance
+
 from .usage import env_switch
+
+#: Privacy clearance of the MCP server (MM0): comma separated levels.
+CLEARANCE_ENV = "MEMFW_MCP_CLEARANCE"
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +35,8 @@ class RuntimeSettings:
     usage_signal: bool | None = None
     #: ``MEMFW_RECORD_ACCESS`` (C6), or None: ``runtime.search.record_access`` decides.
     record_access: bool | None = None
+    #: Privacy levels the interface may return; None filters nothing (MM0).
+    clearance: frozenset[str] | None = None
 
 
 def embedder_from_env(environ: Mapping[str, str]) -> Any:
@@ -58,11 +65,14 @@ def resolve_settings(
     usage_signal: bool | None = None,
     record_access: bool | None = None,
     environ: Mapping[str, str] | None = None,
+    clearance: str | frozenset[str] | None = None,
 ) -> RuntimeSettings:
     """Explicit values, else ``MEMFW_APP``, ``MEMFW_TENANT``, ``MEMFW_ENTITY_ENABLED``,
     ``MEMFW_ALLOWED_SOURCES`` (comma separated), ``MEMFW_EMBEDDING_*``,
     ``MEMFW_USAGE_SIGNAL`` and ``MEMFW_RECORD_ACCESS`` (booleans; unset or empty
-    leaves the choice to ``vault.yaml``, see ``memfw.runtime.usage``)."""
+    leaves the choice to ``vault.yaml``, see ``memfw.runtime.usage``) and
+    ``MEMFW_MCP_CLEARANCE`` (comma separated privacy levels; unset filters
+    nothing, a malformed value narrows to ``public``)."""
 
     env = os.environ if environ is None else environ
     resolved_app = (app if app is not None else env.get("MEMFW_APP", "")).strip()
@@ -84,6 +94,12 @@ def resolve_settings(
         usage_signal = env_switch(env, "MEMFW_USAGE_SIGNAL")
     if record_access is None:
         record_access = env_switch(env, "MEMFW_RECORD_ACCESS")
+    if clearance is None:
+        resolved_clearance = parse_clearance(env.get(CLEARANCE_ENV))
+    elif isinstance(clearance, frozenset):
+        resolved_clearance = clearance
+    else:
+        resolved_clearance = parse_clearance(clearance)
     return RuntimeSettings(
         app=resolved_app,
         tenant=resolved_tenant,
@@ -92,6 +108,7 @@ def resolve_settings(
         embedder=embedder,
         usage_signal=usage_signal,
         record_access=record_access,
+        clearance=resolved_clearance,
     )
 
 

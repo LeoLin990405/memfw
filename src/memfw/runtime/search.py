@@ -514,6 +514,7 @@ def memory_search(
                 include_history=include_history,
                 as_of=as_of,
                 scope=scope,
+                clearance=runtime.clearance,
             )
             merged.extend(
                 item
@@ -582,6 +583,7 @@ def memory_search(
             rows = fuse_rows(rows, alias_rows, limit=page)
         elif len(rows) > page:
             rows = rows[:page]
+    rows = _cleared_rows(runtime, repository, rows)
     if labels and rows:
         # Opt-in (U2): the Runtime computes them with the compat_fts policy
         # these modes filter by; without the flag rows are unchanged.
@@ -616,6 +618,30 @@ def memory_search(
     if "route" in result:
         payload["route"] = result["route"]
     return payload
+
+
+def _cleared_rows(
+    runtime: Runtime, repository: Repository, rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Drop rows the Runtime's privacy clearance does not admit (MM0).
+
+    No clearance (the default) returns ``rows`` unchanged. Otherwise every row
+    is checked against its Markdown file, whatever mode produced it, so a
+    stale index or a provider cannot widen access; an unreadable memory is
+    dropped. A page may then hold fewer than ``limit`` rows.
+    """
+
+    if runtime.clearance is None:
+        return rows
+    kept: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            document = repository.get(str(row.get("id") or ""))
+        except (MemfwError, OSError, ValueError):
+            continue
+        if runtime.privacy_admits(document):
+            kept.append(row)
+    return kept
 
 
 def _search_two_stage(
@@ -703,6 +729,7 @@ def _search_two_stage(
         row["providers"] = list(hit.providers)
         row["recall_labels"] = list(hit.labels)
         rows.append(row)
+    rows = _cleared_rows(runtime, repository, rows)
     errors: list[str] = []
     ambiguities: list[Any] = []
     payload_degraded = False

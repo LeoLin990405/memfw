@@ -20,6 +20,7 @@ from ..budget import BudgetProfile
 from ..knowledge import KnowledgeStoreMixin
 from ..log.store import EventLogMixin
 from ..permissions import PermissionMode, PermissionPolicy
+from ..ports.privacy import LEGACY_PRIVACY_KEY, PRIVACY_LEVELS, legacy_default_from_config
 from ..storage.markdown import MarkdownStorageMixin
 from ..storage.operations import MemoryOperationsMixin, lookup_current
 from ..storage.transactions import TransactionMixin, _serialized
@@ -190,6 +191,17 @@ class Repository(
             raise IntegrityError(f"Invalid vault configuration: {exc}") from exc
         return self._validate_config_mapping(raw)
 
+    def legacy_privacy_default(self) -> str:
+        """Level of memories with no ``privacy`` field (``legacy_privacy_default``).
+
+        ``local-private`` when the vault does not set it (MM0). Change it with
+        ``configure`` (one ``CONFIG_CHANGE`` event).
+        """
+
+        if not self.config_path.exists():
+            return legacy_default_from_config(None)
+        return legacy_default_from_config(self.read_config())
+
     @staticmethod
     def _validate_config_mapping(raw: Any) -> dict[str, Any]:
         if not isinstance(raw, dict):
@@ -251,6 +263,14 @@ class Repository(
 
         if not math.isfinite(protection_boost):
             raise IntegrityError("knowledge_protection_boost must be a non-negative finite number")
+        legacy_privacy = raw.get(LEGACY_PRIVACY_KEY)
+        if LEGACY_PRIVACY_KEY in raw and (
+            not isinstance(legacy_privacy, str)
+            or legacy_privacy.strip().lower() not in PRIVACY_LEVELS
+        ):
+            raise IntegrityError(
+                f"{LEGACY_PRIVACY_KEY} must be one of: " + ", ".join(PRIVACY_LEVELS)
+            )
         reference_path = raw.get("keyness_reference_path")
         if reference_path is not None and not isinstance(reference_path, str):
             raise IntegrityError("keyness_reference_path must be a string or null")

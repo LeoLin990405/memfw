@@ -256,8 +256,35 @@ def fold_temporal_aliases(data: dict[str, Any], *, strict: bool = True) -> dict[
     return folded
 
 
-def document_payload(root: Path, identifier: str) -> dict[str, Any] | None:
-    """Read one memory document's authoritative Markdown for the result payload."""
+def vault_legacy_privacy(root: Path) -> str:
+    """``legacy_privacy_default`` from ``<root>/vault.yaml``; unreadable → ``local-private``."""
+
+    try:
+        config = yaml.safe_load((root / "vault.yaml").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        config = None
+    return str(read_path.legacy_default_from_config(config))
+
+
+def checked_clearance(clearance: Any) -> frozenset[str] | None:
+    """A clearance argument: ``None`` (no filtering), a parsed set, or text to parse."""
+
+    if clearance is None or isinstance(clearance, frozenset):
+        return clearance
+    parsed: frozenset[str] | None = read_path.parse_clearance(clearance)
+    return parsed
+
+
+def document_payload(
+    root: Path, identifier: str, *, legacy_privacy: str | None = None
+) -> dict[str, Any] | None:
+    """Read one memory document's authoritative Markdown for the result payload.
+
+    ``privacy`` is the level an exit filters on (MM0): the strictest of the
+    ``privacy`` field (missing → ``legacy_privacy``, else the vault's
+    ``legacy_privacy_default``) and the ``privacy:``/``sensitivity:`` tags.
+    It is for filtering only; no result carries it.
+    """
     if not identifier or "/" in identifier or ".." in identifier or "\\" in identifier:
         return None
     path = root / "memories" / f"{identifier}.md"
@@ -279,6 +306,10 @@ def document_payload(root: Path, identifier: str) -> dict[str, Any] | None:
         "content_hash": "sha256:" + hashlib.sha256(raw).hexdigest(),
         "provenance": str(metadata.get("provenance") or ""),
         "version": metadata.get("version"),
+        "privacy": read_path.metadata_level(
+            metadata,
+            legacy_privacy if legacy_privacy is not None else vault_legacy_privacy(root),
+        ),
     }
 
 
@@ -587,10 +618,13 @@ def _alias_expansion(
     include_history: bool,
     as_of: str | None,
     scope: str = "",
+    clearance: frozenset[str] | None = None,
+    legacy_privacy: str | None = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
     """Fuse alias hits into ``results``. No ``concepts/`` directory costs one stat.
 
     ``scope`` only selects scoped alias labels; it does not filter lexical hits.
+    ``clearance`` drops alias hits the same way as lexical ones.
     """
 
     directory = base / "concepts"
@@ -619,8 +653,10 @@ def _alias_expansion(
         return [], "alias expansion unavailable: a concept file is invalid"
     alias_rows: list[dict[str, Any]] = []
     for memory_id, why in hits:
-        payload = document_payload(base, memory_id)
+        payload = document_payload(base, memory_id, legacy_privacy=legacy_privacy)
         if payload is None or payload["tenant"] != tenant:
+            continue
+        if not read_path.admits(clearance, payload["privacy"]):
             continue
         meta = read_metadata(base / "memories" / f"{memory_id}.md")
         if source and str(meta.get("source") or "") != source:
@@ -671,7 +707,17 @@ def search_vault(
     include_history: bool = False,
     as_of: str | None = None,
     scope: str = "",
+    clearance: frozenset[str] | str | None = None,
 ) -> dict[str, Any]:
+    """FTS search over the vault index; Markdown decides tenant and privacy.
+
+    ``clearance`` (MM0) is the set of privacy levels the caller may see.
+    ``None`` (the default) filters nothing, as before MM0. Otherwise a hit
+    whose level (see ``document_payload``) is not in it is skipped before it
+    is ranked into the page, like a hit of another tenant; a malformed text
+    clearance becomes ``{"public"}``.
+    """
+
     base = Path(root).expanduser().resolve()
     if not (base / "vault.yaml").is_file() or not (base / "index.sqlite3").is_file():
         raise internal_error()
@@ -698,6 +744,8 @@ def search_vault(
     as_of_normalised = normalise_as_of(as_of) if as_of is not None else None
     if not isinstance(include_history, bool):
         raise bad_request("include_history must be a boolean")
+    cleared = checked_clearance(clearance)
+    legacy_privacy = vault_legacy_privacy(base)
 
     connection = _connect_index(base)
     try:
@@ -740,10 +788,12 @@ def search_vault(
                 break
             offset += len(rows)
             for row in rows:
-                payload = document_payload(base, str(row["id"]))
+                payload = document_payload(base, str(row["id"]), legacy_privacy=legacy_privacy)
                 if payload is None:
                     continue
                 if payload["tenant"] != tenant:
+                    continue
+                if not read_path.admits(cleared, payload["privacy"]):
                     continue
                 matched.append(row)
                 payloads.append(payload)
@@ -800,6 +850,8 @@ def search_vault(
         include_history=include_history,
         as_of=as_of_normalised,
         scope=scope.strip(),
+        clearance=cleared,
+        legacy_privacy=legacy_privacy,
     )
     errors: list[str] = []
     if term_note:

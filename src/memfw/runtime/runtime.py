@@ -29,7 +29,9 @@ from memfw.context import (
 from memfw.core.errors import MemfwError
 from memfw.core.models import EventKind, MemoryDocument, Tier
 from memfw.core.repository import Repository
+from memfw.index.readonly import vault_legacy_privacy
 from memfw.ports.context import ContextPack, ContextSlotProvider, SlotRequest
+from memfw.ports.privacy import admits, effective_level
 from memfw.ports.usage import UsageSignal, UsageSink
 from memfw.recall.coordinator import InflightRegistry
 
@@ -150,9 +152,14 @@ class Runtime:
         usage_signal: bool | None = None,
         record_access: bool | None = None,
         usage_sink: UsageSink | None = None,
+        clearance: frozenset[str] | None = None,
     ) -> None:
         self.root = root
         self.tenant = tenant
+        #: Privacy levels this interface may return (MM0). ``None`` filters
+        #: nothing, the behaviour before MM0.
+        self.clearance = clearance
+        self._legacy_privacy_cache: tuple[tuple[int, int] | None, str] | None = None
         self.allowed_sources = allowed_sources
         self.embedder = embedder
         self.entity_enabled = entity_enabled
@@ -203,9 +210,36 @@ class Runtime:
         return Repository(root)
 
     def visible(self, document: MemoryDocument) -> bool:
-        """In the bound tenant and, when allowed sources are set, an allowed source."""
+        """In the bound tenant and, when allowed sources are set, an allowed source.
+
+        With a ``clearance``, also a privacy level it admits.
+        """
 
         return self._visible(document)
+
+    def legacy_privacy(self) -> str:
+        """The vault's ``legacy_privacy_default``, re-read when ``vault.yaml`` changes."""
+
+        path = self.root / "vault.yaml"
+        try:
+            stat = path.stat()
+            key: tuple[int, int] | None = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            key = None
+        cached = self._legacy_privacy_cache
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        value = vault_legacy_privacy(self.root)
+        self._legacy_privacy_cache = (key, value)
+        return value
+
+    def privacy_admits(self, document: MemoryDocument) -> bool:
+        """Whether the clearance admits ``document`` (always, without a clearance)."""
+
+        if self.clearance is None:
+            return True
+        level = effective_level(document.privacy, document.tags, legacy=self.legacy_privacy())
+        return admits(self.clearance, level)
 
     # --- runtime options and memory_used (C5, C6) ------------------------------
 
@@ -768,7 +802,9 @@ class Runtime:
 
         if document.tenant != self.tenant:
             return False
-        return not self.allowed_sources or document.source in self.allowed_sources
+        if self.allowed_sources and document.source not in self.allowed_sources:
+            return False
+        return self.privacy_admits(document)
 
     def context_keep(self, policy_name: str, *, now: datetime) -> Keep:
         """Who may see a memory in a context pack under ``policy_name``.
@@ -792,6 +828,8 @@ class Runtime:
         rules = FilterPolicy(tenant=self.tenant, allowed_sources=tuple(self.allowed_sources))
 
         def keep(document: MemoryDocument) -> bool:
+            if not self.privacy_admits(document):
+                return False
             return evaluate(meta_from_document(document), rules, now=now).kept
 
         return keep
@@ -950,6 +988,7 @@ def build_runtime(
     usage_signal: bool | None = None,
     record_access: bool | None = None,
     usage_sink: UsageSink | None = None,
+    clearance: frozenset[str] | None = None,
 ) -> Runtime:
     """The default assembly: today's behaviour unless a switch is set.
 
@@ -973,6 +1012,7 @@ def build_runtime(
         usage_signal=usage_signal,
         record_access=record_access,
         usage_sink=usage_sink,
+        clearance=clearance,
     )
 
 

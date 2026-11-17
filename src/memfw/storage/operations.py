@@ -32,6 +32,7 @@ from ..core.models import (
     _same_instant,
     fold_temporal_aliases,
 )
+from ..ports.privacy import privacy_value
 from ..storage import with_archived_body
 from ..storage.transactions import _serialized
 
@@ -75,7 +76,12 @@ class MemoryOperationsMixin:
         group_key: str | None = None,
         manually_marked: bool = False,
         open_question: OpenQuestion | dict[str, Any] | None = None,
+        privacy: str | None = None,
     ) -> MemoryDocument:
+        try:
+            privacy = privacy_value(privacy)
+        except ValueError as exc:
+            raise IntegrityError(str(exc)) from exc
         anchor_always_hot = (
             self.read_config().get("anchor_always_hot", True) if self.config_path.exists() else True
         )
@@ -146,6 +152,7 @@ class MemoryOperationsMixin:
             limitations=limitations or [],
             experience=experience,
             open_question=open_question,
+            privacy=privacy,
             evidence=list(evidence or []),
             created_at=now,
             updated_at=now,
@@ -282,6 +289,9 @@ class MemoryOperationsMixin:
             "limitations",
             "experience",
             "open_question",
+            # Privacy level (MM0); only a human (or an approved proposal) may
+            # loosen it, see below.
+            "privacy",
         }
         if (
             actor != "human"
@@ -298,6 +308,22 @@ class MemoryOperationsMixin:
         )
         if anchor_change and actor != "human":
             raise IntegrityError("Only a human actor may set or remove anchor protection")
+        if "privacy" in changes:
+            try:
+                changes["privacy"] = privacy_value(changes["privacy"])
+            except ValueError as exc:
+                raise IntegrityError(str(exc)) from exc
+            # Fail closed: without a human decision a write may only make a
+            # memory local-private, never public, shared or "unset".
+            if (
+                actor != "human"
+                and not approved
+                and changes["privacy"] != "local-private"
+                and changes["privacy"] != old.privacy
+            ):
+                raise IntegrityError(
+                    "Only a human or an approved proposal may loosen or clear privacy"
+                )
         # Fold aliases before they meet the stored document. A conflict is only
         # two names in this request, and it raises before any write.
         folded_changes = fold_temporal_aliases(dict(changes))

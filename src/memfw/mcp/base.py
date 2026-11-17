@@ -31,6 +31,7 @@ class GatewayBase:
         entity_enabled: bool | None = None,
         allowed_sources: tuple[str, ...] | None = None,
         app: str | None = None,
+        clearance: str | frozenset[str] | None = None,
     ) -> None:
         self.root = Path(root).expanduser()
         settings = resolve_settings(
@@ -39,6 +40,7 @@ class GatewayBase:
             entity_enabled=entity_enabled,
             allowed_sources=allowed_sources,
             app=app,
+            clearance=clearance,
         )
         self.app = settings.app
         # The composition root owns the recall wiring and the index check: one
@@ -53,6 +55,7 @@ class GatewayBase:
             entity_enabled=settings.entity_enabled,
             usage_signal=settings.usage_signal,
             record_access=settings.record_access,
+            clearance=settings.clearance,
         )
         self.dream_clock: Callable[[], datetime] = lambda: datetime.now(UTC)
         self._last_staged: float | None = None

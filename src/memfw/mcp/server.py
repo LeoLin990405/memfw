@@ -63,6 +63,7 @@ from memfw.mcp.tools_search import (
     _RawHashCache,
 )
 from memfw.mcp.tools_usage import UsageTools
+from memfw.ports.privacy import clearance_is_valid
 
 # Names that lived here before the A4a split stay importable from this module.
 # They are read-only re-exports: the code reads each name from its defining module
@@ -246,6 +247,8 @@ def main(argv: list[str] | None = None) -> int:
     root = args.root if args.root is not None else os.environ.get("MEMFW_ROOT")
     if root is None or not str(root).strip():
         parser.error("memfw vault root is required: pass --root or set MEMFW_ROOT")
+    if not clearance_is_valid(os.environ.get("MEMFW_MCP_CLEARANCE")):
+        parser.error("MEMFW_MCP_CLEARANCE must list only public, shared, local-private")
     return serve(Path(str(root)), app=args.app)
 
 

@@ -179,6 +179,12 @@ class MemoryDocument(BaseModel):
     # conflict on it, and what answered it. Absent in older files; rendered
     # only when present, so their bytes do not change.
     open_question: OpenQuestion | None = None
+    # Privacy level (MM0): ``public``, ``shared`` or ``local-private``, read
+    # case-insensitively by ``memfw.ports.privacy``. Absent in older files: they
+    # parse as ``None`` (exits read it as ``legacy_privacy_default``) and render
+    # without the key, so their bytes do not change. An unrecognised value is
+    # kept as written and read as ``unknown``, which no clearance admits.
+    privacy: str | None = None
     created_at: datetime
     updated_at: datetime
     # Transaction time: when memfw itself wrote this memory, from the server
@@ -240,6 +246,15 @@ class MemoryDocument(BaseModel):
             return [value]
         return value
 
+    @field_validator("privacy", mode="before")
+    @classmethod
+    def privacy_is_text(cls, value: Any) -> Any:
+        # A non-string value (a list, a number) must not make the whole memory
+        # unreadable; as text it is still an unknown level (fail closed).
+        if value is None or isinstance(value, str):
+            return value
+        return str(value)
+
     @field_validator("created_at", "updated_at", "recorded_at", "valid_from", "valid_to")
     @classmethod
     def timestamps_are_utc(cls, value: datetime | None) -> datetime | None:
@@ -258,6 +273,10 @@ class MemoryDocument(BaseModel):
         data = handler(self)
         if isinstance(data, dict) and data.get("open_question", ...) is None:
             data.pop("open_question")
+        # Same for ``privacy`` (MM0): snapshot hashes of memories without the
+        # field stay what they were.
+        if isinstance(data, dict) and data.get("privacy", ...) is None:
+            data.pop("privacy")
         return data
 
 

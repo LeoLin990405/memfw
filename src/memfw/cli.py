@@ -67,6 +67,7 @@ from .notes.retrieval import Mode
 from .okf import export_okf, validate_okf_bundle
 from .ontology.cli import app as concepts_app
 from .policies import PolicyName
+from .ports.privacy import LEGACY_PRIVACY_KEY, clearance_is_valid, privacy_value
 from .projection import ProjectionError, export_projection, load_policy, read_hits
 from .projection import resolve as resolve_hits
 from .projections import ObsidianProjector
@@ -84,6 +85,7 @@ tier_app = typer.Typer(help="Inspect and move hot/cold memory tiers")
 tier_alias_app = typer.Typer(help="Tier placement commands")
 layer_alias_app = typer.Typer(help="Layer classification commands")
 okf_app = typer.Typer(help="Export and validate an OKF v0.2 knowledge bundle")
+privacy_app = typer.Typer(help="Privacy levels of memories and the vault's legacy default")
 notes_app = typer.Typer(help="Index and search a Markdown notes tree (derived, rebuildable)")
 code_app = typer.Typer(help="Local code retrieval: lexical + optional semantic + structure")
 eval_app = typer.Typer(help="Local evaluation harnesses (no network, no model calls)")
@@ -97,6 +99,7 @@ project_app = typer.Typer(help="Read-only human-facing projections of the vault 
 app.add_typer(index_app, name="index")
 app.add_typer(corroboration_app, name="corroboration")
 app.add_typer(okf_app, name="okf")
+app.add_typer(privacy_app, name="privacy")
 app.add_typer(notes_app, name="notes")
 app.add_typer(code_app, name="code")
 app.add_typer(log_app, name="log")
@@ -272,9 +275,24 @@ def notes_serve(
     model: Annotated[str, typer.Option("--model")] = "embedding-model",
     dimension: Annotated[int, typer.Option("--dimension")] = 1024,
     related_db: Annotated[Path | None, typer.Option("--related-db")] = None,
+    clearance: Annotated[
+        str | None,
+        typer.Option(
+            "--clearance",
+            envvar="MEMFW_NOTES_CLEARANCE",
+            help="Privacy levels to return, comma separated (public, shared, "
+            "local-private). Unset: no privacy filtering",
+        ),
+    ] = None,
+    legacy_privacy_default: Annotated[
+        str,
+        typer.Option("--legacy-privacy-default", help="Level of notes without a privacy field"),
+    ] = "local-private",
 ) -> None:
     """Serve read-only notes tools over stdio MCP."""
 
+    if not clearance_is_valid(clearance):
+        raise typer.BadParameter("--clearance must list only public, shared, local-private")
     embedder = _notes_embedder(endpoint, model, dimension, 16)
     serve_notes_mcp(
         NotesGateway(
@@ -282,6 +300,8 @@ def notes_serve(
             db,
             embedder=embedder,
             related_db=related_db,
+            clearance=clearance,
+            legacy_privacy_default=legacy_privacy_default,
         )
     )
 
@@ -1161,9 +1181,20 @@ def add(
             "(requires --type experience-point --epistemic experience)",
         ),
     ] = None,
+    privacy: Annotated[
+        str | None,
+        typer.Option(
+            "--privacy",
+            help="public, shared or local-private. Unset: the vault's legacy_privacy_default",
+        ),
+    ] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run/--apply")] = False,
 ) -> None:
     """Add a Markdown memory."""
+    try:
+        privacy_value(privacy)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     record = _json_option(causal_record, "--causal-record")
     experience_record = _json_option(experience, "--experience")
     try:
@@ -1216,6 +1247,7 @@ def add(
             limitations=limitation,
             experience=experience_record,
             evidence=evidence,
+            privacy=privacy,
         )
         _enforce_after_write(repository)
     except MemfwError as exc:
@@ -2006,10 +2038,22 @@ def okf_export(
     root: Annotated[Path, typer.Option("--root", "-r")] = Path("."),
     force: Annotated[bool, typer.Option("--force")] = False,
     bundle_title: Annotated[str | None, typer.Option("--title")] = None,
+    clearance: Annotated[
+        str | None,
+        typer.Option(
+            "--clearance",
+            help=(
+                "Privacy levels to export, comma separated (public, shared, "
+                "local-private). Unset exports every memory."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Export the local vault as an OKF v0.2 bundle (derived, rebuildable)."""
+    if not clearance_is_valid(clearance):
+        raise typer.BadParameter("--clearance must list only public, shared, local-private")
     try:
-        result = export_okf(root, out, force=force, bundle_title=bundle_title)
+        result = export_okf(root, out, force=force, bundle_title=bundle_title, clearance=clearance)
     except (FileExistsError, ValueError, MemfwError, OSError) as exc:
         raise typer.BadParameter(str(exc)) from exc
     typer.echo(
@@ -2025,6 +2069,45 @@ def okf_export(
             sort_keys=True,
         )
     )
+
+
+@privacy_app.command("legacy-default")
+def privacy_legacy_default(
+    level: Annotated[
+        str | None,
+        typer.Argument(help="public, shared or local-private; omit to show the current value"),
+    ] = None,
+    root: Annotated[Path, typer.Option("--root", "-r")] = Path("."),
+) -> None:
+    """Show or set legacy_privacy_default: the level of memories with no privacy field.
+
+    Unset, it is local-private. Setting it rewrites vault.yaml once and records
+    one config_change event; memory files are not touched.
+    """
+    repository = _repo(root)
+    if level is None:
+        config = _config(repository)
+        typer.echo(
+            json.dumps(
+                {
+                    LEGACY_PRIVACY_KEY: repository.legacy_privacy_default(),
+                    "configured": LEGACY_PRIVACY_KEY in config,
+                },
+                sort_keys=True,
+            )
+        )
+        return
+    try:
+        value = privacy_value(level)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    config = _config(repository)
+    config[LEGACY_PRIVACY_KEY] = value
+    try:
+        repository.configure(config)
+    except MemfwError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps({LEGACY_PRIVACY_KEY: value, "configured": True}, sort_keys=True))
 
 
 @okf_app.command("validate")
