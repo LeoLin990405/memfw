@@ -2,9 +2,18 @@
 
 ``projection_residue`` answers one question for one memory id: after the
 memory was forgotten, does any derived store still carry it? It is read-only:
-every SQLite file is opened ``mode=ro``, nothing is rebuilt, deleted or
-written, and the output carries ids, table names and counts, never text or
-host paths.
+nothing is rebuilt, deleted or written, not even a SQLite sidecar, and the
+output carries ids, table names and counts, never text or host paths.
+
+SQLite files are opened without creating ``-wal``/``-shm``/``-journal``
+files, so a store in a read-only directory is read, not reported as
+unreadable residue. A file with no ``-wal`` or ``-journal`` beside it is
+opened ``immutable=1``; one with a pending ``-wal`` or ``-journal`` is
+copied (with that sidecar) into a private temporary directory and the copy
+is read, so committed rows still in the WAL are counted. Caveat: either way
+the check reads a snapshot and assumes no writer is changing the store at
+that moment; run it after a rebuild finishes, not during one. A torn read
+fails closed (``error: "unreadable"``, counted as residue).
 
 The memory's *state* decides what counts as residue:
 
@@ -38,8 +47,11 @@ from __future__ import annotations
 
 import hashlib
 import re
+import shutil
 import sqlite3
-from contextlib import closing
+import tempfile
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
@@ -95,11 +107,35 @@ class StoreCheck:
         return out
 
 
-def _connect_ro(path: Path) -> sqlite3.Connection:
-    uri = f"file:{quote(str(path), safe='/')}?mode=ro"
+def _uri_connect(path: Path, query: str) -> sqlite3.Connection:
+    uri = f"file:{quote(str(path), safe='/')}?{query}"
     connection = sqlite3.connect(uri, uri=True, timeout=5)
     connection.execute("PRAGMA query_only=ON")
     return connection
+
+
+@contextmanager
+def _open_ro(path: Path) -> Iterator[sqlite3.Connection]:
+    """A read-only connection that creates no file beside ``path`` (module docstring)."""
+
+    sidecars = [
+        path.with_name(path.name + suffix)
+        for suffix in ("-wal", "-journal")
+        if path.with_name(path.name + suffix).is_file()
+    ]
+    if not sidecars:
+        with closing(_uri_connect(path, "mode=ro&immutable=1")) as connection:
+            yield connection
+        return
+    with tempfile.TemporaryDirectory(prefix="memfw-residue-") as scratch:
+        copy = Path(scratch) / "store.sqlite3"
+        shutil.copyfile(path, copy)
+        for sidecar in sidecars:
+            shutil.copyfile(sidecar, copy.with_name(copy.name + sidecar.name[len(path.name) :]))
+        # The private copy may replay its WAL or hot journal; the original is untouched.
+        with closing(sqlite3.connect(copy, timeout=5)) as connection:
+            connection.execute("PRAGMA query_only=ON")
+            yield connection
 
 
 def _tables(connection: sqlite3.Connection) -> set[str]:
@@ -116,7 +152,7 @@ def _count_rows(path: Path, queries: dict[str, tuple[str, str, tuple[Any, ...]]]
     if not check.present:
         return check
     try:
-        with closing(_connect_ro(path)) as connection:
+        with _open_ro(path) as connection:
             tables = _tables(connection)
             for label, (table, where, params) in queries.items():
                 if table not in tables:
@@ -126,7 +162,7 @@ def _count_rows(path: Path, queries: dict[str, tuple[str, str, tuple[Any, ...]]]
                     f'SELECT COUNT(*) FROM "{table}" WHERE {where}', params
                 ).fetchone()
                 check.rows[label] = int(row[0]) if row else 0
-    except sqlite3.Error:
+    except (sqlite3.Error, OSError):
         check.error = "unreadable"
     return check
 
@@ -135,13 +171,13 @@ def _index_current(path: Path, memory_id: str) -> bool | None:
     """Whether the index lists ``memory_id`` as current (no ``valid_to``/``superseded_by``)."""
 
     try:
-        with closing(_connect_ro(path)) as connection:
+        with _open_ro(path) as connection:
             if "memory_temporal" not in _tables(connection):
                 return None
             row = connection.execute(
                 "SELECT valid_to, superseded_by FROM memory_temporal WHERE id = ?", (memory_id,)
             ).fetchone()
-    except sqlite3.Error:
+    except (sqlite3.Error, OSError):
         return None
     if row is None:
         return None

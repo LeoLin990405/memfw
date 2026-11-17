@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -278,3 +279,78 @@ def test_forget_requests_lists_http_requests(tmp_path: Path) -> None:
     forget_dir.rmdir()
     forget_dir.symlink_to(other, target_is_directory=True)
     assert list_forget_requests(repository.root) == []
+
+
+def _wal_store(directory: Path, memory_id: str, *, keep_open: bool) -> tuple[Path, object]:
+    """A WAL-mode related projection naming ``memory_id``; optionally with a pending WAL."""
+
+    directory.mkdir()
+    path = directory / "related.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("CREATE TABLE related_items (source TEXT, id TEXT)")
+    connection.execute(
+        "CREATE TABLE related_edges (src_source TEXT, src_id TEXT, dst_source TEXT, dst_id TEXT)"
+    )
+    connection.commit()
+    if keep_open:
+        connection.execute("PRAGMA wal_autocheckpoint=0")
+    connection.execute("INSERT INTO related_items VALUES ('memory', ?)", (memory_id,))
+    connection.commit()
+    if not keep_open:
+        connection.close()
+        return path, None
+    return path, connection
+
+
+def _listing(directory: Path) -> dict[str, bytes]:
+    return {path.name: path.read_bytes() for path in sorted(directory.iterdir())}
+
+
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0, reason="root ignores directory permissions"
+)
+def test_residue_reads_a_store_in_a_read_only_directory(tmp_path: Path, home: Path) -> None:
+    """No sidecar is created, so a read-only directory is read, not reported unreadable."""
+
+    repository = _vault(tmp_path)
+    clean_dir = tmp_path / "clean"
+    clean_path, _ = _wal_store(clean_dir, "mem-other", keep_open=False)
+    dirty_dir = tmp_path / "dirty"
+    dirty_path, _ = _wal_store(dirty_dir, "mem-gone", keep_open=False)
+    before = {name: _listing(path) for name, path in (("c", clean_dir), ("d", dirty_dir))}
+    for directory in (clean_dir, dirty_dir):
+        directory.chmod(0o555)
+    try:
+        clean = projection_residue(repository.root, "mem-gone", related_db=clean_path, home=home)
+        dirty = projection_residue(repository.root, "mem-gone", related_db=dirty_path, home=home)
+    finally:
+        for directory in (clean_dir, dirty_dir):
+            directory.chmod(0o755)
+    assert _checks(clean)["related"].get("error") is None
+    assert _checks(clean)["related"]["residue"] is False
+    assert clean["clean"] is True
+    assert _checks(dirty)["related"].get("error") is None
+    assert _checks(dirty)["related"]["rows"]["related_items"] == 1
+    assert dirty["residue"] == ["related"]
+    after = {name: _listing(path) for name, path in (("c", clean_dir), ("d", dirty_dir))}
+    assert after == before  # no -wal/-shm/-journal appeared, nothing changed
+
+
+def test_residue_counts_rows_still_in_the_wal(tmp_path: Path, home: Path) -> None:
+    """A committed row not yet checkpointed is residue; the store's files are left alone."""
+
+    repository = _vault(tmp_path)
+    directory = tmp_path / "live-wal"
+    path, writer = _wal_store(directory, "mem-gone", keep_open=True)
+    try:
+        assert (directory / "related.sqlite3-wal").stat().st_size > 0
+        before = _listing(directory)
+        report = projection_residue(repository.root, "mem-gone", related_db=path, home=home)
+        assert _listing(directory) == before
+    finally:
+        writer.close()  # type: ignore[attr-defined]
+    related = _checks(report)["related"]
+    assert related.get("error") is None
+    assert related["rows"]["related_items"] == 1
+    assert report["residue"] == ["related"]
