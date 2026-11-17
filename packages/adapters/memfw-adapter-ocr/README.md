@@ -92,7 +92,8 @@ reads its installation, models, configuration or job store.
 
 The child gets a small environment (`PATH`, `HOME`, locale, a private
 `TMPDIR`, plus `mcp_env`); proxy variables and anything named like a key,
-token, secret or password are never passed. An async job still running when
+token, secret or password are never passed, and `mcp_env` may not set
+`PATH`, `HOME` or `TMPDIR` (refused as `bad_mcp_env`). An async job still running when
 the run's time is up is abandoned with the server process; its output
 directory is removed with the work directory.
 

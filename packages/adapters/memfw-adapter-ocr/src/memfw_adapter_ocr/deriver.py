@@ -34,7 +34,7 @@ from typing import Any
 
 from ._ports import PRIVACY_LEVELS, Availability, Citation, DerivedView, DeriveRequest
 from .backend import OcrBackend, OcrBudget, OcrError
-from .mcp import McpOcrBackend
+from .mcp import FIXED_ENV, McpOcrBackend
 from .pdftotext import PdftotextBackend
 from .proxy import DEFAULT_CLEARANCE, generate_proxy
 
@@ -71,7 +71,7 @@ class Settings:
         if not isinstance(self.allow_async_jobs, bool):
             raise OcrError("bad_allow_async_jobs")
         if not isinstance(self.mcp_env, Mapping) or any(
-            _SECRETISH.search(str(k)) for k in self.mcp_env
+            _SECRETISH.search(str(k)) or str(k).upper() in FIXED_ENV for k in self.mcp_env
         ):
             raise OcrError("bad_mcp_env")
         for root in self.source_roots:

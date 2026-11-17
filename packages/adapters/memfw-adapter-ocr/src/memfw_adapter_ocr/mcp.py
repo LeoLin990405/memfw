@@ -64,6 +64,8 @@ MAX_SERVER_REQUESTS = 32
 _PAGE_HEADING = re.compile(r"^##\s+Page\s+(\d+)\s*$")
 _DONE = frozenset({"done", "finished", "completed", "complete", "success", "succeeded"})
 _FAILED = frozenset({"failed", "error", "errored", "cancelled", "canceled", "killed"})
+#: Environment variables ``mcp_env`` may not set.
+FIXED_ENV = frozenset({"PATH", "HOME", "TMPDIR"})
 #: Environment variables a child never inherits (proxies, credentials).
 _DROP_ENV = re.compile(
     r"(?i)^(.*_proxy|all_proxy|no_proxy|.*(_key|_token|_secret|password)|deepseek_.*)$"
@@ -311,6 +313,8 @@ def child_env(extra: Mapping[str, str] | None, workdir: Path) -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "LANG", "LC_ALL")}
     env["TMPDIR"] = str(workdir)
     for key, value in (extra or {}).items():
+        if str(key).upper() in FIXED_ENV:
+            continue  # PATH, HOME and TMPDIR are the adapter's, never the config's
         env[str(key)] = str(value)
     return {k: v for k, v in env.items() if not _DROP_ENV.match(k)}
 

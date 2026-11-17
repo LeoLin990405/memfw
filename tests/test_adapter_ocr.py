@@ -398,6 +398,12 @@ def test_child_environment_has_no_proxy_or_credentials(
 ) -> None:
     monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "not-a-real-key")
+    for key in ("PATH", "HOME", "TMPDIR", "tmpdir"):
+        with pytest.raises(OcrError, match="bad_mcp_env"):
+            Settings.from_mapping({"mcp_env": {key: "/elsewhere"}})
+    fixed = child_env({"TMPDIR": "/elsewhere", "PATH": "/x", "HOME": "/y"}, tmp_path)
+    assert fixed["TMPDIR"] == str(tmp_path) and fixed.get("PATH") != "/x"
+    assert fixed.get("HOME") != "/y"
     env = child_env({"https_proxy": "http://127.0.0.1:9", "OCR_LANG": "en"}, tmp_path)
     assert "HTTPS_PROXY" not in env and "https_proxy" not in env
     assert "DEEPSEEK_API_KEY" not in env and env["OCR_LANG"] == "en"
