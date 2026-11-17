@@ -1,0 +1,13 @@
+id,human_readable_id,community,level,parent,children,title,summary,full_content,rank,rating_explanation,findings,full_content_json,period,size
+80ac044aeda76a7a2f9f6790b552dfe9e36742269469e8f2174bfb62580c2152c52da61911c617d72b310fbdda76d38faf7938ae47a353bdd85e06f09928b72f,0,0,0,-1,[],Nightly backup,The backup job copies the vault to the NAS every night.,"# Nightly backup
+
+The backup job copies the vault to the NAS every night.",5.0,fixture,"[{'summary': 'Nightly backup', 'explanation': 'The backup job copies the vault to the NAS every night.'}]",{},2026-11-17,1
+36968a49dc1319a2ee02128a231c1fac30afce9f49385dfe9420375286e03deedfddb48c4020c11a8199c80afb5dc717228425c222286a91a7199b8c253a1595,1,1,0,-1,[],Release and backups,Release 0.4.0 ships the adapter registry the backup notes mention.,"# Release and backups
+
+Release 0.4.0 ships the adapter registry the backup notes mention.",5.0,fixture,"[{'summary': 'Release and backups', 'explanation': 'Release 0.4.0 ships the adapter registry the backup notes mention.'}]",{},2026-11-17,1
+8c176d19321899fadffb58f5a7c608aa8a9b92c6875283ce4a8212c04c2fcde3c98c903c9ab21ae8000fffb2d856ebd97a07c05cc0bdc658acf96cdda8bbcd66,2,2,0,-1,[],Backup keys,Summarises a memory that is private now.,"# Backup keys
+
+Summarises a memory that is private now.",5.0,fixture,"[{'summary': 'Backup keys', 'explanation': 'Summarises a memory that is private now.'}]",{},2026-11-17,1
+1d3a89a8a5f4ac9e16f7a34c8986ff51f82f8c58ef65e86525ea6011b7c125193f0032b0f990bda3cb6fe7189b7d9ad30420cbf7b2782e7f47dfd0785bbb3e8f,9,9,0,-1,[],Unknown community,A report whose community is not in the table.,"# Unknown community
+
+A report whose community is not in the table.",5.0,fixture,"[{'summary': 'Unknown community', 'explanation': 'A report whose community is not in the table.'}]",{},2026-11-17,1

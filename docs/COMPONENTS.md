@@ -154,6 +154,15 @@ implements the `Deriver` port as a loopback HTTP client of an operator-run `ligh
 requested, shareable, current memory. **Off by default**; rows become memory only as staged
 candidates. See [`adapter-lightrag.md`](adapter-lightrag.md).
 
+## GraphRAG deriver adapter
+
+`packages/adapters/memfw-adapter-graphrag` (wheel `memfw_adapter_graphrag`, version 0.1.0)
+implements the `Deriver` port with GraphRAG 3.3.0 as an offline batch job: shareable documents
+from a `memfw projection export` generation go in, `graphrag index` runs as a subprocess only
+when the operator calls it (loopback model endpoints unless `cloud: true`), and its CSV output
+tables come back as graph and community-report views. **Off by default**; rows become memory
+only as staged candidates. See [`adapter-graphrag.md`](adapter-graphrag.md).
+
 ## QMD recall adapter
 
 `packages/adapters/memfw-adapter-qmd` (wheel `memfw_adapter_qmd`, version 0.1.0) implements
