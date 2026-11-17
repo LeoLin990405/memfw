@@ -728,3 +728,21 @@ def test_fsck_hash_budget_is_per_memory(tmp_path: Path, monkeypatch: pytest.Monk
     hashed = _count_hashes(monkeypatch)
     repository.fsck()
     assert len(hashed) == 3 * storage_evidence.MAX_HASH_FILES
+
+
+def test_relative_paths_resolve_against_the_vault_not_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = _repo(tmp_path)
+    shot = _attach(repository, _original(tmp_path, "s.png", b"png bytes"), "image/png")
+    elsewhere = tmp_path / "cwd"
+    elsewhere.mkdir()
+    (elsewhere / "copy.png").write_bytes(b"png bytes")
+    monkeypatch.chdir(elsewhere)
+    # ``copy.png`` exists only under the working directory: not matched.
+    assert gate_evidence_classes(repository, {"evidence": ["file:copy.png"]}) == {}
+    (repository.root / "copy.png").write_bytes(b"png bytes")
+    assert gate_evidence_classes(repository, {"evidence": ["file:copy.png"]}) == {
+        "file:copy.png": "observation"
+    }
+    assert shot.sha256 == hashlib.sha256(b"png bytes").hexdigest()

@@ -242,15 +242,14 @@ def _real(path: Path) -> Path:
 
 
 def _candidate_paths(raw: str, vault: Path | None) -> list[Path]:
+    """The path a pointer names: absolute, ``~``, or relative to the vault (never cwd)."""
+
     if raw.startswith("~"):
         return [Path(raw).expanduser()]
     path = Path(raw)
     if path.is_absolute():
         return [path]
-    paths = [path]
-    if vault is not None:
-        paths.append(vault / path)
-    return paths
+    return [vault / path] if vault is not None else []
 
 
 def _could_name_attachment(reference: str) -> bool:
