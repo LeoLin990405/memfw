@@ -126,6 +126,8 @@ FORGET_OK = {
     "tenant": "tenant-a",
     "source": "conductor",
 }
+#: ``forget-<sha256("tenant-a")[:16]>-<request_id>``: request ids are per tenant.
+FORGET_OK_CANDIDATE = "forget-80a707af7dc77ee1-forget-sample"
 
 
 def _procedural(
@@ -574,14 +576,14 @@ def test_forget_writes_only_a_request_candidate(
         "duplicate": False,
         "request_id": "forget-sample",
         "memory_id": "mem-beta",
-        "candidate_id": "forget-forget-sample",
-        "path": "_candidates/forget/forget-forget-sample.md",
+        "candidate_id": FORGET_OK_CANDIDATE,
+        "path": f"_candidates/forget/{FORGET_OK_CANDIDATE}.md",
         "deleted": False,
         "authority": False,
     }
     after = _tree(root)
     added = set(after) - set(before)
-    assert added == {"_candidates/forget/forget-forget-sample.md"}
+    assert added == {f"_candidates/forget/{FORGET_OK_CANDIDATE}.md"}
     assert {key: after[key] for key in before} == before  # memory, events, index untouched
     text = (root / payload["path"]).read_text(encoding="utf-8")
     assert 'type: "forget-request"' in text
@@ -612,7 +614,6 @@ def test_forget_is_idempotent_and_conflicts_are_409(
         {"memory_id": "mem-alpha"},
         {"reason": "another reason"},
         {"source": "other"},
-        {"tenant": ""},
     ):
         status, payload = _v3(httpd, "/forget", {**FORGET_OK, **change}, WRITE_TOKEN)
         assert status == 409, change
@@ -622,6 +623,84 @@ def test_forget_is_idempotent_and_conflicts_are_409(
     # A replay still answers duplicate after the memory itself is gone.
     (root / "memories" / "mem-beta.md").unlink()
     status, payload = _v3(httpd, "/forget", FORGET_OK, WRITE_TOKEN)
+    assert status == 200 and payload["duplicate"] is True
+
+
+NOT_FOUND_V3 = {"contract": V3, "error": {"code": "not_found", "message": "memory not found"}}
+
+
+def test_forget_request_ids_are_per_tenant_no_cross_tenant_oracle(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Another tenant replaying a recorded ``request_id`` learns nothing (404, never 409)."""
+
+    root = seed_vault(tmp_path / "vault")
+    _use_vault(monkeypatch, root)
+    status, first = _v3(httpd, "/forget", FORGET_OK, WRITE_TOKEN)
+    assert status == 200 and first["duplicate"] is False
+    written = _tree(root)
+    # Same request_id, same (tenant-a) memory, from another tenant or untenanted.
+    for tenant in ("", "tenant-b"):
+        for change in ({}, {"reason": "another reason"}, {"memory_id": "mem-alpha"}):
+            body = {**FORGET_OK, **change, "tenant": tenant}
+            status, payload = _v3(httpd, "/forget", body, WRITE_TOKEN)
+            assert (status, payload) == (404, NOT_FOUND_V3), (tenant, change)
+    assert _tree(root) == written
+    # The same request_id is free for another tenant's own memory: no pre-claim.
+    body = {**FORGET_OK, "memory_id": "mem-gamma", "tenant": "tenant-b"}
+    status, other = _v3(httpd, "/forget", body, WRITE_TOKEN)
+    assert status == 200 and other["duplicate"] is False
+    assert other["candidate_id"] != first["candidate_id"]
+    assert other["candidate_id"] == service.forget_candidate_id("tenant-b", "forget-sample")
+    # After the memory is gone, another tenant still gets 404, not duplicate.
+    (root / "memories" / "mem-beta.md").unlink()
+    status, payload = _v3(httpd, "/forget", {**FORGET_OK, "tenant": ""}, WRITE_TOKEN)
+    assert (status, payload) == (404, NOT_FOUND_V3)
+    status, payload = _v3(httpd, "/forget", FORGET_OK, WRITE_TOKEN)
+    assert status == 200 and payload["duplicate"] is True
+    # ``memfw forget requests`` still lists both tenant-scoped files.
+    from memfw.curation.residue import list_forget_requests
+
+    listed = {(row["tenant"], row["memory_id"]) for row in list_forget_requests(root)}
+    assert listed == {("tenant-a", "mem-beta"), ("tenant-b", "mem-gamma")}
+
+
+def test_forget_lower_clearance_replay_is_404(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A same-tenant process whose clearance withholds the memory gets 404, not duplicate."""
+
+    documents = [
+        *SEED_DOCUMENTS,
+        _memory("mem-private", "Private note", "private corpus keyword", tenant="tenant-a"),
+        MemoryDocument(
+            id="mem-shared",
+            title="Shared note",
+            body="shared corpus keyword",
+            tenant="tenant-a",
+            privacy="shared",
+            created_at=BASE,
+            updated_at=BASE,
+        ),
+    ]
+    root = seed_vault(tmp_path / "vault", documents)
+    _use_vault(monkeypatch, root)
+    body = {"request_id": "private-1", "memory_id": "mem-private", "tenant": "tenant-a"}
+    monkeypatch.setenv(service.CLEARANCE_ENV, "public,shared,local-private")
+    status, first = _v3(httpd, "/forget", body, WRITE_TOKEN)
+    assert status == 200 and first["duplicate"] is False
+    written = _tree(root)
+    monkeypatch.setenv(service.CLEARANCE_ENV, "public,shared")
+    for change in ({}, {"reason": "another reason"}):
+        status, payload = _v3(httpd, "/forget", {**body, **change}, WRITE_TOKEN)
+        assert (status, payload) == (404, NOT_FOUND_V3), change
+    # The request id is the tenant's own: a visible memory under it is still
+    # 409, an answer that names no memory.
+    status, payload = _v3(httpd, "/forget", {**body, "memory_id": "mem-shared"}, WRITE_TOKEN)
+    assert status == 409
+    assert _tree(root) == written
+    monkeypatch.setenv(service.CLEARANCE_ENV, "public,shared,local-private")
+    status, payload = _v3(httpd, "/forget", body, WRITE_TOKEN)
     assert status == 200 and payload["duplicate"] is True
 
 

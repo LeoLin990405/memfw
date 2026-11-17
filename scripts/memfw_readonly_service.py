@@ -1227,6 +1227,19 @@ def _existing_forget_request(base: Path, relative: str, expected: dict[str, str]
         raise ServiceError(409, "request exists with different content")
 
 
+def forget_candidate_id(tenant: str, request_id: str) -> str:
+    """``forget-<tenant key>-<request_id>``: request ids are scoped per tenant.
+
+    The tenant key is the first 16 hex digits of ``sha256(tenant)`` (the
+    empty tenant included), so two tenants never share a file name, a
+    ``request_id`` one tenant used is no oracle or pre-claim for another,
+    and the file name carries no tenant name.
+    """
+
+    tenant_key = hashlib.sha256(tenant.encode("utf-8")).hexdigest()[:16]
+    return f"forget-{tenant_key}-{request_id}"
+
+
 def _forget_markdown(header: dict[str, Any]) -> str:
     rendered = yaml.dump(
         _single_line(header),
@@ -1257,9 +1270,13 @@ def forget_request(
     equality, empty included) and admitted by ``clearance`` (MM0). A missing
     memory, another tenant's and one the clearance withholds all answer the
     same 404, so the existence of a hidden memory is never revealed.
-    ``request_id`` makes the call idempotent: the same request again is
+    ``request_id`` makes the call idempotent within a tenant (the file name is
+    ``forget_candidate_id(tenant, request_id)``): the same request again is
     ``duplicate: true`` without a rewrite, the same ``request_id`` with any
-    other memory, tenant, source or reason is 409. The memory file, the event
+    other memory, source or reason is 409. While the memory exists, the
+    visibility check runs before either answer, so a hidden target is 404
+    even when a request for it was recorded; once it is gone, a replay of
+    the tenant's own request is still ``duplicate: true``. The memory file, the event
     log and every projection are left alone; ``deleted`` is always false.
     """
 
@@ -1270,7 +1287,7 @@ def forget_request(
         raise _bad_request("tenant must be a string")
     values = _validate_forget_payload(payload)
     cleared = _library.checked_clearance(clearance)
-    candidate_id = f"forget-{values['request_id']}"
+    candidate_id = forget_candidate_id(tenant, values["request_id"])
     relative = "/".join((*FORGET_DIRECTORY, f"{candidate_id}.md"))
     directory = base.joinpath(*FORGET_DIRECTORY)
     _assert_safe_candidate_directory(base, directory, FORGET_DIRECTORY)
@@ -1296,10 +1313,21 @@ def forget_request(
             "authority": False,
         }
 
-    if (base / relative).exists() or (base / relative).is_symlink():
+    recorded = (base / relative).exists() or (base / relative).is_symlink()
+    target_exists = (base / "memories" / f"{values['memory_id']}.md").is_file()
+    if recorded and not target_exists:
+        # The memory is gone (deleted after the request, as intended): only a
+        # request this tenant recorded answers ``duplicate`` or 409, and the
+        # file name is tenant-scoped, so another tenant's never matches.
         _existing_forget_request(base, relative, expected)
         return response(True)
+    # Visibility first: a memory this caller may not see answers the same 404
+    # whether or not a request for it was recorded, so neither a replay nor
+    # a 409 reveals that it exists.
     memory_path, _memory = _memory_metadata(base, values["memory_id"], tenant, clearance=cleared)
+    if recorded:
+        _existing_forget_request(base, relative, expected)
+        return response(True)
     try:
         target_hash = "sha256:" + hashlib.sha256(memory_path.read_bytes()).hexdigest()
     except OSError as exc:

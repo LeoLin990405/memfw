@@ -434,8 +434,8 @@ characters), `source` (optional single line, default `conductor`) and
 ```json
 {"contract": "memfw-http/3", "requested": true, "duplicate": false,
  "request_id": "<request_id>", "memory_id": "<memory_id>",
- "candidate_id": "forget-<request_id>",
- "path": "_candidates/forget/forget-<request_id>.md",
+ "candidate_id": "forget-<tenant_key>-<request_id>",
+ "path": "_candidates/forget/forget-<tenant_key>-<request_id>.md",
  "deleted": false, "authority": false}
 ```
 
@@ -445,13 +445,22 @@ characters), `source` (optional single line, default `conductor`) and
   request's tenant and admitted by the clearance. A missing memory, another
   tenant's and a withheld one all answer the same 404 `memory not found`,
   and nothing is written.
-- **Idempotent.** The same request again (same `request_id`, memory,
-  tenant, source and reason) is 200 with `duplicate: true` and no rewrite,
-  even after the memory is gone; the same `request_id` with anything else is
-  409 `conflict` (`request exists with different content`). Publication is
+- **Idempotent, per tenant.** `request_id` is scoped to the tenant:
+  `<tenant_key>` is the first 16 hex digits of `sha256(tenant)` (the empty
+  tenant included), so two tenants never share a candidate file and one
+  tenant's `request_id` is neither an oracle nor a pre-claim for another.
+  The same request again (same `request_id`, memory, tenant, source and
+  reason) is 200 with `duplicate: true` and no rewrite; the same
+  `request_id` with another memory, source or reason is 409 `conflict`
+  (`request exists with different content`). While the memory exists, the
+  visibility check runs first: a caller that may not see it (another
+  tenant, a lower clearance) gets the same 404 `memory not found` whether
+  or not a request for it was recorded. After the memory is gone, a replay
+  of the tenant's own request is still `duplicate: true`; any other tenant
+  gets 404. Publication is
   atomic (temporary file + hard link), so concurrent requests converge on one
   file.
-- **The candidate.** `<vault>/_candidates/forget/forget-<request_id>.md`, a
+- **The candidate.** `<vault>/_candidates/forget/forget-<tenant_key>-<request_id>.md`, a
   directory of its own so `memfw candidates` / `candidate-apply` never see a
   deletion request. Frontmatter: `type: forget-request`, `status: pending`,
   `request_id`, `memory_id`, `tenant`, `source`, `reason`,

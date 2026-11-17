@@ -52,8 +52,12 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   token only) records one deletion-request candidate under
   `<vault>/_candidates/forget/` and never deletes; the target must be visible
   to the caller (tenant and clearance), hidden and missing targets answer the
-  same 404, and `request_id` makes it idempotent (replay `duplicate: true`,
-  different content 409). Tenant binding and the MM0 clearance (sensitivity
+  same 404, and `request_id` makes it idempotent within the tenant (replay
+  `duplicate: true`, different content 409). The candidate file is
+  `forget-<sha256(tenant)[:16]>-<request_id>.md`, so request ids never
+  collide across tenants, and while the memory exists the visibility check
+  runs before the duplicate/409 check: another tenant or a lower clearance
+  replaying a recorded request gets the same 404. Tenant binding and the MM0 clearance (sensitivity
   key included) apply to every v3 addition. `memfw forget requests` lists the
   requests; `memfw forget residue <id>` checks, read-only, that a forgotten
   memory is gone from the FTS index, the related, corroboration, usage and
