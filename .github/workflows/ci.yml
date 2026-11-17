@@ -2,19 +2,38 @@ name: CI
 on:
   push:
   pull_request:
+permissions:
+  contents: read
 jobs:
   checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # Full history: the architecture allowlist is checked against its
           # merge-base with origin/main (tests/test_architecture_layers.py).
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.11'
       - run: pip install -e '.[dev]'
       - run: pytest
       - run: ruff check src/memfw tests
       - run: mypy src
+  standalone-wheels:
+    # memfw-ports and memfw-recall build as wheels and pass the contract kit in
+    # a fresh venv without memfw (docs/ports-and-recall.md section 1.1).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: '0.13.3'
+      - run: uv build --wheel --package memfw-ports -o "$RUNNER_TEMP/dist"
+      - run: uv build --wheel --package memfw-recall -o "$RUNNER_TEMP/dist"
+      - run: uv venv --python 3.11 "$RUNNER_TEMP/wheel-venv"
+      - run: uv pip install --python "$RUNNER_TEMP/wheel-venv/bin/python" --no-index "$RUNNER_TEMP"/dist/*.whl
+      - run: '"$RUNNER_TEMP/wheel-venv/bin/python" -I tests/standalone/wheel_smoke.py --recall'

@@ -18,6 +18,8 @@ session-start context that ``memory_context`` v2 returns.
 
 from __future__ import annotations
 
+from typing import Final
+
 from .claims import (
     CLAIMS_PORT_VERSION,
     POLARITIES,
@@ -80,9 +82,16 @@ from .types import (
     validate_candidate,
 )
 
+#: Version of the ``memfw.ports`` API as a whole (semver). The standalone
+#: ``memfw-ports`` wheel carries exactly this version, and
+#: ``tests/test_standalone_ports_wheel.py`` keeps the two equal: bump it (and
+#: the wheel) with every change to the ports API, major for a breaking one.
+PORTS_API_VERSION: Final = "0.1.0"
+
 __all__ = [
     "ADAPTER_KINDS",
     "CLAIMS_PORT_VERSION",
+    "PORTS_API_VERSION",
     "POLARITIES",
     "ClaimEvidence",
     "ClaimStager",

@@ -11,6 +11,31 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
+### Added — standalone `memfw-ports` and `memfw-recall` wheels (A5b)
+
+- New uv workspace members `packages/memfw-ports` and `packages/memfw-recall`
+  build wheels importable as `memfw_ports` and `memfw_recall` from memfw's own
+  `src/memfw/ports` and `src/memfw/recall` (hatch `force-include`, no copied
+  sources; `recall/builtin.py` is not shipped). An adapter author can install
+  them and run `memfw_ports.testing` without installing memfw.
+- `memfw.recall` now takes its port names through `memfw.recall._ports`: a
+  relative import of the sibling `ports` package when recall has a parent
+  package (inside memfw: `memfw.ports`, the same objects; no behaviour change),
+  `memfw_ports` when it is the top-level `memfw_recall`. Inside a memfw process
+  use `memfw.ports`; `memfw_ports` classes are distinct copies.
+- New `memfw.ports.PORTS_API_VERSION` (`"0.1.0"`); both wheel versions follow
+  it (test-enforced). The members pin `hatchling==1.33.0` and ship memfw's
+  `LICENSE` and `NOTICE`. CI pins `actions/*` and `setup-uv` to commit SHAs,
+  pins uv, and runs with `permissions: contents: read`.
+- `tests/standalone/wheel_smoke.py` runs every reference implementation through
+  its contract check and a coordinator search in a venv without memfw; new CI
+  job `standalone-wheels` builds both wheels and runs it.
+  `tests/test_standalone_ports_wheel.py` checks the wheel file lists and the
+  seam, and with `MEMFW_STANDALONE_WHEELS=1` (and `uv`) does the build, clean
+  install and smoke itself.
+- memfw does not depend on the new distributions; `uv.lock` gains the two
+  workspace members only.
+
 ### Fixed — `two_stage` access events follow the filter
 
 - `memory_search` `mode=two_stage` with an embedder logged one `memory_access`
