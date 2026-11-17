@@ -1,0 +1,29 @@
+# memfw-ports: the port contracts (protocols, value types, staging, registry,
+# contract kit, reference implementations) as a standalone wheel, importable as
+# ``memfw_ports`` without memfw. The sources are memfw's own src/memfw/ports:
+# every import inside them is relative, so the same files work under both
+# names. See docs/ports-and-recall.md section 1.1.
+#
+# Build a wheel (an sdist is not supported: the sources live outside this
+# directory):  uv build --wheel --package memfw-ports
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "memfw-ports"
+version = "0.1.0"
+description = "memfw port contracts and contract-test kit (standard library only)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+dependencies = []
+
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+exclude = ["__pycache__", "*.pyc"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"../../src/memfw/ports" = "memfw_ports"
+"py.typed" = "memfw_ports/py.typed"
+"../../LICENSE" = "memfw_ports/LICENSE"

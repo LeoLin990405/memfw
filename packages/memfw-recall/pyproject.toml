@@ -1,0 +1,41 @@
+# memfw-recall: the recall coordinator (routing, fusion, filter policy,
+# resolvers, open-question labels) as a standalone wheel, importable as
+# ``memfw_recall`` without memfw. It depends on memfw-ports and takes the
+# port names through ``_ports.py``, which picks ``memfw_ports`` here and
+# ``memfw.ports`` inside memfw. ``builtin.py`` (the vault resolver and the
+# built-in providers) reaches memfw internals and is not shipped. The files
+# are listed one by one, so a new recall module is left out until it is
+# added here (tests/test_standalone_ports_wheel.py checks the list).
+#
+# Build a wheel (no sdist: the sources live outside this directory):
+#   uv build --wheel --package memfw-recall
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "memfw-recall"
+version = "0.1.0"
+description = "memfw recall coordinator: routing, fusion and filter policy over memfw-ports"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+dependencies = ["memfw-ports==0.1.0"]
+
+[tool.uv.sources]
+memfw-ports = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+
+[tool.hatch.build.targets.wheel.force-include]
+"../../src/memfw/recall/__init__.py" = "memfw_recall/__init__.py"
+"../../src/memfw/recall/_ports.py" = "memfw_recall/_ports.py"
+"../../src/memfw/recall/coordinator.py" = "memfw_recall/coordinator.py"
+"../../src/memfw/recall/fusion.py" = "memfw_recall/fusion.py"
+"../../src/memfw/recall/labels.py" = "memfw_recall/labels.py"
+"../../src/memfw/recall/policy.py" = "memfw_recall/policy.py"
+"../../src/memfw/recall/resolve.py" = "memfw_recall/resolve.py"
+"../../src/memfw/recall/routing.py" = "memfw_recall/routing.py"
+"py.typed" = "memfw_recall/py.typed"
+"../../LICENSE" = "memfw_recall/LICENSE"

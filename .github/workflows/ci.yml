@@ -18,3 +18,18 @@ jobs:
       - run: pytest
       - run: ruff check src/memfw tests
       - run: mypy src
+  standalone-wheels:
+    # memfw-ports and memfw-recall build as wheels and pass the contract kit in
+    # a fresh venv without memfw (docs/ports-and-recall.md section 1.1).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: astral-sh/setup-uv@v6
+      - run: uv build --wheel --package memfw-ports -o "$RUNNER_TEMP/dist"
+      - run: uv build --wheel --package memfw-recall -o "$RUNNER_TEMP/dist"
+      - run: uv venv --python 3.11 "$RUNNER_TEMP/wheel-venv"
+      - run: uv pip install --python "$RUNNER_TEMP/wheel-venv/bin/python" --no-index "$RUNNER_TEMP"/dist/*.whl
+      - run: '"$RUNNER_TEMP/wheel-venv/bin/python" -I tests/standalone/wheel_smoke.py --recall'

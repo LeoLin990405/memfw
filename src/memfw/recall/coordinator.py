@@ -42,19 +42,18 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
 
-from memfw.ports.protocols import RecallProvider
-from memfw.ports.types import (
+from ._ports import (
     MEMORY_ID_RE,
     Availability,
     Candidate,
     ExtraValue,
     ProviderUnavailable,
     RecallBudget,
+    RecallProvider,
     RefKind,
     check_name,
     validate_candidate,
 )
-
 from .fusion import DEFAULT_RRF_K, rrf_fuse
 from .policy import FilterPolicy, MemoryMeta, Verdict, evaluate
 from .resolve import Resolution, Resolver

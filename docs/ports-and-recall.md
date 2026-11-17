@@ -22,8 +22,8 @@ external project's public interface, and the kernel uses the adapter only throug
 
 Every component is a separately packageable, replaceable unit:
 
-- **`memfw.ports` is the socket.** It imports only the standard library, so it can ship as a
-  standalone `memfw-ports` distribution that adapters depend on without depending on memfw.
+- **`memfw.ports` is the socket.** It imports only the standard library and ships as the
+  standalone `memfw-ports` wheel (below) that adapters depend on without depending on memfw.
   The shared dataclasses live there. `EPISTEMIC_VALUES` and `CAUSAL_VALUES` are mirrored from
   `memfw.core.epistemic`, and a test keeps the two equal.
 - **`memfw.recall` is replaceable.** Its modules import only `memfw.ports` and each other.
@@ -37,8 +37,43 @@ Every component is a separately packageable, replaceable unit:
   [Architecture guards](architecture.md)).
 
 `memfw/__init__.py` imports `memfw.related` when the package loads. The subprocess check
-therefore compares against a baseline taken after `import memfw`. If `memfw-ports` is ever
-extracted, it ships as its own distribution, so this does not affect it.
+therefore compares against a baseline taken after `import memfw`. The standalone wheels below
+do not contain `memfw/__init__.py`, so this does not affect them.
+
+**Standalone wheels (A5b).** Two uv workspace members build wheels from these same sources:
+
+| Distribution | Import name | Contents | Depends on |
+|---|---|---|---|
+| `memfw-ports` (`packages/memfw-ports`) | `memfw_ports` | all of `src/memfw/ports`, `reference` included | nothing |
+| `memfw-recall` (`packages/memfw-recall`) | `memfw_recall` | `src/memfw/recall` without `builtin.py` | `memfw-ports` (same version) |
+
+- **One copy of the source.** Each wheel maps memfw's own files to a new top-level name with
+  hatch `force-include`; nothing is copied into `packages/`. Every import inside
+  `memfw.ports` is relative, so the files work as `memfw.ports.*` and as `memfw_ports.*`.
+  An adapter written against the wheel changes only the first name:
+  `from memfw_ports.testing import check_recall_provider`.
+- **The recall seam.** `memfw.recall` takes every port name through `memfw.recall._ports`.
+  It re-exports `memfw.ports` when the module is under `memfw` and `memfw_ports` when it is
+  `memfw_recall._ports`. The choice follows the module's own name, not what is installed, so a
+  process with memfw and the wheels never mixes two copies of a dataclass. Inside memfw the
+  names are the same objects as before (a test checks identity). Type checkers always see the
+  `memfw.ports` branch, so in a venv without memfw the seam's names are untyped (`Any`).
+- **Not shipped.** `memfw.recall.builtin` (vault resolver, FTS/multihop/hybrid providers) is
+  memfw-internal. The recall wheel lists its files one by one, so a new recall module stays
+  out until it is added; `tests/test_standalone_ports_wheel.py` fails until it is.
+- **memfw does not depend on the wheels.** It still ships `src/memfw/ports` and
+  `src/memfw/recall` itself; `import memfw.ports` and every memfw output are unchanged. Making
+  memfw depend on `memfw-ports` (and re-export it) is a later step (architecture section 6).
+- **Wheels only.** `uv build --wheel --package memfw-ports` (and `memfw-recall`). An sdist is
+  not supported because the sources live outside the package directory. Editable installs of
+  the members are not supported either; `uv sync` installs memfw alone, as before.
+- **Proof.** `tests/standalone/wheel_smoke.py` runs, in a venv without memfw, every reference
+  implementation through its `memfw_ports.testing` check (recall provider, both projectors,
+  both ingestors, both derivers, clocks, id generators, claim verifier and stager) and a
+  `memfw_recall.Coordinator` search with tenant and privacy filtering. The CI job
+  `standalone-wheels` builds both wheels, installs them with `--no-index` into a fresh venv and
+  runs it. Locally: `MEMFW_STANDALONE_WHEELS=1 pytest tests/test_standalone_ports_wheel.py`
+  (needs `uv`); the static checks in that file always run.
 
 ## 2. The four port contracts
 

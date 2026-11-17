@@ -103,3 +103,7 @@ results/stepG/multiconv/runtime_reuse/
 # Local conversation store (never commit; the default lives outside the repo)
 .memfw-conversations.sqlite*
 conversations.sqlite*
+
+# Built wheels/sdists (uv build)
+/dist/
+packages/*/dist/

@@ -249,6 +249,16 @@ the recall, projector, ingestor and deriver specs (`inmemory` takes a `vault` se
 stays off until an `AdaptersConfig` enables it. No entry points are declared, so discovery
 and every default output are unchanged.
 
+**A5b (done).** `memfw-ports` and `memfw-recall` build as standalone wheels from this tree
+(uv workspace members `packages/memfw-ports` and `packages/memfw-recall`, import names
+`memfw_ports` and `memfw_recall`) and pass the contract kit in a venv without memfw
+(architecture section 9: "can be installed and tested as standalone wheels without memfw").
+Both map memfw's own `src/` files, so there is no second copy; `recall/builtin.py` is not
+shipped. The one source change is the recall seam `memfw.recall._ports`, which re-exports
+`memfw.ports` inside memfw. It is a new module in the existing `memfw.recall` unit: no
+layer-map or allowlist entry. memfw does not depend on either wheel yet (section 6 keeps that
+for the meta-package step). Details: [Standalone wheels](ports-and-recall.md#11-packaging-boundaries).
+
 ## Byte-identical harness
 
 [`tests/harness/byte_identical.py`](../tests/harness/byte_identical.py) runs one probe against
