@@ -117,7 +117,6 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   `topics` are not cached. `memfw.context` gains the `CoreCandidates` seam
   (`CoreSlotProvider(candidates=...)`), `is_core_shaped`, `select_core` and
   `if_version_request`.
-||||||| parent of 93fb563 (M3e-a: settled ingest and archive state)
 
 ### Added — concept taxonomy and relation-type table (K1, K2)
 
