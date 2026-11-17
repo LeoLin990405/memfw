@@ -348,7 +348,7 @@ which tells the client to stay on v2. The v3 `/health` body adds:
 ```
 
 `endpoints` lists `/context` only when the deployment can serve it (it needs
-the `memfw` package; see below). No field is a path, host name or token.
+the `memfw` package and a configured clearance; see below). No field is a path, host name or token.
 
 ### Endpoints under v3
 
@@ -358,7 +358,7 @@ the `memfw` package; see below). No field is a path, host name or token.
 | `POST /search` | read or write token | v2 result plus `recorded_at` on every hit; `mode` checked against `modes` |
 | `POST /related` | read or write token | v2 result plus `why` and `provenance_type` on every result |
 | `POST /stage` | write token only | unchanged apart from the contract tag |
-| `POST /context` | read or write token | the `memory_context` v2 pack (`core` slot), read-only |
+| `POST /context` | read or write token | the `memory_context` v2 pack (`core` slot), read-only; only with a clearance configured |
 | `POST /forget` | write token only | records one deletion-request candidate; never deletes |
 
 Request limits, the error shape, token handling, tenant binding
@@ -417,6 +417,12 @@ procedural memories). With `if_version` equal to the current
 - **Slots.** `handoff` (the conversation share, read as a calling app) and
   `topics` (vault-wide counts) have no HTTP caller identity yet and are
   refused.
+- **Needs a clearance.** `/context` returns memory text, so it is never
+  served unfiltered: with `MEMFW_READONLY_CLEARANCE` (`--clearance`) unset
+  it is 404 `not found`, exactly like an unknown path, and `/health` leaves
+  it out of `endpoints`. Set a clearance (the remote default is
+  `public,shared`; `public,shared,local-private` admits every level) to
+  serve it. `/search` and `/related` keep the pre-MM0 behaviour without one.
 - **Needs `memfw`.** The pack is built by `memfw.runtime.http`. A
   three-file deployment without the `memfw` package answers 404 `context is
   not available`, and `/health` then leaves `/context` out of `endpoints`.

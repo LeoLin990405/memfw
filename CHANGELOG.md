@@ -48,7 +48,9 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   vocabulary (`fts`); v3 `/related` adds `why` and `provenance_type`; v3
   `POST /context` returns the `memory_context` v2 pack (`core` slot) built
   read-only through `memfw.runtime.http` (no cache, no access events, no usage
-  signals; needs the `memfw` package, else 404). v3 `POST /forget` (write
+  signals; needs the `memfw` package and a configured
+  `MEMFW_READONLY_CLEARANCE`, else 404 and left out of `/health`
+  `endpoints`). v3 `POST /forget` (write
   token only) records one deletion-request candidate under
   `<vault>/_candidates/forget/` and never deletes; the target must be visible
   to the caller (tenant and clearance), hidden and missing targets answer the

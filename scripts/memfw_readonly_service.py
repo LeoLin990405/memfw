@@ -53,7 +53,8 @@ to the environment variable), ``MEMFW_RELATED_DB`` (or ``--related-db``),
 file; file content is stripped), ``MEMFW_READONLY_CLEARANCE`` (or
 ``--clearance``): the privacy levels ``/search`` and ``/related`` may return,
 comma separated from ``public``, ``shared``, ``local-private`` (MM0). Unset
-means no privacy filtering, the behaviour before MM0; the design's remote
+means no privacy filtering, the behaviour before MM0, and v3 ``/context`` is
+not served (404) at all; the design's remote
 default is ``public,shared``. A memory with no ``privacy`` field has the
 vault's ``legacy_privacy_default`` (``local-private`` when unset). A token
 file must be mode ``0600``. The read and write tokens must differ. A
@@ -1499,11 +1500,31 @@ def context_v3(
 # ---------------------------------------------------------------------------
 
 
+def context_enabled() -> bool:
+    """Whether ``/context`` is routed: only with a clearance configured.
+
+    ``/context`` packs memory text, so it is never served unfiltered: with
+    ``MEMFW_READONLY_CLEARANCE`` (``--clearance``) unset it answers 404
+    ``not found`` like an unknown path, and ``/health`` leaves it out.
+    """
+
+    return configured_clearance() is not None
+
+
+def v3_paths() -> tuple[str, ...]:
+    """The ``memfw-http/3`` POST paths this deployment routes right now."""
+
+    if context_enabled():
+        return V3_PATHS
+    return tuple(path for path in V3_PATHS if path != "/context")
+
+
 def health_payload(contract: str = CONTRACT_V2) -> dict[str, Any]:
     """``/health``. v2 is unchanged; v3 adds ``contracts``, ``modes`` and ``endpoints``.
 
     Only non-sensitive fields: no path, host name or token. ``endpoints``
-    lists ``/context`` only when this deployment can serve it.
+    lists ``/context`` only when this deployment can serve it: the ``memfw``
+    package is installed and a clearance is configured.
     """
 
     root = _root_or_none()
@@ -1518,8 +1539,8 @@ def health_payload(contract: str = CONTRACT_V2) -> dict[str, Any]:
         "related_index_present": related_present,
     }
     if contract == CONTRACT_V3:
-        endpoints = ["/health", *V3_PATHS]
-        if not context_available():
+        endpoints = ["/health", *v3_paths()]
+        if "/context" in endpoints and not context_available():
             endpoints.remove("/context")
         payload = {
             **_tagged(payload, CONTRACT_V3),
@@ -1684,7 +1705,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self._select_contract()
             v3 = self.contract == CONTRACT_V3
-            if self.path not in (V3_PATHS if v3 else V2_PATHS):
+            if self.path not in (v3_paths() if v3 else V2_PATHS):
                 raise ServiceError(404, "not found")
             self._authorise()
             body_limit = STAGE_BODY_BYTES if self.path == "/stage" else SEARCH_BODY_BYTES

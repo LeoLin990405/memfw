@@ -11,7 +11,10 @@ Naming, serialisation and the seed vault are those of the v2 set: each case is
 `<case>.request.json` plus `<case>.response.json`, written as
 `json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n"`.
 `context.ok` seeds two extra procedural memories (one per tenant), because the
-`core` slot carries anchors and procedural memories only.
+`core` slot carries anchors and procedural memories only. `context.ok` and
+`health.ok` run with `MEMFW_READONLY_CLEARANCE=public,shared,local-private`:
+`/context` is served, and listed in `endpoints`, only with a clearance
+configured.
 
 Cases and their HTTP status: `health.ok` (200), `search.ok` (200),
 `search.mode_unavailable` (400), `related.edges_ok` (200),

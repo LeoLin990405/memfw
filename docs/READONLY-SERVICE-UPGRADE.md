@@ -84,8 +84,9 @@ byte for byte, so existing clients need no change. v3 adds `POST /forget`
 (write token only; it records a deletion request under
 `<vault>/_candidates/forget/` and never deletes) and `POST /context` (the
 `memory_context` v2 pack). `/context` needs the `memfw` package installed
-where the script runs; without it `/context` answers 404 and the v3 `/health`
-leaves it out of `endpoints`. `READ_PATH_VERSION` stays `2`: v3 changed
+where the script runs and a clearance configured (`MEMFW_READONLY_CLEARANCE`
+or `--clearance`, e.g. `public,shared`); without either, `/context` answers
+404 and the v3 `/health` leaves it out of `endpoints`. `READ_PATH_VERSION` stays `2`: v3 changed
 neither `read_path.py` nor `readonly.py`, but deploy the three files from one
 revision as always.
 

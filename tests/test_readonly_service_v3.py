@@ -152,8 +152,19 @@ CONTEXT_DOCUMENTS = [
     _procedural("proc-b", "Procedure B", "Run the beta procedure.", "tenant-b"),
 ]
 
+#: A clearance admitting every privacy level (``/context`` needs one configured).
+ALL_LEVELS = "public,shared,local-private"
+
 V3_SCENARIOS: dict[str, dict] = {
-    "health.ok": {"status": 200, "method": "GET", "path": "/health", "body": {}, "token": None},
+    "health.ok": {
+        "status": 200,
+        "method": "GET",
+        "path": "/health",
+        "body": {},
+        "token": None,
+        # With a clearance configured, so /context is listed.
+        "clearance": ALL_LEVELS,
+    },
     "search.ok": {
         "status": 200,
         "method": "POST",
@@ -190,6 +201,8 @@ V3_SCENARIOS: dict[str, dict] = {
         "body": {"tenant": "tenant-a", "limit_tokens": 2000},
         "token": READ_TOKEN,
         "documents": CONTEXT_DOCUMENTS,
+        # /context is served only with a clearance; this one admits every level.
+        "clearance": ALL_LEVELS,
     },
     "stage.ok": {
         "status": 200,
@@ -254,6 +267,10 @@ def _v3_scenario(base_url: str, name: str, root: Path, monkeypatch: pytest.Monke
     if related and not (root / "related.sqlite3").exists():
         build_related(root)
     _use_vault(monkeypatch, root, related=related)
+    if "clearance" in scenario:
+        monkeypatch.setenv(service.CLEARANCE_ENV, scenario["clearance"])
+    else:
+        monkeypatch.delenv(service.CLEARANCE_ENV, raising=False)
     headers = {service.CONTRACT_HEADER: scenario.get("contract", V3)}
     body = None if scenario["method"] == "GET" else scenario["body"]
     status, payload = _json(
@@ -408,6 +425,10 @@ def test_health_advertises_both_contracts(
     assert v3["contract"] == V3
     assert v3["contracts"] == [V2, V3]
     assert v3["modes"] == ["fts"]
+    # No clearance configured: /context is not served, so not advertised.
+    assert v3["endpoints"] == ["/health", "/search", "/related", "/stage", "/forget"]
+    monkeypatch.setenv(service.CLEARANCE_ENV, "public,shared")
+    _status, v3 = _json(httpd, "GET", "/health", headers=H3)
     assert v3["endpoints"] == ["/health", "/search", "/related", "/stage", "/context", "/forget"]
     monkeypatch.setattr(service, "context_available", lambda: False)
     _status, v3 = _json(httpd, "GET", "/health", headers=H3)
@@ -973,12 +994,42 @@ def test_context_is_the_v2_pack_filtered_and_read_only(
         httpd, "/context", {"tenant": "tenant-a", "if_version": payload["pack_version"]}
     )
     assert status == 200 and same["unchanged"] is True and "slots" not in same
-    # Without a clearance (the pre-MM0 default) the tenant still bounds it.
-    monkeypatch.delenv(service.CLEARANCE_ENV)
+    # A clearance admitting every level: the tenant still bounds it.
+    monkeypatch.setenv(service.CLEARANCE_ENV, ALL_LEVELS)
     status, payload = _v3(httpd, "/context", {"tenant": "tenant-a", "policy": "compat_fts"})
     ids = {entry["id"] for slot in payload["slots"] for entry in slot["entries"]}
     assert ids == {"ctx-public", "ctx-private", "ctx-sensitive"}
     assert _tree(root) == before
+
+
+def test_context_needs_a_configured_clearance(
+    httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unset ``MEMFW_READONLY_CLEARANCE``: /context is 404 like an unknown path, unadvertised."""
+
+    root = _privacy_vault(tmp_path / "vault")
+    _use_vault(monkeypatch, root)
+    for unset in (None, "", "  "):
+        if unset is None:
+            monkeypatch.delenv(service.CLEARANCE_ENV, raising=False)
+        else:
+            monkeypatch.setenv(service.CLEARANCE_ENV, unset)
+        for token in (READ_TOKEN, WRITE_TOKEN, None):
+            status, payload = _v3(httpd, "/context", {"tenant": "tenant-a"}, token)
+            assert status == 404, (unset, token)
+            assert payload == {
+                "contract": V3,
+                "error": {"code": "not_found", "message": "not found"},
+            }
+        _status, health = _json(httpd, "GET", "/health", headers=H3)
+        assert "/context" not in health["endpoints"]
+    # /search and /related keep the pre-MM0 behaviour without a clearance.
+    monkeypatch.delenv(service.CLEARANCE_ENV, raising=False)
+    status, _payload = _v3(httpd, "/search", {"query": "context body", "tenant": "tenant-a"})
+    assert status == 200
+    monkeypatch.setenv(service.CLEARANCE_ENV, "public")
+    status, payload = _v3(httpd, "/context", {"tenant": "tenant-a"})
+    assert status == 200 and payload["v"] == 2
 
 
 def test_context_tenant_binding(
@@ -986,6 +1037,7 @@ def test_context_tenant_binding(
 ) -> None:
     root = _privacy_vault(tmp_path / "vault")
     _use_vault(monkeypatch, root)
+    monkeypatch.setenv(service.CLEARANCE_ENV, ALL_LEVELS)
     monkeypatch.setenv(service.TENANT_ENV, "tenant-a")
     status, payload = _v3(httpd, "/context", {"tenant": "tenant-b"})
     assert status == 403
@@ -1013,6 +1065,7 @@ def test_context_validation(
     httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: dict, message: str
 ) -> None:
     _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
+    monkeypatch.setenv(service.CLEARANCE_ENV, ALL_LEVELS)
     status, payload = _v3(httpd, "/context", {"tenant": "tenant-a", **body})
     assert status == 400, body
     assert payload["error"]["message"] == message
@@ -1022,6 +1075,7 @@ def test_context_without_memfw_is_404(
     httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
+    monkeypatch.setenv(service.CLEARANCE_ENV, ALL_LEVELS)
     monkeypatch.setattr(service, "_context_module", lambda: None)
     status, payload = _v3(httpd, "/context", {"tenant": "tenant-a"})
     assert status == 404
@@ -1032,6 +1086,7 @@ def test_context_limit_is_clamped(
     httpd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _use_vault(monkeypatch, seed_vault(tmp_path / "vault"))
+    monkeypatch.setenv(service.CLEARANCE_ENV, ALL_LEVELS)
     for asked, served in ((0, 1), (-5, 1), (10**9, service.MAX_CONTEXT_TOKENS)):
         status, payload = _v3(httpd, "/context", {"tenant": "tenant-a", "limit_tokens": asked})
         assert status == 200 and payload["limit_tokens"] == served
