@@ -1056,3 +1056,58 @@ def test_adapter_imports_only_stdlib_yaml_and_the_ports() -> None:
     kernel = ROOT / "src" / "memfw"
     for path in kernel.rglob("*.py"):
         assert "memfw_adapter_qdrant" not in path.read_text(encoding="utf-8"), path
+
+
+def _serve_broken_chunked(kind: str) -> ThreadingHTTPServer:
+    """A server whose chunked answer is malformed (bad size line) or cut short."""
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+            del format, args
+
+        def _reply(self) -> None:
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Transfer-Encoding", "chunked")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                if kind == "bad-size":
+                    self.wfile.write(b"zz\r\n{}\r\n0\r\n\r\n")
+                else:  # announces 64 bytes, sends 2, then closes
+                    self.wfile.write(b"40\r\n{}")
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        do_GET = do_POST = do_PUT = _reply  # noqa: N815
+
+    server = _QuietServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+@pytest.mark.parametrize("kind", ["bad-size", "truncated"])
+def test_a_broken_http_answer_is_unreachable_not_a_crash(tmp_path: Path, kind: str) -> None:
+    from memfw_adapter_qdrant.embed import EmbedderError
+
+    repository = _vault(tmp_path)
+    server = _serve_broken_chunked(kind)
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}"
+        provider = factory({"vault": str(repository.root), "url": url, "embedder": WordsEmbedder()})
+        with pytest.raises(qhttp.QdrantError) as caught:
+            provider.client.call("POST", "/collections/memfw/points/query", {"limit": 1})
+        assert caught.value.code == "unreachable"
+        with pytest.raises(ProviderUnavailable, match="unreachable"):
+            provider.search("homelab", limit=3, budget=RecallBudget(), tenant="", as_of=None)
+        client = EnvEmbedder(f"{url}/v1/embeddings", model="m", dimension=4)
+        with pytest.raises(EmbedderError) as broken:
+            client.embed(["q"])
+        assert broken.value.code == "embedding_unreachable"
+    finally:
+        server.shutdown()
+        server.server_close()
