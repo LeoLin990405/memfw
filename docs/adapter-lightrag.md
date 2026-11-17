@@ -68,7 +68,12 @@ shows its configuration) and refuses to go on unless:
   `entity_type`, `description`) and relation rows (`source`, `target`, `keywords`,
   `description`), each with the memory ids it came from.
 - `derive(vault, DeriveRequest("answer", ids, {"query": ...}))`: `POST /query` with
-  `include_references: true`, `stream: false`. The view holds the answer (labelled
+  `mode: naive`, `include_references: true`, `stream: false`. **Only `naive` mode** is
+  allowed for answers (any other `mode` is refused): in the graph modes the answer's context
+  includes merged entity and relation descriptions from any document on the server (an older
+  version, a memory that turned private, a document the operator added) that its
+  `references` do not list, so the reference check below could not catch them. Graph views
+  keep the configured `mode`. The view holds the answer (labelled
   `untrusted_model_output`) and its source ids.
 - `health()`: `GET /health`, status fields only (the gate above uses the full answer).
 

@@ -203,18 +203,33 @@ def test_a_newer_vault_version_makes_old_rows_stale(vault: Path) -> None:
 
 def test_answer_view_cites_its_references(vault: Path) -> None:
     deriver, server = make()
-    view = check_deriver(deriver, vault=vault, request=query("answer", mode="hybrid"))
+    view = check_deriver(deriver, vault=vault, request=query("answer", mode="naive"))
     payload = json.loads(view.content)
     assert payload["answer"].startswith("The nightly backup job")
     assert payload["sources"] == ["m-backup", "m-release"]
     assert payload["untrusted_model_output"] is True
     assert server.requests[0]["body"] == {
         "query": "how does the backup work",
-        "mode": "hybrid",
+        "mode": "naive",
         "top_k": 20,
         "include_references": True,
         "stream": False,
     }
+
+
+@pytest.mark.parametrize("mode", ["mix", "hybrid", "local", "global"])
+def test_answer_views_refuse_every_mode_but_naive(vault: Path, mode: str) -> None:
+    deriver, server = make()
+    with pytest.raises(ValueError, match="answer views need mode 'naive'"):
+        deriver.derive(vault, query("answer", mode=mode))
+    assert server.requests == [] and server.health_calls == 0
+
+
+def test_answer_defaults_to_naive_and_graph_keeps_the_settings_mode(vault: Path) -> None:
+    deriver, server = make()
+    deriver.derive(vault, query("answer"))
+    deriver.derive(vault, query("graph"))
+    assert [r["body"]["mode"] for r in server.requests] == ["naive", "mix"]
 
 
 @pytest.mark.parametrize(

@@ -66,6 +66,8 @@ LICENSE = "MIT"
 KINDS: tuple[str, ...] = ("graph", "answer")
 MODES: tuple[str, ...] = ("local", "global", "hybrid", "naive", "mix")
 VIEW_FORMAT = "memfw-lightrag-v1"
+#: The only mode an ``answer`` view may use (chunk retrieval, references complete).
+ANSWER_MODE = "naive"
 DEFAULT_BASE_URL = "http://127.0.0.1:9621"
 DEFAULT_KEY_ENV = "LIGHTRAG_API_KEY"
 USER_AGENT = f"memfw-adapter-lightrag/{__version__}"
@@ -655,7 +657,19 @@ class LightRagDeriver:
         query = " ".join(query.split())
         if len(query) > self.settings.max_query_chars:
             raise ValueError("query is too long")
-        mode = request.options.get("mode", self.settings.mode)
+        if request.kind == "answer":
+            # Outside naive mode the answer's context carries merged entity and
+            # relation descriptions from any document on the server (an older
+            # version, one that turned private, one the operator added), and
+            # ``references`` does not list them: only chunk retrieval is traceable.
+            mode = request.options.get("mode", ANSWER_MODE)
+            if mode != ANSWER_MODE:
+                raise ValueError(
+                    "answer views need mode 'naive': in other modes the answer draws on "
+                    "graph descriptions its references do not show"
+                )
+        else:
+            mode = request.options.get("mode", self.settings.mode)
         if mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}")
         return query, str(mode)
