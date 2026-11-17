@@ -17,6 +17,9 @@ from .model import (
     merge_concepts,
     propose_concept,
 )
+from .relations import builtin_relation_table
+from .relations_lint import lint_relations
+from .taxonomy import broader_of, narrower_index
 
 app = typer.Typer(help="Concept anchors and the alias projection", no_args_is_help=True)
 
@@ -61,21 +64,44 @@ def list_concepts(vault: Vault) -> None:
 @app.command("show")
 def show_concept(oid: Annotated[str, typer.Argument()], vault: Vault) -> None:
     """Show one concept anchor."""
-    concept = load_concepts(vault).get(oid)
+    concepts = load_concepts(vault)
+    concept = concepts.get(oid)
     if concept is None:
         typer.echo(f"unknown concept {oid}", err=True)
         raise typer.Exit(code=1)
-    _dump(
-        {
-            "alt_labels": [label.text for label in concept.alt_labels],
-            "class": concept.class_name,
-            "merged_into": concept.merged_into,
-            "oid": concept.oid,
-            "pref_label": concept.pref_label,
-            "same_as": list(concept.same_as),
-            "status": concept.status,
-        }
-    )
+    payload: dict[str, object] = {
+        "alt_labels": [label.text for label in concept.alt_labels],
+        "class": concept.class_name,
+        "merged_into": concept.merged_into,
+        "oid": concept.oid,
+        "pref_label": concept.pref_label,
+        "same_as": list(concept.same_as),
+        "status": concept.status,
+    }
+    # Taxonomy keys appear only when the concept uses them.
+    broader = broader_of(concept)
+    if broader:
+        payload["broader"] = list(broader)
+    narrower = narrower_index(concepts).get(oid)
+    if narrower:
+        payload["narrower"] = list(narrower)
+    _dump(payload)
+
+
+@app.command("relations")
+def relations() -> None:
+    """Print the built-in relation-type table."""
+    _dump(builtin_relation_table().as_dict())
+
+
+@app.command("lint-relations")
+def lint_relations_command(vault: Vault) -> None:
+    """Check broader and typed relation fields against the table. Writes nothing."""
+    try:
+        review = lint_relations(vault)
+    except OntologyError as exc:
+        _fail(exc)
+    _dump({"review": review, "table_version": builtin_relation_table().version})
 
 
 @app.command("propose")

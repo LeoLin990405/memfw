@@ -11,6 +11,27 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
 
 ## [Unreleased]
 
+### Added — concept taxonomy and relation-type table (K1, K2)
+
+- Concept files may carry an optional `broader: [<oid>, ...]` (parents).
+  `narrower` is derived, never written (`memfw.ontology.narrower_index`;
+  `memfw concepts show` adds `broader`/`narrower` only for a concept that has
+  them). New lint kinds `broader_invalid`, `broader_dangling`,
+  `broader_merged` and `broader_cycle` fire only on concepts with `broader`;
+  `broader` is no longer an `unknown_relation`. `import-seed` copies a seed's
+  `broader`. Nothing follows `broader` on the read path (no query expansion).
+- New versioned relation-type table `src/memfw/ontology/relations.yaml`
+  (version 1, `memfw.ontology.builtin_relation_table`, `memfw concepts
+  relations`): only relations that already live in vault fields, each with its
+  allowed node kinds, cycles, `epistemic` ceiling and privacy/tenant filtering
+  (required; the loader fails closed). New opt-in, read-only
+  `memfw concepts lint-relations` reports `relation_unknown_type`,
+  `relation_dangling` and `relation_cross_tenant`.
+- Search, context, topics, OKF export, and lint on a vault without `broader`
+  are unchanged (byte-identical probe against `MEMFW_ARCH_BASE_REF`). memfw
+  0.2.0 keeps `broader` but lints it as `unknown_relation`; see
+  [docs/ontology.md](docs/ontology.md#compatibility).
+
 ### Added — standalone `memfw-ports` and `memfw-recall` wheels (A5b)
 
 - New uv workspace members `packages/memfw-ports` and `packages/memfw-recall`

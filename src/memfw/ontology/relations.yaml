@@ -1,0 +1,214 @@
+# memfw relation-type table (K2). Read by memfw.ontology.relations.
+#
+# Version 1 names only relations that already live in vault fields, plus the
+# K1 taxonomy pair (broader/narrower). It adds no new data: every row says
+# where the relation is written today. Nothing reads this table on the search
+# or context path; it backs lint and, later, the edge projection (K3).
+#
+# Per relation:
+#   from / to       node kinds allowed at each end
+#   fields          where the relation is written, per file kind
+#                   ({} means it is never written: it is derived)
+#   inverse         the relation read the other way, if any
+#   derived         computed from other fields, never hand-written
+#   typed           false only for the untyped similarity edge `related`
+#   cycles          whether a chain of this relation may loop back
+#   epistemic_max   the strongest epistemic type an edge of this kind can carry
+#   filter          privacy and tenant filtering; both must be true
+version: 1
+node_kinds: [memory, concept, attachment, note, external, task]
+relations:
+  - name: about
+    from: [memory, concept]
+    to: [concept]
+    fields: {memory: [about], concept: [about]}
+    derived: false
+    typed: true
+    cycles: true
+    epistemic_max: inference
+    filter: {privacy: true, tenant: true}
+    description: "what a memory is about; matched by label or alias"
+  - name: applies_to
+    from: [memory, concept]
+    to: [concept]
+    fields: {memory: [applies_to], concept: [applies_to]}
+    derived: false
+    typed: true
+    cycles: true
+    epistemic_max: inference
+    filter: {privacy: true, tenant: true}
+    description: the concept a rule or decision applies to
+  - name: supersedes
+    from: [memory, concept]
+    to: [memory, concept]
+    fields: {concept: [supersedes]}
+    inverse: superseded_by
+    derived: false
+    typed: true
+    cycles: false
+    epistemic_max: fact
+    filter: {privacy: true, tenant: true}
+    description: "a newer record replaces an older one; for memories it is superseded_by read backwards"
+  - name: superseded_by
+    from: [memory, concept]
+    to: [memory, concept]
+    fields: {memory: [superseded_by], concept: [superseded_by]}
+    inverse: supersedes
+    derived: false
+    typed: true
+    cycles: false
+    epistemic_max: fact
+    filter: {privacy: true, tenant: true}
+    description: the record that replaced this one
+  - name: evidence
+    from: [memory, concept]
+    to: [memory, concept, attachment, note, external]
+    fields: {memory: [evidence], concept: [evidence]}
+    derived: false
+    typed: true
+    cycles: false
+    epistemic_max: fact
+    filter: {privacy: true, tenant: true}
+    description: pointers that back a claim
+  - name: cites
+    from: [memory]
+    to: [note]
+    fields: {memory: ["evidence[kh:]", "body[kh:]"]}
+    derived: false
+    typed: true
+    cycles: false
+    epistemic_max: fact
+    filter: {privacy: true, tenant: true}
+    description: "a kh: note section named in the body or the evidence"
+  - name: observed_in
+    from: [memory]
+    to: [attachment]
+    fields: {memory: ["evidence[att:]"]}
+    derived: false
+    typed: true
+    cycles: false
+    epistemic_max: fact
+    filter: {privacy: true, tenant: true}
+    description: "an att: locator a multimodal memory was observed in"
+  - name: treatment_of
+    from: [memory]
+    to: [concept]
+    fields: {memory: [causal_record.treatment]}
+    derived: false
+    typed: true
+    cycles: true
+    epistemic_max: inference
+    filter: {privacy: true, tenant: true}
+    description: the treatment a causal record names, matched to a concept
+  - name: outcome_of
+    from: [memory]
+    to: [concept]
+    fields: {memory: [causal_record.outcome]}
+    derived: false
+    typed: true
+    cycles: true
+    epistemic_max: inference
+    filter: {privacy: true, tenant: true}
+    description: the outcome a causal record names, matched to a concept
+  - name: experience_of
+    from: [memory]
+    to: [task, memory]
+    fields: {memory: [experience.task, experience.evidence]}
+    derived: false
+    typed: true
+    cycles: false
+    epistemic_max: experience
+    filter: {privacy: true, tenant: true}
+    description: the task an experience point was reviewed for, and what backed it
+  - name: related
+    from: [memory, concept]
+    to: [memory, concept]
+    fields: {memory: [related]}
+    derived: true
+    typed: false
+    cycles: true
+    epistemic_max: inference
+    filter: {privacy: true, tenant: true}
+    description: "similarity edge; derived and untyped"
+  - name: broader
+    from: [concept]
+    to: [concept]
+    fields: {concept: [broader]}
+    inverse: narrower
+    derived: false
+    typed: true
+    cycles: false
+    epistemic_max: fact
+    filter: {privacy: true, tenant: true}
+    description: the parent of a concept in the taxonomy
+  - name: narrower
+    from: [concept]
+    to: [concept]
+    fields: {}
+    inverse: broader
+    derived: true
+    typed: true
+    cycles: false
+    epistemic_max: fact
+    filter: {privacy: true, tenant: true}
+    description: "the children of a concept; computed from broader, never written"
+  - name: decided_by
+    from: [concept]
+    to: [concept]
+    fields: {concept: [decided_by]}
+    derived: false
+    typed: true
+    cycles: true
+    epistemic_max: fact
+    filter: {privacy: true, tenant: true}
+    description: who made a decision
+  - name: authored_by
+    from: [concept]
+    to: [concept]
+    fields: {concept: [authored_by]}
+    derived: false
+    typed: true
+    cycles: true
+    epistemic_max: fact
+    filter: {privacy: true, tenant: true}
+    description: who wrote an artifact
+  - name: contradicts
+    from: [concept]
+    to: [concept]
+    fields: {concept: [contradicts]}
+    derived: false
+    typed: true
+    cycles: true
+    epistemic_max: judgment
+    filter: {privacy: true, tenant: true}
+    description: two records that disagree
+  - name: derived_from
+    from: [concept]
+    to: [concept]
+    fields: {concept: [derived_from]}
+    derived: false
+    typed: true
+    cycles: false
+    epistemic_max: fact
+    filter: {privacy: true, tenant: true}
+    description: what a record was made from
+  - name: part_of
+    from: [concept]
+    to: [concept]
+    fields: {concept: [part_of]}
+    derived: false
+    typed: true
+    cycles: false
+    epistemic_max: fact
+    filter: {privacy: true, tenant: true}
+    description: a component and the whole it belongs to
+  - name: runs_on
+    from: [concept]
+    to: [concept]
+    fields: {concept: [runs_on]}
+    derived: false
+    typed: true
+    cycles: true
+    epistemic_max: fact
+    filter: {privacy: true, tenant: true}
+    description: a service and the host it runs on
