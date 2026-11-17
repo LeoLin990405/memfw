@@ -48,6 +48,30 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   `resources/list` and every pack are byte-identical and the slot is unknown. See
   `docs/ports-and-recall.md` §4.3a.
 
+### Added — typed-edge projection and path patterns (K3/K4)
+
+- **K3 typed-edge projection and K4 bounded path patterns.** `memfw graph
+  rebuild` builds `edges.sqlite3` (0600, rebuildable, never writes the vault)
+  from the relation table's fields: `about`, `applies_to`, `broader`,
+  `superseded_by` (concept `supersedes` read backwards), `evidence` with
+  `observed_in`/`cites`, causal and experience links, `related`, concept
+  relations, and the open-question `conflicts`/`resolved_by` (two new rows in
+  `relations.yaml`). Each edge carries both ends' tenant and privacy level;
+  cross-tenant edges are never built. `memfw graph match --from X --path
+  "about>broader*1..2><about"` follows a bounded path (at most 4 hops, capped
+  fan-out and results, deterministic order, each edge once per path,
+  optional `--acyclic`), filtered by tenant, clearance (default
+  `public,shared`) and sources, with every memory re-checked against the live
+  vault; a hidden node never shows and a hidden start answers like a missing
+  one. New L0 port `ProjectionStore` (`rebuild`/`version`/`query`, contract
+  `check_projection_store`, SQLite and in-memory implementations) and
+  `memfw.ports.patterns`; `PORTS_API_VERSION` and the `memfw-ports` /
+  `memfw-recall` wheels move to 0.3.0. No MCP tool; existing outputs are
+  unchanged. K2 follow-ups: relation rows are immutable and hashable, the
+  loader refuses `version: true` and non-string node kinds, `import-seed`
+  copies only a well-formed `broader`, and `broader_on_merged` is reported.
+  See `docs/ontology.md`.
+
 ### Added
 
 - **C4 context pack evaluation** (`memfw eval context SNAPSHOT`): coverage,

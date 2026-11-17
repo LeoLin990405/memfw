@@ -34,6 +34,16 @@ from .context import (
     pack_version_payload,
 )
 from .models import TAG_PROMPT_VERSION, TAG_TASKS, ModelReply, parse_tagged
+from .projection_store import (
+    MAX_QUERY_LIMIT,
+    Direction,
+    Edge,
+    EdgeScope,
+    ProjectionStore,
+    RebuildResult,
+    edge_set_version,
+    select,
+)
 from .protocols import Deriver, Ingestor, Projector, RecallProvider
 from .staging import CANDIDATES_DIR
 from .types import (
@@ -709,3 +719,207 @@ __all__ = [
     "check_usage_sink",
     "tree_digest",
 ]
+
+
+# --- ProjectionStore (K3) ---------------------------------------------------------
+
+
+def _sample_edges() -> tuple[Edge, ...]:
+    def mm(relation: str, source: str, target: str, level: str = "public") -> Edge:
+        return Edge(
+            relation,
+            source,
+            target,
+            "memory",
+            "memory",
+            relation,
+            source_tenant="",
+            target_tenant="",
+            source_privacy="public",
+            target_privacy=level,
+        )
+
+    def about(source: str, level: str = "public", tenant: str = "") -> Edge:
+        return Edge(
+            "about",
+            source,
+            "concept:backup",
+            "memory",
+            "concept",
+            "about",
+            source_tenant=tenant,
+            source_privacy=level,
+            epistemic_max="inference",
+        )
+
+    def broader(source: str, target: str, level: str | None = None) -> Edge:
+        return Edge(
+            "broader", source, target, "concept", "concept", "broader", source_privacy=level
+        )
+
+    return (
+        about("m-pub"),
+        about("m-shared", "shared"),
+        about("m-priv", "local-private"),
+        about("m-odd", "unknown"),
+        about("m-other", tenant="other"),
+        broader("concept:backup", "concept:ops"),
+        broader("concept:ops", "concept:backup"),
+        broader("concept:secret", "concept:ops", "local-private"),
+        Edge(
+            "superseded_by",
+            "m-old",
+            "m-pub",
+            "memory",
+            "memory",
+            "superseded_by",
+            source_tenant="",
+            target_tenant="",
+            source_privacy="public",
+            target_privacy="public",
+            valid_to="2026-01-01T00:00:00+00:00",
+        ),
+        mm("evidence", "m-pub", "m-priv", "local-private"),
+        mm("related", "m-pub", "m-shared", "shared"),
+        Edge(
+            "observed_in",
+            "m-pub",
+            "att:photo.png#p1",
+            "memory",
+            "attachment",
+            "evidence",
+            source_tenant="",
+            source_privacy="public",
+        ),
+    )
+
+
+#: Edges :func:`check_projection_store` rebuilds a store with (every visibility case).
+SAMPLE_EDGES: tuple[Edge, ...] = _sample_edges()
+#: Scopes it queries with.
+SAMPLE_SCOPES: tuple[EdgeScope, ...] = (
+    EdgeScope("", frozenset({"public"})),
+    EdgeScope("", frozenset({"public", "shared"})),
+    EdgeScope("", frozenset({"public", "shared", "local-private"})),
+    EdgeScope("", frozenset()),
+    EdgeScope("other", frozenset({"public", "shared", "local-private"})),
+)
+
+
+def _nodes(edges: Sequence[Edge]) -> list[str]:
+    found = {edge.source for edge in edges} | {edge.target for edge in edges}
+    return sorted(found | {"m-missing"})
+
+
+def _check_answers(store: ProjectionStore, edges: Sequence[Edge]) -> None:
+    for scope in SAMPLE_SCOPES:
+        for node in _nodes(edges):
+            directions: tuple[Direction, ...] = ("out", "in")
+            for direction in directions:
+                for relations in (None, ("about",), ("broader", "evidence")):
+                    names = frozenset(relations) if relations is not None else None
+                    want = select(
+                        edges, scope, node=node, direction=direction, relations=names, limit=100
+                    )
+                    got = store.query(
+                        scope, node=node, direction=direction, relations=relations, limit=100
+                    )
+                    _require(
+                        isinstance(got, tuple) and all(type(item) is Edge for item in got),
+                        "query() must return a tuple of Edge",
+                    )
+                    call = (
+                        f"query({scope.tenant!r}, {sorted(scope.clearance)}, {node}, {direction})"
+                    )
+                    _require(
+                        got == want,
+                        f"{call} {relations} gave {[e.key for e in got]}, not "
+                        f"{[e.key for e in want]}",
+                    )
+
+
+def check_projection_store(
+    store: ProjectionStore,
+    *,
+    vault: Path | None = None,
+    vault_exclude: Sequence[str] = (),
+    edges: Sequence[Edge] = SAMPLE_EDGES,
+) -> RebuildResult:
+    """A fresh ``store`` follows the ``ProjectionStore`` contract.
+
+    - ``available()`` is ok, ``name`` is set, ``version()`` is ``None`` before
+      the first rebuild;
+    - ``rebuild(edges)`` returns the count and :func:`edge_set_version`, and
+      ``version()`` agrees; rebuilding the same edges in reverse order gives
+      the same version;
+    - every ``query`` (each node, both directions, with and without a relation
+      filter, under :data:`SAMPLE_SCOPES`) returns exactly what
+      :func:`memfw.ports.projection_store.select` returns: tenant and
+      clearance filtered (a private or ``unknown`` endpoint hides the edge,
+      another tenant never shows), sorted by key;
+    - ``limit`` is respected and out-of-range limits, a non-``EdgeScope``
+      scope and a bad direction are refused;
+    - a duplicate key or a non-``Edge`` raises and keeps the old content;
+    - rebuilding with fewer edges deletes the others (and changes the version);
+    - with ``vault``, its files (minus ``vault_exclude``) are unchanged.
+    """
+
+    _check_common(store, ProjectionStore, "store")
+    _require(store.version() is None, "version() must be None before the first rebuild")
+    before = tree_digest(vault, exclude=vault_exclude) if vault is not None else None
+    edges = list(edges)
+    _require(len(edges) >= 2, "check_projection_store needs at least two edges")
+    result = store.rebuild(edges)
+    _require(isinstance(result, RebuildResult), "rebuild() must return RebuildResult")
+    expected = edge_set_version(edges)
+    _require(result.edges == len(edges), "rebuild() must count every edge")
+    _require(result.version == expected, "rebuild() version must be edge_set_version(edges)")
+    _require(store.version() == expected, "version() must match the last rebuild")
+    again = store.rebuild(list(reversed(edges)))
+    _require(again.version == expected, "the same edges in another order changed the version")
+    _check_answers(store, edges)
+
+    scope = EdgeScope("", frozenset({"public", "shared", "local-private"}))
+    hub = max(_nodes(edges), key=lambda node: (sum(e.source == node for e in edges), node))
+    every = store.query(scope, node=hub, direction="out", limit=MAX_QUERY_LIMIT)
+    if len(every) >= 2:
+        one = store.query(scope, node=hub, direction="out", limit=1)
+        _require(one == every[:1], "limit=1 must return the first edge by key")
+    for bad_limit in (0, MAX_QUERY_LIMIT + 1):
+        try:
+            store.query(scope, node=hub, limit=bad_limit)
+        except ValueError:
+            continue
+        raise ContractError(f"query() accepted limit={bad_limit}")
+    bad_calls: list[Callable[[], object]] = [
+        lambda: store.query(None, node=hub),  # type: ignore[arg-type]
+        lambda: store.query(scope, node=hub, direction="both"),  # type: ignore[arg-type]
+    ]
+    for call in bad_calls:
+        try:
+            call()
+        except (TypeError, ValueError):
+            continue
+        raise ContractError("query() accepted a bad scope or direction")
+
+    for bogus in ([edges[0], edges[0]], [edges[0], "not an edge"]):
+        try:
+            store.rebuild(bogus)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            _require(store.version() == expected, "a refused rebuild changed the content")
+            continue
+        raise ContractError("rebuild() accepted a duplicate key or a non-Edge")
+    _check_answers(store, edges)
+
+    kept = edges[: len(edges) // 2]
+    smaller = store.rebuild(kept)
+    _require(smaller.edges == len(kept), "rebuild() must count every edge")
+    _require(smaller.version != expected, "fewer edges must give another version")
+    _check_answers(store, kept)
+    for edge in edges[len(edges) // 2 :]:
+        rows = store.query(scope, node=edge.source, direction="out", limit=MAX_QUERY_LIMIT)
+        _require(edge.key not in {row.key for row in rows}, "rebuild() kept a removed edge")
+    final = store.rebuild(edges)
+    if vault is not None:
+        _require(tree_digest(vault, exclude=vault_exclude) == before, "store changed the vault")
+    return final

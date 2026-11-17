@@ -111,6 +111,8 @@ UNITS: Final[dict[str, str]] = {
     "memfw.history": "L1-projection",
     # Rebuildable corroboration counts (U4); the share policy is injected.
     "memfw.corroboration": "L1-projection",
+    # Rebuildable typed-edge projection (K3) behind the ProjectionStore port.
+    "memfw.edges": "L1-projection",
     # Disposable usage signals (C5 ``memory_used``); never written to the vault.
     "memfw.usage": "L1-projection",
     # Human-facing board projections (O1a Obsidian); read-only on the vault.

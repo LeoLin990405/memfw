@@ -13,8 +13,12 @@ Review kinds:
   (checked only when the vault has ``concepts/``), or its ``superseded_by``
   names no memory;
 * ``relation_cross_tenant``: a memory's ``superseded_by``, ``evidence`` or
-  ``experience.evidence`` names a memory of another tenant. Every relation is
-  tenant-filtered, so such an edge would never be returned.
+  ``experience.evidence`` names a memory of another tenant. The edge
+  projection (``memfw.edges``, K3) drops such an edge when it is built, and
+  its query admits one caller tenant at a time. That is not a promise about
+  every exit: each applies its own tenant rule (the plain-file projection,
+  for one, admits the tenants ``""`` and ``fleet`` together by default), so
+  the edge is reported here rather than assumed to be hidden.
 """
 
 from __future__ import annotations

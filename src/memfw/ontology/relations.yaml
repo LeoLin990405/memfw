@@ -3,7 +3,8 @@
 # Version 1 names only relations that already live in vault fields, plus the
 # K1 taxonomy pair (broader/narrower). It adds no new data: every row says
 # where the relation is written today. Nothing reads this table on the search
-# or context path; it backs lint and, later, the edge projection (K3).
+# or context path; it backs lint and the edge projection (K3, memfw.edges),
+# which builds an edge only for a relation listed here.
 #
 # Per relation:
 #   from / to       node kinds allowed at each end
@@ -120,6 +121,26 @@ relations:
     epistemic_max: experience
     filter: {privacy: true, tenant: true}
     description: the task an experience point was reviewed for, and what backed it
+  - name: conflicts
+    from: [memory]
+    to: [memory]
+    fields: {memory: [open_question.conflicts]}
+    derived: false
+    typed: true
+    cycles: false
+    epistemic_max: judgment
+    filter: {privacy: true, tenant: true}
+    description: the memories an open question says contradict each other
+  - name: resolved_by
+    from: [memory]
+    to: [memory]
+    fields: {memory: [open_question.resolved_by]}
+    derived: false
+    typed: true
+    cycles: false
+    epistemic_max: fact
+    filter: {privacy: true, tenant: true}
+    description: the memory that answered an open question
   - name: related
     from: [memory, concept]
     to: [memory, concept]

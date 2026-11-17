@@ -84,6 +84,7 @@ def _ports(root: Path) -> None:
         JsonlProjector,
         KeywordClaimVerifier,
         MarkdownIngestor,
+        MemoryProjectionStore,
         MemoryUsageSink,
         MirrorProjector,
         NullUsageSink,
@@ -96,6 +97,7 @@ def _ports(root: Path) -> None:
         check_deriver,
         check_id_gen,
         check_ingestor,
+        check_projection_store,
         check_projector,
         check_recall_provider,
         check_usage_sink,
@@ -169,6 +171,9 @@ def _ports(root: Path) -> None:
     check_usage_sink(memory, signals=signals, vault=vault, stored=memory.rows)
     check_usage_sink(NullUsageSink(), signals=signals, vault=vault)
     _ok("check_usage_sink MemoryUsageSink NullUsageSink")
+
+    check_projection_store(MemoryProjectionStore(), vault=vault)
+    _ok("check_projection_store MemoryProjectionStore")
 
 
 def _recall(root: Path) -> None:

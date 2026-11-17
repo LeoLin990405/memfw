@@ -10,6 +10,7 @@ filtered by both privacy and tenant, is an error (fail closed).
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from importlib import resources
@@ -41,14 +42,54 @@ _OPTIONAL = frozenset({"inverse", "description"})
 _FILE_KINDS = frozenset({"memory", "concept"})
 
 
+class FieldMap(Mapping[str, tuple[str, ...]]):
+    """``fields`` of a relation: file kind → field paths. Immutable and hashable.
+
+    Compares equal to a plain ``dict`` with the same items, so
+    ``relation.fields == {}`` still reads naturally; it cannot be changed in
+    place, so the cached built-in table is safe to share.
+    """
+
+    __slots__ = ("_items",)
+
+    def __init__(self, items: Mapping[str, Any] | None = None) -> None:
+        pairs = {str(kind): tuple(paths) for kind, paths in (items or {}).items()}
+        self._items: tuple[tuple[str, tuple[str, ...]], ...] = tuple(sorted(pairs.items()))
+
+    def __getitem__(self, key: str) -> tuple[str, ...]:
+        for kind, paths in self._items:
+            if kind == key:
+                return paths
+        raise KeyError(key)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(kind for kind, _paths in self._items)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def __hash__(self) -> int:
+        return hash(self._items)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, FieldMap):
+            return self._items == other._items
+        if isinstance(other, Mapping):
+            return dict(self._items) == dict(other.items())
+        return NotImplemented
+
+    def __repr__(self) -> str:
+        return f"FieldMap({dict(self._items)!r})"
+
+
 @dataclass(frozen=True)
 class RelationType:
-    """One row of the table."""
+    """One row of the table. Immutable and hashable (every field is)."""
 
     name: str
     sources: tuple[str, ...]
     targets: tuple[str, ...]
-    fields: dict[str, tuple[str, ...]]
+    fields: FieldMap
     derived: bool
     typed: bool
     cycles: bool
@@ -113,7 +154,9 @@ def check_relation_table(data: Any) -> list[dict[str, str]]:
         return issues
     for key in sorted(set(data) - _TOP_KEYS):
         issue("relation_table_invalid", "", f"unknown key {key}")
-    if data.get("version") != TABLE_VERSION:
+    version = data.get("version")
+    # ``True == 1`` in Python: a boolean is not a version.
+    if isinstance(version, bool) or not isinstance(version, int) or version != TABLE_VERSION:
         issue("relation_table_version", "", f"version {data.get('version')!r} is not supported")
     kinds = data.get("node_kinds")
     if not isinstance(kinds, list) or not kinds or any(not isinstance(k, str) for k in kinds):
@@ -151,14 +194,16 @@ def check_relation_table(data: Any) -> list[dict[str, str]]:
                 issue("relation_table_invalid", name, f"{end} must be a non-empty list")
                 continue
             for kind in value:
-                if kind not in known_kinds:
+                if not isinstance(kind, str):
+                    issue("relation_table_invalid", name, f"{end} entries must be node kinds")
+                elif kind not in known_kinds:
                     issue("relation_unknown_node_kind", name, f"{end}: {kind!r}")
         fields = row.get("fields")
         if not isinstance(fields, dict):
             issue("relation_table_invalid", name, "fields must be a mapping")
         else:
             for kind, paths in fields.items():
-                if kind not in _FILE_KINDS:
+                if not isinstance(kind, str) or kind not in _FILE_KINDS:
                     issue("relation_table_invalid", name, f"fields: unknown file kind {kind!r}")
                 if (
                     not isinstance(paths, list)
@@ -204,7 +249,7 @@ def parse_relation_table(data: Any) -> RelationTable:
             name=row["name"],
             sources=tuple(row["from"]),
             targets=tuple(row["to"]),
-            fields={kind: tuple(paths) for kind, paths in row["fields"].items()},
+            fields=FieldMap(row["fields"]),
             derived=row["derived"],
             typed=row["typed"],
             cycles=row["cycles"],
@@ -240,6 +285,7 @@ def builtin_relation_table() -> RelationTable:
 
 __all__ = [
     "TABLE_VERSION",
+    "FieldMap",
     "RelationTable",
     "RelationType",
     "builtin_relation_table",

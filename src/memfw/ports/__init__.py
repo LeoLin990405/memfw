@@ -13,7 +13,9 @@ the ``ClaimVerifier`` / ``ClaimStager`` ports the conversation worker
 verifies and stages claims through, the ``UsageSink`` port the optional
 ``memory_used`` signal goes through (``memfw.ports.usage``), and the
 ``ModelBackend`` port (``memfw.ports.models``) the worker summarises and tags
-through.
+through, and the ``ProjectionStore`` port (``memfw.ports.projection_store``)
+the K3 edge projection is stored behind, with the K4 bounded path patterns
+over it (``memfw.ports.patterns``).
 
 ``ContextPack`` (``memfw.ports.context``) is the data contract for the
 session-start context that ``memory_context`` v2 returns.
@@ -50,6 +52,15 @@ from .models import (
     BackendUnavailable,
     ModelBackend,
     ModelReply,
+)
+from .projection_store import (
+    PROJECTION_STORE_PORT_VERSION,
+    Edge,
+    EdgeScope,
+    ProjectionStore,
+    RebuildResult,
+    edge_set_version,
+    edge_visible,
 )
 from .protocols import Deriver, Ingestor, Projector, RecallProvider
 from .registry import (
@@ -105,7 +116,7 @@ from .versions import PORT_VERSIONS
 #: ``memfw-ports`` wheel carries exactly this version, and
 #: ``tests/test_standalone_ports_wheel.py`` keeps the two equal: bump it (and
 #: the wheel) with every change to the ports API, major for a breaking one.
-PORTS_API_VERSION: Final = "0.2.0"
+PORTS_API_VERSION: Final = "0.3.0"
 
 __all__ = [
     "ADAPTER_KINDS",
@@ -115,6 +126,7 @@ __all__ = [
     "TAG_PROMPT_VERSION",
     "PORTS_API_VERSION",
     "PORT_VERSIONS",
+    "PROJECTION_STORE_PORT_VERSION",
     "POLARITIES",
     "ClaimEvidence",
     "ClaimStager",
@@ -146,6 +158,8 @@ __all__ = [
     "DeriveRequest",
     "DerivedView",
     "Deriver",
+    "Edge",
+    "EdgeScope",
     "ExtraValue",
     "FixedClock",
     "IdGen",
@@ -155,9 +169,11 @@ __all__ = [
     "ModelBackend",
     "ModelReply",
     "ProjectionPolicy",
+    "ProjectionStore",
     "Projector",
     "ProviderUnavailable",
     "RecallBudget",
+    "RebuildResult",
     "RecallProvider",
     "RefKind",
     "SeededIdGen",
@@ -174,6 +190,8 @@ __all__ = [
     "check_view_citations",
     "compute_pack_version",
     "default_registry",
+    "edge_set_version",
+    "edge_visible",
     "item_content_hash",
     "missing_modules",
     "pack_version_payload",
