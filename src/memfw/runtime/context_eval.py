@@ -23,6 +23,9 @@ it (``runtime.context.current``) or ``--current`` simulates that switch
     runs, from ``Runtime.context_slot_provider``), ``repeats`` builds each,
     cold: the runtime has no C3 context cache, so every ``core`` build reads
     the vault (``settings.latency: cold``; a served pack can be faster).
+    A row whose P95 exceeds the slot's ``memory_context`` deadline
+    (``CONTEXT_SLOT_TIMEOUTS``, reported as ``deadline_ms``) is flagged
+    ``over_deadline: true``; the deadlines are not changed.
 **token cost**
     The slot's ``used_tokens_est`` (the budget's own estimate).
 
@@ -65,8 +68,8 @@ for ``app`` and reads model summaries only from an explicit ``--state`` file
 (only their number is reported, as ``hits_dropped``).
 
 **Deterministic.** The same snapshot, stores, arguments and seed give the
-same report, except the ``latency_ms`` fields (``strip_timings`` removes
-them for comparison).
+same report, except the ``latency_ms`` and ``over_deadline`` fields
+(``strip_timings`` removes them for comparison).
 """
 
 from __future__ import annotations
@@ -711,8 +714,13 @@ def _unavailable(build: SlotBuild) -> bool:
 
 
 def _slot_row(
-    build: SlotBuild, hits: Sequence[frozenset[str]], used: Sequence[frozenset[str]]
+    build: SlotBuild,
+    hits: Sequence[frozenset[str]],
+    used: Sequence[frozenset[str]],
+    deadline_s: float | None = None,
 ) -> dict[str, Any]:
+    """One per-slot row. ``deadline_s`` is the slot's ``memory_context`` deadline."""
+
     covered, total = coverage_counts(hits, build.covered)
     unused, item_sessions = waste_counts(used, build.items)
     row: dict[str, Any] = {
@@ -733,7 +741,13 @@ def _slot_row(
             "p50": percentile(build.latency_ms, 50),
             "p95": percentile(build.latency_ms, 95),
         },
+        "deadline_ms": round(deadline_s * 1000, 3) if deadline_s is not None else None,
     }
+    # Flagged, never acted on: the deadlines (CONTEXT_SLOT_TIMEOUTS) are not changed.
+    p95 = row["latency_ms"]["p95"]
+    row["over_deadline"] = (
+        None if p95 is None or row["deadline_ms"] is None else p95 > row["deadline_ms"]
+    )
     return row
 
 
@@ -933,7 +947,11 @@ def _evaluate_copy(
             # stay, but a sweep column would only repeat every row once per cap.
             caps_of[name] = []
 
-    slot_rows = [_slot_row(build, hit_sessions, waste_sessions) for build in builds.values()]
+    deadlines = runtime.context_slot_timeouts
+    slot_rows = [
+        _slot_row(build, hit_sessions, waste_sessions, deadlines.get(build.name))
+        for build in builds.values()
+    ]
     sweep: list[dict[str, Any]] = []
     swept = [name for name in options.slots if caps_of[name]]
     for combination in product(*(caps_of[name] for name in swept)):
@@ -985,11 +1003,12 @@ def _evaluate_copy(
 
 
 def strip_timings(report: Mapping[str, Any]) -> dict[str, Any]:
-    """``report`` without its ``latency_ms`` fields (the only non-deterministic part)."""
+    """``report`` without ``latency_ms`` and ``over_deadline`` (the timing-dependent fields)."""
 
     copied: dict[str, Any] = json.loads(json.dumps(report))
     for row in copied.get("slots", []):
         row.pop("latency_ms", None)
+        row.pop("over_deadline", None)
     return copied
 
 
@@ -1033,6 +1052,8 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     ]
     for row in report["slots"]:
         state = "unavailable" if not row["available"] else (row["degraded"] or "ok")
+        if row.get("over_deadline"):
+            state += ", p95 over deadline"
         latency = row.get("latency_ms") or {}
         lines.append(
             f"| {row['slot']} | {row['cap']} | {row['items']} | {row['tokens']} |"

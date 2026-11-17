@@ -568,6 +568,23 @@ def test_timed_builds_are_cold_never_served_from_the_c3_cache(
     assert _row(report, "core", 500)["latency_ms"]["n"] == CLEARED.repeats
 
 
+def test_p95_over_the_slot_deadline_is_flagged_not_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(CONTEXT_SLOT_TIMEOUTS, "core", 1e-9)
+    timeouts = dict(CONTEXT_SLOT_TIMEOUTS)
+    fixture = known_vault(tmp_path)
+    report = evaluate_snapshot(fixture.vault, options=CLEARED)
+
+    core = _row(report, "core", 500)
+    assert core["deadline_ms"] == 0.0 and core["over_deadline"] is True
+    topics = _row(report, "topics", 500)
+    assert topics["deadline_ms"] == 3000.0 and topics["over_deadline"] is False
+    assert "p95 over deadline" in render_markdown(report)
+    assert dict(CONTEXT_SLOT_TIMEOUTS) == timeouts
+    assert all("over_deadline" not in row for row in strip_timings(report)["slots"])
+
+
 # --- the command -------------------------------------------------------------------
 
 

@@ -192,7 +192,9 @@ switch; the report's `settings` records `current_enabled` and
   provider (`Runtime.context_slot_provider`). The timings are *cold*: the
   evaluation's runtime has no C3 context cache, so every `core` build reads the
   vault (`settings.latency: cold`); a pack served from a warm cache can be
-  faster.
+  faster. A row whose P95 exceeds the slot's `memory_context` deadline
+  (`CONTEXT_SLOT_TIMEOUTS`, as `deadline_ms`) is flagged `over_deadline: true`;
+  the deadlines themselves are not changed.
 - *token cost*: each slot's `used_tokens_est`.
 
 **Where sessions come from**, in this order: the snapshot's `memory_access`
@@ -242,7 +244,7 @@ holds counts, ratios, token estimates, timings, slot names and caps: no body,
 title, query, memory or session id, path or tenant name.
 
 **Deterministic.** The same snapshot, stores, options and seed give the same
-report except the `latency_ms` fields. `--now` fixes the policy instant
+report except the `latency_ms` and `over_deadline` fields. `--now` fixes the policy instant
 (default: the snapshot's latest memory or event time).
 
 ```sh
