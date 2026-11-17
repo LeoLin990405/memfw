@@ -22,13 +22,14 @@ change the output of any other command.
   memories/<id>.md               one page per memory
   questions/<id>.md              type: open-question memories
   concepts/<name>.md             one page per `about` value
-  boards/memories.base           Bases: grouped by type, status, epistemic
-  boards/questions.base          Bases: open questions, all questions
-  boards/disputed.base           Bases: status == disputed
-  .memfw-obsidian/manifest.json  sha256 of every generated file
+  memfw-views/memories.base      Bases: grouped by type, status, epistemic
+  memfw-views/questions.base     Bases: open questions, all questions
+  memfw-views/disputed.base      Bases: status == disputed
+  .memfw-obsidian/memfw-projection.json  sha256 of every generated file
+  .memfw-obsidian/tmp-projection/        temporary files (empty after a run)
 ```
 
-Every generated page has the property `generated: memfw-obsidian` and starts
+Every generated page has the property `generated: memfw-projection` and starts
 with a note that it will be overwritten. Change the memory in memfw instead.
 Bases files carry the same notice as YAML comments.
 
@@ -53,12 +54,16 @@ the same keys and Bases columns line up. The page body is the memory body.
 
 - **`about`.** Written as `[[concepts/<name>]]`. When the vault has a concept
   file for the oid (`memfw concepts`), the concept page shows its preferred
-  label, class and status.
+  label, class and status. K1 `broader` links and the derived `narrower`
+  links connect concept pages, but only pages that are on the board. A
+  concept that only hidden memories use is never named.
 - **Supersession.** `superseded_by` links to the newer memory, and the newer
   memory's `supersedes` links back.
 - **Open questions.** An open question's `conflicts` link to the memories that
   disagree, and `resolved_by` links to the answer. `open` is `true` until the
-  question has an answer or a `valid_to`.
+  question has an answer or a `valid_to`. A question whose answer is hidden by
+  the clearance is shown as open, with no `resolved_by` and no `valid_to`, so
+  the page does not reveal that a hidden answer exists.
 
 A link is written only when its target is on the board too. A page never names
 a memory that the clearance or the tenant hides.
@@ -126,12 +131,42 @@ The manifest records the sha256 of every file the projector wrote.
   outside the generated folders, makes the run refuse rather than guess what
   to delete.
 
+## Coexisting with other generators
+
+Another tool may write its own pages into the same folder. For example, a
+private board script might own `00 overview.md`, `agents/`, `boards/`,
+`.memfw-obsidian/manifest.json` and `.memfw-obsidian/tmp/`. This projector is
+disjoint from such a tool. Everything it owns is named by constants in
+`memfw.projections.obsidian`:
+
+| Constant | Value |
+|---|---|
+| `GENERATED` (page property and manifest `generator`) | `memfw-projection` |
+| `MANIFEST_PATH` | `.memfw-obsidian/memfw-projection.json` |
+| `TMP_DIR` | `.memfw-obsidian/tmp-projection` |
+| `FOLDERS` | `memories`, `questions`, `concepts`, `memfw-views` |
+
+It reads, writes and deletes only those paths. Another generator's manifest
+in `.memfw-obsidian/` is ignored. The Bases views filter on
+`generated == "memfw-projection"`, so they never list the other tool's pages.
+Do not give two tools the same marker or folders.
+
 ## Safety
 
 - The vault is only read. Symlinked memory and concept files are skipped. A
   vault with a pending transaction is refused (run `memfw recover` first).
 - The output directory may not be the vault, sit inside the vault, contain
   the vault, or be a symlink. The generated folders may not be symlinks.
+- Some outputs are refused as protected: `/`, the home directory itself,
+  `~/Documents` and `~/Library/Mobile Documents` and anything below them
+  (these folders sync), any path containing `knowledge-hub`, and every root
+  listed in `MEMFW_OBSIDIAN_PROTECTED` (separated by `os.pathsep`) and
+  anything below them.
+- Temporary files are written in `.memfw-obsidian/tmp-projection/`, never in a
+  page folder, so a crash cannot leave page content where git or Obsidian
+  would pick it up. Temporary files left by an interrupted run are deleted at
+  the start of the next run. That covers the temp folder and the older
+  `.<name>.<hex>.tmp` names in the projector's own folders.
 - Files are written through a temporary file and `os.replace`, so no symlink
   is followed.
 

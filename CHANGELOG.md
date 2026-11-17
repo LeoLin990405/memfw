@@ -17,8 +17,11 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   public,shared] [--tenant <t>]` writes an Obsidian board: `memories/<id>.md`,
   `questions/<id>.md` (open questions), `concepts/<name>.md` (from `about`),
   wikilinks for `about`, supersede (both directions), open-question
-  `conflicts`/`resolved_by`, Bases views in `boards/*.base`, and
-  `.memfw-obsidian/manifest.json` (sha256 per file). See
+  `conflicts`/`resolved_by`, K1 `broader`/`narrower` between concept pages,
+  Bases views in `memfw-views/*.base`, and
+  `.memfw-obsidian/memfw-projection.json` (sha256 per file). Its marker
+  (`generated: memfw-projection`), manifest, temp folder and page folders are
+  disjoint from any other generator writing into the same folder. See
   [docs/obsidian-projection.md](docs/obsidian-projection.md).
 - `memfw.projections.ObsidianProjector` (new unit `memfw.projections`, layer
   `L1-projection`) implements the L0 `Projector` port and passes
@@ -29,8 +32,12 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   output can be committed to git and diffs show only memory changes; unchanged
   files are not rewritten. A rebuild deletes or overwrites only files listed in
   the previous manifest, reports hand-edited ones, and refuses an unlisted file
-  at a generated path. The vault is only read; the output may not be inside,
-  equal to or contain the vault, or be a symlink.
+  at a generated path. Temp files live in `.memfw-obsidian/tmp-projection/`
+  and stale ones are removed at start. The vault is only read; the output may
+  not be inside, equal to or contain the vault, be a symlink, or be a
+  protected path (`/`, `$HOME`, `~/Documents`, `~/Library/Mobile Documents`,
+  any `knowledge-hub` path, `MEMFW_OBSIDIAN_PROTECTED`). A question answered
+  by a hidden memory is shown as open.
 - Off by default: nothing runs unless the command is invoked; no other
   command's output changes.
 

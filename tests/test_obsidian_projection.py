@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from datetime import UTC, datetime, timedelta
@@ -16,7 +17,13 @@ from memfw.core.repository import Repository
 from memfw.ports import FixedClock, ProjectionPolicy, Projector
 from memfw.ports.testing import check_projector, tree_digest
 from memfw.projections import MANIFEST_PATH, ObsidianProjector, parse_clearance
-from memfw.projections.obsidian import privacy_level, safe_name
+from memfw.projections.obsidian import (
+    PROTECTED_ENV,
+    TMP_DIR,
+    privacy_level,
+    protected_reason,
+    safe_name,
+)
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 LOCK = (".memfw.lock",)
@@ -460,7 +467,7 @@ def test_pages_and_bases_shape(tmp_path: Path) -> None:
     ObsidianProjector().build(repository.root, out)
     text = (out / "memories" / "m-pub.md").read_text()
     front = yaml.safe_load(text.split("---\n")[1])
-    assert front["generated"] == "memfw-obsidian"
+    assert front["generated"] == "memfw-projection"
     for key in (
         "id",
         "type",
@@ -483,8 +490,8 @@ def test_pages_and_bases_shape(tmp_path: Path) -> None:
     question = yaml.safe_load((out / "questions" / "q-1.md").read_text().split("---\n")[1])
     assert question["open"] is True and question["conflicts"] == ["[[memories/m-pub]]"]
     for name in ("memories", "questions", "disputed"):
-        raw = (out / "boards" / f"{name}.base").read_text()
-        assert raw.startswith("# generated: memfw-obsidian")
+        raw = (out / "memfw-views" / f"{name}.base").read_text()
+        assert raw.startswith("# generated: memfw-projection")
         base = yaml.safe_load(raw)
         assert set(base) == {"filters", "views"}
         assert all(view["type"] == "table" for view in base["views"])
@@ -504,3 +511,194 @@ def test_default_off(tmp_path: Path) -> None:
     )
     assert result.exit_code == 2
     assert not (tmp_path / "o").exists()
+
+
+# --- review round 1 ---------------------------------------------------------------
+
+
+def _other_generator(out: Path, cycle: int) -> dict[str, bytes]:
+    """A stand-in for another board generator sharing the folder (O0-like).
+
+    It owns ``00 overview.md``, ``boards/``, ``agents/``, ``.memfw-obsidian/manifest.json``
+    and ``.memfw-obsidian/tmp/``, deletes files its own manifest lists that it no
+    longer produces, and never overwrites a file it did not create.
+    """
+
+    marker = "generated: memfw-obsidian"
+    files = {
+        "00 overview.md": f"---\n{marker}\n---\n\ncycle {cycle}\n",
+        "agents/a.md": f"---\n{marker}\n---\n\nagent\n",
+        "boards/agents.base": f"# {marker}\nfilters: 'file.inFolder(\"agents\")'\nviews: []\n",
+    }
+    if cycle % 2 == 0:
+        files["boards/extra.base"] = f"# {marker}\nviews: []\n"
+    manifest_path = out / ".memfw-obsidian" / "manifest.json"
+    previous: dict[str, str] = {}
+    if manifest_path.is_file():
+        previous = json.loads(manifest_path.read_text()).get("files", {})
+    for rel, text in files.items():
+        target = out / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists() and rel not in previous and marker not in target.read_text()[:400]:
+            continue
+        target.write_text(text)
+    for rel in set(previous) - set(files):
+        (out / rel).unlink(missing_ok=True)
+    (out / ".memfw-obsidian" / "tmp").mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "generator": "memfw-obsidian",
+                "version": 1,
+                "files": {
+                    rel: hashlib.sha256(text.encode()).hexdigest() for rel, text in files.items()
+                },
+            }
+        )
+    )
+    return {rel: text.encode() for rel, text in files.items()}
+
+
+def test_coexists_with_another_generator_in_the_same_folder(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    out = tmp_path / "board"
+    reference = tmp_path / "alone"
+    ObsidianProjector().build(repository.root, reference)
+    ours = {name: data for name, data in _tree(reference).items()}
+    for cycle in range(4):
+        theirs = _other_generator(out, cycle)
+        result = ObsidianProjector().build(repository.root, out)
+        assert result.edited == () and result.deleted == ()
+        tree = _tree(out)
+        for name, data in ours.items():
+            assert tree[name] == data, name
+        for name, data in theirs.items():
+            assert tree[name] == data, name
+        theirs = _other_generator(out, cycle + 1)
+        tree = _tree(out)
+        for name, data in ours.items():
+            assert tree[name] == data, name
+    assert json.loads((out / MANIFEST_PATH).read_text())["generator"] == "memfw-projection"
+    other = json.loads((out / ".memfw-obsidian" / "manifest.json").read_text())
+    assert other["generator"] == "memfw-obsidian"
+    assert not any(name.startswith(("memories/", "concepts/")) for name in other["files"])
+
+
+def test_temp_files_live_outside_page_folders_and_stale_ones_are_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from memfw.projections import obsidian
+
+    repository = _vault(tmp_path)
+    out = tmp_path / "board"
+    seen: list[Path] = []
+    real_replace = os.replace
+
+    def spy(source: str | os.PathLike[str], target: str | os.PathLike[str]) -> None:
+        seen.append(Path(source))
+        real_replace(source, target)
+
+    monkeypatch.setattr(obsidian.os, "replace", spy)
+    ObsidianProjector().build(repository.root, out)
+    assert seen and all(path.parent == out / TMP_DIR for path in seen)
+    monkeypatch.undo()
+    stale_tmp = out / TMP_DIR / "0123456789ab.0123456789abcdef.tmp"
+    stale_tmp.write_text("ZEBRAPRIVATE half-written\n")
+    legacy = out / "memories" / ".m-pub.md.0123456789abcdef.tmp"
+    legacy.write_text("ZEBRAPRIVATE legacy\n")
+    mine = out / "memories" / "keep.0123456789abcdef.tmp"  # not a hidden temp name
+    mine.write_text("mine\n")
+    other_tmp = out / ".memfw-obsidian" / "tmp" / "x.tmp-1"
+    other_tmp.parent.mkdir()
+    other_tmp.write_text("other generator\n")
+    result = ObsidianProjector().build(repository.root, out)
+    assert len(result.stale_tmp) == 2
+    assert not stale_tmp.exists() and not legacy.exists()
+    assert mine.exists() and other_tmp.exists()
+    assert "ZEBRAPRIVATE" not in _blob(out / "memories")
+    assert list((out / TMP_DIR).iterdir()) == []
+
+
+def test_question_answered_by_hidden_memory_stays_open(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    _raw(
+        repository.root,
+        "q-hidden",
+        "type: open-question\nvalid_to: '2026-02-01T00:00:00Z'\n"
+        "open_question:\n  question: Where are the keys?\n  resolved_by: m-priv\n",
+        "question answered privately",
+    )
+    _raw(
+        repository.root,
+        "q-public",
+        "type: open-question\nvalid_to: '2026-02-01T00:00:00Z'\n"
+        "open_question:\n  question: Which NAS?\n  resolved_by: m-pub\n",
+        "question answered publicly",
+    )
+    out = tmp_path / "board"
+    ObsidianProjector().build(repository.root, out)
+    hidden = yaml.safe_load((out / "questions" / "q-hidden.md").read_text().split("---\n")[1])
+    assert hidden["open"] is True and hidden["resolved_by"] is None
+    assert hidden["valid_to"] is None
+    assert "m-priv" not in (out / "questions" / "q-hidden.md").read_text()
+    public = yaml.safe_load((out / "questions" / "q-public.md").read_text().split("---\n")[1])
+    assert public["open"] is False and public["resolved_by"] == "[[memories/m-pub]]"
+    assert public["valid_to"] == "2026-02-01T00:00:00Z"
+
+
+def test_protected_outputs_are_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home = tmp_path / "home"
+    (home / "Documents").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    extra = tmp_path / "synced"
+    monkeypatch.setenv(PROTECTED_ENV, os.pathsep.join([str(extra), ""]))
+    repository = _vault(tmp_path)
+    assert protected_reason(Path("/")) == "filesystem root"
+    for out in (
+        home,
+        home / "Documents",
+        home / "Documents" / "board",
+        home / "Library" / "Mobile Documents" / "x" / "board",
+        tmp_path / "Knowledge-Hub" / "board",
+        extra,
+        extra / "board",
+    ):
+        with pytest.raises(ValueError, match="protected"):
+            ObsidianProjector().build(repository.root, out)
+        assert not out.exists() or out in (home, home / "Documents")
+    assert protected_reason(home / "memfw-board") is None
+    ObsidianProjector().build(repository.root, home / "memfw-board")
+    result = CliRunner().invoke(
+        app, ["project", "obsidian", "--root", str(repository.root), "--out", str(home)]
+    )
+    assert result.exit_code == 2 and "protected" in result.stderr
+
+
+def test_concept_pages_link_broader_and_narrower(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    concepts = repository.root / "concepts" / "Concept"
+    concepts.mkdir(parents=True)
+    (concepts / "backup.md").write_text(
+        "---\noid: concept:demo:backup\nclass: Concept\npref_label: Backup\n"
+        "status: active\nbroader:\n- concept:demo:ops\n---\n"
+    )
+    (concepts / "ops.md").write_text(
+        "---\noid: concept:demo:ops\nclass: Concept\npref_label: Ops\nstatus: active\n---\n"
+    )
+    (concepts / "only.md").write_text(
+        "---\noid: concept:hidden:only\nclass: Concept\npref_label: Hiddenonly\n"
+        "status: active\nbroader:\n- concept:demo:ops\n---\n"
+    )
+    repository.add("Ops", "ops note", memory_id="m-ops", about=["concept:demo:ops"])
+    out = tmp_path / "board"
+    ObsidianProjector().build(repository.root, out)
+    pages = {p.name: p.read_text() for p in (out / "concepts").iterdir()}
+    backup = next(text for name, text in pages.items() if name.startswith("concept-demo-backup"))
+    ops_name = next(name for name in pages if name.startswith("concept-demo-ops"))
+    ops = pages[ops_name]
+    assert yaml.safe_load(backup.split("---\n")[1])["broader"] == [
+        f"[[concepts/{ops_name.removesuffix('.md')}]]"
+    ]
+    narrower = yaml.safe_load(ops.split("---\n")[1])["narrower"]
+    assert len(narrower) == 1 and "concept-demo-backup" in narrower[0]
+    assert "hidden" not in ops.lower()
