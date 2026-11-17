@@ -23,7 +23,7 @@ vault facade, assembled from `storage`, `log` and `knowledge` mixins), `memfw.co
 | 4 | `L1-projection` | `index`, `stats`, `entities`, `related`, `related_annotation`, `projection`, `notes`, `history` |
 | 5 | `L1-read` | `retrieval`, `memory_hybrid` |
 | 6 | `L3-capability` | `recall`, `recall.builtin`, `capture`, `conversations`, `dream`, `curation`, `handoff`, `okf`, `experience`, `export`, `code_retrieval`, `memory_eval` |
-| 7 | `L4-runtime` | `memfw.runtime` (the composition root; A3a: recall wiring) |
+| 7 | `L4-runtime` | `memfw.runtime` (the composition root: recall, context and MCP tool wiring) |
 | 8 | `L5-interface` | `memfw.cli`, `memfw.mcp`, every `*/cli.py`, `curation.review_cli`, `notes.mcp` |
 
 The spec's L-number is kept in each name. Projections (L1) rank above the kernel (L2)
@@ -160,21 +160,33 @@ with the same `FilterPolicy`), and `Runtime.open_question_labels(repository, ids
 policy_name, source, include_history, as_of)` gives the other `memory_search` modes the same
 labels for `labels: true`. The MCP server only parses the flag; no import edge was added.
 
-**Still to do (A3b and later).**
+**A3b (done).** The MCP server gets everything from the Runtime:
 
-- Resolve settings (tenant, allowed sources, entity flag, embedder from
-  `MEMFW_EMBEDDING_*`) in `build_runtime` instead of `Gateway.__init__`; that removes
-  `memfw.mcp -> memfw.notes`.
-- `Repository` opening from the runtime (`memfw.mcp -> memfw.core.repository`); the
-  `memfw.index` edge goes once `readonly` is reached through the runtime too.
-- The other `memory_search` modes: `MemoryHybridRetriever` (`memfw.memory_hybrid`),
-  `search_multihop` (`memfw.retrieval`), `RelatedIndex` (`memfw.related`).
-- The two_stage input checks (`check_query_text`, `as_of` parsing) and row building move
-  below L5 so the server only translates.
-- The CLI gets its capability objects from the `Runtime` too; a `runtime:` config section
-  (fail closed on unknown names) and `build_runtime(test_config)` for tests.
-- A4 entries (`core`, `capture`, `conversations`, `dream`, `history`, `ontology`) go with
-  the MCP split, not A3.
+- `memfw.runtime.resolve_settings(*, embedder, tenant, entity_enabled, allowed_sources, app)`
+  resolves explicit values, else `MEMFW_*` (the `HttpEmbeddingProvider` from
+  `MEMFW_EMBEDDING_*` included), in the order `Gateway.__init__` used to;
+  `history_refresh_seconds()` reads `MEMFW_HISTORY_REFRESH_SECONDS`.
+  `build_runtime` still takes the resolved values.
+- `Runtime.open_repository()` opens the vault per call from the unresolved root and refuses
+  a missing one (`ValueError("vault root does not exist")`); it never keeps a `Repository`.
+- `Runtime.search(repository, query, limit, *, mode, ..., client_message)` runs every
+  `memory_search` mode (`memfw/runtime/search.py`: fts through `memfw.index.readonly`,
+  hybrid/vector through `MemoryHybridRetriever`, multihop, two_stage through `recall`,
+  ontology alias expansion, U2 labels) and builds the rows (freshness, `_RawHashCache`).
+  Row building reads vault files, so it is not protocol code; the MCP tool only checks the
+  arguments and passes `_client_message` for error texts.
+- `Runtime.remember`, `related`, `status` (`memories.py`), `conversation_share`,
+  `history_scoped`, `history_ref_source` (`sharing.py`), `dream_run`, `staged_dreams`
+  (`dreams.py`) back the other tool groups. Each loads its capability module on first use.
+- All 12 `memfw.mcp` allowlist entries are gone (A3: `core.repository`, `index`,
+  `memory_hybrid`, `notes`, `related`, `retrieval`; A4: `core`, `capture`,
+  `conversations`, `dream`, `history`, `ontology`). Byte-identical against `origin/main`:
+  `mcp_all_tools` (11 variants) and `mcp_memory_search_stable` (65 payloads).
+
+**Still to do.** The MCP server's types for the share and the transcript index are `Any`
+until `memfw.ports` has protocols for them. The CLI gets its capability objects from the
+`Runtime` too; a `runtime:` config section (fail closed on unknown names) and
+`build_runtime(test_config)` for tests.
 
 ## A4: the MCP split
 
@@ -185,10 +197,10 @@ one mixin per group; each mixin subclasses `GatewayBase`.
 
 | Module | Holds |
 |---|---|
-| `mcp/base.py` | `GatewayBase`: `__init__` (root, tenant, sources, embedder, Runtime), `_repo`, `_visible` |
+| `mcp/base.py` | `GatewayBase`: `__init__` (root, tenant, sources, embedder, Runtime), `_repo`, `_visible` (A3b: all from the Runtime) |
 | `mcp/schema.py` | `TOOLS`, `SERVER_INFO`, `PROTOCOL`, `INSTRUCTIONS`, `SEARCH_POLICIES` |
 | `mcp/protocol.py` | `ProtocolMixin` (`handle`, `respond`), `_rpc_error`, `client_endpoint_fields`, `_client_message`, `_flag` |
-| `mcp/tools_search.py` | `memory_search` (all modes), row building and freshness (`_RawHashCache`) |
+| `mcp/tools_search.py` | `memory_search` (all modes), row building and freshness (`_RawHashCache`; A3b: moved to `memfw.runtime.search`) |
 | `mcp/tools_memory.py` | `memory_get`, `memory_remember`, `memory_related`, `memory_status` |
 | `mcp/tools_context.py` | `memory_context` |
 | `mcp/tools_history.py` | `history_list`, `history_search`, `history_read` |
@@ -208,8 +220,11 @@ vault; `tests/test_mcp_split.py` runs it against `MEMFW_ARCH_BASE_REF` when that
 expected changes to the base output (`initialize` advertises `resources`; `memory_context`
 gains the optional `slots` property; `with_expected_c2_changes`), so any other byte still fails.
 
-**A4b (next).** Each group reaches its capability through the `Runtime` or a protocol, and
-its allowlist entries go.
+**A4b (done, with A3b).** Each group reaches its capability through the `Runtime`;
+`memfw.mcp` imports only `memfw.ports`, `memfw.runtime` and itself, and its allowlist entries
+are gone. `tools_search.py` re-exports `_RAW_HASH_CACHE`, `_RawHashCache`,
+`_frontmatter_version` and `_FRESHNESS_READ_ATTEMPTS` from `memfw.runtime.search`; patch
+`memfw.runtime.search.search_multihop`.
 
 ## A5: swap drills
 
