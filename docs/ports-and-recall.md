@@ -53,17 +53,30 @@ do not contain `memfw/__init__.py`, so this does not affect them.
   An adapter written against the wheel changes only the first name:
   `from memfw_ports.testing import check_recall_provider`.
 - **The recall seam.** `memfw.recall` takes every port name through `memfw.recall._ports`.
-  It re-exports `memfw.ports` when the module is under `memfw` and `memfw_ports` when it is
-  `memfw_recall._ports`. The choice follows the module's own name, not what is installed, so a
-  process with memfw and the wheels never mixes two copies of a dataclass. Inside memfw the
-  names are the same objects as before (a test checks identity). Type checkers always see the
-  `memfw.ports` branch, so in a venv without memfw the seam's names are untyped (`Any`).
+  When recall sits inside a parent package (`memfw.recall`, or a vendored
+  `<vendor>.memfw.recall`), it imports the sibling `..ports` relatively; inside memfw that is
+  `memfw.ports`, the same objects as before (a test checks identity). When recall is a
+  top-level package (`memfw_recall`), it imports `memfw_ports`. The choice follows the
+  module's own name, not what is installed. Type checkers always see the relative branch, so
+  in a venv without memfw the seam's names are untyped (`Any`). No other shipped module may
+  climb above its wheel's top-level package (`from ..x` in a recall module, `from ...x` in
+  `ports/reference`); a test checks every file.
+- **One process, one copy.** Inside a memfw process, use `memfw.ports`. `memfw_ports` is a
+  second copy of the same modules: its classes are distinct, so `isinstance` and `is` never
+  match across the two, and an adapter built on `memfw_ports` types is for memfw-less use
+  (contract tests, a service that does not load memfw). memfw itself never imports
+  `memfw_ports`.
 - **Not shipped.** `memfw.recall.builtin` (vault resolver, FTS/multihop/hybrid providers) is
   memfw-internal. The recall wheel lists its files one by one, so a new recall module stays
   out until it is added; `tests/test_standalone_ports_wheel.py` fails until it is.
 - **memfw does not depend on the wheels.** It still ships `src/memfw/ports` and
   `src/memfw/recall` itself; `import memfw.ports` and every memfw output are unchanged. Making
   memfw depend on `memfw-ports` (and re-export it) is a later step (architecture section 6).
+- **Versions.** Both wheels carry `memfw.ports.PORTS_API_VERSION` (semver, `0.1.0`), and
+  `memfw-recall` pins `memfw-ports` to it; a test keeps the three equal. Bump it with every
+  change to the ports API (major for a breaking one). The members pin their build backend
+  (`hatchling==1.33.0`) and ship memfw's `LICENSE` and `NOTICE` (symlinks in each package
+  directory) under `.dist-info/licenses/`.
 - **Wheels only.** `uv build --wheel --package memfw-ports` (and `memfw-recall`). An sdist is
   not supported because the sources live outside the package directory. Editable installs of
   the members are not supported either; `uv sync` installs memfw alone, as before.

@@ -254,8 +254,9 @@ and every default output are unchanged.
 `memfw_ports` and `memfw_recall`) and pass the contract kit in a venv without memfw
 (architecture section 9: "can be installed and tested as standalone wheels without memfw").
 Both map memfw's own `src/` files, so there is no second copy; `recall/builtin.py` is not
-shipped. The one source change is the recall seam `memfw.recall._ports`, which re-exports
-`memfw.ports` inside memfw. It is a new module in the existing `memfw.recall` unit: no
+shipped. The source changes are the recall seam `memfw.recall._ports` (a relative import of
+the sibling `ports` inside memfw, `memfw_ports` when recall is top-level) and the new
+`memfw.ports.PORTS_API_VERSION`, which both wheel versions follow. It is a new module in the existing `memfw.recall` unit: no
 layer-map or allowlist entry. memfw does not depend on either wheel yet (section 6 keeps that
 for the meta-package step). Details: [Standalone wheels](ports-and-recall.md#11-packaging-boundaries).
 

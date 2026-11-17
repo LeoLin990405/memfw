@@ -18,9 +18,15 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   `src/memfw/ports` and `src/memfw/recall` (hatch `force-include`, no copied
   sources; `recall/builtin.py` is not shipped). An adapter author can install
   them and run `memfw_ports.testing` without installing memfw.
-- `memfw.recall` now takes its port names through `memfw.recall._ports`, which
-  re-exports `memfw.ports` inside memfw (the same objects; no behaviour change)
-  and `memfw_ports` in the standalone wheel.
+- `memfw.recall` now takes its port names through `memfw.recall._ports`: a
+  relative import of the sibling `ports` package when recall has a parent
+  package (inside memfw: `memfw.ports`, the same objects; no behaviour change),
+  `memfw_ports` when it is the top-level `memfw_recall`. Inside a memfw process
+  use `memfw.ports`; `memfw_ports` classes are distinct copies.
+- New `memfw.ports.PORTS_API_VERSION` (`"0.1.0"`); both wheel versions follow
+  it (test-enforced). The members pin `hatchling==1.33.0` and ship memfw's
+  `LICENSE` and `NOTICE`. CI pins `actions/*` and `setup-uv` to commit SHAs,
+  pins uv, and runs with `permissions: contents: read`.
 - `tests/standalone/wheel_smoke.py` runs every reference implementation through
   its contract check and a coordinator search in a venv without memfw; new CI
   job `standalone-wheels` builds both wheels and runs it.

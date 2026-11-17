@@ -10,7 +10,7 @@
 # Build a wheel (no sdist: the sources live outside this directory):
 #   uv build --wheel --package memfw-recall
 [build-system]
-requires = ["hatchling>=1.26"]
+requires = ["hatchling==1.33.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -19,7 +19,9 @@ version = "0.1.0"
 description = "memfw recall coordinator: routing, fusion and filter policy over memfw-ports"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+# Symlinks to memfw's own LICENSE and NOTICE (one copy of the text).
+license-files = ["LICENSE", "NOTICE"]
 dependencies = ["memfw-ports==0.1.0"]
 
 [tool.uv.sources]
@@ -38,4 +40,4 @@ bypass-selection = true
 "../../src/memfw/recall/resolve.py" = "memfw_recall/resolve.py"
 "../../src/memfw/recall/routing.py" = "memfw_recall/routing.py"
 "py.typed" = "memfw_recall/py.typed"
-"../../LICENSE" = "memfw_recall/LICENSE"
+

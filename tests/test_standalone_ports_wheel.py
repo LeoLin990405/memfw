@@ -42,7 +42,7 @@ def _force_include(package: str) -> dict[str, str]:
 def test_ports_wheel_maps_the_whole_ports_tree() -> None:
     mapping = _force_include("memfw-ports")
     assert mapping["../../src/memfw/ports"] == "memfw_ports"
-    assert set(mapping) == {"../../src/memfw/ports", "py.typed", "../../LICENSE"}
+    assert set(mapping) == {"../../src/memfw/ports", "py.typed"}
 
 
 def test_recall_wheel_lists_every_recall_module_but_builtin() -> None:
@@ -60,6 +60,35 @@ def test_recall_wheel_lists_every_recall_module_but_builtin() -> None:
     ports = tomllib.loads((PACKAGES / "memfw-ports" / "pyproject.toml").read_text("utf-8"))
     pin = f"memfw-ports=={ports['project']['version']}"
     assert data["project"]["dependencies"] == [pin]
+
+
+def test_recall_has_no_subpackage_the_wheel_could_miss() -> None:
+    """The recall wheel lists top-level files; a subpackage would silently be left out."""
+
+    nested = [
+        path.relative_to(SRC / "recall").as_posix()
+        for path in (SRC / "recall").rglob("*.py")
+        if path.parent != SRC / "recall"
+    ]
+    assert nested == [], "add the subpackage to packages/memfw-recall/pyproject.toml"
+
+
+def test_wheel_versions_follow_the_ports_api_version() -> None:
+    from memfw.ports import PORTS_API_VERSION
+
+    for package in ("memfw-ports", "memfw-recall"):
+        data = tomllib.loads((PACKAGES / package / "pyproject.toml").read_text("utf-8"))
+        assert data["project"]["version"] == PORTS_API_VERSION, package
+
+
+def test_members_pin_their_build_backend_and_ship_license_and_notice() -> None:
+    for package in ("memfw-ports", "memfw-recall"):
+        data = tomllib.loads((PACKAGES / package / "pyproject.toml").read_text("utf-8"))
+        assert data["build-system"]["requires"] == ["hatchling==1.33.0"], package
+        assert data["project"]["license-files"] == ["LICENSE", "NOTICE"], package
+        for name in ("LICENSE", "NOTICE"):
+            link = PACKAGES / package / name
+            assert link.is_symlink() and link.resolve() == (ROOT / name).resolve(), link
 
 
 def test_workspace_lists_both_packages_and_memfw_does_not_depend_on_them() -> None:
@@ -81,11 +110,55 @@ def _seam_branches() -> tuple[list[ast.ImportFrom], list[ast.ImportFrom]]:
 def test_recall_seam_imports_the_same_names_under_both_roots() -> None:
     inside, outside = _seam_branches()
     assert inside and len(inside) == len(outside)
-    for memfw_import, standalone in zip(inside, outside, strict=True):
-        assert memfw_import.module and standalone.module
-        assert memfw_import.module.startswith("memfw.ports.")
-        assert standalone.module == "memfw_" + memfw_import.module.removeprefix("memfw.")
-        assert [a.name for a in memfw_import.names] == [a.name for a in standalone.names]
+    for sibling, standalone in zip(inside, outside, strict=True):
+        assert sibling.level == 2 and sibling.module and sibling.module.startswith("ports.")
+        assert standalone.level == 0 and standalone.module == "memfw_" + sibling.module
+        assert [a.name for a in sibling.names] == [a.name for a in standalone.names]
+
+
+def _escapes(source: str, depth: int) -> list[str]:
+    """Relative imports in ``source`` that climb above the wheel's top-level package.
+
+    ``depth`` is how deep the file's package sits below that top level: 0 for
+    ``memfw_ports/x.py`` and ``memfw_recall/x.py``, 1 for
+    ``memfw_ports/reference/x.py``. Inside memfw the same climb would reach
+    ``memfw`` itself, which the wheel does not contain.
+    """
+
+    return [
+        "." * node.level + (node.module or "")
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.ImportFrom) and node.level > depth + 1
+    ]
+
+
+def test_escape_check_catches_a_climb_out_of_the_wheel() -> None:
+    """Mutation test for the check below."""
+
+    assert _escapes("from ..ports import types\n", 0) == ["..ports"]
+    assert _escapes("def f():\n    from ..core import x\n", 0) == ["..core"]
+    assert _escapes("from ...core import x\n", 1) == ["...core"]
+    assert _escapes("from ..types import x\nfrom . import y\n", 1) == []
+    assert _escapes("from .fusion import x\nimport os\n", 0) == []
+    coordinator = (SRC / "recall" / "coordinator.py").read_text(encoding="utf-8")
+    assert _escapes(coordinator, 0) == []
+    mutated = coordinator.replace("from .fusion import", "from ..ports.fusion import", 1)
+    assert _escapes(mutated, 0) == ["..ports.fusion"]
+
+
+def test_shipped_files_never_import_above_their_wheel() -> None:
+    files = [
+        (p, len(p.relative_to(SRC / "ports").parts) - 1) for p in (SRC / "ports").rglob("*.py")
+    ]
+    files += [
+        (p, 0)
+        for p in (SRC / "recall").glob("*.py")
+        # The seam's ``..ports`` branch runs only when recall has a parent package.
+        if p.name not in RECALL_EXCLUDED | {"_ports.py"}
+    ]
+    assert len(files) > 20
+    for path, depth in files:
+        assert _escapes(path.read_text(encoding="utf-8"), depth) == [], path
 
 
 def test_only_the_seam_names_the_standalone_ports() -> None:
