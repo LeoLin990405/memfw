@@ -869,3 +869,50 @@ def test_synced_folders_by_target_and_desktop_documents(tmp_path: Path, private_
         with pytest.raises(BlobLocationError, match="synced"):
             repository.add_attachment(source)
     assert "vault_id" not in repository.read_config()
+
+
+def _log_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, count: int) -> dict[str, int]:
+    """How many times each attachment operation reads the event log, with ``count`` records."""
+
+    repository = _repo(tmp_path / f"n{count}")
+    for index in range(count):
+        repository.add_attachment(_file(tmp_path, f"f{count}-{index}.txt", f"{index}".encode()))
+    attachment_id = repository.attachment_ids()[-1]
+    root = str(repository.root)
+    reads = {"n": 0}
+    original = Repository._live_events
+
+    def counted(self: Repository, archived: Any) -> Any:
+        reads["n"] += 1
+        return original(self, archived)
+
+    monkeypatch.setattr(Repository, "_live_events", counted)
+
+    def measure(action: Any) -> int:
+        reads["n"] = 0
+        action()
+        return reads["n"]
+
+    result = {
+        "add": measure(
+            lambda: repository.add_attachment(_file(tmp_path, f"new{count}.txt", b"new"))
+        ),
+        "get": measure(lambda: repository.get_attachment(attachment_id)),
+        "records": measure(repository.attachment_records),
+        "verify": measure(repository.verify_attachments),
+        "fsck_issues": measure(repository.attachment_fsck_issues),
+        "cli_list": measure(lambda: _cli("attach", "list", "--root", root)),
+        "cli_show": measure(lambda: _cli("attach", "show", attachment_id, "--root", root)),
+        "cli_verify": measure(lambda: _cli("attach", "verify", "--root", root)),
+    }
+    monkeypatch.setattr(Repository, "_live_events", original)
+    return result
+
+
+def test_log_is_read_once_per_operation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    few = _log_reads(tmp_path, monkeypatch, 2)
+    many = _log_reads(tmp_path, monkeypatch, 12)
+    # The number of log reads does not grow with the number of attachments.
+    assert few == many
+    for operation, reads in many.items():
+        assert reads <= 2, (operation, reads)

@@ -25,7 +25,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from memfw.core.errors import IntegrityError, NotFoundError
+from memfw.core.errors import IntegrityError, MemfwError, NotFoundError
 from memfw.core.models import ATTACHMENT_EVENT_KINDS, Event, EventKind
 from memfw.ports.privacy import privacy_value
 from memfw.storage.transactions import _serialized
@@ -302,12 +302,10 @@ class AttachmentStoreMixin:
         events = self.events()
         committed = committed_records(events)
         stored_sizes: dict[str, int] = {}
-        for attachment_id in committed:
-            try:
-                existing = AttachmentStoreMixin.get_attachment(self, attachment_id)
-            except (IntegrityError, NotFoundError):
-                continue
-            stored_sizes[existing.sha256] = existing.size
+        # One log pass: the record files are read directly, not via get_attachment.
+        for _, existing in _load_committed(self, committed):
+            if isinstance(existing, AttachmentRecord):
+                stored_sizes[existing.sha256] = existing.size
         max_total = _config_int(config, MAX_TOTAL_KEY, DEFAULT_MAX_TOTAL_BYTES)
         if sha256 not in stored_sizes and sum(stored_sizes.values()) + size > max_total:
             raise ValueError(
@@ -351,14 +349,17 @@ class AttachmentStoreMixin:
         expected = committed_records(self.events()).get(identifier)
         if expected is None:
             raise NotFoundError(f"Attachment not found: {identifier}")
-        path = _record_path(self, identifier)
-        try:
-            raw = path.read_bytes()
-        except FileNotFoundError:
-            raise NotFoundError(f"Attachment record file is missing: {identifier}") from None
-        if hashlib.sha256(raw).hexdigest() != expected:
-            raise IntegrityError(f"Attachment record hash mismatch: {identifier}")
-        return parse_record(raw, identifier)
+        return _load_record(self, identifier, expected)
+
+    def attachment_records(
+        self: RepositoryHost,
+    ) -> list[tuple[str, AttachmentRecord | MemfwError]]:
+        """Every committed attachment, oldest first: its record or why it cannot be read.
+
+        Reads the event log once, whatever the number of attachments.
+        """
+
+        return _load_committed(self, committed_records(self.events()))
 
     def attachment_citations(self: RepositoryHost, attachment_id: str) -> list[str]:
         """Ids of memories whose ``evidence`` cites ``att:<id>`` (with or without a locator)."""
@@ -376,15 +377,20 @@ class AttachmentStoreMixin:
     # -- integrity ----------------------------------------------------------------
 
     def verify_attachments(
-        self: RepositoryHost, attachment_ids: Iterable[str] | None = None
+        self: RepositoryHost,
+        attachment_ids: Iterable[str] | None = None,
+        *,
+        events: list[Event] | None = None,
     ) -> tuple[list[str], list[AttachmentProblem]]:
         """Re-hash records and blobs. Returns (checked ids, problems). Read-only.
 
         With no ids every committed attachment is checked, untracked record
         files are reported and so are orphan blobs (no record names them).
+        ``events`` is the event log when the caller has already read it.
         """
 
-        events = self.events()
+        if events is None:
+            events = self.events()
         committed = committed_records(events)
         everything = attachment_ids is None
         if attachment_ids is None:
@@ -495,9 +501,10 @@ class AttachmentStoreMixin:
         """``fsck`` rows for attachments; empty (and no I/O past the log) without any."""
 
         has_records = _attachments_dir(self).exists()
-        if not has_records and not committed_records(self.events()):
+        events = self.events()
+        if not has_records and not committed_records(events):
             return []
-        _, problems = AttachmentStoreMixin.verify_attachments(self)
+        _, problems = AttachmentStoreMixin.verify_attachments(self, events=events)
         return [
             {
                 "memory_id": problem.attachment_id,
@@ -526,6 +533,30 @@ class AttachmentStoreMixin:
                 path.unlink()
                 removed.append(path.stem)
         return removed
+
+
+def _load_record(host: RepositoryHost, identifier: str, expected: str) -> AttachmentRecord:
+    """The record file of ``identifier``, checked against its committed hash."""
+
+    try:
+        raw = _record_path(host, identifier).read_bytes()
+    except FileNotFoundError:
+        raise NotFoundError(f"Attachment record file is missing: {identifier}") from None
+    if hashlib.sha256(raw).hexdigest() != expected:
+        raise IntegrityError(f"Attachment record hash mismatch: {identifier}")
+    return parse_record(raw, identifier)
+
+
+def _load_committed(
+    host: RepositoryHost, committed: dict[str, str]
+) -> list[tuple[str, AttachmentRecord | MemfwError]]:
+    loaded: list[tuple[str, AttachmentRecord | MemfwError]] = []
+    for identifier, expected in committed.items():
+        try:
+            loaded.append((identifier, _load_record(host, identifier, expected)))
+        except (IntegrityError, NotFoundError) as exc:
+            loaded.append((identifier, exc))
+    return loaded
 
 
 def _is_attachment_name(stem: str) -> bool:

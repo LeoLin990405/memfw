@@ -107,11 +107,14 @@ def list_attachments(
     repository = _repo(root)
     rows: list[dict[str, Any]] = []
     failed = False
-    for attachment_id in repository.attachment_ids():
-        try:
-            record = repository.get_attachment(attachment_id)
-        except MemfwError as exc:
-            typer.echo(f"warning: {attachment_id}: {exc}", err=True)
+    try:
+        loaded = repository.attachment_records()
+    except MemfwError as exc:
+        _fail(exc)
+        return
+    for attachment_id, record in loaded:
+        if isinstance(record, MemfwError):
+            typer.echo(f"warning: {attachment_id}: {record}", err=True)
             failed = True
             continue
         rows.append(
