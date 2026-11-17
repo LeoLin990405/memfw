@@ -32,6 +32,13 @@ bookkeeping steps are skipped, and every other step is a tool step whose
 a step with no index sits between its neighbours (see :func:`_steps`).
 ``conversation_summaries.db`` supplies the workspace (``cwd``) and project of a
 conversation when it can be opened.
+
+A root can exist with nothing to read: ``brain/`` holding only
+``tempmediaStorage`` (pasted media, no ``<id>/.system_generated/logs``),
+empty ``conversations/``, an empty summaries table, and only the opaque
+``implicit/*.pb`` blobs the ``agy`` CLI keeps. Zero sessions is then the
+correct result, not a parse failure: the agent server itself lists no
+conversations for such a root.
 """
 
 from __future__ import annotations

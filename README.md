@@ -14,7 +14,7 @@ Markdown is the source of truth · hash-linked JSONL events · rebuildable FTS5 
 <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.11+"></a>
 <a href="#-status-and-boundaries"><img src="https://img.shields.io/badge/release-v0.3.0-2563EB?style=flat-square" alt="Release v0.3.0"></a>
 <a href="#-mcp-tools"><img src="https://img.shields.io/badge/MCP-15_tools_(%2B1_opt--in),_3_resources-8B5CF6?style=flat-square" alt="15 MCP tools (+1 opt-in), 3 resources"></a>
-<a href="#-conversation-store-every-agent-one-place"><img src="https://img.shields.io/badge/agent_readers-14-10B981?style=flat-square" alt="14 agent readers"></a>
+<a href="#-conversation-store-every-agent-one-place"><img src="https://img.shields.io/badge/agent_readers-15-10B981?style=flat-square" alt="15 agent readers"></a>
 <a href="#-architecture-layers-and-ports"><img src="https://img.shields.io/badge/ports-11-0EA5E9?style=flat-square" alt="11 ports"></a>
 <a href="#-evaluation-summary"><img src="https://img.shields.io/badge/evaluation-bounded-D97706?style=flat-square" alt="Bounded evaluation"></a>
 
@@ -27,7 +27,7 @@ memfw is a local memory engine for AI agents. It does three jobs:
 1. **Keeps memories as files.** Every memory is a plain Markdown file in a vault folder, every
    change is appended to a hash-linked event log, and search runs on an index you can rebuild at
    any time.
-2. **Collects what agents said.** It reads the session stores of 14 agent CLIs and apps into one
+2. **Collects what agents said.** It reads the session stores of 15 agent CLIs and apps into one
    local, redacted conversation store, so any agent can search, read and continue another
    agent's work.
 3. **Turns that into better memory, carefully.** "Dream" passes check memories against the
@@ -196,7 +196,7 @@ Raw lines are never copied, and memfw never writes to an agent's own storage.
 `--settled-minutes N` skips sessions active in the last `N` minutes and marks the settled ones
 archived (`memfw conversations list --with-archive-state` / `--archived-only`).
 
-**14 registered readers** (`memfw history agents` lists them and which stores exist on this
+**15 registered readers** (`memfw history agents` lists them and which stores exist on this
 machine, including the isolated homes of orchestrated workers):
 
 | Reader | Agent or app | Default store |
@@ -215,6 +215,9 @@ machine, including the isolated homes of orchestrated workers):
 | `deepseek` | DeepSeek harness CLI (`dsh`) | `~/.dsh/sessions` |
 | `minimax` | MiniMax Agent CLI | `~/.minimax/v2/sessions` |
 | `stepfun` | StepFun `stepcode` | `~/.stepcode/agent/sessions` |
+| `qwen` | Qwen Code CLI | `~/.qwen/projects` |
+
+Not readable: TRAE SOLO keeps its agent conversations in a database file that is not plain SQLite (it appears encrypted), so it has no reader.
 
 ```sh
 memfw history agents

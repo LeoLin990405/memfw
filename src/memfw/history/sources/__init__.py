@@ -25,6 +25,7 @@ from . import (
     kimi_desktop,
     minimax,
     opencode,
+    qwen,
     stepfun,
 )
 from .base import ConversationRecord, Reader, SessionLocator, StoreRoot, ToolCall
@@ -46,6 +47,7 @@ READERS: dict[str, Reader] = {
         opencode,
         gemini,
         antigravity,
+        qwen,
     )
 }
 ALIASES = {
@@ -64,6 +66,7 @@ ALIASES = {
     "antigravity-cli": "antigravity",
     "antigravity-ide": "antigravity",
     "jetski": "antigravity",
+    "qwen-code": "qwen",
 }
 
 

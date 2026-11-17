@@ -63,6 +63,7 @@ EDIT_TOOLS: dict[str, dict[str, tuple[str, ...]]] = {
         "write_to_file": ("TargetFile", "path"),
         "replace_file_content": ("TargetFile",),
     },
+    "qwen": {"write_file": ("file_path",), "edit": ("file_path",)},
 }
 
 _EDIT_LIKE = re.compile(r"(?i)edit|write|patch|str_?replace|create_?file|multiedit|apply|replace")

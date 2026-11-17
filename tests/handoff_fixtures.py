@@ -44,6 +44,7 @@ EDITS: dict[str, tuple[str, dict[str, Any]]] = {
     "opencode": ("edit", {"filePath": "/work/demo/src/app.py", "oldString": "a"}),
     "gemini": ("replace", {"file_path": "/work/demo/src/app.py", "old_string": "a"}),
     "antigravity": ("write_to_file", {"TargetFile": "/work/demo/src/app.py", "CodeContent": "x"}),
+    "qwen": ("edit", {"file_path": "/work/demo/src/app.py", "old_string": "a"}),
 }
 EXPECTED_FILE = {"codex": "src/app.py"}
 

@@ -14,7 +14,7 @@ Markdown 即真相 · 哈希链 JSONL 事件 · 可重建 FTS5 索引 · 先核�
 <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.11+"></a>
 <a href="#-现状与边界"><img src="https://img.shields.io/badge/release-v0.3.0-2563EB?style=flat-square" alt="Release v0.3.0"></a>
 <a href="#-mcp-工具"><img src="https://img.shields.io/badge/MCP-15_tools_(%2B1_opt--in),_3_resources-8B5CF6?style=flat-square" alt="15 MCP tools (+1 opt-in), 3 resources"></a>
-<a href="#-会话库所有-agent-汇到一处"><img src="https://img.shields.io/badge/agent_readers-14-10B981?style=flat-square" alt="14 agent readers"></a>
+<a href="#-会话库所有-agent-汇到一处"><img src="https://img.shields.io/badge/agent_readers-15-10B981?style=flat-square" alt="15 agent readers"></a>
 <a href="#-架构分层与端口"><img src="https://img.shields.io/badge/ports-11-0EA5E9?style=flat-square" alt="11 ports"></a>
 <a href="#-评估结果摘要"><img src="https://img.shields.io/badge/evaluation-bounded-D97706?style=flat-square" alt="Bounded evaluation"></a>
 
@@ -25,7 +25,7 @@ Markdown 即真相 · 哈希链 JSONL 事件 · 可重建 FTS5 索引 · 先核�
 memfw 是一个跑在本机的 AI agent 记忆引擎，主要做三件事：
 
 1. **把记忆存成文件。** 每条记忆都是 vault 文件夹里的一个普通 Markdown 文件；每次改动都追加进一条哈希链事件日志；搜索用的索引随时可以重建。
-2. **把 agent 说过的话收拢起来。** 它读取 14 种 agent CLI 和应用各自的会话文件，汇入一个本地、已脱敏的会话库。任何一个 agent 都能搜索、阅读并接手另一个 agent 的工作。
+2. **把 agent 说过的话收拢起来。** 它读取 15 种 agent CLI 和应用各自的会话文件，汇入一个本地、已脱敏的会话库。任何一个 agent 都能搜索、阅读并接手另一个 agent 的工作。
 3. **小心地把这些变成更好的记忆。** “做梦”（dream）会拿会话记录去核对记忆，提出确认、改正、合并、经验总结和技能草稿。它只会暂存候选，进不进 vault 由人决定。
 
 agent 通过本地 **MCP 服务**（`memfw-mcp`）使用它，人通过 `memfw` 命令行使用它。内部是一个小内核加一组端口契约：检索后端、投影器、导入器都通过端口接入，从不直接碰 vault（见[架构](#-架构分层与端口)）。
@@ -140,7 +140,7 @@ Claude Code 可以直接运行 `claude mcp add memfw -- memfw-mcp --root /path/t
 
 `memfw history ingest` 读取各个 agent 自己的会话文件，把规范化后的对话轮次写进同一个本地库（`~/.local/share/memfw/conversations.sqlite`）。它是增量的：没变的会话直接跳过，追加的部分从上次存到的那一轮接着读。每一轮写入前，所有文本字段都要过一遍密钥扫描：一旦命中，整轮扣下不存；其余内容一律脱敏后再写。原始行从不复制，memfw 也从不改动 agent 自己的存储。加上 `--settled-minutes N` 会跳过最近 `N` 分钟内还有动静的会话，并把已经沉淀下来的会话标为已归档（`memfw conversations list --with-archive-state` / `--archived-only` 可以查看）。
 
-**已注册 14 个 reader**（`memfw history agents` 会列出它们，以及本机上实际存在哪些会话目录，包括编排 worker 的隔离 HOME）：
+**已注册 15 个 reader**（`memfw history agents` 会列出它们，以及本机上实际存在哪些会话目录，包括编排 worker 的隔离 HOME）：
 
 | reader | agent 或应用 | 默认会话目录 |
 |---|---|---|
@@ -158,6 +158,9 @@ Claude Code 可以直接运行 `claude mcp add memfw -- memfw-mcp --root /path/t
 | `deepseek` | DeepSeek harness CLI（`dsh`） | `~/.dsh/sessions` |
 | `minimax` | MiniMax Agent CLI | `~/.minimax/v2/sessions` |
 | `stepfun` | 阶跃星辰 `stepcode` | `~/.stepcode/agent/sessions` |
+| `qwen` | Qwen Code CLI | `~/.qwen/projects` |
+
+无法读取：TRAE SOLO 把 agent 会话存在一个不是普通 SQLite 的数据库文件里（看起来是加密的），因此没有 reader。
 
 ```sh
 memfw history agents
