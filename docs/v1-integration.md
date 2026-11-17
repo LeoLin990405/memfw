@@ -438,6 +438,12 @@ key), `memory_id` (required, a memory id), `reason` (optional, at most 500
 characters), `source` (optional single line, default `conductor`) and
 `tenant` (bound as on `/stage`: with `MEMFW_TENANT` set, only that tenant).
 
+`memory_id` must match `^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`, the id shape
+`memfw` generates. A memory whose id contains anything else (a `.`, for
+example, which hand-written or imported files can carry) cannot be named
+over HTTP: the request is 400 `memory_id is invalid`. Such a memory can
+only be deleted locally (`memfw delete`), after a human review as always.
+
 ```json
 {"contract": "memfw-http/3", "requested": true, "duplicate": false,
  "request_id": "<request_id>", "memory_id": "<memory_id>",
