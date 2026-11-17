@@ -1,7 +1,8 @@
 """MM1a against the base ref (opt-in: set ``MEMFW_ARCH_BASE_REF``, e.g. ``origin/main``).
 
 * Without attachments every memory command's output is byte-identical.
-* A 0.3.0 reader (the base ref) of a vault this tree attached to: it reads a
+* A 0.3.0 reader (``MEMFW_COMPAT_RELEASE_REF``, default ``v0.3.0``) of a vault
+  this tree attached to: it reads a
   vault that only gained ``vault_id``, and fails closed on every command that
   reads the event log once an ``attach`` event exists (docs/attachments.md).
 """
@@ -20,6 +21,9 @@ import pytest
 from memfw.core.repository import Repository
 
 BASE_REF = os.environ.get("MEMFW_ARCH_BASE_REF")
+# The downgrade check must read with the last release that predates attachments,
+# not the moving base ref: once MM1a is on main, the base ref reads `attach`.
+RELEASE_REF = os.environ.get("MEMFW_COMPAT_RELEASE_REF", "v0.3.0")
 pytestmark = pytest.mark.skipif(
     not BASE_REF, reason="opt-in (slow): set MEMFW_ARCH_BASE_REF to compare against that ref"
 )
@@ -70,7 +74,7 @@ def test_base_ref_reader_of_an_attached_vault(
     configured = _vault(tmp_path / "configured", attach=False)
     attached = _vault(tmp_path / "attached", attach=True)
     with tempfile.TemporaryDirectory(prefix="memfw-attach-compat-") as tmp:
-        tree = byte_identical.materialize(str(BASE_REF), Path(tmp) / "old")
+        tree = byte_identical.materialize(RELEASE_REF, Path(tmp) / "old")
         configured_out, attached_out = byte_identical.run_probe(
             tree,
             "tests.harness.attachments_probe:old_reader",
