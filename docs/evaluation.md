@@ -220,9 +220,12 @@ write (`.pending.json`, `.event-append.pending.json`: reading it would need
 `memfw recover`, which writes), an `--out` inside the snapshot and a store
 inside it. It copies the snapshot (without its search index and lock file) to
 a private temporary directory, runs everything there and deletes it.
-`--conversations` and `--usage` are opened `mode=ro`. The snapshot and both
-stores are fingerprinted (path, size, mtime) before and after; any change
-fails the run with no report.
+`--conversations` and `--usage` are never opened in place either: each is
+copied with its `-wal`, `-shm` and `-journal` files (when present) into the
+private directory, and the copy is opened `mode=ro`, so a WAL-mode store gets
+no sidecar beside it. The snapshot, both stores and their sidecar paths are
+fingerprinted (path, size, mtime) before and after; any change fails the run
+with no report.
 
 **Privacy.** Visibility is the MCP server's: `--tenant`, `--source`,
 `--clearance` and `--app` (else `MEMFW_TENANT`, `MEMFW_ALLOWED_SOURCES`,

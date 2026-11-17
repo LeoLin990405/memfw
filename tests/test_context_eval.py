@@ -255,6 +255,62 @@ def test_the_snapshot_and_stores_are_never_written(tmp_path: Path) -> None:
     assert (fixture.conversations.read_bytes(), fixture.usage.read_bytes()) == stores
 
 
+def _files(directory: Path) -> dict[str, bytes]:
+    return {path.name: path.read_bytes() for path in sorted(directory.iterdir())}
+
+
+def test_wal_mode_stores_are_copied_with_their_sidecars_never_opened(tmp_path: Path) -> None:
+    import shutil
+    import sqlite3
+
+    fixture = known_vault(tmp_path)
+    # The conversation store in WAL mode with no sidecar (a clean close).
+    with sqlite3.connect(fixture.conversations) as connection:
+        assert connection.execute("PRAGMA journal_mode = WAL").fetchone()[0] == "wal"
+    connection.close()
+    # The usage store with its last write still in -wal (copied while open).
+    wal_dir = tmp_path / "wal-store"
+    wal_dir.mkdir()
+    live = sqlite3.connect(fixture.usage, isolation_level=None)
+    try:
+        live.execute("PRAGMA journal_mode = WAL")
+        live.execute("PRAGMA wal_autocheckpoint = 0")
+        live.execute("DELETE FROM used WHERE session_ref = 'u2'")
+        for suffix in ("", "-wal", "-shm"):
+            shutil.copy2(f"{fixture.usage}{suffix}", wal_dir / f"usage.sqlite3{suffix}")
+    finally:
+        live.close()
+    usage = wal_dir / "usage.sqlite3"
+    stores = fixture.conversations.parent
+    before = (_files(stores), _files(wal_dir))
+
+    report = evaluate_snapshot(
+        fixture.vault, options=CLEARED, conversations=fixture.conversations, usage=usage
+    )
+
+    assert (_files(stores), _files(wal_dir)) == before
+    assert sorted(_files(wal_dir)) == ["usage.sqlite3", "usage.sqlite3-shm", "usage.sqlite3-wal"]
+    # The copy carried the -wal: u2 is gone, one waste session is left.
+    assert report["basis"]["waste"] == "memory_used" and report["sessions"]["waste"] == 1
+    assert _row(report, "handoff", 500)["items"] == 3
+
+
+def test_a_store_sidecar_that_changes_fails_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = known_vault(tmp_path)
+    real = ce._evaluate_copy
+
+    def touching(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        out = real(*args, **kwargs)
+        Path(f"{fixture.usage}-wal").write_bytes(b"")
+        return out
+
+    monkeypatch.setattr(ce, "_evaluate_copy", touching)
+    with pytest.raises(SnapshotChanged):
+        evaluate_snapshot(fixture.vault, options=CLEARED, usage=fixture.usage)
+
+
 def test_refuses_a_snapshot_that_needs_recovery(tmp_path: Path) -> None:
     fixture = known_vault(tmp_path)
     (fixture.vault / ".pending.json").write_text("{}", encoding="utf-8")

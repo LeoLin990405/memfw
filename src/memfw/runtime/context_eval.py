@@ -45,9 +45,12 @@ refuses a snapshot that would need ``memfw recover`` (a pending transaction
 or event append) and an output path inside it, copies it once into a private
 temporary directory (without its search index and lock file) and runs every
 provider and search there; the copy is deleted afterwards. The snapshot, the
-conversation store and the usage store are fingerprinted (path, size,
-mtime) before and after; a change fails the run (``SnapshotChanged``) and no
-report is returned. The stores are opened read-only (``mode=ro``).
+conversation store and the usage store (with their ``-wal``, ``-shm`` and
+``-journal`` sidecars) are fingerprinted (path, size, mtime) before and
+after; a change fails the run (``SnapshotChanged``) and no report is
+returned. The stores are never opened where they are: each is copied with
+its present sidecars into the private directory (a WAL store's last writes
+may be only in its ``-wal``) and the copy is opened read-only (``mode=ro``).
 
 **Privacy.** The report holds counts, ratios, token estimates, timings,
 slot names and cap values only: no memory body, title, query text, session
@@ -126,6 +129,9 @@ _COPY_IGNORED = frozenset(
     {"index.sqlite3", "index.sqlite3-wal", "index.sqlite3-shm", "index.sqlite3-journal"}
     | {".memfw.lock"}
 )
+#: SQLite files beside a store: copied with it and fingerprinted (a WAL store's last
+#: writes may live only in ``-wal``; opening the original would create ``-shm``).
+STORE_SIDECARS = ("-wal", "-shm", "-journal")
 _WORD = re.compile(r"\w{3,}", re.UNICODE)
 _SETTINGS_ENV = ("MEMFW_APP", "MEMFW_TENANT", "MEMFW_ALLOWED_SOURCES", "MEMFW_MCP_CLEARANCE")
 
@@ -272,6 +278,28 @@ def private_copy(snapshot: Path, workdir: Path) -> Path:
 
     target = workdir / "vault"
     shutil.copytree(snapshot, target, symlinks=True, ignore=ignore)
+    return target
+
+
+def store_files(store: Path) -> list[Path]:
+    """``store`` and its SQLite sidecar paths (present or not: both are fingerprinted)."""
+
+    return [store, *(Path(f"{store}{suffix}") for suffix in STORE_SIDECARS)]
+
+
+def private_store(store: Path, workdir: Path, name: str) -> Path:
+    """Copy ``store`` and its present sidecars to ``workdir/stores/name``; the copy is opened.
+
+    The original is never opened, so a WAL-mode store gets no ``-shm`` or
+    ``-wal`` beside it, and the copy keeps the writes still in its ``-wal``.
+    """
+
+    target_dir = workdir / "stores"
+    target_dir.mkdir(mode=0o700, exist_ok=True)
+    target = target_dir / name
+    for source, suffix in zip(store_files(store), ("", *STORE_SIDECARS), strict=True):
+        if os.path.lexists(source):
+            shutil.copyfile(source, f"{target}{suffix}")
     return target
 
 
@@ -740,20 +768,27 @@ def evaluate_snapshot(
         for output in outputs:
             if Path(output).expanduser().resolve() == store:
                 raise SnapshotRefused("an output path is a store path")
-    before = fingerprint([snapshot, *stores])
+    watched = [snapshot, *(path for store in stores for path in store_files(store))]
+    before = fingerprint(watched)
     own_workdir = workdir is None
     base = Path(tempfile.mkdtemp(prefix="memfw-c4-")) if workdir is None else Path(workdir)
     try:
+        conversations_path = Path(conversations).expanduser().resolve() if conversations else None
+        usage_path = Path(usage).expanduser().resolve() if usage else None
         report = _evaluate_copy(
             private_copy(snapshot, base),
             options,
-            conversations=Path(conversations).expanduser().resolve() if conversations else None,
-            usage=Path(usage).expanduser().resolve() if usage else None,
+            conversations=(
+                private_store(conversations_path, base, "conversations.sqlite")
+                if conversations_path
+                else None
+            ),
+            usage=private_store(usage_path, base, "usage.sqlite3") if usage_path else None,
         )
     finally:
         if own_workdir:
             shutil.rmtree(base, ignore_errors=True)
-    if fingerprint([snapshot, *stores]) != before:
+    if fingerprint(watched) != before:
         raise SnapshotChanged("the snapshot or a store changed during the evaluation; no report")
     return report
 
