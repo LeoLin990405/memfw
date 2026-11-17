@@ -22,8 +22,9 @@ Gates (fail closed):
   reported usage) and ``max_calls`` calls. When the next call would not fit,
   the search raises :class:`ProviderUnavailable` and the provider reports
   ``budget_spent`` from then on. A backend's own
-  :class:`BackendBudgetExhausted` or :class:`BackendUnavailable` does the same
-  for that call.
+  :class:`BackendBudgetExhausted` does the same. A
+  :class:`BackendUnavailable` (network, auth, deadline) only degrades that one
+  search (``backend_unavailable``); the next search tries again.
 
 Candidates are path refs (``kh:<path>#<heading>``, ``<source>#page=<n>``) with
 ``extra`` holding only ``kind`` (``section``), ``page`` (PDF) and ``why``
@@ -381,10 +382,13 @@ class PageIndexProvider:
         assert backend is not None
         try:
             reply = backend.run(TASK, data, max_tokens=self.settings.max_output_tokens)
-        except (BackendBudgetExhausted, BackendUnavailable):
-            with self._lock:
-                self.stopped = self.stopped or "backend"
+        except BackendBudgetExhausted:
+            with self._lock:  # the backend's own budget is spent: stop for this run
+                self.stopped = self.stopped or "backend_budget"
             raise ProviderUnavailable("budget_spent") from None
+        except BackendUnavailable:
+            # transient (network, auth, deadline): this search degrades, later ones retry
+            raise ProviderUnavailable("backend_unavailable") from None
         text = getattr(reply, "text", None)
         if not isinstance(text, str):
             raise ProviderUnavailable("bad_reply")

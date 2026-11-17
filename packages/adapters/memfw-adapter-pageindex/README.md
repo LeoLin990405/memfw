@@ -103,7 +103,9 @@ Gates, all fail closed:
   conversation tag tasks, so it cannot serve this adapter yet;
 - per-run budget: estimated prompt plus `max_output_tokens` must fit
   `max_run_tokens`, and calls must fit `max_calls`; then the provider stops
-  (`budget_spent`). A backend's own budget or unavailability errors stop it too.
+  (`budget_spent`). A backend's own budget error (`BackendBudgetExhausted`)
+  stops it too; a `BackendUnavailable` (network, auth, deadline) only degrades
+  that one search (`backend_unavailable`) and the next search tries again.
 
 ## References
 

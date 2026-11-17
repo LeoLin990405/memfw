@@ -518,6 +518,22 @@ def test_per_run_budget_stops_the_provider(tmp_path: Path) -> None:
     assert exhausted.available().reason == "budget_spent"
 
 
+def test_transient_backend_failure_degrades_one_search_only(tmp_path: Path) -> None:
+    from memfw.ports import BackendUnavailable
+
+    index = _index(tmp_path)
+    backend = RecordedBackend()
+    backend.raise_exc = BackendUnavailable("transient")
+    provider = _provider(index, backend)
+    budget = RecallBudget()
+    with pytest.raises(ProviderUnavailable, match="backend_unavailable"):
+        provider.search("drift", limit=3, budget=budget, tenant="", as_of=None)
+    assert provider.available().available and provider.stopped == ""
+    backend.raise_exc = None
+    assert provider.search("drift", limit=3, budget=budget, tenant="", as_of=None)
+    assert len(backend.calls) == 2
+
+
 @pytest.mark.parametrize("reply", ["not json", '["d1:0002"]', '{"node_ids": "d1", "x": 1}'])
 def test_malformed_reply_degrades(tmp_path: Path, reply: str) -> None:
     provider = _provider(_index(tmp_path), RecordedBackend(reply))
