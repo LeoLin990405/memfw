@@ -21,16 +21,22 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   neither memory changes; the candidate passes the open-question gate before it
   is staged. Never a vault write.
 - Dedupe per unordered pair: none while an unresolved open question lists both
-  ids, or while a staged candidate for the pair was not accepted. Same tenant
-  only; a pair with a private memory (any `sensitivity:*`, or a `privacy:` tag
-  other than `none`) is skipped.
-- New `memfw dream accept-question DREAM_ID MEM_A MEM_B [--apply]`
-  (`memfw.dream.questions.accept_question`): the human writes the question
-  through the U1 gate, with `evidence: [dream:DREAM_ID]`. Answer + supersede and
-  reject (remove the staged file) are documented in `docs/dream.md`.
-- `report.open_questions` appears only when a conflict was found; a dream
-  without conflicts is byte-identical to before (harness probe
-  `tests.harness.probes:dream_run`).
+  ids, while a resolved one does and neither memory changed since it closed,
+  while a recorded rejection matches both memories' versions, or while a staged
+  candidate for the pair was not accepted. Same tenant only; a pair with a
+  private memory (`sensitivity:*`, a `privacy:` tag other than `none`, or the
+  lifecycle meta-index's privacy; fail closed) is skipped. New
+  `--lifecycle-source` on `dream run` and `dream accept-question`.
+- New `memfw dream accept-question DREAM_ID MEM_A MEM_B [--apply]`: the human
+  writes the question through the U1 gate, rebuilt from the two memories (an
+  edited or outdated staged candidate is refused; the dry run prints the full
+  memory), under the vault lock, with `evidence: [dream:DREAM_ID]`.
+- New `memfw dream reject-question DREAM_ID MEM_A MEM_B [--apply]`: removes
+  only that candidate and records a rejection under
+  `_candidates/dream-rejections/`.
+- Default output: `report.open_questions` and the candidate appear only when a
+  conflict was found; a dream without conflicts is byte-identical to before
+  (harness probe `tests.harness.probes:dream_run`).
 
 ### Added — `memory_context` cache and `if_version` (C3)
 

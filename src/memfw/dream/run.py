@@ -36,7 +36,13 @@ from .curate import curate
 from .distill import MIN_EVENTS, distill
 from .model import Candidate
 from .questions import ACTION as OPEN_QUESTION_ACTION
-from .questions import check_candidate, conflict_questions, staged_questions
+from .questions import (
+    check_candidate,
+    conflict_questions,
+    load_lifecycle,
+    rejections,
+    staged_questions,
+)
 from .stage import check_dream_id, stage
 from .verify import Judge, cited, is_current, verify
 
@@ -66,6 +72,9 @@ class DreamOptions:
     dream_id: str | None = None
     judge: str | None = None
     allow_config_judge: bool = False
+    lifecycle_source: Path | None = None
+    """Lifecycle meta-index for the open-question privacy check (default: the
+    vault's ``status/memory-meta-index.json`` when present)."""
     """Honour ``dream_judge`` from vault.yaml. Off: the vault must not choose code to run."""
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -218,6 +227,8 @@ def run_dream(
             tenant_documents,
             tenant=options.tenant,
             staged=staged_questions(repository.root, tenant=options.tenant),
+            rejected=rejections(repository.root, tenant=options.tenant),
+            lifecycle=load_lifecycle(repository.root, options.lifecycle_source),
         )
     distilled, distill_stats = distill(documents, verified, min_events=options.min_events)
     budget = check_budget(repository.root, config)

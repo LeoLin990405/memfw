@@ -87,6 +87,7 @@ def test_memfw_dream_is_a_command_group_with_run() -> None:
         "run",
         "skills",
         "accept-question",
+        "reject-question",
     }
 
 
