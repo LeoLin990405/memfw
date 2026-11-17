@@ -75,6 +75,43 @@ their bytes (see [Compatibility and upgrade](#compatibility-and-upgrade)).
   byte-identical vault check; only its disposable index files are excluded, so
   `events.jsonl` and `events.state.json` are covered.
 
+### Internal — MCP gets everything from the Runtime (A3b, A4b)
+
+- `memfw.mcp` now imports only `memfw.ports`, `memfw.runtime` and its own
+  modules: all 12 `memfw.mcp` allowlist entries are gone (`ALLOWLIST_SIZE`
+  13 → 1; the root `RelatedIndex` re-export, A5, is the one left).
+- Settings: `memfw.runtime.resolve_settings` (explicit values, else
+  `MEMFW_APP`, `MEMFW_TENANT`, `MEMFW_ENTITY_ENABLED`,
+  `MEMFW_ALLOWED_SOURCES`, and the `HttpEmbeddingProvider` from
+  `MEMFW_EMBEDDING_*`) and `history_refresh_seconds` replace the parsing in
+  `Gateway.__init__`; the values are the same.
+- `Runtime.open_repository()` is the vault opener (refuses a missing vault,
+  opens per call from the unresolved root, never keeps one); `Gateway._repo`
+  and `Runtime.ensure_index` use it.
+- `Runtime.search` checks the `memory_search` arguments (blank query,
+  `policy`, 512-character `scope`, allowed `source`; same messages, before the
+  vault is opened), then runs every mode (fts, hybrid/vector, multihop,
+  two_stage, alias expansion, U2 labels) and builds the rows; that code moved
+  from `memfw/mcp/tools_search.py` to `memfw/runtime/search.py` (the MCP
+  server passes its `_client_message` for error texts). The MCP tool only
+  parses the arguments.
+- `Gateway.tenant`, `allowed_sources`, `embedder` and `entity_enabled` are
+  read-only properties returning the Runtime's values.
+- `Runtime.remember`, `related`, `status`, `conversation_share`,
+  `history_scoped`, `history_ref_source`, `dream_run` and `staged_dreams`
+  (modules `memfw/runtime/{memories,sharing,dreams}.py`) back the other tool
+  groups; the capability modules load on first use, so `import memfw.runtime`
+  stays light.
+- Byte-identical: `mcp_all_tools` (11 variants) and `mcp_memory_search_stable`
+  (73 payloads, every mode with and without an embedder, error paths included)
+  match `origin/main`; the second is a new opt-in test next to the first
+  (`MEMFW_ARCH_BASE_REF`).
+- Tests that patch `search_multihop` now patch `memfw.runtime.search`.
+  `RawHashCache`, `RAW_HASH_CACHE`, `FRESHNESS_READ_ATTEMPTS` and
+  `frontmatter_version` are public in `memfw.runtime.search`; the underscore
+  names in `memfw.mcp.tools_search` and `memfw.mcp.server` are deprecated
+  aliases.
+
 ### Internal — swap drills: every port has two implementations (A5a)
 
 - New `memfw.ports.reference` (stdlib only, imports only `memfw.ports`): `InMemoryRecallProvider`

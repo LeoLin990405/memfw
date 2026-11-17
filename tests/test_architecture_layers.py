@@ -25,7 +25,7 @@ import pytest
 from tests.architecture import allowlist, layers, scan
 
 #: ``len(allowlist.ALLOWLIST)``. Lower it when an entry is removed; never raise it.
-ALLOWLIST_SIZE = 13
+ALLOWLIST_SIZE = 1
 
 STEP = re.compile(r"^A[1-5]\b")
 ALLOWLIST_PATH = "tests/architecture/allowlist.py"
@@ -442,8 +442,9 @@ def test_mutations_are_caught(tmp_path: Path, code: str, edge: Edge | None) -> N
 
 
 def test_new_site_on_an_allowlisted_edge_is_caught(tmp_path: Path) -> None:
-    found = _mutant(tmp_path, "memfw.mcp.mutant", "from memfw.capture import CaptureSession\n")
-    edge = ("memfw.mcp", "memfw.capture")
+    # A3b emptied the memfw.mcp entries; the root re-export is the edge left.
+    found = _mutant(tmp_path, "memfw.mutant", "from memfw.related import RelatedIndex\n")
+    edge = ("memfw", "memfw.related")
     assert edge in found
     merged = dict(_current()[edge][1])
     for module, count in found[edge][1].items():
@@ -465,6 +466,14 @@ def test_a2b_edges_are_gone(edge: Edge) -> None:
 
     assert edge not in _current()
     assert edge not in allowlist.ALLOWLIST
+
+
+def test_a3b_mcp_imports_only_ports_and_runtime() -> None:
+    """A3b: every memfw.mcp edge to an implementation is gone, none allowlisted."""
+
+    targets = {target for source, target in _current() if source == "memfw.mcp"}
+    assert targets == set()
+    assert not [edge for edge in allowlist.ALLOWLIST if edge[0] == "memfw.mcp"]
 
 
 # --- the scanner -------------------------------------------------------------

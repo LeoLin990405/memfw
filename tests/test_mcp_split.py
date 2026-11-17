@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from memfw.mcp import protocol, schema, server, tools_dream, tools_search
+from memfw.runtime import search as runtime_search
 
 #: Constants re-exported by ``memfw.mcp.server`` and the module that defines them.
 CONSTANTS = {
@@ -24,8 +25,16 @@ CONSTANTS = {
     "SEARCH_POLICIES": schema,
     "SERVER_INFO": schema,
     "TOOLS": schema,
+    # Deprecated aliases of ``memfw.runtime.search`` public names (A3b); see below.
     "_FRESHNESS_READ_ATTEMPTS": tools_search,
     "_RAW_HASH_CACHE": tools_search,
+}
+#: The deprecated alias in ``tools_search``/``server`` and its public name (A3b).
+RUNTIME_ALIASES = {
+    "_FRESHNESS_READ_ATTEMPTS": "FRESHNESS_READ_ATTEMPTS",
+    "_RAW_HASH_CACHE": "RAW_HASH_CACHE",
+    "_RawHashCache": "RawHashCache",
+    "_frontmatter_version": "frontmatter_version",
 }
 #: Defined in ``server.py`` itself.
 OWN = {"Gateway", "main", "serve"}
@@ -41,8 +50,10 @@ def test_server_reexports_are_the_defining_modules_objects() -> None:
     }
     for name, module in CONSTANTS.items():
         assert getattr(server, name) is getattr(module, name), name
-    assert server._RawHashCache is tools_search._RawHashCache
-    assert server._frontmatter_version is tools_search._frontmatter_version
+    for alias, public in RUNTIME_ALIASES.items():
+        assert getattr(server, alias) is getattr(runtime_search, public), alias
+        assert getattr(tools_search, alias) is getattr(runtime_search, public), alias
+        assert public in runtime_search.__all__, public
     assert server.client_endpoint_fields is protocol.client_endpoint_fields
     for name in OWN:
         assert getattr(server, name).__module__ == "memfw.mcp.server", name
@@ -139,3 +150,71 @@ def test_all_tools_byte_identical_to_base_ref() -> None:
             payload=result.payload, old=with_expected_c2_changes(result.old), new=result.new
         )
         assert expected.identical, f"{result.payload}:\n{expected.diff[:4000]}"
+
+
+def test_mcp_search_policies_are_the_runtime_ones() -> None:
+    """``Runtime.search`` checks ``policy`` against ``RECALL_POLICIES`` (A3b)."""
+
+    from memfw.runtime import RECALL_POLICIES
+
+    assert schema.SEARCH_POLICIES == RECALL_POLICIES
+
+
+def _stable_search_payloads() -> list[dict[str, Any]]:
+    """Every mode, a few queries, with/without an embedder and an open question."""
+
+    payloads: list[dict[str, Any]] = []
+    for mode in ("fts", "hybrid", "vector", "multihop", "two_stage"):
+        for query in ("service port", "backup", "port"):
+            for embedder in (False, True):
+                for open_question in (False, True):
+                    arguments: dict[str, Any] = {"query": query, "mode": mode, "limit": 5}
+                    if open_question and mode != "two_stage":
+                        arguments["labels"] = True
+                    payloads.append(
+                        {
+                            "arguments": arguments,
+                            "embedder": embedder,
+                            "open_question": open_question,
+                        }
+                    )
+    payloads += [
+        {"arguments": {"query": "port", "mode": "two_stage", "policy": "strict"}},
+        {
+            "arguments": {"query": "port", "mode": "two_stage", "policy": "strict"},
+            "open_question": True,
+            "embedder": True,
+        },
+        {"arguments": {"query": "port", "mode": "fts", "as_of": "2020-01-01"}},
+        {"arguments": {"query": "port", "mode": "multihop", "as_of": "2020-01-01"}},
+        {"arguments": {"query": "port", "mode": "two_stage", "as_of": "2020-01-01"}},
+        {"arguments": {"query": "port", "mode": "fts", "scope": " x "}},
+        {"arguments": {"query": "port", "mode": "fts", "scope": "x" * 513}},
+        {"arguments": {"query": "port", "mode": "fts", "scope": 3}},
+        {"arguments": {"query": "port", "mode": "fts", "policy": "strict"}},
+        {"arguments": {"query": "port", "mode": "two_stage", "policy": "bogus"}},
+        {"arguments": {"query": "port", "mode": "fts", "source": "nas"}},
+        {"arguments": {"query": "", "mode": "fts"}},
+        {"arguments": {"query": "   ", "mode": "two_stage"}},
+    ]
+    return payloads
+
+
+@pytest.mark.skipif(
+    not os.environ.get("MEMFW_ARCH_BASE_REF"),
+    reason="opt-in (slow): set MEMFW_ARCH_BASE_REF to compare memory_search against that ref",
+)
+def test_memory_search_stable_byte_identical_to_base_ref() -> None:
+    """``mcp_memory_search_stable`` on the base ref and on this tree (A3b moved every mode)."""
+
+    from tests.harness import byte_identical
+
+    if not byte_identical.git_available():
+        pytest.skip("git is not available")
+    results = byte_identical.compare(
+        "tests.harness.probes:mcp_memory_search_stable",
+        _stable_search_payloads(),
+        old_ref=os.environ["MEMFW_ARCH_BASE_REF"],
+    )
+    for result in results:
+        assert result.identical, f"{result.payload}:\n{result.diff[:4000]}"
