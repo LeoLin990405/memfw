@@ -513,7 +513,10 @@ only be deleted locally (`memfw delete`), after a human review as always.
 `memfw forget residue <memory_id> --root <vault> [--related-db P]
 [--entities-db P]` checks, read-only, that a forgotten memory left nothing in
 the derived stores: the FTS index, the related projection (default
-`<vault>/.memfw-related.sqlite`), `corroboration.sqlite3`, the usage
+`<vault>/.memfw-related.sqlite`), the corroboration projection
+(`~/.local/share/memfw/corroboration/<key>.sqlite3`, outside the vault; a
+leftover vault-root `corroboration.sqlite3` from an earlier release is
+checked too, as `corroboration_legacy`), the usage
 projection and, when given, the entity projection. A hard-deleted (or
 never-existing) id may appear in none of them; a closed memory
 (`valid_to`/`superseded_by`) may keep FTS rows for history queries but must
