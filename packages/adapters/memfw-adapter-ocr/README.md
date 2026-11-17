@@ -56,7 +56,7 @@ Implementations:
 | `backend` | What it runs |
 |---|---|
 | `mcp` (default) | an OCR server named in `mcp_command`, run as a child process and spoken to over the MCP stdio protocol |
-| `pdftotext` | poppler's `pdftotext -bbox-layout` (text-layer PDFs only), at the absolute path in `pdftotext` |
+| `pdftotext` | poppler's `pdftotext -bbox-layout` (text-layer PDFs only), at the absolute path in `pdftotext`; with `pdfinfo` (absolute path) only the first `max_pages` pages are converted and coverage names the page count, without it a longer PDF is refused (`page_budget`); output is read with a 64 MiB cap |
 | `"module:factory"` | any other implementation; `factory(backend_options)` returns it |
 
 Engine discovery is explicit configuration only: no `PATH` search, no
@@ -130,7 +130,7 @@ options={"source": "<path under a source root>", "root": 0, "sha256": …,
   "mcp_env": {},
   "lang": "en", "engine": "", "dpi": 200,
   "text_layer_min_words": 10, "sync_max_pages": 5, "allow_async_jobs": false,
-  "pdftotext": "/absolute/path/to/pdftotext",
+  "pdftotext": "/absolute/path/to/pdftotext", "pdfinfo": "/absolute/path/to/pdfinfo",
   "source_roots": ["/absolute/dir"],
   "clearance": ["public", "shared"],
   "timeout_seconds": 600, "max_pages": 200

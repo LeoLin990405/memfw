@@ -58,6 +58,7 @@ class Settings:
     poll_seconds: float = 2.0
     allow_async_jobs: bool = False
     pdftotext: str = ""
+    pdfinfo: str = ""
     backend_options: Mapping[str, Any] = field(default_factory=dict)
     source_roots: Sequence[str] = ()
     clearance: Sequence[str] = tuple(sorted(DEFAULT_CLEARANCE))
@@ -119,7 +120,7 @@ def build_backend(settings: Settings) -> OcrBackend:
             allow_async_jobs=settings.allow_async_jobs,
         )
     if settings.backend == "pdftotext":
-        return PdftotextBackend(settings.pdftotext)
+        return PdftotextBackend(settings.pdftotext, pdfinfo=settings.pdfinfo)
     module_name, attr = settings.backend.split(":", 1)
     backend = getattr(importlib.import_module(module_name), attr)(dict(settings.backend_options))
     if not isinstance(backend, OcrBackend):

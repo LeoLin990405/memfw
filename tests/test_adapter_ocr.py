@@ -557,6 +557,41 @@ def test_recorded_pdftotext_output_maps_to_bottom_left_points() -> None:
     assert candidate["source"] == {"pages": 2, "page_size": [612, 792]}
 
 
+def _fake_poppler(tmp_path: Path, *, pages: int = 2, size: int = 0) -> tuple[str, str]:
+    """Stand-ins for pdftotext/pdfinfo that print recorded output (and log their argv)."""
+
+    recorded = FIXTURES / "pdftotext_bbox_layout.xhtml"
+    log = tmp_path / "poppler-argv.txt"
+    tool = tmp_path / "fake-pdftotext"
+    filler = f"head -c {size} /dev/zero; " if size else ""
+    tool.write_text(f'#!/bin/sh\necho "$@" >> "{log}"\n{filler}cat "{recorded}"\n')
+    info = tmp_path / "fake-pdfinfo"
+    info.write_text(f"#!/bin/sh\nprintf 'Title: x\\nPages:          {pages}\\n'\n")
+    for path in (tool, info):
+        path.chmod(0o700)
+    return str(tool), str(info)
+
+
+def test_pdftotext_passes_the_page_budget_and_caps_output(
+    tmp_path: Path, pdf: tuple[Path, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from memfw_adapter_ocr import pdftotext as module
+
+    path, sha = pdf
+    tool, info = _fake_poppler(tmp_path, pages=7)
+    candidate = _run(PdftotextBackend(tool, pdfinfo=info), path, sha, budget=OcrBudget(60, 2))
+    assert "-f 1 -l 2 " in (tmp_path / "poppler-argv.txt").read_text()
+    assert candidate["coverage"] == {"status": "partial", "detail": "pages 1-2/7"}
+    assert candidate["source"]["pages"] == 7
+    with pytest.raises(OcrError, match="page_budget"):  # no pdfinfo: length unknown
+        _run(PdftotextBackend(tool), path, sha, budget=OcrBudget(60, 1))
+    monkeypatch.setattr(module, "MAX_OUTPUT_BYTES", 4096)
+    (tmp_path / "big").mkdir()
+    big, _ = _fake_poppler(tmp_path / "big", size=10_000)
+    with pytest.raises(OcrError, match="pdftotext_output_too_large"):
+        _run(PdftotextBackend(big), path, sha)
+
+
 @pytest.mark.skipif(shutil.which("pdftotext") is None, reason="pdftotext not installed")
 def test_real_pdftotext_on_a_synthetic_pdf(tmp_path: Path, pdf: tuple[Path, str]) -> None:
     path, sha = pdf

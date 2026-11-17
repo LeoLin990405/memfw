@@ -1,11 +1,11 @@
 """``PdftotextBackend``: poppler's ``pdftotext -bbox-layout`` for text-layer PDFs (fallback).
 
-The executable's absolute path comes from the settings (``pdftotext: /...``);
-nothing searches ``PATH``. One line of the output is one segment, with its box
-converted by :mod:`.proxy` from poppler's frame (points, top-left origin) to
-memfw's (points, bottom-left origin). A scanned PDF gives pages without lines;
-the proxy's ``coverage`` still names every page read and ``empty_pages``
-lists the ones without text.
+The executable's absolute path comes from the settings (``pdftotext: /...``,
+and optionally ``pdfinfo: /...``); nothing searches ``PATH``. One line of the
+output is one segment, with its box converted by :mod:`.proxy` from
+poppler's frame (points, top-left origin) to memfw's (points, bottom-left
+origin). A scanned PDF gives pages without lines; the proxy's ``coverage``
+still names every page read and notes the pages without text.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import html
 import os
 import re
 import subprocess
+import threading
 from pathlib import Path
 
 from ._ports import Availability
@@ -66,53 +67,131 @@ def tool_version(executable: str) -> str:
     return match.group(1).decode() if match else "unknown"
 
 
+def _run_capped(argv: list[str], *, timeout: float, cap: int, workdir: Path) -> bytes:
+    """Run ``argv`` and read at most ``cap`` bytes of stdout (killed when over, or late)."""
+
+    try:
+        proc = subprocess.Popen(  # noqa: S603 - the operator's configured executable
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            env=child_env(None, workdir),
+            cwd=workdir,
+        )
+    except OSError:
+        raise OcrError("pdftotext_failed") from None
+    late = threading.Event()
+
+    def stop() -> None:
+        late.set()
+        proc.kill()
+
+    timer = threading.Timer(timeout, stop)
+    timer.daemon = True
+    timer.start()
+    chunks: list[bytes] = []
+    size = 0
+    try:
+        assert proc.stdout is not None
+        while chunk := proc.stdout.read(1 << 16):
+            size += len(chunk)
+            if size > cap:
+                proc.kill()
+                raise OcrError("pdftotext_output_too_large")
+            chunks.append(chunk)
+        code = proc.wait()
+    finally:
+        timer.cancel()
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        if proc.stdout is not None:
+            proc.stdout.close()
+    if late.is_set():
+        raise OcrError("pdftotext_timeout")
+    if code != 0:
+        raise OcrError("pdftotext_failed")
+    return b"".join(chunks)
+
+
+_PAGES = re.compile(rb"^Pages:\s+(\d+)\s*$", re.M)
+
+
 class PdftotextBackend:
-    """An :class:`~.backend.OcrBackend` for PDFs with a text layer (``kind: extract``)."""
+    """An :class:`~.backend.OcrBackend` for PDFs with a text layer (``kind: extract``).
+
+    ``pdfinfo`` (optional, absolute path) gives the page count, so only the
+    first ``max_pages`` pages are converted (``-l``) and coverage can say how
+    many there are. Without it, a PDF longer than ``max_pages`` is refused
+    (``page_budget``). Output is read with a byte cap (:data:`MAX_OUTPUT_BYTES`).
+    """
 
     name = "pdftotext"
 
-    def __init__(self, executable: str) -> None:
+    def __init__(self, executable: str, *, pdfinfo: str = "") -> None:
         if not isinstance(executable, str) or not Path(executable).is_absolute():
             raise OcrError("pdftotext_not_absolute")
+        if pdfinfo and (not isinstance(pdfinfo, str) or not Path(pdfinfo).is_absolute()):
+            raise OcrError("pdfinfo_not_absolute")
         self.executable = executable
+        self.pdfinfo = pdfinfo
 
     def __repr__(self) -> str:
         return "PdftotextBackend()"
 
     def available(self) -> Availability:
-        if not Path(self.executable).is_file() or not os.access(self.executable, os.X_OK):
-            return Availability.missing("pdftotext_missing")
+        for tool in filter(None, (self.executable, self.pdfinfo)):
+            if not Path(tool).is_file() or not os.access(tool, os.X_OK):
+                return Availability.missing("pdftotext_missing")
         return Availability.ok()
+
+    def _page_count(self, path: Path, budget: OcrBudget, workdir: Path) -> int | None:
+        if not self.pdfinfo:
+            return None
+        info = _run_capped(
+            [self.pdfinfo, str(path)], timeout=budget.timeout_seconds, cap=1 << 20, workdir=workdir
+        )
+        match = _PAGES.search(info)
+        if match is None or int(match.group(1)) < 1:
+            raise OcrError("pdftotext_unreadable")
+        return int(match.group(1))
 
     def extract(self, path: Path, *, media: Media, budget: OcrBudget, workdir: Path) -> OcrResult:
         if media != "pdf":
             raise OcrError("pdftotext_pdf_only")
-        try:
-            done = subprocess.run(  # noqa: S603 - the operator's configured executable
-                [self.executable, "-q", "-bbox-layout", "-enc", "UTF-8", str(path), "-"],
-                capture_output=True,
-                timeout=budget.timeout_seconds,
-                env=child_env(None, workdir),
-                cwd=workdir,
-                stdin=subprocess.DEVNULL,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            raise OcrError("pdftotext_timeout") from None
-        except OSError:
-            raise OcrError("pdftotext_failed") from None
-        if done.returncode != 0:
-            raise OcrError("pdftotext_failed")
-        if len(done.stdout) > MAX_OUTPUT_BYTES:
-            raise OcrError("pdftotext_output_too_large")
-        pages = parse_bbox_layout(done.stdout.decode("utf-8", errors="replace"))
+        total = self._page_count(path, budget, workdir)
+        last = min(total, budget.max_pages) if total is not None else budget.max_pages + 1
+        raw = _run_capped(
+            [
+                self.executable,
+                "-q",
+                "-bbox-layout",
+                "-enc",
+                "UTF-8",
+                "-f",
+                "1",
+                "-l",
+                str(last),
+                str(path),
+                "-",
+            ],
+            timeout=budget.timeout_seconds,
+            cap=MAX_OUTPUT_BYTES,
+            workdir=workdir,
+        )
+        pages = parse_bbox_layout(raw.decode("utf-8", errors="replace"))
         if not pages:
             raise OcrError("pdftotext_no_pages")
+        if total is None:
+            if len(pages) > budget.max_pages:
+                raise OcrError("page_budget")  # longer than the budget, length unknown
+            total = len(pages)
         return OcrResult(
             tool="pdftotext",
             version=tool_version(self.executable),
             media="pdf",
-            total_pages=len(pages),
+            total_pages=total,
             pages=tuple(pages[: budget.max_pages]),
             kind="extract",
         )
