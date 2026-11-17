@@ -252,7 +252,7 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
     from memfw.ports import PORTS_API_VERSION as v
 
     assert wheels == [
-        "memfw_adapter_bm25s-0.1.0-py3-none-any.whl",
+        "memfw_adapter_bm25s-0.1.1-py3-none-any.whl",
         "memfw_adapter_deepseek-0.1.1-py3-none-any.whl",
         "memfw_adapter_qdrant-0.1.1-py3-none-any.whl",
         "memfw_adapter_qmd-0.1.0-py3-none-any.whl",

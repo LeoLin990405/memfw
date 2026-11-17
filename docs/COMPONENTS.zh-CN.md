@@ -96,7 +96,7 @@ CI 的 `standalone-wheels` 任务会构建两者，装进一个没有 memfw 的�
 
 ## bm25s 召回适配器
 
-`packages/adapters/memfw-adapter-bm25s`（wheel 名 `memfw_adapter_bm25s`，版本 0.1.0）是一个进程内的 `RecallProvider`：用 bm25s 0.3.16（MIT）给记忆排序，中文用 jieba 切词。它**默认关闭**：只有 `vault.yaml` 的 `runtime.recall.adapters` 里写了 `memfw_adapter_bm25s:factory`，MCP `memory_search` 的 `mode=two_stage` 才会用它。它只索引隐私级别在 `clearance` 里的记忆（默认 `public,shared`），索引放在 vault 之外的私有目录（`~/.local/share/memfw/adapters/bm25s/`）。memfw 本身从不导入它。见 [`adapter-bm25s.md`](adapter-bm25s.md)。
+`packages/adapters/memfw-adapter-bm25s`（wheel 名 `memfw_adapter_bm25s`，版本 0.1.1）是一个进程内的 `RecallProvider`：用 bm25s 0.3.16（MIT）给记忆排序，中文用 jieba 切词。它**默认关闭**：只有 `vault.yaml` 的 `runtime.recall.adapters` 里写了 `memfw_adapter_bm25s:factory`，MCP `memory_search` 的 `mode=two_stage` 才会用它。它只索引隐私级别在 `clearance` 里的记忆（默认 `public,shared`），索引放在 vault 之外的私有目录（`~/.local/share/memfw/adapters/bm25s/`）。memfw 本身从不导入它。见 [`adapter-bm25s.md`](adapter-bm25s.md)。
 
 ## Qdrant 召回适配器
 

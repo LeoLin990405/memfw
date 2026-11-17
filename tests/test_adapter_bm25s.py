@@ -288,6 +288,35 @@ def test_a_data_dir_inside_the_vault_is_refused(tmp_path: Path) -> None:
         factory({"vault": str(repository.root), "data_dir": str(link / "idx")})
 
 
+def test_a_data_dir_naming_the_vault_in_another_case_is_refused(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    swapped = repository.root.parent / repository.root.name.upper()
+    if not swapped.exists():
+        pytest.skip("case-sensitive file system: another case is another directory")
+    with pytest.raises(ValueError, match="outside the vault"):
+        factory({"vault": str(repository.root), "data_dir": str(swapped / "idx")})
+    # The vault itself named in another case is the same vault, too.
+    with pytest.raises(ValueError, match="outside the vault"):
+        factory({"vault": str(swapped), "data_dir": str(repository.root / "idx")})
+
+
+def test_a_relative_data_dir_is_resolved_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = _vault(tmp_path)
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    monkeypatch.chdir(first)
+    provider = factory({"vault": str(repository.root), "data_dir": "rel-index"})
+    expected = (first / "rel-index").resolve() / store.vault_key(repository.root)
+    assert provider.index_dir() == expected and provider.index_dir().is_absolute()
+    monkeypatch.chdir(second)  # a later working directory does not move the index
+    assert _search(provider, "homelab backup")
+    assert provider.index_dir() == expected
+    assert list(expected.glob("idx-*")) and not (second / "rel-index").exists()
+
+
 def test_a_data_dir_of_another_user_or_not_private_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
