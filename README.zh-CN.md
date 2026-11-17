@@ -297,7 +297,7 @@ memfw dream skills --root /path/to/vault --from-queue          # 用 worker 排�
 
 候选文件、报告和 worker 状态只会新增键或表，旧的 reader 和 worker 照常工作（旧 worker 只是忽略扫描游标）。细节见 [`docs/dream.md`](docs/dream.md#memory-fields)。
 
-**从 0.2.0 升到 0.3.0 时，共用同一个 vault 的所有机器要一起升。** memfw 0.2.0 能读 0.3.0 写出的文件，但它一旦改写某条记忆，就会丢掉所有它不认识的字段：`epistemic`、`causal`、`causal_record`、`limitations`、`experience`、`open_question` 块、`privacy`，以及顶层的 `sensitivity:` 键（记忆因此可能被放宽）。0.3.0 压缩过事件日志之后，0.2.0 也再读不了这份日志。会话库在第一次打开时迁移到 schema 2（每个会话都会重读、重新处理一次）；`memfw-http/2` 有两处回应变了：不带租户的 `/related` 查有租户的记忆时返回 404，`/stage` 用已有的 `proposal_id` 提交不同内容时返回 409。见 [`CHANGELOG.md` → Compatibility / upgrade notes](CHANGELOG.md#compatibility--upgrade-notes)。
+**从 0.2.0 升到 0.3.0 时，共用同一个 vault 的所有机器要一起升。** memfw 0.2.0 能读 0.3.0 写出的文件，但它一旦改写某条记忆，就会丢掉所有它不认识的字段：`epistemic`、`causal`、`causal_record`、`limitations`、`experience`、`open_question` 块、`privacy`，以及顶层的 `sensitivity:` 键（记忆因此可能被放宽）。0.3.0 压缩过事件日志之后，0.2.0 也再读不了这份日志。会话库在第一次打开时迁移到 schema 2（worker 可能把会话重新处理一次，最多是全部会话；开启云端后端之前，先用 extractive 后端跑一遍 worker）；`memfw-http/2` 有两处回应变了：不带租户的 `/related` 查有租户的记忆时返回 404，`/stage` 用已有的 `proposal_id` 提交不同内容时返回 409。见 [`CHANGELOG.md` → Compatibility / upgrade notes](CHANGELOG.md#compatibility--upgrade-notes)。
 
 ## 🌐 集成与联邦
 

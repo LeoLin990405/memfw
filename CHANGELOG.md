@@ -128,18 +128,20 @@ The entries after this summary give the details, newest first.
 - **Conversation store schema 2.** The first open by 0.3.0 migrates the store
   in one transaction (turn ownership backfilled, cursors cleared), so the next
   ingest re-reads every session once. The session fingerprint now includes a
-  UTC-normalised `updated_at`, so the next conversation worker run re-processes
-  every session once. Readers skip a store directory that is a symlink
+  UTC-normalised `updated_at`, so the next conversation worker run may
+  re-process sessions once: up to every session, namely those whose
+  timestamps were not plain UTC or whose turns or offsets change on the
+  re-read. Readers skip a store directory that is a symlink
   resolving outside its root (a warning names it); point the root at the real
   directory.
 - **Cloud tagging is off; turn it on after the re-processing.** The DeepSeek
   adapter is a separate wheel; the worker uses it only with `conversations:
   {backend, cloud: true}` in `vault.yaml` and `DEEPSEEK_API_KEY` set.
-  Otherwise the worker behaves as in 0.2.0. The one-time re-processing above
-  counts every session as *changed*, and `backfill_days` / `replan_limit`
-  only hold back *unchanged* sessions, so those caps do not limit it. Run the
-  worker once on the default extractive backend after upgrading, then enable
-  the cloud backend; its re-planning of the then unchanged history is capped
+  Otherwise the worker behaves as in 0.2.0. A session the one-time
+  re-processing above picks up counts as *changed*, and `backfill_days` /
+  `replan_limit` only hold back *unchanged* sessions, so those caps do not
+  limit it. Run the worker on the default extractive backend after upgrading,
+  before enabling the cloud backend; its re-planning of the then unchanged history is capped
   (30 days, newest 1000 sessions by default).
 - **Expected stricter output.** Fail-closed fixes can hide rows 0.2.0 showed
   or keep records 0.2.0 dropped: `privacy:`, `sensitivity:` and `lifecycle:`

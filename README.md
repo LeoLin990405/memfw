@@ -438,7 +438,8 @@ workers keep working (an older worker simply ignores the scan cursor). Details i
 `causal`, `causal_record`, `limitations`, `experience`, the `open_question` block, `privacy` and
 a top-level `sensitivity:` key (so it can loosen a memory). Once 0.3.0 compacts a vault's event
 log, 0.2.0 can no longer read that log. The conversation store moves to schema 2 on first open
-(every session is re-read and re-processed once), and two `memfw-http/2` answers changed:
+(the worker may re-process sessions once, up to every session; run it on the extractive backend
+before enabling a cloud backend), and two `memfw-http/2` answers changed:
 `/related` without a tenant gives 404 for a tenanted memory, and `/stage` with a known
 `proposal_id` but changed content gives 409. See
 [`CHANGELOG.md` → Compatibility / upgrade notes](CHANGELOG.md#compatibility--upgrade-notes).
