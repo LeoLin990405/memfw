@@ -212,9 +212,10 @@ combination is scored against every `--resident-caps` value (default
 order while their tokens fit under the cap; the first that does not fit and all
 later ones are demoted (they would become a catalogue line plus a
 `memory_search(mode=two_stage)` hint) and add neither cost nor coverage. A slot
-that is degraded (for example `handoff` without `--conversations`:
-`unavailable`) costs and covers nothing; a slot the build does not know is one
-`available: false` row and is left out of the sweep.
+that is degraded costs and covers nothing; a slot the build does not know is one
+`available: false` row, and one that is `unavailable` at every cap (for example
+`handoff` without `--conversations`) keeps its rows; both are listed in
+`settings.unavailable_slots` and left out of the sweep.
 
 **Read-only, by construction.** The snapshot is never opened in place. The
 command refuses a path without `vault.yaml`, a snapshot with an interrupted

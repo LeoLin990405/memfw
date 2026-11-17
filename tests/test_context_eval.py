@@ -144,7 +144,12 @@ def test_handoff_without_a_store_is_unavailable(tmp_path: Path) -> None:
 
     handoff = _row(report, "handoff", 500)
     assert handoff["degraded"] == "unavailable" and handoff["coverage"] is None
-    row = _sweep(report, 1000, core=500, handoff=500, topics=500)
+    assert _row(report, "handoff", 25)["degraded"] == "unavailable"
+    # Unavailable at every cap: listed, and not a sweep column (no repeated rows).
+    assert report["settings"]["unavailable_slots"] == ["handoff"]
+    assert all("handoff" not in row["slot_caps"] for row in report["sweep"])
+    assert len(report["sweep"]) == 2 * 2 * 2
+    row = _sweep(report, 1000, core=500, topics=500)
     assert row["resident"] == ["core", "topics"]
 
 

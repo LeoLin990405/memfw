@@ -704,6 +704,12 @@ def _default_now(documents: Sequence[MemoryDocument], events: Sequence[Event]) -
     return max(moments) if moments else datetime(1970, 1, 1, tzinfo=UTC)
 
 
+def _unavailable(build: SlotBuild) -> bool:
+    """The slot does not exist here, or its source is missing (``degraded: unavailable``)."""
+
+    return not build.available or build.degraded == "unavailable"
+
+
 def _slot_row(
     build: SlotBuild, hits: Sequence[frozenset[str]], used: Sequence[frozenset[str]]
 ) -> dict[str, Any]:
@@ -922,6 +928,10 @@ def _evaluate_copy(
             if not build.available:
                 break  # this build has no such slot: one row, and no sweep column
             caps_of[name].append(cap)
+        if all(_unavailable(builds[(name, cap)]) for cap in caps_of[name]):
+            # Unavailable at every cap (``handoff`` without a store, say): its rows
+            # stay, but a sweep column would only repeat every row once per cap.
+            caps_of[name] = []
 
     slot_rows = [_slot_row(build, hit_sessions, waste_sessions) for build in builds.values()]
     sweep: list[dict[str, Any]] = []
