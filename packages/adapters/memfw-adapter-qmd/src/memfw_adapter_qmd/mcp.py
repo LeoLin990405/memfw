@@ -17,8 +17,9 @@ Network rules (memfw compat framework section 5):
 * Redirects are refused; a response body larger than ``MAX_RESPONSE_BYTES`` is
   an error; every request carries the time left of the caller's deadline as its
   socket timeout, and the body is read in chunks with that timeout shrunk to
-  the time left before each one, so the whole exchange (not each ``recv``)
-  ends by the deadline.
+  the time left before each one; a watchdog timer also shuts the request's
+  socket down at the deadline, so the whole exchange (connect, headers, body;
+  not each ``recv``) ends by the deadline.
 
 Errors: anything that means "QMD cannot answer now" (refused connection,
 timeout, HTTP 5xx, a busy client) raises ``ProviderUnavailable``; an answer
@@ -31,6 +32,7 @@ from __future__ import annotations
 import http.client
 import ipaddress
 import json
+import socket
 import threading
 import time
 import urllib.error
@@ -116,6 +118,63 @@ class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
 
 
 _CHUNK = 64 * 1024
+
+
+class _Sockets:
+    """The sockets the current request opened, so a watchdog can cut them."""
+
+    def __init__(self) -> None:
+        self.open: list[socket.socket] = []
+
+    def cut(self) -> None:
+        for sock in list(self.open):
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+
+class _TrackedHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, *args: Any, sockets: _Sockets, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._sockets = sockets
+
+    def connect(self) -> None:
+        super().connect()
+        self._sockets.open.append(self.sock)
+
+
+class _TrackedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, *args: Any, sockets: _Sockets, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._sockets = sockets
+
+    def connect(self) -> None:
+        super().connect()
+        self._sockets.open.append(self.sock)
+
+
+class _TrackedHTTPHandler(urllib.request.HTTPHandler):
+    def __init__(self, sockets: _Sockets) -> None:
+        super().__init__()
+        self._sockets = sockets
+
+    def http_open(self, req: urllib.request.Request) -> Any:
+        return self.do_open(_TrackedHTTPConnection, req, sockets=self._sockets)
+
+
+class _TrackedHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, sockets: _Sockets) -> None:
+        super().__init__()
+        self._sockets = sockets
+
+    def https_open(self, req: urllib.request.Request) -> Any:
+        return self.do_open(
+            _TrackedHTTPSConnection,
+            req,
+            sockets=self._sockets,
+            context=self._context,  # type: ignore[attr-defined]
+        )
 
 
 def _socket_of(response: Any) -> Any:
@@ -210,7 +269,12 @@ class McpHttpClient:
         self.endpoint = endpoint
         self.client_name = client_name
         self.client_version = client_version
-        handlers: list[Any] = [_RefuseRedirects]
+        self._sockets = _Sockets()
+        handlers: list[Any] = [
+            _RefuseRedirects,
+            _TrackedHTTPHandler(self._sockets),
+            _TrackedHTTPSHandler(self._sockets),
+        ]
         if is_loopback_host(urlsplit(endpoint).hostname):
             handlers.append(urllib.request.ProxyHandler({}))
         self._opener = urllib.request.build_opener(*handlers)
@@ -225,6 +289,45 @@ class McpHttpClient:
     # -- transport -------------------------------------------------------
 
     def _post(
+        self, payload: Mapping[str, Any], *, deadline: float
+    ) -> tuple[int, Mapping[str, str], bytes, str]:
+        """One POST, cut at ``deadline`` whatever phase it is in.
+
+        Socket timeouts bound each ``recv``, not the call: a server that sends
+        its status line and headers a line at a time could hold the call (and
+        the client lock) long after the deadline. A watchdog timer shuts the
+        request's socket down at the deadline (connect, headers and body
+        alike); whatever the cut produces, the call reports ``timeout`` and
+        never a truncated answer.
+        """
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ProviderUnavailable("timeout")
+        fired = threading.Event()
+
+        def cut() -> None:
+            fired.set()
+            self._sockets.cut()
+
+        self._sockets.open.clear()
+        watchdog = threading.Timer(remaining, cut)
+        watchdog.daemon = True
+        watchdog.start()
+        try:
+            answer = self._post_once(payload, deadline=deadline)
+        except (ProviderUnavailable, QmdResponseError):
+            if fired.is_set():
+                raise ProviderUnavailable("timeout") from None
+            raise
+        finally:
+            watchdog.cancel()
+            self._sockets.open.clear()
+        if fired.is_set():
+            raise ProviderUnavailable("timeout")
+        return answer
+
+    def _post_once(
         self, payload: Mapping[str, Any], *, deadline: float
     ) -> tuple[int, Mapping[str, str], bytes, str]:
         remaining = deadline - time.monotonic()

@@ -736,6 +736,46 @@ def test_a_slow_drip_answer_is_cut_at_the_deadline() -> None:
         server.server_close()
 
 
+def test_slow_headers_are_cut_at_the_deadline() -> None:
+    """A server that sends its header lines one at a time cannot hold a call past it."""
+
+    stop = threading.Event()
+
+    class SlowHeaders(http.server.BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            try:
+                self.wfile.write(b"HTTP/1.1 200 OK\r\n")
+                for index in range(100):  # one header line every 0.1 s: each recv is quick
+                    if stop.is_set():
+                        return
+                    self.wfile.write(f"X-Drip-{index}: 1\r\n".encode())
+                    self.wfile.flush()
+                    time.sleep(0.1)
+            except OSError:
+                return
+
+        def log_message(self, *args: Any) -> None:
+            del args
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), SlowHeaders)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, args=(0.05,), daemon=True)
+    thread.start()
+    try:
+        client = McpHttpClient(f"http://127.0.0.1:{server.server_address[1]}/mcp")
+        for _ in range(2):  # the second call is not "busy": the first released the lock
+            started = time.monotonic()
+            with pytest.raises(ProviderUnavailable) as caught:
+                client.call_tool("query", {}, deadline=time.monotonic() + 1.0)
+            assert str(caught.value) == "timeout"
+            assert time.monotonic() - started < 1.6
+    finally:
+        stop.set()
+        server.shutdown()
+        server.server_close()
+
+
 def test_session_restart_reinitializes_once(fake: FakeQmd) -> None:
     provider = _notes(fake.url)
     first = _search(provider, NOTES_X["query"])
