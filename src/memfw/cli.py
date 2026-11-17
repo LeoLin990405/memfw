@@ -29,7 +29,7 @@ from .core.epistemic import (
 )
 from .core.errors import IntegrityError, MemfwError, NotFoundError
 from .core.local_data import vault_identity
-from .core.models import Layer, Tier
+from .core.models import Layer, Tier, foreign_event_kind_counts
 from .core.repository import Repository, open_vault
 from .corroboration import (
     CorroborationError,
@@ -1631,7 +1631,8 @@ def rollback(
                     {
                         "event_id": event_id,
                         "available": bool(
-                            event.before_hash
+                            not event.is_foreign_kind
+                            and event.before_hash
                             and repository._has_version(event.memory_id, event.before_hash)
                         ),
                     }
@@ -1762,22 +1763,25 @@ def log_verify(root: Annotated[Path, typer.Option("--root", "-r")] = Path(".")) 
         verification_level = "active_payloads_and_archived_summaries"
     else:
         verification_level = "active_and_archived_full_event_payloads"
-    typer.echo(
-        json.dumps(
-            {
-                "valid": True,
-                "event_count": len(events),
-                "head": events[-1].event_hash if events else "0" * 64,
-                "segment_count": len(segments),
-                "archived_event_count": sum(int(segment["event_count"]) for segment in segments),
-                "summary_segment_count": summary_count,
-                "legacy_payload_segment_count": legacy_count,
-                "verification_level": verification_level,
-                "original_archived_payloads_available": legacy_count > 0,
-                "active_tail_payloads_verified": True,
-            }
-        )
-    )
+    report: dict[str, object] = {
+        "valid": True,
+        "event_count": len(events),
+        "head": events[-1].event_hash if events else "0" * 64,
+        "segment_count": len(segments),
+        "archived_event_count": sum(int(segment["event_count"]) for segment in segments),
+        "summary_segment_count": summary_count,
+        "legacy_payload_segment_count": legacy_count,
+        "verification_level": verification_level,
+        "original_archived_payloads_available": legacy_count > 0,
+        "active_tail_payloads_verified": True,
+    }
+    # Marked events of kinds this version does not know (a newer memfw wrote
+    # them): listed, not errors. The keys appear only when there are some.
+    foreign = foreign_event_kind_counts(events)
+    if foreign:
+        report["unknown_non_memory_event_count"] = sum(foreign.values())
+        report["unknown_non_memory_event_kinds"] = foreign
+    typer.echo(json.dumps(report))
 
 
 @log_app.command("compact")

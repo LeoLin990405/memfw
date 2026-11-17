@@ -14,7 +14,7 @@ from typing import Any, cast
 
 from ..core.context import RepositoryHost
 from ..core.errors import IntegrityError
-from ..core.models import NON_MEMORY_EVENT_KINDS, Event, EventKind
+from ..core.models import MEMORY_EVENT_KINDS, Event, EventKind
 
 
 class EventLogMixin:
@@ -771,7 +771,9 @@ class EventLogMixin:
         """Project terminal committed hashes; validate only retained terminal Markdown objects."""
         state: dict[str, str | None] = {}
         for event in self.events():
-            if event.kind in NON_MEMORY_EVENT_KINDS:
+            # Only memory kinds project; this also skips marked kinds this
+            # version does not know (``ForeignEventKind``).
+            if event.kind not in MEMORY_EVENT_KINDS:
                 continue
             if event.kind in {EventKind.DELETE, EventKind.EXTERNAL_DELETE} or (
                 event.kind == EventKind.EXTERNAL_EDIT and event.details.get("quarantined") is True
@@ -979,7 +981,7 @@ def _read_event_before_offset(path: Path, offset: int) -> Event:
 def _project_events(events: list[Event]) -> dict[str, str | None]:
     state: dict[str, str | None] = {}
     for event in events:
-        if event.kind in NON_MEMORY_EVENT_KINDS:
+        if event.kind not in MEMORY_EVENT_KINDS:
             continue
         if event.kind in {EventKind.DELETE, EventKind.EXTERNAL_DELETE} or (
             event.kind == EventKind.EXTERNAL_EDIT and event.details.get("quarantined") is True
@@ -1080,12 +1082,18 @@ _SUMMARY_DETAIL_KEYS = frozenset(
 
 
 def _event_summary(event: Event) -> dict[str, Any]:
-    details = {
-        key: value
-        for key, value in event.details.items()
-        if key in _SUMMARY_DETAIL_KEYS
-        and isinstance(value, (str, int, float, bool, list, dict, type(None)))
-    }
+    if event.is_foreign_kind:
+        # A kind this version does not know: it cannot tell which details
+        # matter, so the summary keeps them all and the event stays lossless
+        # (byte-identical after compaction), marker included.
+        details = dict(event.details)
+    else:
+        details = {
+            key: value
+            for key, value in event.details.items()
+            if key in _SUMMARY_DETAIL_KEYS
+            and isinstance(value, (str, int, float, bool, list, dict, type(None)))
+        }
     return {
         "event_id": event.event_id,
         "kind": event.kind.value,
@@ -1123,6 +1131,10 @@ def _summarize_events(events: list[Event], previous_hash: str) -> tuple[list[str
             "original_event_digest": original_digest,
             "lossless": lossless,
         }
+        if event.is_foreign_kind:
+            # ``event`` is written with sorted keys; the canonical line keeps the
+            # writer's key order so the event reads back byte-for-byte.
+            payload["event_line"] = event.model_dump_json()
         digest = hashlib.sha256(_canonical_json(payload)).hexdigest()
         rows.append(
             json.dumps(
@@ -1150,7 +1162,7 @@ def _parse_segment_summaries(
             if not isinstance(row, dict):
                 raise ValueError("summary row must be an object")
             keys = set(row)
-            if keys not in (_LEGACY_SUMMARY_ROW_KEYS, _SUMMARY_ROW_KEYS):
+            if keys not in (_LEGACY_SUMMARY_ROW_KEYS, _SUMMARY_ROW_KEYS, _FOREIGN_SUMMARY_ROW_KEYS):
                 raise IntegrityError(f"Unexpected event summary fields at summary {number}")
             payload = {key: value for key, value in row.items() if key != "summary_hash"}
             summary_hash = hashlib.sha256(_canonical_json(payload)).hexdigest()
@@ -1163,7 +1175,13 @@ def _parse_segment_summaries(
             if event_data["prev_event_hash"] != event_previous:
                 raise IntegrityError(f"Broken original event hash chain at summary {number}")
             event = Event.model_validate(event_data)
-            if keys == _SUMMARY_ROW_KEYS:
+            if keys == _FOREIGN_SUMMARY_ROW_KEYS:
+                event = _foreign_summary_event(row, event, number)
+            elif event.is_foreign_kind:
+                raise IntegrityError(
+                    f"Summary of an unknown event kind lacks its event line at summary {number}"
+                )
+            if keys != _LEGACY_SUMMARY_ROW_KEYS:
                 _verify_summary_row(row, event, number)
             object.__setattr__(event, "_compacted", True)
             result.append(event)
@@ -1178,6 +1196,24 @@ def _parse_segment_summaries(
 
 _LEGACY_SUMMARY_ROW_KEYS = frozenset({"previous_summary_hash", "event", "summary_hash"})
 _SUMMARY_ROW_KEYS = _LEGACY_SUMMARY_ROW_KEYS | {"original_event_digest", "lossless"}
+#: A marked event of a kind this version does not know also keeps its line.
+_FOREIGN_SUMMARY_ROW_KEYS = _SUMMARY_ROW_KEYS | {"event_line"}
+
+
+def _foreign_summary_event(row: dict[str, Any], event: Event, number: int) -> Event:
+    """The event of a foreign-kind summary row, read from its canonical line."""
+    line = row["event_line"]
+    if not isinstance(line, str):
+        raise IntegrityError(f"Invalid event line at summary {number}")
+    original = Event.model_validate_json(line)
+    if (
+        not original.is_foreign_kind
+        or original.model_dump_json() != line
+        or original.model_dump(mode="json") != event.model_dump(mode="json")
+        or row["lossless"] is not True
+    ):
+        raise IntegrityError(f"Event line does not match its summary at summary {number}")
+    return original
 
 
 def _verify_summary_row(row: dict[str, Any], event: Event, number: int) -> None:

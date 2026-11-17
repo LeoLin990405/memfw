@@ -494,7 +494,9 @@ class MarkdownStorageMixin:
         refs = [
             event.after_hash
             for event in self.events()
-            if event.memory_id == memory_id and event.after_hash is not None
+            if event.memory_id == memory_id
+            and event.after_hash is not None
+            and not event.is_foreign_kind
         ]
         retained = set(refs[-keep:])
         current = self._current_path(memory_id)

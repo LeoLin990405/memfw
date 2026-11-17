@@ -1,0 +1,17 @@
+schema_version: 1
+content_format: markdown-frontmatter
+default_layer: current
+default_tier: hot
+permissions: propose_then_confirm
+history_keep: 2
+archive_keep_history: 1
+log_keep_recent: 100
+budget_level: 10MB
+budget_mode: body
+budget_scope: hot
+anchor_always_hot: true
+keyness_enabled: false
+keyness_window: 20
+keyness_top_k: 5
+knowledge_protection_boost: 1.0
+auto_enforce_on_write: false
