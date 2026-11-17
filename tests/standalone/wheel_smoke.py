@@ -577,6 +577,8 @@ def _graphrag(root: Path) -> None:
 
     from memfw_adapter_graphrag import GraphRagDeriver, Settings, candidates
     from memfw_adapter_graphrag import _ports as seam
+    from memfw_adapter_graphrag.deriver import input_name
+    from memfw_ports.reference._vault import read_memory
     from memfw_ports.testing import check_deriver
     from memfw_ports.types import DeriveRequest
 
@@ -593,8 +595,14 @@ def _graphrag(root: Path) -> None:
     project = root / "gr-project"
     output = project / "output"
     output.mkdir(parents=True)
+    names = {}
+    for memory_id in ("m-pub", "m-priv"):
+        memory = read_memory(vault, memory_id)
+        assert memory is not None
+        names[memory_id] = input_name(memory)
     tables = {
-        "documents": "id,title,text_unit_ids\nd1,m-pub.v2.txt,['u1']\nd2,m-priv.v2.txt,['u2']\n",
+        "documents": f"id,title,text_unit_ids\nd1,{names['m-pub']},['u1']\n"
+        f"d2,{names['m-priv']},['u2']\n",
         "text_units": "id,document_id\nu1,d1\nu2,d2\n",
         "entities": "id,title,type,description,text_unit_ids\n"
         "e1,BACKUP,service,a job,['u1']\ne2,KEYS,concept,private,['u2']\n",
