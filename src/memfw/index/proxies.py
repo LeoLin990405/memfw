@@ -15,8 +15,8 @@ it, else jieba segments in unicode61) and the same query terms, including the
 two-character ``instr`` fallback on a trigram index.
 
 Each row is one segment of an **active** proxy (not superseded) of a
-committed, readable, **active** attachment (not detached, missing or purged,
-when the vault's log says so) whose retention has not ended, with the
+committed, readable, **active** attachment (not detached, missing or purged:
+``attachment_state_map``) whose retention has not ended, with the
 segment's canonical locator, the proxy's kind and coverage, the tenant
 (attachments belong to the vault's default tenant ``""``) and the effective
 privacy level (the strictest of the proxy's and the attachment's). Search
@@ -52,10 +52,16 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Final
 
-from ..attachments.proxies import ProxyRecord, proxy_log
+from ..attachments.proxies import (
+    PROXY_INDEX_KIND,
+    ProxyRecord,
+    drop_proxy_index_file,
+    proxy_index_file,
+    proxy_log,
+)
 from ..attachments.records import AttachmentRecord
 from ..core.errors import IntegrityError, MemfwError, NotFoundError
-from ..core.local_data import VaultIdentity, ensure_private_dir, projection_file, vault_identity
+from ..core.local_data import VaultIdentity, ensure_private_dir, vault_identity
 from ..core.models import ATTACHMENT_EVENT_KINDS, Event, EventKind
 from ..core.repository import Repository
 from .fts_terms import (
@@ -67,7 +73,6 @@ from .fts_terms import (
 )
 
 #: The ``memfw.core.local_data`` kind: ``~/.local/share/memfw/proxy_index/<key>.sqlite3``.
-PROXY_INDEX_KIND: Final = "proxy_index"
 #: Where MM2b's first draft put the index (the vault root). Never read or deleted.
 LEGACY_PROXY_INDEX_NAME: Final = "proxy_index.sqlite3"
 PROXY_INDEX_SCHEMA_VERSION: Final = 2
@@ -78,21 +83,19 @@ def proxy_index_path(repository: Repository | Path, *, home: Path | None = None)
     """The vault's proxy index: outside it, under the home directory."""
 
     root = repository if isinstance(repository, Path) else repository.root
-    return projection_file(root, PROXY_INDEX_KIND, home=home)
+    return proxy_index_file(root, home=home)
 
 
 def drop_proxy_index(repository: Repository | Path, *, home: Path | None = None) -> bool:
     """Delete the vault's proxy index (and SQLite side files); ``True`` when one existed.
 
-    ``attach purge`` calls this so no index page keeps purged text; the next
+    ``attach purge`` does this (``memfw.attachments.proxies.
+    remove_attachment_proxies``) so no index page keeps purged text; the next
     search rebuilds from the remaining proxies.
     """
 
-    path = proxy_index_path(repository, home=home)
-    existed = path.exists()
-    for suffix in ("", "-wal", "-shm", "-journal"):
-        Path(f"{path}{suffix}").unlink(missing_ok=True)
-    return existed
+    root = repository if isinstance(repository, Path) else repository.root
+    return drop_proxy_index_file(root, home=home)
 
 
 def proxy_index_residue(
@@ -132,20 +135,13 @@ def proxy_index_residue(
 
 
 def _active_attachments(repository: Repository) -> Callable[[str], bool]:
-    """Which attachments are active (not detached, missing or purged).
+    """Which attachments are active: not detached, missing or purged (MM1b states)."""
 
-    Uses the vault's attachment state map when this memfw has one (MM1b);
-    without it every committed attachment is active.
-    """
-
-    state_map = getattr(repository, "attachment_state_map", None)
-    if state_map is None:
-        return lambda _attachment_id: True
-    states = state_map()
+    states = repository.attachment_state_map()
 
     def active(attachment_id: str) -> bool:
         state = states.get(attachment_id)
-        return state is not None and getattr(state, "label", "active") == "active"
+        return state is not None and state.label == "active"
 
     return active
 

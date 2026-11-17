@@ -243,7 +243,7 @@ read-only service, OKF and every projection keep reading `index.sqlite3` and
   (`备份`, `AI`).
 * One row per segment of an **active** proxy (superseded ones are left out)
   of a committed, readable, active attachment (not detached, missing or
-  purged once the log records those, MM1b) whose sha256 still matches the proxy's
+  purged: `Repository.attachment_state_map`) whose sha256 still matches the proxy's
   `source_sha256` and whose retention has not ended (`until:<date>` is
   searchable through that day).
 * Each row carries the tenant and the effective privacy level (strictest of
@@ -256,11 +256,17 @@ read-only service, OKF and every projection keep reading `index.sqlite3` and
   first use when either differs, so an index left by a deleted vault at the
   same path is never used.
   A vault without a `proxy_add` event never gets the file.
-* **Purge:** `memfw.index.proxies.drop_proxy_index(repository)` deletes the
-  file (and SQLite side files); `attach purge` must call it so no index page
-  keeps purged text, and `proxy_index_residue(repository, attachment_id)`
-  (rows in both tables, 0 without a file) is what the purge residue check
-  counts. Wiring both into MM1b's purge follows once MM1b has merged.
+* **Purge:** `attach purge` deletes the attachment's proxy files (superseded
+  ones too) and drops this file with its SQLite side files
+  (`memfw.attachments.proxies.remove_attachment_proxies`; `memfw recover`
+  finishes it after an interrupted purge), so no page keeps purged text; the
+  next search rebuilds from the remaining proxies. The purge result's
+  `still_containing` lists any proxy file or `proxy_index` left behind
+  (`proxy_purge_residue`), and `memfw.index.proxies.proxy_index_residue(
+  repository, attachment_id)` counts an attachment's rows in both tables.
+  Proxies of a purged attachment are purged everywhere (`proxy list`, `fsck`,
+  search). The memory forget-residue check (`memfw forget residue`) does not
+  list the proxy index: it holds no memory ids.
 
 ### `ProxyProvider`
 
@@ -268,8 +274,13 @@ read-only service, OKF and every projection keep reading `index.sqlite3` and
 `RecallProvider` over that index. It returns `Candidate`s with
 `ref_kind="attachment_segment"`, `ref="<prx-id>:<n>"` and
 `extra={"locator": "<fragment>", "kind": "<proxy kind>", "why": "lexical"}`
-— never text. `ProxySegmentResolver` resolves a segment for the coordinator
-(hit id `<prx-id>_<n>`). It is not part of the memory recall assembly and has
+— never text. `ProxySegmentResolver`, registered as
+`resolvers["attachment_segment"]`, resolves each ref to a
+`SegmentResolution(source="attachments", path=<att-id>, anchor=<prx-id>:<n>,
+title=<kind>, snippet="", privacy=<level>, tenant=<the attachments' tenant,
+"">)`, so the coordinator fuses proxy segments into `RecallResult.segments`
+and checks their tenant and privacy class, never treating them as memory
+hits. It is not part of the memory recall assembly and has
 no configuration key of its own (it is not loaded through
 `runtime.recall.adapters`); only the attachment tools below build a
 coordinator with it, so memory search output is unchanged.

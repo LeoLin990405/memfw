@@ -43,7 +43,7 @@ from memfw.storage.transactions import _serialized
 
 from .blobs import REOWN_HINT, BlobLocationError, BlobOwnerError, BlobStore, hash_stream, stage_blob
 from .locations import Location, location_for_path, looks_like_location, open_location
-from .proxies import PROXIES_DIR, proxy_log
+from .proxies import PROXIES_DIR, proxy_log, proxy_purge_residue, remove_attachment_proxies
 from .records import ATTACHMENTS_DIR, AttachmentRecord, check_attachment_id, render_record
 from .scrub import scrub_stores, vault_sqlite_stores
 from .store import (
@@ -96,7 +96,8 @@ class PurgePlan:
     stores: tuple[str, ...] = ()
     #: The id that owns the kept blob from now on (quota accounting), if any.
     heir: str | None = None
-    #: Proxy files of the attachment (``attachments/proxies/...``); not removed yet.
+    #: Proxy files of the attachment (``attachments/proxies/...``), superseded
+    #: ones included; purge removes them and drops the proxy search index.
     proxies: tuple[str, ...] = ()
     notices: tuple[str, ...] = ()
 
@@ -485,9 +486,9 @@ class AttachmentLifecycleMixin:
         )
         if proxies:
             notices.append(
-                f"{len(proxies)} proxy file(s) of this attachment are NOT removed by this "
-                "purge yet (proxy deletion arrives with the MM2b wiring); they keep the "
-                "proxy text until then: " + ", ".join(proxies)
+                f"{len(proxies)} proxy file(s) of this attachment (superseded ones included) "
+                "are deleted with it, and the proxy search index is dropped (it is rebuilt "
+                "from the remaining proxies): " + ", ".join(proxies)
             )
         if cited or mentioned:
             notices.append(
@@ -566,6 +567,10 @@ class AttachmentLifecycleMixin:
                 result.removed.append(candidate.relative_to(self.root).as_posix())
         if store is not None:
             result.removed.extend(store.reclaim_stale_stages())
+        # Proxy text goes with the attachment: its proxy files and the
+        # out-of-vault proxy index (MM2b).
+        result.removed.extend(remove_attachment_proxies(self, identifier, events))
+        result.still_containing.extend(proxy_purge_residue(self, identifier, events))
         scrubbed = scrub_stores(self, record)
         result.removed.extend(scrubbed.removed)
         result.vacuumed.extend(scrubbed.vacuumed)

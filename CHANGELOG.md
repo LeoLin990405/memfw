@@ -97,7 +97,13 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   and projections never read it. `drop_proxy_index` / `proxy_index_residue`
   are the hooks `attach purge` uses.
 - Built-in recall provider `ProxyProvider` (`ref_kind="attachment_segment"`,
-  locator in `extra`, never text); not part of memory recall.
+  locator in `extra`, never text) with `ProxySegmentResolver` returning
+  `SegmentResolution(source="attachments")`, so segments land in
+  `RecallResult.segments`, never as memory hits; not part of memory recall.
+- `attach purge` now deletes the attachment's proxy files and drops the
+  proxy index (`still_containing` reports leftovers; `recover` finishes an
+  interrupted purge). Detached, missing and purged attachments leave
+  `attachment_search`, `attachment_get` and originals.
 - MCP `attachment_search` and `attachment_get`, listed only with
   `mcp.attachments: true` in `vault.yaml` (default off: `tools/list`
   unchanged). Results are re-checked against the proxy file, the attachment
@@ -583,8 +589,8 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   splits a copy off (new `vault_id`, blobs copied); `memfw attach reown --yes`
   re-owns after a move, and is refused while the vault path recorded in the
   marker still holds a vault with the same `vault_id` (`--force-take-over`
-  overrides). The purge plan lists the attachment's MM2a proxies, which a
-  purge does not remove until the MM2b wiring; `scan` counts hard-linked
+  overrides). The purge plan lists the attachment's MM2a proxies (MM2b
+  removes them with the attachment); `scan` counts hard-linked
   files; a blocked `purge --orphans --yes` reports `purged: false`, exit 1.
 - `fsck` only `lstat`s referenced originals (`fsck --hash-referenced`
   re-hashes); directory listings are cached per pass. An empty root or one

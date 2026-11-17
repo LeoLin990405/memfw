@@ -430,9 +430,11 @@ printed and nothing is written:
   whose original is **never touched** (it is not memfw's copy).
 * `stores`: the SQLite stores in the vault, and `irrecoverable_copies`.
 * `proxies`: the attachment's proxy files (`attachments/proxies/prx-*.md`,
-  MM2a). **A purge does not remove them yet**; proxy deletion arrives with
-  the MM2b wiring. Until then the proxy text stays in the vault, and the
-  plan says so.
+  MM2a), superseded ones included. The purge deletes them and drops the
+  out-of-vault proxy search index (MM2b; it is rebuilt from the remaining
+  proxies on next use); the plan's notice says so, and the result's
+  `still_containing` names any proxy file or `proxy_index` that could not
+  be removed. `memfw recover` finishes this part of an interrupted purge.
 
 With `--yes` one `attach_purge` event commits the purge (only the id and what
 happened to the blob), then the blob is removed when no other record names

@@ -7,7 +7,6 @@ import hashlib
 import json
 import os
 import stat
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -29,6 +28,7 @@ from memfw.index.proxies import (
 from memfw.mcp.schema import TOOLS
 from memfw.mcp.server import Gateway
 from memfw.ports.testing import check_recall_provider
+from memfw.recall import SegmentResolution
 from memfw.recall.builtin import ProxyProvider, ProxySegmentResolver
 from memfw.stats import measure_physical_disk_bytes
 
@@ -265,34 +265,46 @@ def test_drop_and_residue_for_purge(tmp_path: Path) -> None:
     assert drop_proxy_index(repository) is False
 
 
-@dataclass
-class _State:
-    label: str
-
-
-def test_detached_or_missing_attachments_leave_search_and_get(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_detached_missing_and_purged_attachments_leave_search_get_and_originals(
+    tmp_path: Path,
 ) -> None:
     repository, ids = _corpus(tmp_path)
+    # A referenced attachment under a configured root, with its own proxy.
+    library = tmp_path / "library"
+    library.mkdir()
+    data = b"%PDF referenced original"
+    (library / "ref.pdf").write_bytes(data)
+    (library / "other.txt").write_bytes(b"keeps the root mounted")
+    config = repository.read_config()
+    config["attachments_roots"] = {"kh": str(library)}
+    repository.configure(config)
+    referenced = repository.add_attachment("kh:ref.pdf", reference=True).record.id
+    _proxy(repository, tmp_path, referenced, data, ["backup schedule referenced copy"])
     _enable(repository, originals=True)
     gateway = Gateway(repository.root, entity_enabled=False)
-    assert len(gateway.attachment_search("backup schedule")["results"]) == 3
-    states = {attachment: _State("active") for attachment in ids.values()}
-    states[ids["public"]] = _State("detached")
-    states[ids["shared"]] = _State("missing")
-    # MM1b's state map (feature-detected); without it every attachment is active.
-    monkeypatch.setattr(Repository, "attachment_state_map", lambda self: states, raising=False)
-    found = gateway.attachment_search("backup schedule")["results"]
+    found = gateway.attachment_search("backup schedule", limit=20)["results"]
+    assert {row["attachment_id"] for row in found} == {*ids.values(), referenced}
+    # Detach one, purge one, lose the referenced original.
+    repository.detach_attachment(ids["public"])
+    repository.purge_attachment(ids["shared"], confirm=True)
+    (library / "ref.pdf").unlink()
+    assert repository.record_missing_attachments([referenced]) == [referenced]
+    states = repository.attachment_state_map()
+    assert states[ids["public"]].label == "detached"
+    assert states[ids["shared"]].label == "purged"
+    assert states[referenced].label == "missing"
+    found = gateway.attachment_search("backup schedule", limit=20)["results"]
     assert {row["attachment_id"] for row in found} == {ids["local-private"]}
     index = ensure_proxy_index(repository, now=NOW)
     assert index is not None
-    rebuilt = proxy_index_module.active_proxies(repository, today=NOW.date())
-    assert {attachment.id for _record, attachment in rebuilt} == {ids["local-private"]}
-    for gone in (ids["public"], ids["shared"]):
+    hits = index.search("backup schedule", tenant="", clearance=None, limit=50)
+    assert {hit.attachment_id for hit in hits} == {ids["local-private"]}
+    for gone in (ids["public"], ids["shared"], referenced):
         with pytest.raises(NotFoundError):
             gateway.attachment_get(gone)
         with pytest.raises(NotFoundError):
             gateway.attachment_get(gone, original="bytes")
+    assert gateway.attachment_get(ids["local-private"], original="path")["original"]["verified"]
 
 
 def test_damaged_record_reads_as_missing_under_a_clearance(tmp_path: Path) -> None:
@@ -316,7 +328,7 @@ def test_damaged_record_reads_as_missing_under_a_clearance(tmp_path: Path) -> No
 
 
 def test_proxy_provider_passes_the_recall_contract(tmp_path: Path) -> None:
-    repository, _ids = _corpus(tmp_path)
+    repository, ids = _corpus(tmp_path)
     ensure_proxy_index(repository, now=NOW)
     provider = ProxyProvider(repository.root, clearance=frozenset({"public"}))
     found = check_recall_provider(provider, queries=["backup schedule", "备份"])
@@ -330,9 +342,37 @@ def test_proxy_provider_passes_the_recall_contract(tmp_path: Path) -> None:
     )
     assert candidates and all(c.ref_kind == "attachment_segment" for c in candidates)
     assert candidates[0].extra["locator"] == "page=1&bbox=72,600,540,640"
-    resolved = ProxySegmentResolver().resolve([candidates[0].ref, "m-1"])
+    resolved = ProxySegmentResolver(proxy_index_path(repository)).resolve(
+        [candidates[0].ref, "m-1", "prx-01a1e931-1818-772b-8713-76e6bea4a716:1"]
+    )
     assert list(resolved) == [candidates[0].ref]
-    assert resolved[candidates[0].ref].memory_id == candidates[0].ref.replace(":", "_")
+    segment = resolved[candidates[0].ref]
+    # A segment, never a memory hit: source attachments, the bound tenant.
+    assert isinstance(segment, SegmentResolution)
+    assert segment.source == "attachments" and segment.tenant == ""
+    assert segment.anchor == candidates[0].ref and segment.snippet == ""
+    assert segment.path in ids.values() and segment.privacy == "public"
+    # Through the coordinator: segments, never memory hits.
+    from memfw.recall import Coordinator, FilterPolicy
+    from memfw.recall.policy import GRANTABLE_PRIVACY
+
+    coordinator = Coordinator(
+        [provider],
+        resolvers={"attachment_segment": ProxySegmentResolver(proxy_index_path(repository))},
+    )
+    result = coordinator.search(
+        "backup schedule",
+        limit=5,
+        policy=FilterPolicy(tenant="", privacy_clearance=GRANTABLE_PRIVACY),
+    )
+    assert result.hits == ()
+    assert result.segments and {hit.source for hit in result.segments} == {"attachments"}
+    other_tenant = coordinator.search(
+        "backup schedule",
+        limit=5,
+        policy=FilterPolicy(tenant="work", privacy_clearance=GRANTABLE_PRIVACY),
+    )
+    assert other_tenant.segments == () and other_tenant.hits == ()
     assert ProxyProvider(tmp_path / "nowhere").available().reason == "no_vault"
 
 

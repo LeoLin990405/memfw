@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 import yaml
 
 from memfw.core.errors import IntegrityError, NotFoundError
+from memfw.core.local_data import projection_file
 from memfw.core.models import Event, EventKind
 from memfw.ports.privacy import (
     LEGACY_PRIVACY_FALLBACK,
@@ -73,6 +74,9 @@ if TYPE_CHECKING:
     from memfw.core.context import RepositoryHost
 
 PROXIES_DIR: Final = "proxies"
+#: ``memfw.core.local_data`` kind of the out-of-vault search index (MM2b):
+#: ``~/.local/share/memfw/proxy_index/<vault key>.sqlite3``.
+PROXY_INDEX_KIND: Final = "proxy_index"
 PROXY_TYPE: Final = "attachment_proxy"
 #: ``vault.yaml``: the most bytes all proxy files together may take.
 PROXY_MAX_BYTES_KEY: Final = "attachments_proxy_max_bytes"
@@ -449,6 +453,85 @@ def proxy_log(events: Iterable[Event]) -> ProxyLog:
     return ProxyLog(committed, attachments, superseded, unconfirmed, invalid)
 
 
+def proxy_index_file(root: Path, *, home: Path | None = None) -> Path:
+    """Where the vault's proxy search index lives: outside it, under the home directory."""
+
+    return projection_file(root, PROXY_INDEX_KIND, home=home)
+
+
+def drop_proxy_index_file(root: Path, *, home: Path | None = None) -> bool:
+    """Delete the proxy search index and its SQLite side files; ``True`` when one existed.
+
+    The next search rebuilds it from the proxies that remain.
+    """
+
+    path = proxy_index_file(root, home=home)
+    existed = path.exists()
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        Path(f"{path}{suffix}").unlink(missing_ok=True)
+    return existed
+
+
+def purged_attachments(events: Iterable[Event]) -> set[str]:
+    """Attachment ids whose latest record event is an ``attach_purge``."""
+
+    purged: set[str] = set()
+    for event in events:
+        if event.kind == EventKind.ATTACH_PURGE:
+            purged.add(event.memory_id)
+        elif event.kind in (EventKind.ATTACH, EventKind.ATTACH_UPDATE, EventKind.ATTACH_RELINK):
+            if event.after_hash is not None:
+                purged.discard(event.memory_id)
+    return purged
+
+
+def proxy_purge_residue(
+    host: RepositoryHost, attachment_id: str, events: Iterable[Event]
+) -> list[str]:
+    """What still holds a purged attachment's proxy text: its proxy files, the proxy index.
+
+    Empty after a complete purge. Names only (vault-relative paths, or
+    ``proxy_index`` for the out-of-vault index), never text.
+    """
+
+    log = proxy_log(events)
+    left = [
+        _proxy_path(host, proxy_id).relative_to(host.root).as_posix()
+        for proxy_id, owner in log.attachments.items()
+        if owner == attachment_id and _proxy_path(host, proxy_id).exists()
+    ]
+    if proxy_index_file(host.root).exists():
+        left.append(PROXY_INDEX_KIND)
+    return left
+
+
+def remove_attachment_proxies(
+    host: RepositoryHost, attachment_id: str, events: Iterable[Event]
+) -> list[str]:
+    """Delete every proxy file of ``attachment_id`` (superseded ones too) and the index.
+
+    Part of ``attach purge`` (and of ``memfw recover`` finishing one). The
+    ``proxy_add`` events stay (they carry ids and counts, never text); a
+    proxy of a purged attachment counts as purged everywhere. Idempotent.
+    Returns the vault-relative paths removed, plus ``proxy_index`` when the
+    out-of-vault index was dropped.
+    """
+
+    log = proxy_log(events)
+    removed: list[str] = []
+    directory = proxies_dir(host)
+    for proxy_id, owner in log.attachments.items():
+        if owner != attachment_id:
+            continue
+        for path in (_proxy_path(host, proxy_id), directory / f"{proxy_id}.md.tmp"):
+            if path.exists() or path.is_symlink():
+                path.unlink()
+                removed.append(path.relative_to(host.root).as_posix())
+    if drop_proxy_index_file(host.root):
+        removed.append(PROXY_INDEX_KIND)
+    return removed
+
+
 def proxies_dir(host: RepositoryHost) -> Path:
     return host.root / ATTACHMENTS_DIR / PROXIES_DIR
 
@@ -635,11 +718,15 @@ class ProxyStoreMixin:
     ) -> list[tuple[str, ProxyRecord | IntegrityError | NotFoundError, str | None]]:
         """Committed proxies, oldest first: (id, record or why not, superseded by)."""
 
-        log = proxy_log(self.events())
+        events = self.events()
+        log = proxy_log(events)
+        gone = purged_attachments(events)
         owner = None if attachment_id is None else check_attachment_id(attachment_id)
         rows: list[tuple[str, ProxyRecord | IntegrityError | NotFoundError, str | None]] = []
         for identifier, expected in log.committed.items():
             if owner is not None and log.attachments.get(identifier) != owner:
+                continue
+            if log.attachments.get(identifier) in gone:
                 continue
             by = log.superseded_by.get(identifier)
             if by is not None and not include_superseded:
@@ -681,7 +768,11 @@ class ProxyStoreMixin:
             )
 
         attachments: dict[str, AttachmentRecord | None] = {}
+        gone = purged_attachments(events)
         for identifier, expected in log.committed.items():
+            if log.attachments.get(identifier) in gone:
+                # Purged with its attachment: the file is meant to be gone.
+                continue
             path = _proxy_path(self, identifier)
             if not path.exists():
                 issue(identifier, "record_missing", expected=expected)
@@ -708,6 +799,8 @@ class ProxyStoreMixin:
             elif attachment.sha256 != record.source_sha256:
                 issue(identifier, "source_mismatch", message=owner)
         for replaced, by in log.unconfirmed.items():
+            if log.attachments.get(replaced) in gone:
+                continue
             # The replacement committed; its proxy_supersede confirmation did not.
             issue(replaced, "supersede_missing", message=by)
         for proxy_id, target in log.invalid:
@@ -794,7 +887,13 @@ __all__ = [
     "ProxyLog",
     "ProxyRecord",
     "ProxyStoreMixin",
+    "PROXY_INDEX_KIND",
     "check_proxy_id",
+    "drop_proxy_index_file",
+    "proxy_index_file",
+    "proxy_purge_residue",
+    "purged_attachments",
+    "remove_attachment_proxies",
     "parse_proxy",
     "proxies_dir",
     "proxy_bytes",

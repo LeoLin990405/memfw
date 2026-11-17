@@ -20,7 +20,7 @@ caller's tenant (attachments belong to the default tenant ``""``), source
 allow-list (attachments have no source, so an allow-list hides them) and
 privacy clearance (``memfw.ports.privacy``; the level is the strictest of the
 proxy's and the attachment's), and the attachment must be active (not
-detached, missing or purged, where this memfw tracks that). A withheld
+detached, missing or purged: ``Repository.attachment_state_map``). A withheld
 attachment, or a damaged one asked for under a clearance, reads as missing.
 """
 
@@ -139,6 +139,7 @@ def attachment_search(
     from memfw.index.proxies import attachment_active, ensure_proxy_index, retention_ended
     from memfw.recall import Coordinator, FilterPolicy
     from memfw.recall.builtin import ProxyProvider, ProxySegmentResolver
+    from memfw.recall.policy import GRANTABLE_PRIVACY
 
     if not isinstance(query, str) or not query.strip():
         raise ValueError("query required")
@@ -155,15 +156,17 @@ def attachment_search(
         return empty
     coordinator = Coordinator(
         [ProxyProvider(runtime.root, clearance=runtime.clearance, index_path=built.path)],
-        resolvers={"attachment_segment": ProxySegmentResolver()},
+        resolvers={"attachment_segment": ProxySegmentResolver(built.path)},
         inflight=runtime.recall_inflight,
         total_timeout=runtime.total_timeout,
         clock=lambda: moment,
     )
-    # Privacy is filtered by the index and re-checked below with the exit's
-    # clearance (MM0 levels); the coordinator applies tenant and fusion.
+    # Segments come back in ``result.segments`` (never as memory hits). The
+    # coordinator checks tenant and privacy class; the MM0 clearance is
+    # applied by the index and re-checked below against the files.
     policy = FilterPolicy(
         tenant=runtime.tenant,
+        privacy_clearance=GRANTABLE_PRIVACY,
         check_privacy=False,
         check_status=False,
         drop_archived=False,
@@ -174,9 +177,9 @@ def attachment_search(
     proxies: dict[str, ProxyRecord | None] = {}
     attachments: dict[str, AttachmentRecord | None] = {}
     rows: list[dict[str, Any]] = []
-    for hit in result.hits:
-        # The coordinator's hit id for a segment is ``<prx-id>_<n>``.
-        proxy_id, _, number = hit.memory_id.rpartition("_")
+    for hit in result.segments:
+        # A segment hit's anchor is its ref, ``<prx-id>:<n>``.
+        proxy_id, _, number = hit.anchor.partition(":")
         if not state.active(proxy_id):
             continue
         if proxy_id not in proxies:

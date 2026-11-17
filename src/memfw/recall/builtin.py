@@ -981,31 +981,56 @@ class ProxyProvider:
         return out
 
 
-class ProxySegmentResolver:
-    """``attachment_segment`` refs → a filter record in the default tenant.
+#: The ``SegmentResolution.source`` of an attachment proxy segment.
+ATTACHMENTS_SOURCE = "attachments"
 
-    The coordinator keys hits by an id of the memory-id shape, so the
-    segment ``<prx-id>:<n>`` resolves to the key ``<prx-id>_<n>``
-    (:func:`segment_key`). Attachments carry no tenant (``""``), source,
-    status or validity; privacy is filtered by the index and re-checked by the
-    caller against the files.
+
+class ProxySegmentResolver:
+    """``attachment_segment`` refs → ``SegmentResolution``s, not memory hits.
+
+    Registered as ``resolvers["attachment_segment"]``. Each ref ``<prx-id>:<n>``
+    the proxy index holds resolves to ``SegmentResolution(source="attachments",
+    path=<att-id>, anchor=<prx-id>:<n>, title=<proxy kind>, snippet="",
+    privacy=<effective MM0 level>, tenant=<the index row's tenant>)``; the
+    coordinator fuses these into ``RecallResult.segments`` and filters them by
+    tenant and privacy class. ``tenant`` is the tenant the attachments are
+    bound to (the vault's default tenant ``""``). The snippet stays empty: the
+    caller reads the text from the proxy file after its own re-checks.
     """
 
-    def resolve(self, refs: Sequence[str]) -> Mapping[str, Resolution]:
+    def __init__(self, index_path: Path) -> None:
+        self.index_path = Path(index_path)
+
+    def resolve(self, refs: Sequence[str]) -> Mapping[str, SegmentResolution]:
         from memfw.ports.proxies import SEGMENT_REF_RE
 
-        out: dict[str, Resolution] = {}
-        for ref in refs:
-            if isinstance(ref, str) and SEGMENT_REF_RE.fullmatch(ref):
-                key = segment_key(ref)
-                out[ref] = Resolution(key, MemoryMeta(memory_id=key, tenant=""))
+        wanted = [ref for ref in refs if isinstance(ref, str) and SEGMENT_REF_RE.fullmatch(ref)]
+        if not wanted or not self.index_path.is_file():
+            return {}
+        out: dict[str, SegmentResolution] = {}
+        try:
+            uri = f"file:{self.index_path}?mode=ro"
+            with closing(sqlite3.connect(uri, uri=True, timeout=5)) as connection:
+                for ref in wanted:
+                    row = connection.execute(
+                        "SELECT attachment_id, kind, privacy, tenant FROM segment_rows "
+                        "WHERE ref = ?",
+                        (ref,),
+                    ).fetchone()
+                    if row is None:
+                        continue
+                    out[ref] = SegmentResolution(
+                        source=ATTACHMENTS_SOURCE,
+                        path=str(row[0]),
+                        anchor=ref,
+                        title=str(row[1]),
+                        snippet="",
+                        privacy=str(row[2]),
+                        tenant=str(row[3]),
+                    )
+        except (OSError, sqlite3.Error):
+            return {}
         return out
-
-
-def segment_key(ref: str) -> str:
-    """``<prx-id>:<n>`` → ``<prx-id>_<n>`` (the coordinator's hit id for a segment)."""
-
-    return ref.replace(":", "_", 1)
 
 
 __all__ = [
@@ -1021,7 +1046,7 @@ __all__ = [
     "Prepare",
     "ProxyProvider",
     "ProxySegmentResolver",
-    "segment_key",
+    "ATTACHMENTS_SOURCE",
     "VaultIdResolver",
     "default_resolvers",
     "join_lifecycle",
