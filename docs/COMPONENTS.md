@@ -211,7 +211,7 @@ README.
 
 ## OCR proxy adapter
 
-`packages/adapters/memfw-adapter-ocr` (wheel `memfw_adapter_ocr`, version 0.1.0, standard
+`packages/adapters/memfw-adapter-ocr` (wheel `memfw_adapter_ocr`, version 0.1.1, standard
 library only) turns a PDF or image attachment into a `memfw.proxy` v1 import file: text
 segments with canonical locators, `coverage`, `source_sha256`, the producer and per-segment
 confidence when the engine gives one. Engines: an OCR server run as a child process over MCP

@@ -13,7 +13,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "memfw-adapter-ocr"
-version = "0.1.0"
+version = "0.1.1"
 description = "Local OCR proxy generator for memfw attachments (MCP stdio OCR server or pdftotext)"
 readme = "README.md"
 requires-python = ">=3.11"
