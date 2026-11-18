@@ -233,16 +233,75 @@ def _open_inside(root: Path, rel: str) -> bytes:
 PRIVACY_KEYS = ("privacy", "tags", "sensitivity")
 
 
+#: A line that sets a frontmatter key deciding a note's privacy.
+_PRIVACY_KEY_LINE_RE = re.compile(r"^(?:privacy|sensitivity|tags?)\s*:", re.IGNORECASE)
+_PRIVACY_VIEW_KEYS = ("privacy", "sensitivity", "tags", "tag")
+_MAX_CLOSE_CANDIDATES = 64
+
+
+def _indented(line: str) -> bool:
+    return line[:1] in (" ", "\t")
+
+
+def _yaml_mapping(lines: Sequence[str]) -> dict[str, Any] | None:
+    try:
+        loaded = yaml.safe_load("".join(lines)) or {}
+    except (yaml.YAMLError, RecursionError, ValueError, TypeError):
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
+def _privacy_view(mapping: dict[str, Any] | None) -> list[Any] | None:
+    if mapping is None:
+        return None
+    return [mapping.get(key) for key in _PRIVACY_VIEW_KEYS]
+
+
+def frontmatter_close(lines: Sequence[str]) -> tuple[int | None, bool]:
+    """``(index of the line closing the frontmatter, ambiguous)``: memfw's rule.
+
+    A copy of ``memfw.notes.index.frontmatter_close`` (kept in parity by the
+    tests; adapters never import memfw internals). A column-0 ``---`` closes
+    the block. An indented first ``---`` may be YAML scalar content (a
+    ``|``/``>`` block scalar line): the block then closes at the last
+    candidate, up to the first column-0 one, whose text before it is still a
+    YAML mapping. ``ambiguous`` (fail closed) when that reading and the one
+    stopping at the first candidate differ on ``privacy``/``sensitivity``/
+    ``tags``/``tag``, or a line setting one of them is left after the close
+    and before the first column-0 candidate (or the end of the note).
+    """
+
+    candidates = [index for index in range(1, len(lines)) if lines[index].strip() == "---"]
+    if not candidates:
+        return None, False
+    first = candidates[0]
+    if not _indented(lines[first]):
+        return first, False
+    hard = next((index for index in candidates if not _indented(lines[index])), None)
+    limit = hard if hard is not None else len(lines)
+    short = _yaml_mapping(lines[1:first])
+    end, chosen = first, short
+    later = [index for index in candidates[1:] if index <= limit]
+    for index in later[:_MAX_CLOSE_CANDIDATES]:
+        loaded = _yaml_mapping(lines[1:index])
+        if loaded is not None:
+            end, chosen = index, loaded
+    ambiguous = end != first and _privacy_view(short) != _privacy_view(chosen)
+    if any(_PRIVACY_KEY_LINE_RE.match(line) for line in lines[end + 1 : limit]):
+        ambiguous = True
+    return end, ambiguous
+
+
 def _frontmatter_block(text: str) -> tuple[str | None, int, bool]:
     """``(frontmatter text or None, first body line index, malformed)``.
 
-    The same split as memfw's notes index (``memfw.notes.index._split_frontmatter``):
+    The same split as memfw's notes index (``memfw.notes.index.split_frontmatter``):
     the text must start with ``---`` and its first line be ``---`` (surrounding
-    whitespace ignored); the block closes at the next line that is ``---``
-    (likewise) and at nothing else (a ``...`` line does not close it). Lines
-    split like ``str.splitlines``. An opening line without a close is
-    malformed: the notes index would read no frontmatter at all, the privacy
-    reader here fails closed instead.
+    whitespace ignored); the block closes where :func:`frontmatter_close`
+    says (a ``...`` line never closes it). Lines split like
+    ``str.splitlines``. An opening line without a close, or an ambiguous
+    close, is malformed: the notes index would read no frontmatter at all
+    (or force ``local-private``), the privacy reader here fails closed.
     """
 
     if not text.startswith("---"):
@@ -250,10 +309,10 @@ def _frontmatter_block(text: str) -> tuple[str | None, int, bool]:
     lines = text.splitlines(keepends=True)
     if not lines or lines[0].strip() != "---":
         return None, 0, False
-    for index in range(1, len(lines)):
-        if lines[index].strip() == "---":
-            return "".join(lines[1:index]), index + 1, False
-    return None, 0, True
+    end, ambiguous = frontmatter_close(lines)
+    if end is None:
+        return None, 0, True
+    return "".join(lines[1:end]), end + 1, ambiguous
 
 
 def note_level(text: str, operator: str) -> str:

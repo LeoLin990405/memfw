@@ -49,7 +49,7 @@ from memfw.core.epistemic import OPEN_QUESTION_TYPE
 from memfw.core.errors import MemfwError
 from memfw.core.models import MemoryDocument
 from memfw.core.repository import Repository
-from memfw.notes.index import NoteParseError, _note_file_inside_root, _split_frontmatter
+from memfw.notes.index import NoteParseError, note_file_inside_root, split_frontmatter
 from memfw.ports.privacy import (
     LEGACY_PRIVACY_FALLBACK,
     PRIVACY_LEVELS,
@@ -356,7 +356,7 @@ class NotesSegmentResolver:
 
     def _level(self, text: str) -> str | None:
         try:
-            frontmatter, _body, _offset = _split_frontmatter(text)
+            frontmatter, _body, _offset = split_frontmatter(text)
         except NoteParseError:
             return None
         return metadata_level(frontmatter, self.legacy_privacy_default)
@@ -369,7 +369,7 @@ class NotesSegmentResolver:
         """
 
         path = self.root / rel
-        if not _note_file_inside_root(path, self.root):
+        if not note_file_inside_root(path, self.root):
             return None
         try:
             text = path.read_text(encoding="utf-8", errors="replace")

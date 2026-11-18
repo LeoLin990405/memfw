@@ -176,7 +176,7 @@ only as staged candidates. See [`adapter-graphrag.md`](adapter-graphrag.md).
 
 ## QMD recall adapter
 
-`packages/adapters/memfw-adapter-qmd` (wheel `memfw_adapter_qmd`, version 0.1.0) implements
+`packages/adapters/memfw-adapter-qmd` (wheel `memfw_adapter_qmd`, version 0.1.1) implements
 the `RecallProvider` port twice, with the standard library and PyYAML, over a running
 [QMD](https://github.com/tobi/qmd) (MIT, pinned 2.5.3) MCP server: `qmd` searches a collection
 built from a `memfw projection export` and returns memory ids mapped through the projection

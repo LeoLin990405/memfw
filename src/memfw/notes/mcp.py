@@ -36,7 +36,7 @@ from ..ports.privacy import (
 )
 from ..related import RelatedIndex
 from .feedback import FeedbackEvent, FeedbackStore
-from .index import HttpEmbeddingProvider, NoteParseError, NotesIndex, _split_frontmatter
+from .index import HttpEmbeddingProvider, NoteParseError, NotesIndex, split_frontmatter
 from .retrieval import HttpRerankerProvider, NotesRetriever, RetrievalConfig, query_coverage
 
 SERVER_INFO = {"name": "memfw-notes", "version": "0.3.0"}
@@ -231,7 +231,7 @@ class NotesGateway:
         if path is None:
             return False
         try:
-            frontmatter, _body, _offset = _split_frontmatter(
+            frontmatter, _body, _offset = split_frontmatter(
                 path.read_text(encoding="utf-8", errors="replace")
             )
         except (OSError, NoteParseError):

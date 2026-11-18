@@ -185,7 +185,7 @@ def test_memory_requests_match_the_recorded_contract(
     recorded = RECORDING["initialize"]["request"]["params"]
     assert init.keys() == recorded.keys()
     assert init["protocolVersion"] == recorded["protocolVersion"]
-    assert init["clientInfo"] == {"name": "memfw-adapter-qmd", "version": "0.1.0"}
+    assert init["clientInfo"] == {"name": "memfw-adapter-qmd", "version": "0.1.1"}
     (call,) = fake.tool_calls()
     assert call["params"] == MEMORY["request"]["params"]
     # The session header and protocol version follow the MCP Streamable HTTP rules.
@@ -965,7 +965,7 @@ def test_bad_settings_are_a_factory_error(name: str, settings: dict[str, Any]) -
 def test_package_metadata_entry_points_and_isolation() -> None:
     data = tomllib.loads((ADAPTER / "pyproject.toml").read_text(encoding="utf-8"))
     project = data["project"]
-    assert project["version"] == memfw_adapter_qmd.__version__ == "0.1.0"
+    assert project["version"] == memfw_adapter_qmd.__version__ == "0.1.1"
     assert project["dependencies"] == ["memfw-ports==0.3.0", "PyYAML==6.0.3"]
     points = project["entry-points"]["memfw.adapters"]
     assert points == {

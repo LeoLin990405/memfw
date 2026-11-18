@@ -14,7 +14,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "memfw-adapter-pageindex"
-version = "0.1.0"
+version = "0.1.1"
 description = "PageIndex-style reasoning tree search over long documents, as a memfw RecallProvider"
 readme = "README.md"
 requires-python = ">=3.11"

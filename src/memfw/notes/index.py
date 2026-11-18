@@ -216,17 +216,96 @@ def _sha256(value: str | bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _split_frontmatter(text: str) -> tuple[dict[str, Any], str, int]:
+#: A line that sets a frontmatter key deciding a note's privacy
+#: (``memfw.ports.privacy.metadata_level`` reads ``privacy``, ``sensitivity``
+#: and the ``tags``/``tag`` lists).
+_PRIVACY_KEY_LINE_RE = re.compile(r"^(?:privacy|sensitivity|tags?)\s*:", re.IGNORECASE)
+_PRIVACY_KEYS = ("privacy", "sensitivity", "tags", "tag")
+#: Most closing candidates tried when the first one is ambiguous.
+_MAX_CLOSE_CANDIDATES = 64
+
+
+def _indented(line: str) -> bool:
+    return line[:1] in (" ", "\t")
+
+
+def _yaml_mapping(lines: Sequence[str]) -> dict[str, Any] | None:
+    try:
+        loaded = yaml.safe_load("".join(lines)) or {}
+    except (yaml.YAMLError, RecursionError, ValueError, TypeError):
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
+def _privacy_view(mapping: dict[str, Any] | None) -> list[Any] | None:
+    if mapping is None:
+        return None
+    return [mapping.get(key) for key in _PRIVACY_KEYS]
+
+
+def frontmatter_close(lines: Sequence[str]) -> tuple[int | None, bool]:
+    """``(index of the line that closes the frontmatter, ambiguous)``.
+
+    ``lines`` is the note split with ``str.splitlines(keepends=True)``, its
+    first line the opening ``---``. A closing candidate is any later line that
+    is ``---`` once surrounding whitespace is stripped; ``None`` when there
+    is none (no frontmatter).
+
+    - The first candidate at column 0 closes the block: YAML ends every
+      scalar at a column-0 ``---`` (a document marker), so nothing after it
+      can be frontmatter. Ordinary notes always take this path.
+    - An indented first candidate may be scalar content instead (a line of a
+      ``|``/``>`` block scalar, or of a multi-line plain or quoted scalar).
+      The block then closes at the last candidate, up to and including the
+      first column-0 one, whose text before it still parses as a YAML
+      mapping, so a ``privacy`` key after a ``---`` inside a block scalar is
+      read as frontmatter, not body.
+    - ``ambiguous`` (the caller fails closed to ``local-private``) when that
+      longer reading and the reading that stops at the first candidate give
+      different ``privacy``/``sensitivity``/``tags``/``tag`` values, or when
+      a line setting one of those keys is left between the chosen close and
+      the first column-0 candidate (the end of the note without one).
+
+    The same rule is mirrored, for parity, by the PageIndex and QMD adapters.
+    """
+
+    candidates = [index for index in range(1, len(lines)) if lines[index].strip() == "---"]
+    if not candidates:
+        return None, False
+    first = candidates[0]
+    if not _indented(lines[first]):
+        return first, False
+    hard = next((index for index in candidates if not _indented(lines[index])), None)
+    limit = hard if hard is not None else len(lines)
+    short = _yaml_mapping(lines[1:first])
+    end, chosen = first, short
+    later = [index for index in candidates[1:] if index <= limit]
+    for index in later[:_MAX_CLOSE_CANDIDATES]:
+        loaded = _yaml_mapping(lines[1:index])
+        if loaded is not None:
+            end, chosen = index, loaded
+    ambiguous = end != first and _privacy_view(short) != _privacy_view(chosen)
+    if any(_PRIVACY_KEY_LINE_RE.match(line) for line in lines[end + 1 : limit]):
+        ambiguous = True
+    return end, ambiguous
+
+
+def split_frontmatter(text: str) -> tuple[dict[str, Any], str, int]:
+    """``(frontmatter, body, index of the first body line)`` of a note's text.
+
+    The block opens only when the text starts with ``---`` and its first line
+    is ``---``, and closes as :func:`frontmatter_close` says (no close: no
+    frontmatter). A YAML error or a block that is not a mapping raises
+    ``NoteParseError``. When the close is ambiguous the frontmatter's
+    ``privacy`` is ``local-private`` (fail closed), whatever it said.
+    """
+
     if not text.startswith("---"):
         return {}, text, 0
     lines = text.splitlines(keepends=True)
     if not lines or lines[0].strip() != "---":
         return {}, text, 0
-    end = None
-    for index in range(1, len(lines)):
-        if lines[index].strip() == "---":
-            end = index
-            break
+    end, ambiguous = frontmatter_close(lines)
     if end is None:
         return {}, text, 0
     raw = "".join(lines[1:end])
@@ -236,7 +315,14 @@ def _split_frontmatter(text: str) -> tuple[dict[str, Any], str, int]:
         raise NoteParseError(f"invalid frontmatter: {exc}") from exc
     if not isinstance(loaded, dict):
         raise NoteParseError("frontmatter must be a mapping")
-    return dict(loaded), "".join(lines[end + 1 :]), end + 1
+    frontmatter = dict(loaded)
+    if ambiguous:
+        frontmatter["privacy"] = "local-private"
+    return frontmatter, "".join(lines[end + 1 :]), end + 1
+
+
+#: The name this helper had before it was public (kept for existing callers).
+_split_frontmatter = split_frontmatter
 
 
 def _tags(frontmatter: dict[str, Any]) -> list[str]:
@@ -291,7 +377,7 @@ def parse_markdown(path: Path, root: Path) -> ParsedNote:
     except OSError as exc:
         raise NoteParseError(str(exc)) from exc
     relative = path.relative_to(root).as_posix()
-    frontmatter, body, offset = _split_frontmatter(text)
+    frontmatter, body, offset = split_frontmatter(text)
     title = str(frontmatter.get("title") or "").strip()
     if not title:
         match = re.search(r"^#\s+(.+?)\s*$", body, re.MULTILINE)
@@ -335,7 +421,7 @@ def parse_markdown(path: Path, root: Path) -> ParsedNote:
     )
 
 
-def _note_file_inside_root(path: Path, root: Path) -> bool:
+def note_file_inside_root(path: Path, root: Path) -> bool:
     """False for symlinks and for files that resolve outside ``root``."""
 
     try:
@@ -366,6 +452,10 @@ def _note_file_inside_root(path: Path, root: Path) -> bool:
 
 Filters = tuple[list[str], list[object]]
 NO_FILTERS: Filters = ([], [])
+
+
+#: The name this helper had before it was public (kept for existing callers).
+_note_file_inside_root = note_file_inside_root
 
 
 def _where(filters: Filters) -> tuple[str, list[object]]:
@@ -782,7 +872,7 @@ class NotesIndex:
             "sections": 0,
             "embedded": 0,
         }
-        paths = [path for path in sorted(root.rglob("*.md")) if _note_file_inside_root(path, root)]
+        paths = [path for path in sorted(root.rglob("*.md")) if note_file_inside_root(path, root)]
         if max_files is not None:
             paths = paths[: max(0, max_files)]
         seen: set[str] = set()
