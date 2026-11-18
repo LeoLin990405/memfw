@@ -16,7 +16,7 @@ import io
 import json
 import os
 import stat
-from contextlib import redirect_stdout
+from contextlib import closing, redirect_stdout
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -343,9 +343,12 @@ def test_existing_usage_directory_is_tightened(tmp_path: Path) -> None:
     assert stat.S_IMODE(directory.stat().st_mode) == 0o700
 
 
-def test_a_write_at_the_row_cap_does_not_scan_the_table(tmp_path: Path) -> None:
+def test_a_write_at_the_row_cap_does_not_scan_the_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Counts work, not wall-clock time: query plans and SQLite VM steps."""
+    import re
     import sqlite3
-    import time
 
     path = tmp_path / "u.sqlite3"
     sink = SqliteUsageSink(path)
@@ -358,15 +361,43 @@ def test_a_write_at_the_row_cap_does_not_scan_the_table(tmp_path: Path) -> None:
                 for n in range(100_000)
             ),
         )
-    timings = []
-    for _ in range(5):
-        start = time.perf_counter()
-        sink.record(_signals()[1])
-        timings.append(time.perf_counter() - start)
+    statements: list[str] = []
+    steps = [0]
+
+    def count_step() -> int:
+        steps[0] += 1
+        return 0
+
+    real_connect = sqlite3.connect
+
+    def traced_connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+        connection = real_connect(*args, **kwargs)
+        connection.set_trace_callback(statements.append)
+        connection.set_progress_handler(count_step, 1)  # one call per VM instruction
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", traced_connect)
+    sink.record(_signals()[1])
+    monkeypatch.setattr(sqlite3, "connect", real_connect)
     assert len(sink.rows()) == 100_000
-    # The old NOT IN (... ORDER BY rowid DESC LIMIT 100000) delete took ~30-40 ms
-    # here; the rowid-range delete is a few ms. The bound is generous for slow CI.
-    assert sorted(timings)[2] < 0.020
+    deletes = [s for s in statements if s.lstrip().upper().startswith("DELETE")]
+    assert len(deletes) == 2  # retention by age, then by count
+    with closing(sqlite3.connect(path)) as connection:
+        for statement in deletes:
+            plan = connection.execute(f"EXPLAIN QUERY PLAN {statement}").fetchall()
+            details = [str(row[3]) for row in plan]
+            # The rows to drop are found through an index or a rowid range, never
+            # by visiting every row (the old ``rowid NOT IN (...)`` was a SCAN) ...
+            top = [str(row[3]) for row in plan if row[1] == 0]
+            top = [d for d in top if d.startswith(("SCAN ", "SEARCH "))]
+            assert top and all(re.match(r"SEARCH (TABLE )?used ", d) for d in top), details
+            # ... and nothing is sorted.
+            assert not any("TEMP B-TREE" in d for d in details), details
+    # The count-cap subquery walks back max_rows entries of the rowid b-tree
+    # (~2 VM steps per row, ~200k in all); the old NOT IN delete also probed
+    # every row against the kept set (~1.4M steps). 3 per row leaves room for
+    # SQLite version differences and still fails the old shape by ~4.5x.
+    assert steps[0] < 3 * sink.max_rows, steps[0]
 
 
 def test_missing_vault_is_not_cached(tmp_path: Path) -> None:
