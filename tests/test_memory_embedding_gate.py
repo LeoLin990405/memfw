@@ -24,6 +24,7 @@ from memfw.memory_hybrid import SEMANTIC_PARTIAL, MemoryHybridRetriever
 from memfw.notes import HashEmbeddingProvider, HttpEmbeddingProvider
 from memfw.notes import http as notes_http
 from memfw.notes.http import embedder_sends_off_host
+from memfw.notes.index import SEMANTIC_QUERY_WITHHELD
 from memfw.runtime.settings import resolve_settings
 
 pytest.importorskip("sqlite_vec")
@@ -137,12 +138,17 @@ def test_remote_endpoint_never_receives_private_memories(
     tmp_path: Path, remote: list[str], mode: str
 ) -> None:
     repository = _vault(tmp_path)
-    payload = _gateway(repository, _embedder(REMOTE_URL)).search("zebra vault", limit=10, mode=mode)
+    query = "zebra vault querymarker"
+    payload = _gateway(repository, _embedder(REMOTE_URL)).search(query, limit=10, mode=mode)
     sent = "\n".join(remote)
     assert "public runbook" in sent and "shared notes" in sent
     for word in PRIVATE_WORDS:
         assert word not in sent, word
-    assert payload["degraded"] is True and SEMANTIC_PARTIAL in payload["errors"]
+    assert "querymarker" not in sent  # the query may be private: never sent either
+    assert payload["mode"] == "fts" and payload["degraded"] is True
+    assert SEMANTIC_QUERY_WITHHELD in payload["errors"]
+    assert SEMANTIC_PARTIAL in payload["errors"]
+    assert {row["id"] for row in payload["results"]} >= {"m-public", "m-private"}  # FTS
 
 
 def test_opt_in_embeds_everything(tmp_path: Path, remote: list[str]) -> None:
@@ -152,7 +158,10 @@ def test_opt_in_embeds_everything(tmp_path: Path, remote: list[str]) -> None:
     )
     sent = "\n".join(remote)
     assert all(word in sent for word in PRIVATE_WORDS)
+    assert "zebra vault" in remote  # the query too, opted in
+    assert payload["mode"] == "hybrid"
     assert SEMANTIC_PARTIAL not in payload["errors"]
+    assert SEMANTIC_QUERY_WITHHELD not in payload["errors"]
 
 
 def test_environment_opt_in_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -179,7 +188,7 @@ def test_turning_the_gate_on_drops_vectors_already_stored(
     remote.clear()
     result = gated.search("zebra vault", limit=10, mode="hybrid")
     assert gated.notes_index.unembedded_sections() > 0  # private vectors removed
-    assert SEMANTIC_PARTIAL in result["errors"]
+    assert SEMANTIC_PARTIAL in result["errors"] and SEMANTIC_QUERY_WITHHELD in result["errors"]
     assert not any(word in "\n".join(remote) for word in PRIVATE_WORDS)
     # Opting in again re-embeds what was withheld.
     again = MemoryHybridRetriever(repository, embedder=embedder, embedding_allow_remote=True)
@@ -213,3 +222,167 @@ def test_loopback_endpoint_is_unchanged(tmp_path: Path, loopback: tuple[str, lis
     assert SEMANTIC_PARTIAL not in payload["errors"]
     manifest = json.loads((repository.root / ".memory-hybrid.manifest.json").read_text("utf-8"))
     assert manifest["labels"] == {"kind": "memory-vault"}
+
+
+# --- #104 review: every other route to an off-host embedder ------------------------------
+
+
+class Remote:
+    """An off-host embedder that records every text and role (no transport)."""
+
+    endpoint = REMOTE_URL
+    dimension = DIM
+    fingerprint = "remote:8"
+    model = "m"
+
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, str]] = []
+
+    def embed(self, texts: list[str], role: str = "document") -> list[list[float]]:
+        self.sent.extend((role, text) for text in texts)
+        return [_vector(text) for text in texts]
+
+
+def test_reviewer_repro_query_text_is_not_sent(tmp_path: Path) -> None:
+    repository = _vault(tmp_path)
+    embedder = Remote()
+    retriever = MemoryHybridRetriever(repository, embedder=embedder, entity_enabled=False)
+    assert retriever.embedding_gated
+    retriever.search("what are the " + SECRET, mode="hybrid")
+    assert not any(SECRET in text for _role, text in embedder.sent)
+    assert not [text for role, text in embedder.sent if role == "query"]
+
+
+def test_memory_related_build_is_gated(tmp_path: Path) -> None:
+    from memfw.related import RelatedIndex, shareable_item
+
+    repository = _vault(tmp_path)
+    index = RelatedIndex(tmp_path / "rel.sqlite")
+    index.rebuild_memory(repository)
+    embedder = Remote()
+    index.build_semantic(embedder, admit=shareable_item(repository=repository))
+    sent = "\n".join(text for _role, text in embedder.sent)
+    assert "public runbook" in sent
+    assert not any(word in sent for word in PRIVATE_WORDS)
+
+
+def test_memory_related_build_cli_gate(tmp_path: Path, remote: list[str]) -> None:
+    from typer.testing import CliRunner
+
+    from memfw.cli import app
+
+    repository = _vault(tmp_path)
+    related = tmp_path / "rel.sqlite"
+    args = ["memory-related-build", "--root", str(repository.root), "--related-db", str(related)]
+    args += ["--embedding-url", REMOTE_URL, "--dimension", str(DIM)]
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 0, result.output
+    assert not any(word in "\n".join(remote) for word in PRIVATE_WORDS)
+    remote.clear()
+    args[args.index(str(related))] = str(tmp_path / "rel-opted.sqlite")
+    result = CliRunner().invoke(app, [*args, "--allow-remote"])
+    assert result.exit_code == 0, result.output
+    assert all(word in "\n".join(remote) for word in PRIVATE_WORDS)
+
+
+def _notes_tree(tmp_path: Path) -> Path:
+    root = tmp_path / "notes"
+    root.mkdir()
+    (root / "open.md").write_text(
+        "---\nprivacy: public\n---\n# Open\nzebra public note text\n", encoding="utf-8"
+    )
+    (root / "secret.md").write_text(
+        "---\nprivacy: local-private\n---\n# Secret\n" + SECRET + "\n", encoding="utf-8"
+    )
+    (root / "plain.md").write_text("# Plain\nzebra unlabelled note text\n", encoding="utf-8")
+    return root
+
+
+def test_notes_index_and_search_are_gated(tmp_path: Path) -> None:
+    from memfw.notes import NotesIndex, NotesRetriever, RetrievalConfig
+
+    root = _notes_tree(tmp_path)
+    embedder = Remote()
+    index = NotesIndex(tmp_path / "notes.sqlite", embedder=embedder)
+    assert index.remote_gated
+    index.index(root)
+    sent = "\n".join(text for _role, text in embedder.sent)
+    assert "zebra public note text" in sent
+    assert SECRET not in sent and "unlabelled" not in sent  # no privacy: local-private
+    embedder.sent.clear()
+    result = NotesRetriever(index, config=RetrievalConfig(mode="hybrid")).search(
+        "zebra " + SECRET, limit=5
+    )
+    assert embedder.sent == []
+    assert SEMANTIC_QUERY_WITHHELD in result.errors
+    opted = NotesIndex(tmp_path / "notes2.sqlite", embedder=embedder, allow_remote=True)
+    opted.index(root)
+    assert any(SECRET in text for _role, text in embedder.sent)
+
+
+def test_notes_related_build_is_gated(tmp_path: Path) -> None:
+    from memfw.notes import NotesIndex
+    from memfw.related import RelatedIndex, shareable_item
+
+    root = _notes_tree(tmp_path)
+    db = tmp_path / "notes.sqlite"
+    NotesIndex(db).index(root)
+    index = RelatedIndex(tmp_path / "rel.sqlite")
+    index.rebuild_notes(db)
+    embedder = Remote()
+    index.build_semantic(embedder, admit=shareable_item(notes_db=db))
+    sent = "\n".join(text for _role, text in embedder.sent)
+    assert "Open" in sent and "Secret" not in sent and "Plain" not in sent
+
+
+def test_missing_manifest_still_purges_private_vectors_under_the_gate(
+    tmp_path: Path, remote: list[str]
+) -> None:
+    repository = _vault(tmp_path)
+    embedder = _embedder(REMOTE_URL)
+    MemoryHybridRetriever(repository, embedder=embedder, embedding_allow_remote=True).search(
+        "zebra vault", limit=10, mode="hybrid"
+    )
+    (repository.root / ".memory-hybrid.manifest.json").unlink()  # a pre-upgrade index
+    gated = MemoryHybridRetriever(repository, embedder=embedder)
+    gated.search("zebra vault", limit=10, mode="hybrid")
+    assert gated.notes_index.unembedded_sections() > 0
+
+
+def test_remember_suggestions_follow_the_callers_visibility(tmp_path: Path) -> None:
+    """Reviewer repro: no private or cross-tenant suggestion, no access event, no warming."""
+
+    from memfw.core.models import EventKind, Tier
+
+    repository = Repository(tmp_path / "vault")
+    repository.init()
+    config = repository.root / "vault.yaml"
+    config.write_text(
+        config.read_text(encoding="utf-8") + "legacy_privacy_default: public\n", encoding="utf-8"
+    )
+    add = repository.add
+    add(
+        "Zebra vault keys alpha", "zebra vault keys alpha copy", memory_id="m-alpha", tenant="alpha"
+    )
+    add(
+        "Zebra vault keys private",
+        "zebra vault keys private copy",
+        memory_id="m-alpha-priv",
+        tenant="alpha",
+        tier=Tier.COLD,
+        tags=["sensitivity:private"],
+    )
+    add("Zebra vault keys other", "zebra vault keys other tenant", memory_id="m-other")
+    MemoryIndex(repository.index_path).rebuild(repository)
+    gateway = Gateway(
+        repository.root,
+        entity_enabled=False,
+        allowed_sources=(),
+        tenant="alpha",
+        clearance=frozenset({"public", "shared"}),
+    )
+    out = gateway.remember("zebra vault keys new note", "zebra vault keys")
+    ids = {item["memory_id"] for item in out["suggestions"]}
+    assert ids == {"m-alpha"}
+    assert not [e for e in repository.events() if e.kind == EventKind.MEMORY_ACCESS]
+    assert repository.get("m-alpha-priv").tier == Tier.COLD

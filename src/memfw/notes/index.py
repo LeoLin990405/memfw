@@ -25,7 +25,7 @@ import sqlite3
 import time
 import urllib.request
 from array import array
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -48,6 +48,45 @@ _TOKENIZE_RE = re.compile(r"tokenize\s*=\s*['\"]?(\w+)")
 
 class NoteParseError(RuntimeError):
     """A Markdown note could not be parsed."""
+
+
+#: ``(path relative to the indexed root, parsed frontmatter) -> may it be embedded``.
+EmbedFilter = Callable[[str, Mapping[str, Any]], bool]
+#: ``errors`` code when a search's query was not embedded (an off-host embedder
+#: without the opt-in): the semantic side did not run.
+SEMANTIC_QUERY_WITHHELD = "semantic_query_withheld"
+
+
+#: The opt-in that lets an off-host embedder receive every note, memory and query.
+ALLOW_REMOTE_ENV = "MEMFW_EMBEDDING_ALLOW_REMOTE"
+
+
+def remote_embedding_allowed(environ: Mapping[str, str] | None = None) -> bool:
+    """``MEMFW_EMBEDDING_ALLOW_REMOTE`` is ``1``/``true``/``yes``/``on`` (anything else: no)."""
+
+    import os
+
+    value = (os.environ if environ is None else environ).get(ALLOW_REMOTE_ENV, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _shareable(frontmatter: Mapping[str, Any], legacy: str) -> bool:
+    """Whether a note's level (``metadata_level``) is ``public`` or ``shared``."""
+
+    from ..ports.privacy import metadata_level
+
+    try:
+        return metadata_level(dict(frontmatter), legacy) in ("public", "shared")
+    except Exception:  # noqa: BLE001 - an odd value is never shared
+        return False
+
+
+def _stored_frontmatter(raw: Any) -> dict[str, Any]:
+    try:
+        loaded = json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        return {"privacy": "unknown"}  # unreadable: never shared
+    return loaded if isinstance(loaded, dict) else {"privacy": "unknown"}
 
 
 class EmbeddingProvider(Protocol):
@@ -218,11 +257,21 @@ def _sha256(value: str | bytes) -> str:
 
 #: A line that sets a frontmatter key deciding a note's privacy
 #: (``memfw.ports.privacy.metadata_level`` reads ``privacy``, ``sensitivity``
-#: and the ``tags``/``tag`` lists).
-_PRIVACY_KEY_LINE_RE = re.compile(r"^(?:privacy|sensitivity|tags?)\s*:", re.IGNORECASE)
+#: and the ``tags``/``tag`` lists), quoted or not, an explicit ``? key`` or a
+#: merge key ``<<`` (which can carry any of them).
+_PRIVACY_KEY_LINE_RE = re.compile(
+    r"""^(?:\?\s+)?["']?(?:privacy|sensitivity|tags?|<<)["']?\s*(?::|$)""", re.IGNORECASE
+)
 _PRIVACY_KEYS = ("privacy", "sensitivity", "tags", "tag")
-#: Most closing candidates tried when the first one is ambiguous.
+#: Most closing candidates tried when the first one is ambiguous; more is
+#: itself ambiguous.
 _MAX_CLOSE_CANDIDATES = 64
+#: Longest frontmatter region (bytes before the first column-0 ``---``, or the
+#: whole note) resolved with YAML; a longer one is ambiguous.
+_MAX_CLOSE_SCAN = 256 * 1024
+#: Most YAML bytes parsed while resolving one close; past it, ambiguous.
+_MAX_CLOSE_PARSE = 1024 * 1024
+_KNOWN_LEVELS = ("public", "shared", "local-private")
 
 
 def _indented(line: str) -> bool:
@@ -243,6 +292,22 @@ def _privacy_view(mapping: dict[str, Any] | None) -> list[Any] | None:
     return [mapping.get(key) for key in _PRIVACY_KEYS]
 
 
+def forced_privacy(*values: Any) -> Any:
+    """The ``privacy`` an ambiguous close is read with: never looser than any reading.
+
+    ``local-private``, unless one of ``values`` (the ``privacy`` of each
+    reading) is an unrecognised value: that one is kept, so the note stays
+    ``unknown`` (stricter still) instead of being relaxed to ``local-private``.
+    """
+
+    for value in values:
+        if value is None:
+            continue
+        if not isinstance(value, str) or value.strip().lower() not in _KNOWN_LEVELS:
+            return value
+    return "local-private"
+
+
 def frontmatter_close(lines: Sequence[str]) -> tuple[int | None, bool]:
     """``(index of the line that closes the frontmatter, ambiguous)``.
 
@@ -260,11 +325,14 @@ def frontmatter_close(lines: Sequence[str]) -> tuple[int | None, bool]:
       first column-0 one, whose text before it still parses as a YAML
       mapping, so a ``privacy`` key after a ``---`` inside a block scalar is
       read as frontmatter, not body.
-    - ``ambiguous`` (the caller fails closed to ``local-private``) when that
+    - ``ambiguous`` (the caller fails closed: ``forced_privacy``) when that
       longer reading and the reading that stops at the first candidate give
-      different ``privacy``/``sensitivity``/``tags``/``tag`` values, or when
-      a line setting one of those keys is left between the chosen close and
-      the first column-0 candidate (the end of the note without one).
+      different ``privacy``/``sensitivity``/``tags``/``tag`` values; when any
+      reading up to a candidate does not parse as a mapping; when there are
+      more than ``_MAX_CLOSE_CANDIDATES`` candidates, the region is longer
+      than ``_MAX_CLOSE_SCAN`` bytes or the parsing budget runs out; or when
+      a line setting a privacy key is left between the chosen close and the
+      first column-0 candidate (the end of the note without one).
 
     The same rule is mirrored, for parity, by the PageIndex and QMD adapters.
     """
@@ -277,14 +345,29 @@ def frontmatter_close(lines: Sequence[str]) -> tuple[int | None, bool]:
         return first, False
     hard = next((index for index in candidates if not _indented(lines[index])), None)
     limit = hard if hard is not None else len(lines)
+    if sum(len(line) for line in lines[1:limit]) > _MAX_CLOSE_SCAN:
+        return first, True  # too large to resolve: fail closed
+    budget = _MAX_CLOSE_PARSE
+    budget -= sum(len(line) for line in lines[1:first])
     short = _yaml_mapping(lines[1:first])
+    ambiguous = short is None
     end, chosen = first, short
     later = [index for index in candidates[1:] if index <= limit]
-    for index in later[:_MAX_CLOSE_CANDIDATES]:
+    if len(later) > _MAX_CLOSE_CANDIDATES:
+        ambiguous = True
+        later = later[:_MAX_CLOSE_CANDIDATES]
+    for index in later:
+        budget -= sum(len(line) for line in lines[1:index])
+        if budget < 0:
+            ambiguous = True
+            break
         loaded = _yaml_mapping(lines[1:index])
-        if loaded is not None:
-            end, chosen = index, loaded
-    ambiguous = end != first and _privacy_view(short) != _privacy_view(chosen)
+        if loaded is None:
+            ambiguous = True
+            continue
+        end, chosen = index, loaded
+    if end != first and _privacy_view(short) != _privacy_view(chosen):
+        ambiguous = True
     if any(_PRIVACY_KEY_LINE_RE.match(line) for line in lines[end + 1 : limit]):
         ambiguous = True
     return end, ambiguous
@@ -295,9 +378,11 @@ def split_frontmatter(text: str) -> tuple[dict[str, Any], str, int]:
 
     The block opens only when the text starts with ``---`` and its first line
     is ``---``, and closes as :func:`frontmatter_close` says (no close: no
-    frontmatter). A YAML error or a block that is not a mapping raises
+    frontmatter). A YAML error (or a value the YAML constructors reject, or
+    nesting too deep) or a block that is not a mapping raises
     ``NoteParseError``. When the close is ambiguous the frontmatter's
-    ``privacy`` is ``local-private`` (fail closed), whatever it said.
+    ``privacy`` is :func:`forced_privacy` of every reading's (fail closed:
+    ``local-private``, or the unrecognised value one reading gave).
     """
 
     if not text.startswith("---"):
@@ -311,14 +396,31 @@ def split_frontmatter(text: str) -> tuple[dict[str, Any], str, int]:
     raw = "".join(lines[1:end])
     try:
         loaded = yaml.safe_load(raw) or {}
-    except yaml.YAMLError as exc:
+    except (yaml.YAMLError, RecursionError, ValueError, TypeError) as exc:
         raise NoteParseError(f"invalid frontmatter: {exc}") from exc
     if not isinstance(loaded, dict):
         raise NoteParseError("frontmatter must be a mapping")
     frontmatter = dict(loaded)
     if ambiguous:
-        frontmatter["privacy"] = "local-private"
+        frontmatter["privacy"] = forced_privacy(
+            frontmatter.get("privacy"), *_first_reading_privacy(lines)
+        )
     return frontmatter, "".join(lines[end + 1 :]), end + 1
+
+
+def _first_reading_privacy(lines: Sequence[str]) -> tuple[Any, ...]:
+    """``privacy`` of the reading that stops at the first ``---`` candidate.
+
+    ``"unknown"`` when that reading does not parse: before the YAML-aware
+    split such a note was withheld altogether, so it must not come back less
+    private than ``unknown`` (never admitted by any clearance).
+    """
+
+    first = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+    if first is None or sum(len(line) for line in lines[1:first]) > _MAX_CLOSE_SCAN:
+        return ("unknown",)
+    short = _yaml_mapping(lines[1:first])
+    return ("unknown",) if short is None else (short.get("privacy"),)
 
 
 #: The name this helper had before it was public (kept for existing callers).
@@ -514,14 +616,36 @@ class NotesIndex:
         db_path: Path | str,
         *,
         embedder: EmbeddingProvider | None = None,
-        embed_filter: Callable[[str], bool] | None = None,
+        embed_filter: EmbedFilter | None = None,
+        allow_remote: bool | None = None,
+        legacy_privacy_default: str = "local-private",
     ) -> None:
         self.db_path = Path(db_path)
         self.embedder = embedder
-        #: Which notes (by path relative to the indexed root) may be sent to the
-        #: embedder; ``None`` embeds every note (the default). A note it refuses
-        #: is indexed for FTS only, gets no vector, and loses any stored one
-        #: (the memory embedding locality gate, ``memfw.memory_hybrid``).
+        #: The locality gate: the embedder sends text off this machine
+        #: (``notes_http.embedder_sends_off_host``) and ``allow_remote`` is off.
+        #: Then no query text is embedded (``_vector_search`` returns nothing,
+        #: ``query_withheld`` is set) and only notes ``embed_filter`` admits are
+        #: (by default the notes whose level is ``public`` or ``shared``).
+        #: A loopback or in-process embedder, or the opt-in: as before.
+        if allow_remote is None:
+            allow_remote = remote_embedding_allowed()
+        self.remote_gated = (
+            embedder is not None
+            and not allow_remote
+            and notes_http.embedder_sends_off_host(embedder)
+        )
+        self.query_withheld = False
+        if embed_filter is None and self.remote_gated:
+            legacy = legacy_privacy_default
+
+            def embed_filter(_path: str, frontmatter: Mapping[str, Any]) -> bool:
+                return _shareable(frontmatter, legacy)
+
+        #: Which notes (path relative to the indexed root, parsed frontmatter)
+        #: may be sent to the embedder; ``None`` embeds every note (the
+        #: default). A note it refuses is indexed for FTS only, gets no vector,
+        #: and loses any stored one.
         self.embed_filter = embed_filter
         self.vec_enabled = False
         self.fts_tokenizer = ""
@@ -690,7 +814,7 @@ class NotesIndex:
         if not self._has_table(connection, table):
             return 0
         rows = connection.execute(
-            "SELECT s.id, s.heading, s.content, n.title, n.path FROM sections s "
+            "SELECT s.id, s.heading, s.content, n.title, n.path, n.frontmatter FROM sections s "
             f"JOIN notes n ON n.id=s.note_id WHERE s.id NOT IN (SELECT section_id FROM {table}) "
             "ORDER BY s.id"
         ).fetchall()
@@ -699,7 +823,7 @@ class NotesIndex:
             for row in rows:
                 path = str(row["path"])
                 if path not in allowed:
-                    allowed[path] = self.embed_filter(path)
+                    allowed[path] = self.embed_filter(path, _stored_frontmatter(row["frontmatter"]))
             rows = [row for row in rows if allowed[str(row["path"])]]
         embedded = 0
         for start in range(0, len(rows), BACKFILL_BATCH):
@@ -963,7 +1087,9 @@ class NotesIndex:
                 if (
                     self.embedder is not None
                     and section_rows
-                    and (self.embed_filter is None or self.embed_filter(note.path))
+                    and (
+                        self.embed_filter is None or self.embed_filter(note.path, note.frontmatter)
+                    )
                 ):
                     texts = [
                         (note.title + "\n" + heading + "\n" + content)[:EMBED_MAX_CHARS]
@@ -999,8 +1125,9 @@ class NotesIndex:
         table = "vec_sections" if self.vec_enabled else "section_vectors"
         has_table = self._has_table(connection, table)
         withheld = 0
-        for row in connection.execute("SELECT id, path FROM notes ORDER BY id").fetchall():
-            if self.embed_filter(str(row["path"])):
+        rows = connection.execute("SELECT id, path, frontmatter FROM notes ORDER BY id").fetchall()
+        for row in rows:
+            if self.embed_filter(str(row["path"]), _stored_frontmatter(row["frontmatter"])):
                 continue
             withheld += 1
             if has_table:
@@ -1131,6 +1258,10 @@ class NotesIndex:
         filters: Filters = NO_FILTERS,
     ) -> list[tuple[int, float]]:
         if self.embedder is None:
+            return []
+        if self.remote_gated:
+            # The query may be private: never sent off this machine.
+            self.query_withheld = True
             return []
         try:
             vector = _embed(self.embedder, [query], role="query")[0]

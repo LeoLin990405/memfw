@@ -746,23 +746,30 @@ The memory vector index (`.memory-hybrid.sqlite`, built by `MemoryHybridRetrieve
 `memory_search` `hybrid`/`vector`, the `two_stage` hybrid provider and `memory_remember`'s
 related suggestions) sends each memory's text to the embedder. When the embedder sends text
 off this machine (`memfw.notes.http.embedder_sends_off_host`: an `endpoint` whose host is not
-a loopback literal, the strict rule `is_loopback_url`, never DNS), only memories whose
-effective MM0 level is `public` or `shared` are embedded:
+a loopback literal, the strict rule `is_loopback_url`, never DNS), it receives no text that
+is not `public`/`shared`, and query text counts as possibly private:
 
 - a `local-private` or `unknown` memory is indexed for FTS only and gets no vector; a vector
   stored earlier is dropped when the index is next rebuilt (the manifest records the gate as
   the label `embedding_gate: public,shared`, so turning the gate on or off rebuilds);
-- a `hybrid`/`vector` search over such an index reports `degraded: true` and
-  `semantic_partial` in `errors` (FTS still finds those memories);
-- `memory_remember` embeds a candidate's text as the suggestion query only when the candidate
-  is `public`/`shared`; otherwise its suggestions are lexical.
+- no query is embedded: a `hybrid`/`vector` search answers from FTS (`mode: fts`,
+  `degraded: true`, `semantic_query_withheld` in `errors`, plus `semantic_partial` when the
+  index holds memories without vectors); the `two_stage` hybrid provider reports itself
+  unavailable and FTS answers;
+- `memory_remember`'s related suggestions are lexical (the candidate's text is a query); they
+  are also bounded to the caller (tenant, allowed sources, privacy clearance) and write no
+  `memory_access` event and warm nothing;
+- the same gate covers the notes index (`NotesIndex`: `memfw notes index/search/serve/...`
+  with `--endpoint`; a note is embedded only when its frontmatter level is `public`/`shared`,
+  no `privacy` field meaning `local-private`) and `memfw memory-related-build` /
+  `notes related-build --embedding-url` (`RelatedIndex.build_semantic(admit=...)`).
 
-Opt in to embed every level with `MEMFW_EMBEDDING_ALLOW_REMOTE=1` (wins) or `vault.yaml`
-`runtime: {embedding: {allow_remote: true}}`. A loopback endpoint or an in-process embedder
-is unchanged (every memory embedded, no setting read). Query texts are still sent to the
-embedder as typed. Not covered: the opt-in `memfw related` semantic edges
-(`RelatedIndex.build_semantic`) and adapters that embed on their own (each has its own
-clearance setting).
+One switch opts in to both stored text and queries: `MEMFW_EMBEDDING_ALLOW_REMOTE=1` (wins),
+`vault.yaml` `runtime: {embedding: {allow_remote: true}}`, or `--allow-remote` on the CLI
+commands. A loopback endpoint or an in-process embedder is unchanged (every memory embedded,
+queries embedded, no setting read). Not covered: `memfw code index/search --embedding-url`
+(source code, sent as given), a notes reranker (`--rerank-endpoint`) or query rewriter, and
+adapters that embed on their own (each has its own clearance setting).
 
 ### 4.2 MCP `memory_context` `v=2` (ContextPack)
 

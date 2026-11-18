@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from ..core.models import MemoryDocument
 from ..core.repository import Repository
 from ..memory_hybrid import MemoryHybridRetriever
 
@@ -42,9 +44,27 @@ def suggest_related(
     embedder: Any | None = None,
     limit: int = 5,
     embedding_allow_remote: bool = False,
+    tenant: str = "",
+    allowed_sources: tuple[str, ...] = (),
+    admit: Callable[[MemoryDocument], bool] | None = None,
 ) -> list[CandidateSuggestion]:
+    """Memories related to a candidate being staged; read-only.
+
+    The search is the caller's: ``tenant`` and ``allowed_sources`` bound it,
+    and ``admit`` (the interface's visibility and privacy clearance) drops a
+    memory the caller may not see, so its id and title never appear. No
+    ``memory_access`` event is written and nothing is warmed: a suggestion is
+    not a read by the caller.
+    """
+
     retriever = MemoryHybridRetriever(
-        repository, embedder=embedder, embedding_allow_remote=embedding_allow_remote
+        repository,
+        embedder=embedder,
+        embedding_allow_remote=embedding_allow_remote,
+        tenant=tenant,
+        allowed_sources=allowed_sources,
+        record_access=False,
+        autowarm=False,
     )
     query = title.strip() or content[:200]
     if not query:
@@ -60,6 +80,8 @@ def suggest_related(
         try:
             document = repository.get(item["id"])
         except Exception:
+            continue
+        if document.tenant != tenant or (admit is not None and not admit(document)):
             continue
         existing_norm = _norm(document.body)
         if source_norm and source_norm == existing_norm:

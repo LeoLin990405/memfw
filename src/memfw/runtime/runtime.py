@@ -527,6 +527,10 @@ class Runtime:
             related=related,
             privacy=checked_privacy,
             embedding_allow_remote=self.embedding_allow_remote(repository),
+            allowed_sources=tuple(self.allowed_sources),
+            # Tenant, allowed sources and the privacy clearance: a suggestion
+            # never names a memory this caller could not read.
+            visible=self._visible,
         )
 
     def related(self, repository: Repository, memory_id: str, limit: int) -> dict[str, Any]:

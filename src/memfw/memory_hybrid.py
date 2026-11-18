@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,6 +22,7 @@ from .index.readonly import shared_readonly as shared_readonly  # re-export for 
 from .index.readonly import vault_legacy_privacy
 from .notes import HttpEmbeddingProvider, NotesIndex, NotesRetriever, RetrievalConfig
 from .notes.http import embedder_sends_off_host
+from .notes.index import SEMANTIC_QUERY_WITHHELD
 from .notes.versioning import (
     IndexCompatibilityError,
     IndexManifest,
@@ -111,6 +112,7 @@ class MemoryHybridRetriever:
             index_path or (repository.root / ".memory-hybrid.sqlite"),
             embedder=embedder,
             embed_filter=self._embeddable if self.embedding_gated else None,
+            allow_remote=embedding_allow_remote,
         )
         self.manifest_path = Path(
             manifest_path or (repository.root / ".memory-hybrid.manifest.json")
@@ -127,7 +129,7 @@ class MemoryHybridRetriever:
         self.last_metrics: dict[str, Any] = {}
         self._legacy: str | None = None
 
-    def _embeddable(self, path: str) -> bool:
+    def _embeddable(self, path: str, _frontmatter: Mapping[str, Any] | None = None) -> bool:
         """Under the gate: whether the memory at ``path`` (``<id>.md``) may be embedded.
 
         Only a readable memory whose effective MM0 level is ``public`` or
@@ -173,6 +175,10 @@ class MemoryHybridRetriever:
             self.rebuild()
             return
         if not self.manifest_path.exists():
+            if self.embedding_gated:
+                # An index from before the gate (or without a manifest) may
+                # hold vectors of private memories: rebuild, which drops them.
+                self.rebuild()
             return
         try:
             manifest = read_manifest(self.manifest_path)
@@ -399,7 +405,9 @@ class MemoryHybridRetriever:
         degraded = mode != "fts"
         results: list[dict[str, Any]] = []
         started = time.perf_counter()
-        if mode != "fts" and self.embedder is not None:
+        # Under the gate no query is embedded either (it may be private):
+        # hybrid and vector answer from FTS, degraded, with a fixed code.
+        if mode != "fts" and self.embedder is not None and not self.embedding_gated:
             try:
                 self._ensure_index()
                 retriever = NotesRetriever(
@@ -460,11 +468,6 @@ class MemoryHybridRetriever:
                 mode_used = notes_result.mode_used
                 degraded = notes_result.degraded
                 errors.extend(notes_result.errors)
-                if self.embedding_gated and self.notes_index.unembedded_sections():
-                    # Private memories were not sent to the off-host embedder:
-                    # the semantic side covers only public and shared ones.
-                    degraded = True
-                    errors.append(SEMANTIC_PARTIAL)
             except Exception as exc:  # noqa: BLE001 - optional index/model boundary
                 errors.append(f"hybrid unavailable: {exc}")
                 results = []
@@ -480,6 +483,11 @@ class MemoryHybridRetriever:
             errors.extend(fts_errors)
             mode_used = "fts"
             degraded = mode != "fts"
+            if self.embedding_gated and mode != "fts":
+                errors.append(SEMANTIC_QUERY_WITHHELD)
+                if self.notes_index.unembedded_sections():
+                    # Private memories were not sent to the off-host embedder.
+                    errors.append(SEMANTIC_PARTIAL)
         if self.entity_enabled:
             if not self.entity_index.path.exists():
                 self.entity_index.rebuild(self.repository)

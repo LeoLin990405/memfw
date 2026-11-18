@@ -69,13 +69,15 @@ agent CLIs / apps ──readers──► conversation store (local, redacted)
    by default, and no bundled adapter sends a `local-private` memory or attachment to a non-local
    service.
 
-   **Embedding endpoints:** when the memory embedding endpoint (`MEMFW_EMBEDDING_URL`) is not a
-   loopback address, hybrid search embeds only `public` / `shared` memories (`local-private` and
-   `unknown` ones stay FTS-only and the search reports `semantic_partial`) unless you opt in with
-   `MEMFW_EMBEDDING_ALLOW_REMOTE=1` or `runtime.embedding.allow_remote: true`. One exception to
-   check yourself: an explicit `--embedding-url` on the offline build commands (`notes
-   related-build`, `code index`) is used as given, for everything those commands embed; point it
-   only at a loopback service.
+   **Embedding endpoints:** an embedding endpoint that is not a loopback address
+   (`MEMFW_EMBEDDING_URL`, or `--embedding-url` / `--endpoint` on the `notes` and
+   `memory-related-build` commands) receives only `public` / `shared` memories and notes and no
+   query text at all, so `hybrid` / `vector` search answers from FTS (`degraded`,
+   `semantic_query_withheld`), unless you opt in with `MEMFW_EMBEDDING_ALLOW_REMOTE=1`,
+   `runtime.embedding.allow_remote: true` or the commands' `--allow-remote`. One exception to
+   check yourself: `code index` / `code search --embedding-url` send source code as given; point
+   them only at a loopback service. A `notes search --rerank-endpoint` reranker and a configured
+   query rewriter also receive query text as given.
 2. **Event-backed Markdown.** Markdown files are the authority. Every state change is appended to
    a hash-linked JSONL event chain (`memfw log verify` proves it is intact). SQLite indexes are
    derived projections that can be deleted and rebuilt.
@@ -188,9 +190,9 @@ rebuild: it detects the missing tables and degrades instead (no temporal filteri
 
 Search matches each query word on its own and ranks by bm25, so a whole sentence finds relevant
 memories. `memory_search` `mode` defaults to `hybrid`, which is FTS5 unless an OpenAI-compatible
-embedding endpoint (`MEMFW_EMBEDDING_URL`) is configured; an endpoint that is not loopback receives
-only `public` / `shared` memories unless `MEMFW_EMBEDDING_ALLOW_REMOTE=1` (or
-`runtime.embedding.allow_remote: true`) is set, and searches then report `semantic_partial`. Every command prints
+embedding endpoint (`MEMFW_EMBEDDING_URL`) is configured. An endpoint that is not loopback gets no
+query and only `public` / `shared` memories, so the search is FTS (`semantic_query_withheld`)
+unless `MEMFW_EMBEDDING_ALLOW_REMOTE=1` (or `runtime.embedding.allow_remote: true`) is set. Every command prints
 `--help`; global `--now` and `--id-seed` make runs deterministic for tests. Which capability is
 reachable from the CLI, MCP and HTTP (and why a gap is there) is in
 [`docs/cli-mcp-parity.md`](docs/cli-mcp-parity.md).

@@ -693,10 +693,23 @@ def _tags_readable(value: Any) -> bool:
     return all(not isinstance(item, (list, dict, set)) for item in value)
 
 
-#: A line that sets a frontmatter key deciding a note's privacy.
-_PRIVACY_KEY_LINE_RE = re.compile(r"^(?:privacy|sensitivity|tags?)\s*:", re.IGNORECASE)
-_PRIVACY_VIEW_KEYS = ("privacy", "sensitivity", "tags", "tag")
+#: A line that sets a frontmatter key deciding a note's privacy
+#: (``memfw.ports.privacy.metadata_level`` reads ``privacy``, ``sensitivity``
+#: and the ``tags``/``tag`` lists), quoted or not, an explicit ``? key`` or a
+#: merge key ``<<`` (which can carry any of them).
+_PRIVACY_KEY_LINE_RE = re.compile(
+    r"""^(?:\?\s+)?["']?(?:privacy|sensitivity|tags?|<<)["']?\s*(?::|$)""", re.IGNORECASE
+)
+_PRIVACY_KEYS = ("privacy", "sensitivity", "tags", "tag")
+#: Most closing candidates tried when the first one is ambiguous; more is
+#: itself ambiguous.
 _MAX_CLOSE_CANDIDATES = 64
+#: Longest frontmatter region (bytes before the first column-0 ``---``, or the
+#: whole note) resolved with YAML; a longer one is ambiguous.
+_MAX_CLOSE_SCAN = 256 * 1024
+#: Most YAML bytes parsed while resolving one close; past it, ambiguous.
+_MAX_CLOSE_PARSE = 1024 * 1024
+_KNOWN_LEVELS = ("public", "shared", "local-private")
 
 
 def _indented(line: str) -> bool:
@@ -714,21 +727,52 @@ def _yaml_mapping(lines: Sequence[str]) -> dict[str, Any] | None:
 def _privacy_view(mapping: dict[str, Any] | None) -> list[Any] | None:
     if mapping is None:
         return None
-    return [mapping.get(key) for key in _PRIVACY_VIEW_KEYS]
+    return [mapping.get(key) for key in _PRIVACY_KEYS]
+
+
+def forced_privacy(*values: Any) -> Any:
+    """The ``privacy`` an ambiguous close is read with: never looser than any reading.
+
+    ``local-private``, unless one of ``values`` (the ``privacy`` of each
+    reading) is an unrecognised value: that one is kept, so the note stays
+    ``unknown`` (stricter still) instead of being relaxed to ``local-private``.
+    """
+
+    for value in values:
+        if value is None:
+            continue
+        if not isinstance(value, str) or value.strip().lower() not in _KNOWN_LEVELS:
+            return value
+    return "local-private"
 
 
 def frontmatter_close(lines: Sequence[str]) -> tuple[int | None, bool]:
-    """``(index of the line closing the frontmatter, ambiguous)``: memfw's rule.
+    """``(index of the line that closes the frontmatter, ambiguous)``.
 
-    A copy of ``memfw.notes.index.frontmatter_close`` (kept in parity by the
-    tests; adapters never import memfw internals). A column-0 ``---`` closes
-    the block. An indented first ``---`` may be YAML scalar content (a
-    ``|``/``>`` block scalar line): the block then closes at the last
-    candidate, up to the first column-0 one, whose text before it is still a
-    YAML mapping. ``ambiguous`` (fail closed) when that reading and the one
-    stopping at the first candidate differ on ``privacy``/``sensitivity``/
-    ``tags``/``tag``, or a line setting one of them is left after the close
-    and before the first column-0 candidate (or the end of the note).
+    ``lines`` is the note split with ``str.splitlines(keepends=True)``, its
+    first line the opening ``---``. A closing candidate is any later line that
+    is ``---`` once surrounding whitespace is stripped; ``None`` when there
+    is none (no frontmatter).
+
+    - The first candidate at column 0 closes the block: YAML ends every
+      scalar at a column-0 ``---`` (a document marker), so nothing after it
+      can be frontmatter. Ordinary notes always take this path.
+    - An indented first candidate may be scalar content instead (a line of a
+      ``|``/``>`` block scalar, or of a multi-line plain or quoted scalar).
+      The block then closes at the last candidate, up to and including the
+      first column-0 one, whose text before it still parses as a YAML
+      mapping, so a ``privacy`` key after a ``---`` inside a block scalar is
+      read as frontmatter, not body.
+    - ``ambiguous`` (the caller fails closed: ``forced_privacy``) when that
+      longer reading and the reading that stops at the first candidate give
+      different ``privacy``/``sensitivity``/``tags``/``tag`` values; when any
+      reading up to a candidate does not parse as a mapping; when there are
+      more than ``_MAX_CLOSE_CANDIDATES`` candidates, the region is longer
+      than ``_MAX_CLOSE_SCAN`` bytes or the parsing budget runs out; or when
+      a line setting a privacy key is left between the chosen close and the
+      first column-0 candidate (the end of the note without one).
+
+    The same rule is mirrored, for parity, by the PageIndex and QMD adapters.
     """
 
     candidates = [index for index in range(1, len(lines)) if lines[index].strip() == "---"]
@@ -739,14 +783,29 @@ def frontmatter_close(lines: Sequence[str]) -> tuple[int | None, bool]:
         return first, False
     hard = next((index for index in candidates if not _indented(lines[index])), None)
     limit = hard if hard is not None else len(lines)
+    if sum(len(line) for line in lines[1:limit]) > _MAX_CLOSE_SCAN:
+        return first, True  # too large to resolve: fail closed
+    budget = _MAX_CLOSE_PARSE
+    budget -= sum(len(line) for line in lines[1:first])
     short = _yaml_mapping(lines[1:first])
+    ambiguous = short is None
     end, chosen = first, short
     later = [index for index in candidates[1:] if index <= limit]
-    for index in later[:_MAX_CLOSE_CANDIDATES]:
+    if len(later) > _MAX_CLOSE_CANDIDATES:
+        ambiguous = True
+        later = later[:_MAX_CLOSE_CANDIDATES]
+    for index in later:
+        budget -= sum(len(line) for line in lines[1:index])
+        if budget < 0:
+            ambiguous = True
+            break
         loaded = _yaml_mapping(lines[1:index])
-        if loaded is not None:
-            end, chosen = index, loaded
-    ambiguous = end != first and _privacy_view(short) != _privacy_view(chosen)
+        if loaded is None:
+            ambiguous = True
+            continue
+        end, chosen = index, loaded
+    if end != first and _privacy_view(short) != _privacy_view(chosen):
+        ambiguous = True
     if any(_PRIVACY_KEY_LINE_RE.match(line) for line in lines[end + 1 : limit]):
         ambiguous = True
     return end, ambiguous
@@ -804,7 +863,13 @@ def note_level(text: str, legacy: str) -> tuple[str, int]:
     merged = dict(loaded)
     merged["tags"] = [*(loaded.get("tags") or []), *(loaded.get("tag") or [])]
     if ambiguous:
-        merged["privacy"] = "local-private"  # as memfw's notes reader forces it
+        # As memfw's notes reader forces it: never looser than any reading.
+        first = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), end)
+        short = _yaml_mapping(lines[1:first]) if first != end else loaded
+        # A first reading that does not parse was withheld before: ``unknown``.
+        merged["privacy"] = forced_privacy(
+            loaded.get("privacy"), "unknown" if short is None else short.get("privacy")
+        )
     try:
         level = metadata_level(merged, legacy)
     except Exception:  # noqa: BLE001 - an odd value must not widen access

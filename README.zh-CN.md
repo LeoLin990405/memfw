@@ -51,7 +51,7 @@ agent CLI / 应用 ──reader──► 会话库（本地、已脱敏）
 
 1. **本地优先。** vault、索引和会话库都在你自己的机器上。核心不调用任何模型，也不需要联网；凡是可能连到云端模型的功能，默认关闭，必须显式打开开关：会话 worker 和交接用 `--allow-cloud` 或 `conversations.cloud: true`，适配器在配置里写 `cloud: true`。所有适配器默认关闭，自带的适配器都不会把 `local-private` 记忆或附件发给非本地服务。
 
-   **Embedding 端点：** 记忆的 embedding 端点（`MEMFW_EMBEDDING_URL`）不是 loopback 地址时，hybrid 搜索只对 `public` / `shared` 记忆做 embedding（`local-private` 和 `unknown` 的记忆只走 FTS，搜索结果报 `semantic_partial`），除非用 `MEMFW_EMBEDDING_ALLOW_REMOTE=1` 或 `runtime.embedding.allow_remote: true` 明确放开。有一处需要你自己把关：离线构建命令（`notes related-build`、`code index`）上显式给的 `--embedding-url` 按原样使用，这些命令要 embedding 的内容都会发过去；只把它指向 loopback 服务。
+   **Embedding 端点：** 不是 loopback 地址的 embedding 端点（`MEMFW_EMBEDDING_URL`，或 `notes` 系列命令和 `memory-related-build` 的 `--embedding-url` / `--endpoint`）只会收到 `public` / `shared` 的记忆和笔记，收不到任何查询文本，所以 `hybrid` / `vector` 搜索改由 FTS 回答（`degraded`，`semantic_query_withheld`）；除非用 `MEMFW_EMBEDDING_ALLOW_REMOTE=1`、`runtime.embedding.allow_remote: true` 或命令的 `--allow-remote` 明确放开。有一处需要你自己把关：`code index` / `code search --embedding-url` 会把源代码按原样发过去，只把它指向 loopback 服务。`notes search --rerank-endpoint` 的重排服务和配置的查询改写器也会按原样收到查询文本。
 2. **以事件为后盾的 Markdown。** Markdown 文件是权威来源。每次状态变化都追加到哈希链 JSONL 事件链里，`memfw log verify` 可以证明它没被动过。SQLite 索引只是派生投影，删了也能重建。
 3. **先核对。** 模型提出的任何东西，都要先对照证据核实、再经人批准，才会成为记忆。dream 和会话 worker 只暂存候选，从不直接写 vault。
 4. **人 > 机制 > 模型。** 模型可以提议；确定性的机制负责检查预算、来源和状态迁移；内容和锚点记忆最终由人负责。
@@ -139,7 +139,7 @@ Claude Code 可以直接运行 `claude mcp add memfw -- memfw-mcp --root /path/t
 | 投影 | `okf export` / `okf validate` / `okf import`（[OKF v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format) 包）、`projection export`（给 QMD 等外部召回后端导出的文件）、`project obsidian`（只读的 Obsidian 看板）、`notes`（Markdown 笔记索引）、`code`（本地代码检索） |
 | 评估 | `eval context SNAPSHOT`（在只读快照上测上下文包的覆盖率、浪费、延迟和 token 开销）、`eval causal` |
 
-搜索时每个查询词单独匹配、按 bm25 排序，所以直接输入一整句话也能找到相关记忆。`memory_search` 的 `mode` 默认是 `hybrid`：没有配置 OpenAI 兼容的 embedding 端点（`MEMFW_EMBEDDING_URL`）时，它就是 FTS5；端点不是 loopback 时只会收到 `public` / `shared` 的记忆，除非设置了 `MEMFW_EMBEDDING_ALLOW_REMOTE=1`（或 `runtime.embedding.allow_remote: true`），这时搜索会报 `semantic_partial`。每个命令都有 `--help`；全局的 `--now` 和 `--id-seed` 可以让运行结果完全确定，方便测试。哪些功能能从命令行、MCP、HTTP 调用（以及为什么某处没有），见 [`docs/cli-mcp-parity.md`](docs/cli-mcp-parity.md)。
+搜索时每个查询词单独匹配、按 bm25 排序，所以直接输入一整句话也能找到相关记忆。`memory_search` 的 `mode` 默认是 `hybrid`：没有配置 OpenAI 兼容的 embedding 端点（`MEMFW_EMBEDDING_URL`）时，它就是 FTS5；端点不是 loopback 时收不到查询，只会收到 `public` / `shared` 的记忆，搜索改走 FTS（报 `semantic_query_withheld`），除非设置了 `MEMFW_EMBEDDING_ALLOW_REMOTE=1`（或 `runtime.embedding.allow_remote: true`）。每个命令都有 `--help`；全局的 `--now` 和 `--id-seed` 可以让运行结果完全确定，方便测试。哪些功能能从命令行、MCP、HTTP 调用（以及为什么某处没有），见 [`docs/cli-mcp-parity.md`](docs/cli-mcp-parity.md)。
 
 ### 知道自己不知道什么
 

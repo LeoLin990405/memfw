@@ -34,15 +34,23 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 - `memory_search` `hybrid`/`vector` (and their internal FTS fallback) apply the
   MCP clearance before `memory_access` and autowarm: a withheld hit is neither
   logged nor warmed (as `two_stage`). No clearance: unchanged.
-- Memory embeddings stay local unless allowed: when `MEMFW_EMBEDDING_URL` is not
-  a loopback address, only `public`/`shared` memories are embedded;
-  `local-private`/`unknown` ones are indexed for FTS only (stored vectors are
-  dropped on the next rebuild) and `hybrid`/`vector` searches report
-  `degraded` with `semantic_partial`. `memory_remember` no longer embeds a
-  private candidate as its suggestion query. Opt in with
-  `MEMFW_EMBEDDING_ALLOW_REMOTE=1` or `runtime.embedding.allow_remote: true`.
-  Loopback endpoints are unchanged. **Upgrade note:** with a remote embedding
-  endpoint you now get partial semantic results until you opt in.
+- Embeddings stay local unless allowed: an embedding endpoint that is not a
+  loopback address (`MEMFW_EMBEDDING_URL`, the `notes` commands' `--endpoint`,
+  `memory-related-build` / `notes related-build --embedding-url`) receives only
+  `public`/`shared` memories and notes and no query text. `hybrid`/`vector`
+  searches then answer from FTS (`degraded`, `semantic_query_withheld`, and
+  `semantic_partial` when vectors are missing); stored vectors of private
+  items are dropped on the next rebuild. Opt in with
+  `MEMFW_EMBEDDING_ALLOW_REMOTE=1`, `runtime.embedding.allow_remote: true` or
+  `--allow-remote`. Loopback endpoints are unchanged. **Upgrade note:** a
+  remote embedding endpoint without the opt-in means no semantic search.
+- `memory_remember` suggestions are bounded to the caller (tenant, allowed
+  sources, privacy clearance) and no longer write `memory_access` or warm.
+- Lifecycle meta-index cache also keys on ctime (an in-place rewrite with the
+  mtime restored is re-read) and hands out read-only items.
+- Ambiguous frontmatter keeps an `unknown` level (never relaxed to
+  `local-private`); quoted/merge privacy keys, unparsable readings, too many
+  candidates or an oversized block all count as ambiguous (bounded time).
 - Docs: `docs/attachments.md` states that a later version which knows a marked
   kind must still compact it in the foreign format (`details` + `event_line`).
 

@@ -104,3 +104,38 @@ def test_dream_privacy_reads_a_directory_default_as_unreadable(tmp_path: Path) -
     lifecycle = questions.load_lifecycle(repository.root)
     assert lifecycle.unreadable
     assert questions.is_private(document, lifecycle)
+
+
+def test_an_in_place_rewrite_with_the_mtime_restored_is_re_read(tmp_path: Path) -> None:
+    """Same size, same mtime (``cp -p`` style), new content: the ctime catches it."""
+
+    root = tmp_path / "vault"
+    path = root / DEFAULT_LIFECYCLE_SOURCE
+    path.parent.mkdir(parents=True)
+
+    def document(lifecycle: str) -> str:
+        return json.dumps({"items": [{"path": "a.md", "lifecycle": lifecycle}]})
+
+    path.write_text(document("active"), encoding="utf-8")
+    info = os.stat(path)
+    first = load_lifecycle(root)
+    assert first.meta is not None and first.meta.items["a.md"]["lifecycle"] == "active"
+    with open(path, "r+", encoding="utf-8") as handle:
+        handle.write(document("retird"))  # same length as "active"
+    os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns))
+    after = os.stat(path)
+    assert (after.st_size, after.st_mtime_ns) == (info.st_size, info.st_mtime_ns)
+    second = load_lifecycle(root)
+    assert second.meta is not None and second.meta.items["a.md"]["lifecycle"] == "retird"
+
+
+def test_cached_items_are_read_only(tmp_path: Path) -> None:
+    source = _write(tmp_path / "meta.json", [{"path": "a.md", "lifecycle": "active"}])
+    meta = load_lifecycle(tmp_path, source).meta
+    assert meta is not None
+    with pytest.raises(TypeError):
+        meta.items["a.md"]["lifecycle"] = "POISON"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        meta.items["b.md"] = {}  # type: ignore[index]
+    again = load_lifecycle(tmp_path, source).meta
+    assert again is not None and again.items["a.md"]["lifecycle"] == "active"

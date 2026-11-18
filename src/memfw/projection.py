@@ -39,9 +39,10 @@ import stat as stat_mode
 import threading
 import time
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Literal
 
 import yaml
@@ -346,8 +347,10 @@ class Lifecycle:
 
 
 #: Parsed meta-indexes by path, each with the ``(device, inode, mtime_ns,
-#: size)`` it was read at. A small bound: one Runtime reads one or two files.
-_LIFECYCLE_CACHE: dict[str, tuple[tuple[int, int, int, int], MetaIndex]] = {}
+#: ctime_ns, size)`` it was read at (``ctime`` catches an in-place rewrite
+#: whose mtime was restored, as ``cp -p``, ``rsync -t`` or ``tar x`` do).
+#: A small bound: one Runtime reads one or two files.
+_LIFECYCLE_CACHE: dict[str, tuple[tuple[int, int, int, int, int], MetaIndex]] = {}
 _LIFECYCLE_CACHE_MAX = 8
 _LIFECYCLE_LOCK = threading.Lock()
 
@@ -355,15 +358,23 @@ _LIFECYCLE_LOCK = threading.Lock()
 def _cached_meta_index(path: Path, info: os.stat_result) -> MetaIndex:
     """``load_meta_index(path)``, re-read only when the file's stat key changes."""
 
-    key = (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size)
+    key = (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns, info.st_size)
     name = str(path)
     with _LIFECYCLE_LOCK:
         cached = _LIFECYCLE_CACHE.get(name)
     if cached is not None and cached[0] == key:
         return cached[1]
-    meta = load_meta_index(path)
-    if meta is None:  # pragma: no cover - a path was given
+    loaded = load_meta_index(path)
+    if loaded is None:  # pragma: no cover - a path was given
         raise ProjectionError("lifecycle source unavailable")
+    # Shared by every caller until the file changes: read-only views, so no
+    # caller can change what another one reads.
+    meta = replace(
+        loaded,
+        items=MappingProxyType(
+            {rel: MappingProxyType(dict(item)) for rel, item in loaded.items.items()}
+        ),
+    )
     with _LIFECYCLE_LOCK:
         if name not in _LIFECYCLE_CACHE and len(_LIFECYCLE_CACHE) >= _LIFECYCLE_CACHE_MAX:
             _LIFECYCLE_CACHE.pop(next(iter(_LIFECYCLE_CACHE)))
@@ -387,8 +398,9 @@ def load_lifecycle(root: Path | str, source: Path | str | None = None) -> Lifecy
     - a file that cannot be read or parsed: ``unreadable``.
 
     A parsed file is kept and reused while its device, inode, modification
-    time and size stay the same, so a long-running server reads it once per
-    change rather than once per call.
+    and change times and size stay the same, so a long-running server reads
+    it once per change rather than once per call. The cached items are
+    read-only mappings.
     """
 
     try:

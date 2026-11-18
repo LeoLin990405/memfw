@@ -19,7 +19,7 @@ import jieba  # type: ignore[import-untyped]
 
 from . import http as notes_http
 from .feedback import CandidateTrace, FeedbackStore, RetrievalTrace
-from .index import NoteHit, NotesIndex
+from .index import SEMANTIC_QUERY_WITHHELD, NoteHit, NotesIndex
 
 Mode = Literal["fts", "vector", "hybrid"]
 
@@ -352,6 +352,9 @@ class NotesRetriever:
     ) -> RetrievalResult:
         final_k = limit or self.config.final_k
         errors: list[str] = []
+        if getattr(self.index, "remote_gated", False) and self.config.mode != "fts":
+            # An off-host embedder without the opt-in: no query is embedded.
+            errors.append(SEMANTIC_QUERY_WITHHELD)
         rewrites = self._rewrite(query, errors)
         fused: dict[tuple[str, int | None], tuple[float, NoteHit, int]] = {}
         for text in rewrites:

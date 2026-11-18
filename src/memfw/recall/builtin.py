@@ -213,8 +213,9 @@ def join_lifecycle(meta: MemoryMeta, tags: Sequence[str], lifecycle: Lifecycle) 
       strongest of them and the vault's ``lifecycle:`` tags (retired >
       superseded > other non-active > active). A boolean
       ``lifecycle_override`` (the real meta-index's flag that ``lifecycle``
-      was set by hand) is not a lifecycle and is ignored; any other
-      non-string value fails closed;
+      was set by hand) is not a lifecycle and is ignored, and so is a
+      ``null`` one (absent, as before); any other non-string value fails
+      closed;
     - ``superseded_by`` (non-empty): counts as ``lifecycle: superseded``;
     - ``valid_until`` and ``valid_to``: the strict expiry (the earlier of
       every end date; a value that does not parse fails closed);

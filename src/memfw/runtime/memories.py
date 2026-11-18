@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,8 @@ def stage_remember(
     related: list[str] | None,
     privacy: str | None = None,
     embedding_allow_remote: bool = False,
+    allowed_sources: tuple[str, ...] = (),
+    visible: Callable[[MemoryDocument], bool] | None = None,
 ) -> dict[str, Any]:
     """Stage one candidate under ``_candidates/remember/`` of ``root``.
 
@@ -68,7 +71,14 @@ def stage_remember(
     ):
         embedder = None
     suggestions = suggest_related(
-        repository, title, text, embedder=embedder, embedding_allow_remote=embedding_allow_remote
+        repository,
+        title,
+        text,
+        embedder=embedder,
+        embedding_allow_remote=embedding_allow_remote,
+        tenant=tenant,
+        allowed_sources=allowed_sources,
+        admit=visible,
     )
     suggestion_rows = [item.as_dict() for item in suggestions]
     related_ids = list(related) if related else [item.memory_id for item in suggestions]
