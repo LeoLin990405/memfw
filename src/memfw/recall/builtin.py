@@ -40,7 +40,7 @@ import re
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -67,11 +67,11 @@ from memfw.ports.types import (
     RefKind,
 )
 from memfw.projection import (
-    MetaIndex,
-    ProjectionError,
+    DEFAULT_LIFECYCLE_SOURCE,
+    Lifecycle,
     fleet_paths,
     join_meta,
-    load_meta_index,
+    load_lifecycle,
     tag_privacy_class,
 )
 
@@ -180,44 +180,9 @@ def meta_from_document(document: MemoryDocument) -> MemoryMeta:
     )
 
 
-#: The lifecycle meta-index read when none is named (relative to the vault);
-#: the same default as ``memfw dream`` (``memfw.dream.questions``).
-DEFAULT_LIFECYCLE_SOURCE = Path("status") / "memory-meta-index.json"
-
 #: Stands in for a meta-index temporal value that is not a string: the strict
 #: policy cannot parse it, so it fails closed (``expiry_unparsable``).
 _UNPARSABLE = "unparsable"
-
-
-@dataclass(frozen=True)
-class Lifecycle:
-    """The lifecycle meta-index for one resolve call (``meta=None``: none present)."""
-
-    meta: MetaIndex | None = None
-    unreadable: bool = False
-
-
-def load_lifecycle(root: Path, source: Path | str | None = None) -> Lifecycle:
-    """Read the lifecycle meta-index: ``source``, else ``<vault>/status/memory-meta-index.json``.
-
-    No default file means no meta-index: the vault alone decides, as before.
-    A named file that is missing or unreadable, or a default file that is a
-    symlink, unreadable or malformed, is ``unreadable``: every document with
-    a ``fleet_path`` tag then fails closed under the strict policy.
-    """
-
-    if source is None:
-        path = Path(root) / DEFAULT_LIFECYCLE_SOURCE
-        if path.is_symlink():
-            return Lifecycle(unreadable=True)
-        if not path.exists():
-            return Lifecycle()
-    else:
-        path = Path(source).expanduser()
-    try:
-        return Lifecycle(meta=load_meta_index(path))
-    except ProjectionError:
-        return Lifecycle(unreadable=True)
 
 
 def _temporal(value: Any) -> str | None:
