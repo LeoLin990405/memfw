@@ -444,7 +444,7 @@ providers alike. `join_lifecycle` merges, each only ever restricting:
 
 | Meta-index field | Merged into | Strict effect |
 |---|---|---|
-| `lifecycle`, `lifecycle_override` | `lifecycle` (strongest of these and the `lifecycle:` tags) | `retired`, `superseded`, other non-active → `lifecycle` |
+| `lifecycle`, `lifecycle_override` (a string only; the boolean flag is ignored) | `lifecycle` (strongest of these and the `lifecycle:` tags) | `retired`, `superseded`, other non-active → `lifecycle` |
 | `superseded_by` (non-empty) | `lifecycle = superseded` | `superseded` |
 | `valid_until` | `valid_until` | `expired` / `expiry_unparsable` |
 | `valid_to` | `meta_valid_to` | `expired` / `expiry_unparsable` (earliest end wins) |

@@ -91,6 +91,12 @@ MATRIX: tuple[tuple[str, dict[str, Any] | None, str | None, bool, str | None], .
     ("m-superseded", {"lifecycle": "superseded"}, "superseded", True, "superseded"),
     ("m-supby", {"superseded_by": "new.md"}, "superseded", True, "superseded"),
     ("m-override", {"lifecycle": "active", "lifecycle_override": "retired"}, "retired", True, None),
+    # The real meta-index's shape: ``lifecycle_override`` is a boolean flag
+    # next to the ``lifecycle`` it marks, never a lifecycle of its own.
+    ("m-flag-true", {"lifecycle": "active", "lifecycle_override": True}, None, True, None),
+    ("m-flag-false", {"lifecycle": "active", "lifecycle_override": False}, None, True, None),
+    ("m-flag-retired", {"lifecycle": "retired", "lifecycle_override": True}, "retired", True, None),
+    ("m-flag-odd", {"lifecycle": "active", "lifecycle_override": 1}, "lifecycle", False, None),
     ("m-archived", {"lifecycle": "archived"}, "lifecycle", False, None),
     ("m-oddlife", {"lifecycle": 7}, "lifecycle", False, None),
     ("m-until-past", {"valid_until": PAST}, "expired", True, "expired"),
@@ -169,6 +175,22 @@ def test_lifecycle_drop_matrix_through_the_coordinator(
                 assert label in hit.labels, memory_id
             continue
         assert dropped.get(reason, 0) >= 1, (memory_id, reason, dropped)
+
+
+def test_boolean_lifecycle_override_is_a_flag_not_a_lifecycle(tmp_path: Path) -> None:
+    """The real meta-index shape (``lifecycle_override: true``) keeps the ``lifecycle``."""
+
+    repository = _lifecycle_vault(tmp_path)
+    metas = VaultIdResolver(repository.root).resolve(
+        ["m-flag-true", "m-flag-false", "m-flag-retired", "m-flag-odd"]
+    )
+    lifecycles = {key: value.meta.lifecycle for key, value in metas.items() if value.meta}
+    assert lifecycles == {
+        "m-flag-true": "active",
+        "m-flag-false": "active",
+        "m-flag-retired": "retired",
+        "m-flag-odd": "unparsable",
+    }
 
 
 @pytest.mark.parametrize("provider_kind", ["fts", "fake"])

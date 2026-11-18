@@ -244,9 +244,12 @@ def join_lifecycle(meta: MemoryMeta, tags: Sequence[str], lifecycle: Lifecycle) 
     which the strict policy drops. A joined item adds, each only ever
     restricting:
 
-    - ``lifecycle`` and ``lifecycle_override``: the strongest of them and the
-      vault's ``lifecycle:`` tags (retired > superseded > other non-active >
-      active);
+    - ``lifecycle``, and ``lifecycle_override`` when it is a string: the
+      strongest of them and the vault's ``lifecycle:`` tags (retired >
+      superseded > other non-active > active). A boolean
+      ``lifecycle_override`` (the real meta-index's flag that ``lifecycle``
+      was set by hand) is not a lifecycle and is ignored; any other
+      non-string value fails closed;
     - ``superseded_by`` (non-empty): counts as ``lifecycle: superseded``;
     - ``valid_until`` and ``valid_to``: the strict expiry (the earlier of
       every end date; a value that does not parse fails closed);
@@ -267,10 +270,17 @@ def join_lifecycle(meta: MemoryMeta, tags: Sequence[str], lifecycle: Lifecycle) 
         return replace(meta, lifecycle_join="unjoined")
     item = join.item
     lifecycles = [meta.lifecycle] if meta.lifecycle else []
-    for key in ("lifecycle", "lifecycle_override"):
-        value = item.get(key)
-        if value is not None:
-            lifecycles.append(value if isinstance(value, str) else _UNPARSABLE)
+    value = item.get("lifecycle")
+    if value is not None:
+        lifecycles.append(value if isinstance(value, str) else _UNPARSABLE)
+    # In the real meta-index ``lifecycle_override`` is a boolean flag (the
+    # ``lifecycle`` value was set by hand), not a lifecycle: only a string
+    # one is ranked. Another non-boolean shape still fails closed.
+    override = item.get("lifecycle_override")
+    if isinstance(override, str):
+        lifecycles.append(override)
+    elif override is not None and not isinstance(override, bool):
+        lifecycles.append(_UNPARSABLE)
     if item.get("superseded_by") not in (None, ""):
         lifecycles.append("superseded")
     privacy_values = [value for value in (meta.privacy, _declared(item.get("privacy"))) if value]
