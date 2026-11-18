@@ -517,19 +517,32 @@ def remove_attachment_proxies(
     out-of-vault index was dropped.
     """
 
-    log = proxy_log(events)
     removed: list[str] = []
+    # The index goes first: while any proxy file is left, `memfw recover`
+    # knows this purge is unfinished (`attachment_proxy_files_left`) and runs
+    # it again, so an interruption can never leave the index behind alone.
+    if drop_proxy_index_file(host.root):
+        removed.append(PROXY_INDEX_KIND)
+    for path in attachment_proxy_files_left(host, attachment_id, events):
+        path.unlink()
+        removed.append(path.relative_to(host.root).as_posix())
+    return removed
+
+
+def attachment_proxy_files_left(
+    host: RepositoryHost, attachment_id: str, events: Iterable[Event]
+) -> list[Path]:
+    """The proxy files (and temp files) of ``attachment_id`` still on disk."""
+
     directory = proxies_dir(host)
-    for proxy_id, owner in log.attachments.items():
+    left: list[Path] = []
+    for proxy_id, owner in proxy_log(events).attachments.items():
         if owner != attachment_id:
             continue
         for path in (_proxy_path(host, proxy_id), directory / f"{proxy_id}.md.tmp"):
             if path.exists() or path.is_symlink():
-                path.unlink()
-                removed.append(path.relative_to(host.root).as_posix())
-    if drop_proxy_index_file(host.root):
-        removed.append(PROXY_INDEX_KIND)
-    return removed
+                left.append(path)
+    return left
 
 
 def proxies_dir(host: RepositoryHost) -> Path:
@@ -888,6 +901,7 @@ __all__ = [
     "ProxyRecord",
     "ProxyStoreMixin",
     "PROXY_INDEX_KIND",
+    "attachment_proxy_files_left",
     "check_proxy_id",
     "drop_proxy_index_file",
     "proxy_index_file",

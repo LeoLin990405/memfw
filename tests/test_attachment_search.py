@@ -300,6 +300,58 @@ def test_rebuild_racing_a_purge_never_writes_back_purged_text(
     assert proxy_index_residue(repository, target) == 0
 
 
+def test_recover_keeps_the_index_after_a_finished_purge_and_finishes_an_interrupted_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from memfw.attachments import proxies as attachment_proxies
+
+    repository, ids = _corpus(tmp_path)
+    repository.purge_attachment(ids["public"], confirm=True)
+    assert ensure_proxy_index(repository, now=NOW) is not None
+    path = proxy_index_path(repository)
+    before = path.stat().st_ino
+
+    from memfw.attachments import lifecycle as lifecycle_module
+
+    plain = _attach(repository, tmp_path, b"%PDF no proxy", "plain.pdf")
+
+    def crash_after_event(*args: Any, **kwargs: Any) -> bool:
+        raise OSError("simulated crash after the purge event")
+
+    # An unrelated interrupted purge (no proxies): recover reconciles the records.
+    with monkeypatch.context() as patch:
+        patch.setattr(lifecycle_module, "_remove_blob", crash_after_event)
+        with pytest.raises(OSError, match="simulated"):
+            repository.purge_attachment(plain, confirm=True)
+    assert repository.pending_path.exists()
+    repository.recover_pending()
+    assert path.exists() and path.stat().st_ino == before  # finished purge: index kept
+    # A purge interrupted after the index was dropped but before its proxy files went.
+    proxy_files = [
+        attachment_proxies.proxies_dir(repository) / f"{proxy_id}.md"
+        for proxy_id, owner in attachment_proxies.proxy_log(repository.events()).attachments.items()
+        if owner == ids["shared"]
+    ]
+    assert proxy_files and all(item.exists() for item in proxy_files)
+    real_files_left = attachment_proxies.attachment_proxy_files_left
+
+    def crash_after_index(*args: Any, **kwargs: Any) -> list[Path]:
+        raise OSError("simulated crash after the index was dropped")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(attachment_proxies, "attachment_proxy_files_left", crash_after_index)
+        with pytest.raises(OSError, match="simulated"):
+            repository.purge_attachment(ids["shared"], confirm=True)
+    assert not path.exists()
+    assert all(item.exists() for item in proxy_files)
+    path.write_bytes(b"stale index left by a racing rebuild")
+    assert attachment_proxies.attachment_proxy_files_left is real_files_left
+    repository.recover_pending()
+    assert not any(item.exists() for item in proxy_files)
+    assert not path.exists()  # recover finished the purge, index included
+    assert proxy_index_residue(repository, ids["shared"]) == 0
+
+
 def test_detached_missing_and_purged_attachments_leave_search_get_and_originals(
     tmp_path: Path,
 ) -> None:

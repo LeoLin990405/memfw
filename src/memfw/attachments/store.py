@@ -887,12 +887,18 @@ class AttachmentStoreMixin:
                 # The same scrub a normal purge runs (index dropped, stores VACUUMed).
                 scrub_stores(self, parsed)
         # A purge interrupted after its record was removed still owes the
-        # proxy files and the proxy index (idempotent; MM2b).
-        from .proxies import proxy_log, remove_attachment_proxies
+        # proxy files and the proxy index (MM2b). Purge drops the index before
+        # the files, so a purged attachment with no proxy file left is done:
+        # recover leaves the (rebuilt) index alone then.
+        from .proxies import attachment_proxy_files_left, proxy_log, remove_attachment_proxies
 
         owners = set(proxy_log(events).attachments.values())
         for identifier, state in states.items():
-            if state.purged and identifier in owners:
+            if (
+                state.purged
+                and identifier in owners
+                and attachment_proxy_files_left(self, identifier, events)
+            ):
                 removed.extend(remove_attachment_proxies(self, identifier, events))
         for path in sorted(directory.glob("*.md")):
             if _is_attachment_name(path.stem) and path.stem not in committed:
