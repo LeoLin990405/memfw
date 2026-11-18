@@ -260,7 +260,7 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
         "memfw_adapter_deepseek-0.1.1-py3-none-any.whl",
         "memfw_adapter_ocr-0.1.0-py3-none-any.whl",
         "memfw_adapter_pageindex-0.1.0-py3-none-any.whl",
-        "memfw_adapter_qdrant-0.1.1-py3-none-any.whl",
+        "memfw_adapter_qdrant-0.1.2-py3-none-any.whl",
         "memfw_adapter_qmd-0.1.0-py3-none-any.whl",
         f"memfw_ports-{v}-py3-none-any.whl",
         f"memfw_recall-{v}-py3-none-any.whl",

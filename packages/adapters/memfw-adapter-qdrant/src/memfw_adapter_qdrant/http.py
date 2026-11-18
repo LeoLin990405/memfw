@@ -16,6 +16,7 @@ and a ``result`` is an error with a fixed code; no body text is kept.
 
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import json
 import urllib.error
@@ -182,7 +183,9 @@ class QdrantClient:
             if 300 <= exc.code < 400:
                 raise QdrantError("redirect_refused", status=exc.code) from None
             raise QdrantError(f"http_{exc.code}", status=exc.code) from None
-        except (urllib.error.URLError, TimeoutError, OSError):
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError):
+            # HTTPException: a broken answer (IncompleteRead on a malformed chunked
+            # body, a bad status line) is a transport failure, not a crash.
             raise QdrantError("unreachable") from None
         try:
             payload = json.loads(raw.decode("utf-8"))

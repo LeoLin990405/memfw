@@ -1,6 +1,6 @@
 # Qdrant recall adapter
 
-`packages/adapters/memfw-adapter-qdrant` (import `memfw_adapter_qdrant`, version 0.1.1) is a
+`packages/adapters/memfw-adapter-qdrant` (import `memfw_adapter_qdrant`, version 0.1.2) is a
 semantic `RecallProvider` (see [Ports and the recall coordinator](ports-and-recall.md)) backed by
 a [Qdrant](https://github.com/qdrant/qdrant) service that the operator runs. It embeds the query
 with memfw's own embedder, asks Qdrant for the nearest points of this vault and tenant, and

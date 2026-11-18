@@ -14,6 +14,14 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 
 ## [Unreleased]
 
+### Fixed — Qdrant adapter maps a broken HTTP answer to unreachable (memfw-adapter-qdrant 0.1.2)
+
+- `http.client.HTTPException` (for example `IncompleteRead` on a malformed or
+  cut-short chunked body, or a bad status line) is now `unreachable` in
+  `QdrantClient.call` (so the coordinator reports the provider degraded) and
+  `embedding_unreachable` in `EnvEmbedder.embed`, instead of escaping as an
+  unexpected error.
+
 ### Fixed — deterministic usage-retention cost test
 
 - `test_a_write_at_the_row_cap_does_not_scan_the_table` no longer times the

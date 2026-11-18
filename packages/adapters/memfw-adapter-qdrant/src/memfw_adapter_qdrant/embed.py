@@ -18,6 +18,7 @@ goes through a proxy; redirects are refused.
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import math
 import os
@@ -103,7 +104,13 @@ class EnvEmbedder:
             except ResponseTooLarge:
                 # Checked before any OSError mapping: a cap breach is never "unreachable".
                 raise EmbedderError("embedding_response_too_large") from None
-            except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+            except (
+                urllib.error.URLError,
+                http.client.HTTPException,
+                TimeoutError,
+                OSError,
+                ValueError,
+            ):
                 raise EmbedderError("embedding_unreachable") from None
             try:
                 payload = json.loads(raw.decode("utf-8"))
