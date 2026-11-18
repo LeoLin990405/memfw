@@ -51,7 +51,7 @@ agent CLI / 应用 ──reader──► 会话库（本地、已脱敏）
 
 1. **本地优先。** vault、索引和会话库都在你自己的机器上。核心不调用任何模型，也不需要联网；凡是可能连到云端模型的功能，默认关闭，必须显式打开开关：会话 worker 和交接用 `--allow-cloud` 或 `conversations.cloud: true`，适配器在配置里写 `cloud: true`。所有适配器默认关闭，自带的适配器都不会把 `local-private` 记忆或附件发给非本地服务。
 
-   **有一处需要你自己把关：** 可选的 embedding 端点（`MEMFW_EMBEDDING_URL`，或 `--embedding-url`）按配置原样使用，不检查是否在本机；hybrid 搜索和关联记忆构建会对所有隐私级别的记忆做 embedding。只把它指向 loopback 服务。
+   **Embedding 端点：** 记忆的 embedding 端点（`MEMFW_EMBEDDING_URL`）不是 loopback 地址时，hybrid 搜索只对 `public` / `shared` 记忆做 embedding（`local-private` 和 `unknown` 的记忆只走 FTS，搜索结果报 `semantic_partial`），除非用 `MEMFW_EMBEDDING_ALLOW_REMOTE=1` 或 `runtime.embedding.allow_remote: true` 明确放开。有一处需要你自己把关：离线构建命令（`notes related-build`、`code index`）上显式给的 `--embedding-url` 按原样使用，这些命令要 embedding 的内容都会发过去；只把它指向 loopback 服务。
 2. **以事件为后盾的 Markdown。** Markdown 文件是权威来源。每次状态变化都追加到哈希链 JSONL 事件链里，`memfw log verify` 可以证明它没被动过。SQLite 索引只是派生投影，删了也能重建。
 3. **先核对。** 模型提出的任何东西，都要先对照证据核实、再经人批准，才会成为记忆。dream 和会话 worker 只暂存候选，从不直接写 vault。
 4. **人 > 机制 > 模型。** 模型可以提议；确定性的机制负责检查预算、来源和状态迁移；内容和锚点记忆最终由人负责。
@@ -139,7 +139,7 @@ Claude Code 可以直接运行 `claude mcp add memfw -- memfw-mcp --root /path/t
 | 投影 | `okf export` / `okf validate` / `okf import`（[OKF v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format) 包）、`projection export`（给 QMD 等外部召回后端导出的文件）、`project obsidian`（只读的 Obsidian 看板）、`notes`（Markdown 笔记索引）、`code`（本地代码检索） |
 | 评估 | `eval context SNAPSHOT`（在只读快照上测上下文包的覆盖率、浪费、延迟和 token 开销）、`eval causal` |
 
-搜索时每个查询词单独匹配、按 bm25 排序，所以直接输入一整句话也能找到相关记忆。`memory_search` 的 `mode` 默认是 `hybrid`：没有配置 OpenAI 兼容的 embedding 端点（`MEMFW_EMBEDDING_URL`）时，它就是 FTS5；memfw 不检查这个端点是否在本机，而且会对所有隐私级别的记忆做 embedding，所以只把它指向 loopback 服务。每个命令都有 `--help`；全局的 `--now` 和 `--id-seed` 可以让运行结果完全确定，方便测试。哪些功能能从命令行、MCP、HTTP 调用（以及为什么某处没有），见 [`docs/cli-mcp-parity.md`](docs/cli-mcp-parity.md)。
+搜索时每个查询词单独匹配、按 bm25 排序，所以直接输入一整句话也能找到相关记忆。`memory_search` 的 `mode` 默认是 `hybrid`：没有配置 OpenAI 兼容的 embedding 端点（`MEMFW_EMBEDDING_URL`）时，它就是 FTS5；端点不是 loopback 时只会收到 `public` / `shared` 的记忆，除非设置了 `MEMFW_EMBEDDING_ALLOW_REMOTE=1`（或 `runtime.embedding.allow_remote: true`），这时搜索会报 `semantic_partial`。每个命令都有 `--help`；全局的 `--now` 和 `--id-seed` 可以让运行结果完全确定，方便测试。哪些功能能从命令行、MCP、HTTP 调用（以及为什么某处没有），见 [`docs/cli-mcp-parity.md`](docs/cli-mcp-parity.md)。
 
 ### 知道自己不知道什么
 
@@ -392,8 +392,8 @@ memfw 分成若干层，只允许向下依赖，并由 CI 强制检查：
 | `memfw-adapter-deepseek`（0.1.1） | `ModelBackend` | 给会话 worker 生成 `conv-v2` 摘要和标签；需要 `conversations.cloud: true` 和 `DEEPSEEK_API_KEY` | 已合并 |
 | `memfw-adapter-bm25s`（0.1.1） | `RecallProvider` | 进程内的 bm25s 0.3.16 排序，jieba 切词；只索引 `clearance` 内的记忆（默认 `public,shared`），在 vault 之外存哈希后的词元；`memfw-adapter-bm25s build` | 已合并 |
 | `memfw-adapter-qdrant`（0.1.2） | `RecallProvider` | 基于 Qdrant v1.20.x 服务的语义召回（REST，只用标准库）；除非 `allow_remote: true`，只连 loopback；`memfw-adapter-qdrant sync` 只发送 `public` / `shared` 记忆，不存正文 | 已合并 |
-| `memfw-adapter-qmd`（0.1.0） | `RecallProvider` ×2 | 基于运行中的 QMD 2.5.3 MCP 服务：`qmd`（记忆投影 → 记忆 id）和 `qmd-notes`（笔记 → `kh:` 引用）；从不返回 `local-private` 或 `unknown` | 已合并 |
-| `memfw-adapter-pageindex`（0.1.0） | `RecallProvider` | 对长文档做 PageIndex 风格的目录树搜索（返回 `kh:` 和 `att:…#page=` 引用）；`mode: titles` 不需要模型；`memfw-pageindex build-md \| import-tree \| list` | 已合并 |
+| `memfw-adapter-qmd`（0.1.1） | `RecallProvider` ×2 | 基于运行中的 QMD 2.5.3 MCP 服务：`qmd`（记忆投影 → 记忆 id）和 `qmd-notes`（笔记 → `kh:` 引用）；从不返回 `local-private` 或 `unknown` | 已合并 |
+| `memfw-adapter-pageindex`（0.1.1） | `RecallProvider` | 对长文档做 PageIndex 风格的目录树搜索（返回 `kh:` 和 `att:…#page=` 引用）；`mode: titles` 不需要模型；`memfw-pageindex build-md \| import-tree \| list` | 已合并 |
 | `memfw-adapter-ocr`（0.1.0） | 代理生成器（`ocr` deriver） | 用本地引擎（MCP stdio OCR 服务、`pdftotext` 或 `module:factory`）把 PDF 或图片附件转成 `memfw.proxy` v1 导入文件；什么都不上传；`memfw-ocr-proxy run \| check` | 已合并 |
 | `memfw-adapter-langextract`（0.1.0） | `Deriver`（`entities`） | 用 LangExtract 1.7.2 从 `public` / `shared` 记忆里抽取能对应到原文字符位置的实体和关系；模型是 memfw 的 `ModelBackend`（自带一个只连 loopback 的 Ollama 后端），每轮有 token 预算 | 已合并 |
 | `memfw-adapter-lightrag`（0.1.0） | `Deriver`（`graph`、`answer`） | 运维自己运行的 `lightrag-server` 1.5.7 的 loopback HTTP 客户端；只发送 `public` / `shared` 记忆；保留下来的每一行，其来源都必须是请求过的、可共享的、现行的记忆 | 已合并 |

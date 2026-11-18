@@ -123,7 +123,7 @@ CI 的 `standalone-wheels` 任务会构建两者，装进一个没有 memfw 的�
 
 ## PageIndex 召回适配器
 
-`packages/adapters/memfw-adapter-pageindex`（wheel 名 `memfw_adapter_pageindex`，版本 0.1.0）是一个面向长文档的 `RecallProvider`，按 PageIndex 风格搜索目录树（标题、节点 id、页码范围、可选的简短摘要；从不含正文）。由 memfw 的 `ModelBackend` 挑选章节，或者用 `mode: titles` 不经模型直接给标题排序。它只返回 `kh:<路径>#<标题>` 和 `att:<id>#page=<n>` 引用。非本地后端需要 `cloud: true`，`local-private` 的目录树从不发给它，每轮有 token 和调用次数预算。目录树用 `memfw-pageindex build-md | import-tree | list` 离线构建或导入，以 `0600` 的 JSON 存在 vault 之外。**默认关闭**；memfw 本身从不导入它。见包内 README。
+`packages/adapters/memfw-adapter-pageindex`（wheel 名 `memfw_adapter_pageindex`，版本 0.1.1）是一个面向长文档的 `RecallProvider`，按 PageIndex 风格搜索目录树（标题、节点 id、页码范围、可选的简短摘要；从不含正文）。由 memfw 的 `ModelBackend` 挑选章节，或者用 `mode: titles` 不经模型直接给标题排序。它只返回 `kh:<路径>#<标题>` 和 `att:<id>#page=<n>` 引用。非本地后端需要 `cloud: true`，`local-private` 的目录树从不发给它，每轮有 token 和调用次数预算。目录树用 `memfw-pageindex build-md | import-tree | list` 离线构建或导入，以 `0600` 的 JSON 存在 vault 之外。**默认关闭**；memfw 本身从不导入它。见包内 README。
 
 ## OCR 代理适配器
 
