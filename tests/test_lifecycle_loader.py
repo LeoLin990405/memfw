@@ -130,12 +130,21 @@ def test_an_in_place_rewrite_with_the_mtime_restored_is_re_read(tmp_path: Path) 
 
 
 def test_cached_items_are_read_only(tmp_path: Path) -> None:
-    source = _write(tmp_path / "meta.json", [{"path": "a.md", "lifecycle": "active"}])
+    source = _write(
+        tmp_path / "meta.json",
+        [{"path": "a.md", "lifecycle": "active", "tags": ["x"], "extra": {"k": [1]}}],
+    )
     meta = load_lifecycle(tmp_path, source).meta
     assert meta is not None
     with pytest.raises(TypeError):
         meta.items["a.md"]["lifecycle"] = "POISON"  # type: ignore[index]
     with pytest.raises(TypeError):
         meta.items["b.md"] = {}  # type: ignore[index]
+    item = meta.items["a.md"]
+    assert item["tags"] == ("x",)  # lists become tuples
+    with pytest.raises(TypeError):
+        item["extra"]["k"] = []  # type: ignore[index]
+    with pytest.raises(AttributeError):
+        item["extra"]["k"].append(2)
     again = load_lifecycle(tmp_path, source).meta
     assert again is not None and again.items["a.md"]["lifecycle"] == "active"

@@ -184,6 +184,16 @@ def _semantic_admit(
 
     if allow_remote or remote_embedding_allowed() or not embedder_sends_off_host(embedder):
         return None
+    if repository is not None:
+        # The vault's own switch (``runtime.embedding.allow_remote``), as the
+        # MCP server reads it: one opt-in everywhere.
+        try:
+            section = repository.read_config().get("runtime")
+        except Exception:  # noqa: BLE001 - unreadable: not opted in
+            section = None
+        embedding = section.get("embedding") if isinstance(section, dict) else None
+        if isinstance(embedding, dict) and embedding.get("allow_remote") is True:
+            return None
     return shareable_item(repository=repository, notes_db=notes_db)
 
 
@@ -305,6 +315,7 @@ def notes_search(
         ),
         reranker=reranker,
         trace_store=FeedbackStore(feedback_db) if feedback_db else None,
+        allow_remote=True if allow_remote else None,
     )
     metadata: dict[str, str] = {}
     for item in meta or []:
@@ -371,6 +382,14 @@ def notes_serve(
         str,
         typer.Option("--legacy-privacy-default", help="Level of notes without a privacy field"),
     ] = "local-private",
+    allow_remote: Annotated[
+        bool,
+        typer.Option(
+            "--allow-remote",
+            help="Let a non-loopback embedder receive local-private text and queries "
+            "(also MEMFW_EMBEDDING_ALLOW_REMOTE=1)",
+        ),
+    ] = False,
 ) -> None:
     """Serve read-only notes tools over stdio MCP."""
 
@@ -385,6 +404,7 @@ def notes_serve(
             related_db=related_db,
             clearance=clearance,
             legacy_privacy_default=legacy_privacy_default,
+            allow_remote=True if allow_remote else None,
         )
     )
 
@@ -642,9 +662,8 @@ def notes_related_build(
     semantic = 0
     if endpoint:
         embedder = HttpEmbeddingProvider(endpoint, model=model, dimension=dimension)
-        semantic = index.build_semantic(
-            embedder, admit=_semantic_admit(embedder, allow_remote, notes_db=notes_db)
-        )
+        admit = _semantic_admit(embedder, allow_remote, notes_db=notes_db)
+        semantic = index.build_semantic(embedder, admit=admit, allow_remote=admit is None)
     typer.echo(
         json.dumps(
             {"related_db": str(related_db), "edges": count, "semantic_edges": semantic},
@@ -1048,9 +1067,8 @@ def memory_related_build(
     semantic = 0
     if endpoint:
         embedder = HttpEmbeddingProvider(endpoint, model=model, dimension=dimension)
-        semantic = index.build_semantic(
-            embedder, admit=_semantic_admit(embedder, allow_remote, repository=repository)
-        )
+        admit = _semantic_admit(embedder, allow_remote, repository=repository)
+        semantic = index.build_semantic(embedder, admit=admit, allow_remote=admit is None)
     typer.echo(
         json.dumps(
             {"related_db": str(related_db), "edges": count, "semantic_edges": semantic},

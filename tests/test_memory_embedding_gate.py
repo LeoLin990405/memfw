@@ -387,3 +387,181 @@ def test_remember_suggestions_follow_the_callers_visibility(tmp_path: Path) -> N
     logged = [e.memory_id for e in repository.events() if e.kind == EventKind.MEMORY_ACCESS]
     assert logged == ["m-alpha"]  # only the suggestion that was shown
     assert repository.get("m-alpha-priv").tier == Tier.COLD
+
+
+# --- #104 re-review: reranker, rewriter, stale stored frontmatter ------------------------
+
+
+class RemoteReranker:
+    endpoint = "https://rerank.example.invalid/v1/rerank"
+    name = "http-rerank:x"
+
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, list[str]]] = []
+
+    def rerank(self, query: str, candidates: Any, *, top_k: int) -> list[Any]:
+        self.sent.append((query, [hit.content for hit in candidates]))
+        return list(candidates[:top_k])
+
+
+class LocalReranker(RemoteReranker):
+    endpoint = "http://127.0.0.1:8090/v1/rerank"
+
+
+class RemoteRewriter:
+    endpoint = "https://llm.example.invalid/v1/chat"
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+
+    def rewrite_query(self, query: str, *, limit: int) -> Any:
+        self.sent.append(query)
+        raise AssertionError("must not be called")
+
+
+def _two_notes(tmp_path: Path) -> Path:
+    root = tmp_path / "notes"
+    root.mkdir()
+    (root / "open.md").write_text("---\nprivacy: public\n---\n# Open\nzebra public\n")
+    (root / "secret.md").write_text("---\nprivacy: local-private\n---\n# S\n" + SECRET + "\n")
+    return root
+
+
+def test_reranker_off_host_is_withheld(tmp_path: Path) -> None:
+    from memfw.notes import NotesIndex, NotesRetriever, RetrievalConfig
+    from memfw.notes.retrieval import RERANK_WITHHELD
+
+    index = NotesIndex(tmp_path / "n.sqlite", embedder=Remote())
+    index.index(_two_notes(tmp_path))
+    reranker = RemoteReranker()
+    result = NotesRetriever(
+        index, config=RetrievalConfig(mode="hybrid", rerank_candidates=10), reranker=reranker
+    ).search("zebra vault keys", limit=5)
+    assert reranker.sent == []  # neither the query nor a passage
+    assert RERANK_WITHHELD in result.errors and result.degraded
+    local = LocalReranker()
+    NotesRetriever(
+        index, config=RetrievalConfig(mode="fts", rerank_candidates=10), reranker=local
+    ).search("zebra vault keys", limit=5)
+    assert local.sent  # a loopback reranker works as before
+    opted = RemoteReranker()
+    NotesRetriever(
+        index,
+        config=RetrievalConfig(mode="fts", rerank_candidates=10),
+        reranker=opted,
+        allow_remote=True,
+    ).search("zebra vault keys", limit=5)
+    assert opted.sent
+
+
+def test_query_rewriter_off_host_is_withheld(tmp_path: Path) -> None:
+    from memfw.notes import NotesIndex, NotesRetriever, RetrievalConfig
+    from memfw.notes.retrieval import REWRITE_WITHHELD
+
+    index = NotesIndex(tmp_path / "n.sqlite")
+    index.index(_two_notes(tmp_path))
+    rewriter = RemoteRewriter()
+    result = NotesRetriever(
+        index, config=RetrievalConfig(mode="fts", rewrite=True), language_model=rewriter
+    ).search("zebra", limit=5)
+    assert rewriter.sent == [] and REWRITE_WITHHELD in result.errors
+
+
+def test_gateway_clearance_applies_before_the_reranker(tmp_path: Path) -> None:
+    from memfw.notes import NotesIndex
+    from memfw.notes.mcp import NotesGateway
+
+    root = _two_notes(tmp_path)
+    db = tmp_path / "n.sqlite"
+    NotesIndex(db).index(root)
+    reranker = LocalReranker()  # even a local reranker never sees a withheld note
+    gateway = NotesGateway(root, db, embedder=None, reranker=reranker, clearance="public")
+    out = gateway.call(
+        "notes_search", {"query": "zebra vault keys", "rerank_candidates": 10, "mode": "fts"}
+    )
+    assert all("secret" not in row["path"] for row in out["results"])
+    assert SECRET not in json.dumps(reranker.sent)
+
+
+def test_frontmatter_stored_by_the_old_split_is_re_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An index written before the YAML-aware split: re-read before anything is embedded."""
+
+    import yaml
+
+    from memfw.notes import NotesIndex
+    from memfw.notes import index as notes_index
+
+    root = tmp_path / "notes"
+    root.mkdir()
+    (root / "b.md").write_text(
+        "---\nprivacy: public\nnote: |\n  a\n  ---\nprivacy: local-private\n---\n# B\n"
+        + SECRET
+        + "\n"
+    )
+    db = tmp_path / "n.sqlite"
+
+    def old_split(text: str) -> tuple[dict[str, Any], str, int]:
+        lines = text.splitlines(keepends=True)
+        end = next(i for i in range(1, len(lines)) if lines[i].strip() == "---")
+        loaded = yaml.safe_load("".join(lines[1:end])) or {}
+        return dict(loaded), "".join(lines[end + 1 :]), end + 1
+
+    with monkeypatch.context() as patch:
+        patch.setattr(notes_index, "split_frontmatter", old_split)
+        patch.setattr(notes_index, "FRONTMATTER_SPLIT_VERSION", "1")  # the old index
+        NotesIndex(db).index(root)
+    embedder = Remote()
+    NotesIndex(db, embedder=embedder).index(root)  # upgraded, remote, no opt-in
+    assert not any(SECRET in text for _role, text in embedder.sent), embedder.sent
+
+
+def test_related_index_refuses_stale_notes_frontmatter(tmp_path: Path) -> None:
+    import sqlite3
+
+    from memfw.notes import NotesIndex
+    from memfw.related import shareable_item
+
+    root = _two_notes(tmp_path)
+    db = tmp_path / "n.sqlite"
+    NotesIndex(db).index(root)
+    admit = shareable_item(notes_db=db)
+    assert admit("notes", "open.md", "open.md")
+    with sqlite3.connect(db) as connection:
+        connection.execute("DELETE FROM index_versions")
+    assert not shareable_item(notes_db=db)("notes", "open.md", "open.md")
+
+
+def test_build_semantic_defaults_to_nothing_off_host(tmp_path: Path) -> None:
+    from memfw.related import RelatedIndex
+
+    repository = _vault(tmp_path)
+    index = RelatedIndex(tmp_path / "rel.sqlite")
+    index.rebuild_memory(repository)
+    embedder = Remote()
+    index.build_semantic(embedder)  # no admit: an off-host embedder gets nothing
+    assert embedder.sent == []
+
+
+def test_memory_related_build_honours_the_vault_opt_in(tmp_path: Path, remote: list[str]) -> None:
+    from typer.testing import CliRunner
+
+    from memfw.cli import app
+
+    repository = _vault(tmp_path, allow_remote=True)
+    args = ["memory-related-build", "--root", str(repository.root)]
+    args += ["--related-db", str(tmp_path / "rel.sqlite"), "--embedding-url", REMOTE_URL]
+    result = CliRunner().invoke(app, [*args, "--dimension", str(DIM)])
+    assert result.exit_code == 0, result.output
+    assert all(word in "\n".join(remote) for word in PRIVATE_WORDS)
+
+
+def test_notes_servers_take_allow_remote() -> None:
+    import inspect
+
+    from memfw.cli import notes_serve
+    from memfw.notes import mcp
+
+    assert "allow_remote" in inspect.signature(notes_serve).parameters
+    assert "--allow-remote" in inspect.getsource(mcp.main)

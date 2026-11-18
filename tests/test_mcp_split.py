@@ -251,13 +251,15 @@ def test_all_tools_byte_identical_to_base_ref() -> None:
     assert removed, "labels=true calls must carry corroboration"
 
 
-#: Values derived from the event count (ids drawn from the probe's counter).
+#: Values that follow from the number of events but cannot be recomputed here
+#: (the log head hash and ids drawn from the probe's counter). The event count
+#: itself is checked exactly (``_EVENT_COUNT``).
 _COUNTED = (
     (re.compile(r"dream-20260101T000000Z-[0-9a-f]{8}"), "dream-<id>"),
     (re.compile(r"t-mcp-[0-9a-f]{32}"), "t-mcp-<n>"),
-    (re.compile(r'"event_count": [0-9]+'), '"event_count": <n>'),
     (re.compile(r'"head": "[0-9a-f]{64}"'), '"head": "<head>"'),
 )
+_EVENT_COUNT = re.compile(r'"event_count": ([0-9]+)')
 
 
 def _with_remember_visibility_fix(old: str, new: str, *, empty: bool) -> tuple[str, str]:
@@ -284,10 +286,21 @@ def _with_remember_visibility_fix(old: str, new: str, *, empty: bool) -> tuple[s
 
     before, after = suggestions(old), suggestions(new)
     assert len(before) == len(after)
+    dropped = 0
     for was, now in zip(before, after, strict=True):
         assert set(now) <= set(was), (was, now)
         if empty:
             assert not now, now
+        dropped += len(set(was) - set(now))
+    # Exactly one ``memory_access`` event fewer per dropped suggestion (the probe
+    # vault's memories are hot: no warm events), from the first remember on.
+    old_counts = [int(value) for value in _EVENT_COUNT.findall(old)]
+    new_counts = [int(value) for value in _EVENT_COUNT.findall(new)]
+    deltas = [was - now for was, now in zip(old_counts, new_counts, strict=True)]
+    assert all(delta in (0, dropped) for delta in deltas), (deltas, dropped)
+    assert deltas == sorted(deltas) and (dropped == 0 or deltas[-1] == dropped), deltas
+    replacement = iter(new_counts)
+    old = _EVENT_COUNT.sub(lambda _m: f'"event_count": {next(replacement)}', old)
 
     def masked(text: str) -> str:
         messages = _messages(text)

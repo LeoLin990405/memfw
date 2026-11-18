@@ -355,6 +355,16 @@ _LIFECYCLE_CACHE_MAX = 8
 _LIFECYCLE_LOCK = threading.Lock()
 
 
+def _frozen(value: Any) -> Any:
+    """``value`` with every dict a read-only mapping and every list a tuple, all the way down."""
+
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _frozen(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_frozen(item) for item in value)
+    return value
+
+
 def _cached_meta_index(path: Path, info: os.stat_result) -> MetaIndex:
     """``load_meta_index(path)``, re-read only when the file's stat key changes."""
 
@@ -371,9 +381,7 @@ def _cached_meta_index(path: Path, info: os.stat_result) -> MetaIndex:
     # caller can change what another one reads.
     meta = replace(
         loaded,
-        items=MappingProxyType(
-            {rel: MappingProxyType(dict(item)) for rel, item in loaded.items.items()}
-        ),
+        items=MappingProxyType({rel: _frozen(item) for rel, item in loaded.items.items()}),
     )
     with _LIFECYCLE_LOCK:
         if name not in _LIFECYCLE_CACHE and len(_LIFECYCLE_CACHE) >= _LIFECYCLE_CACHE_MAX:

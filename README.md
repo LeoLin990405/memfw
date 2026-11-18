@@ -69,15 +69,16 @@ agent CLIs / apps ──readers──► conversation store (local, redacted)
    by default, and no bundled adapter sends a `local-private` memory or attachment to a non-local
    service.
 
-   **Embedding endpoints:** an embedding endpoint that is not a loopback address
-   (`MEMFW_EMBEDDING_URL`, or `--embedding-url` / `--endpoint` on the `notes` and
-   `memory-related-build` commands) receives only `public` / `shared` memories and notes and no
-   query text at all, so `hybrid` / `vector` search answers from FTS (`degraded`,
-   `semantic_query_withheld`), unless you opt in with `MEMFW_EMBEDDING_ALLOW_REMOTE=1`,
-   `runtime.embedding.allow_remote: true` or the commands' `--allow-remote`. One exception to
-   check yourself: `code index` / `code search --embedding-url` send source code as given; point
-   them only at a loopback service. A `notes search --rerank-endpoint` reranker and a configured
-   query rewriter also receive query text as given.
+   **Model endpoints:** an embedding endpoint that is not a loopback address
+   (`MEMFW_EMBEDDING_URL`, or `--embedding-url` / `--endpoint` on the `notes`,
+   `memfw-notes-mcp` and `memory-related-build` commands) receives only `public` / `shared`
+   memories and notes and no query text at all, so `hybrid` / `vector` search answers from FTS
+   (`degraded`, `semantic_query_withheld`); a non-loopback notes reranker (`--rerank-endpoint`)
+   or query rewriter is skipped (`rerank_withheld` / `rewrite_withheld`), and a notes clearance
+   applies before reranking. Opt in with `MEMFW_EMBEDDING_ALLOW_REMOTE=1`,
+   `runtime.embedding.allow_remote: true` (the vault's commands) or `--allow-remote` (every
+   command that takes an endpoint). One exception to check yourself: `code index` / `code
+   search --embedding-url` send source code as given; point them only at a loopback service.
 2. **Event-backed Markdown.** Markdown files are the authority. Every state change is appended to
    a hash-linked JSONL event chain (`memfw log verify` proves it is intact). SQLite indexes are
    derived projections that can be deleted and rebuilt.

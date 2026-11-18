@@ -382,8 +382,13 @@ def note_level(text: str, operator: str) -> str:
     ``privacy`` field, every ``privacy:*`` / ``sensitivity:*`` tag, a top-level
     ``sensitivity``), with the operator's level standing in for a missing
     ``privacy`` field. Fail closed to ``local-private``: a YAML error, an
-    unclosed block, frontmatter that is not a mapping, a ``tags`` that is not a
-    list, or any unrecognised value.
+    unclosed block, an ambiguous close (where memfw's reader gives
+    :func:`forced_privacy`: ``local-private`` or ``unknown``), frontmatter that
+    is not a mapping, a ``tags`` that is not a list, or any unrecognised value.
+    A tree records only the three MM0 levels (``tree.privacy``), so the
+    kernel's ``unknown`` is stored here as ``local-private``, the strictest
+    level a tree can hold: never sent to a non-local backend and returned
+    only under a ``local-private`` clearance.
     """
 
     block, _, malformed = _frontmatter_block(text)

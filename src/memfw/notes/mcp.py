@@ -153,9 +153,13 @@ class NotesGateway:
         related_db: Path | None = None,
         clearance: frozenset[str] | str | None = None,
         legacy_privacy_default: str = LEGACY_PRIVACY_FALLBACK,
+        allow_remote: bool | None = None,
     ) -> None:
         self.root = root.expanduser().resolve()
-        self.index = NotesIndex(db, embedder=embedder)
+        #: One switch for the embedder, the reranker and every query they get
+        #: (``--allow-remote``; ``None``: ``MEMFW_EMBEDDING_ALLOW_REMOTE``).
+        self.allow_remote = allow_remote
+        self.index = NotesIndex(db, embedder=embedder, allow_remote=allow_remote)
         self.reranker = reranker
         self.feedback_store = feedback_store
         self.related = RelatedIndex(related_db) if related_db else None
@@ -318,6 +322,10 @@ class NotesGateway:
                 ),
                 reranker=self.reranker,
                 trace_store=self.feedback_store,
+                allow_remote=self.allow_remote,
+                # The clearance comes first: a withheld note never reaches the
+                # reranker (or any other step); the hits are re-checked below.
+                admit=(lambda hit: self.admitted(hit.path)) if self.clearance is not None else None,
             )
             result = retriever.search(
                 query,
@@ -482,6 +490,12 @@ def main(argv: list[str] | None = None) -> None:
         default=LEGACY_PRIVACY_FALLBACK,
         help="level of notes without a privacy field (default local-private)",
     )
+    parser.add_argument(
+        "--allow-remote",
+        action="store_true",
+        help="let a non-loopback embedder or reranker receive local-private text and queries "
+        "(also MEMFW_EMBEDDING_ALLOW_REMOTE=1)",
+    )
     args = parser.parse_args(argv)
     clearance = args.clearance if args.clearance is not None else os.environ.get(CLEARANCE_ENV)
     if not clearance_is_valid(clearance):
@@ -508,6 +522,7 @@ def main(argv: list[str] | None = None) -> None:
             related_db=args.related_db,
             clearance=clearance,
             legacy_privacy_default=args.legacy_privacy_default,
+            allow_remote=True if args.allow_remote else None,
         )
     )
 

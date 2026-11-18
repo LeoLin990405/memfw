@@ -269,6 +269,8 @@ def test_an_ambiguous_close_keeps_an_unknown_level() -> None:
         text = REVIEW_CASES[name]
         assert _new_level(text, "public") in ("unknown", "hidden"), name
         assert qmd_provider.note_level(text, "public")[0] == "unknown", name
+        # A PageIndex tree holds only the three MM0 levels: its strictest one.
+        assert pageindex_tree.note_level(text, "public") == "local-private", name
 
 
 def test_ordinary_notes_split_as_before_fuzz() -> None:

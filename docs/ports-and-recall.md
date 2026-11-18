@@ -764,12 +764,23 @@ is not `public`/`shared`, and query text counts as possibly private:
   no `privacy` field meaning `local-private`) and `memfw memory-related-build` /
   `notes related-build --embedding-url` (`RelatedIndex.build_semantic(admit=...)`).
 
-One switch opts in to both stored text and queries: `MEMFW_EMBEDDING_ALLOW_REMOTE=1` (wins),
-`vault.yaml` `runtime: {embedding: {allow_remote: true}}`, or `--allow-remote` on the CLI
-commands. A loopback endpoint or an in-process embedder is unchanged (every memory embedded,
-queries embedded, no setting read). Not covered: `memfw code index/search --embedding-url`
-(source code, sent as given), a notes reranker (`--rerank-endpoint`) or query rewriter, and
-adapters that embed on their own (each has its own clearance setting).
+The same rule covers the notes reranker and query rewriter (`NotesRetriever`): one off this
+machine is skipped, with neither the query nor a passage sent (`rerank_withheld`,
+`rewrite_withheld`, the search `degraded`), and the notes server's clearance is applied to
+every hit before fusion, so a withheld note never reaches even a local reranker. Notes
+indexes record the frontmatter split they were built with (`index_versions`); an older index
+re-reads every note once before anything is embedded, and `shareable_item` trusts no stored
+note frontmatter until it has. `build_semantic` without an `admit` sends nothing to an
+off-host embedder.
+
+One switch opts in to all of it, stored text and queries: `MEMFW_EMBEDDING_ALLOW_REMOTE=1`
+(wins), `vault.yaml` `runtime: {embedding: {allow_remote: true}}` (the MCP server and
+`memory-related-build`), or `--allow-remote` on every command that takes an endpoint
+(`notes index/search/serve`, `memfw-notes-mcp`, `memory-related-build`, `notes
+related-build`). A loopback endpoint or an in-process embedder is unchanged (every memory
+embedded, queries embedded, no setting read). Not covered: `memfw code index/search
+--embedding-url` (source code, sent as given) and adapters that embed on their own (each has
+its own clearance setting).
 
 ### 4.2 MCP `memory_context` `v=2` (ContextPack)
 

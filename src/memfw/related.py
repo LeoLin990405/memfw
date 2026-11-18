@@ -461,6 +461,7 @@ class RelatedIndex:
         *,
         limit: int = 10,
         admit: Callable[[str, str, str], bool] | None = None,
+        allow_remote: bool | None = None,
     ) -> int:
         """Build semantic edges across all indexed sources with one model.
 
@@ -468,8 +469,18 @@ class RelatedIndex:
         and never runs automatically. ``admit(source, id, path)``, when given, decides
         which items may be sent to the embedder (the locality gate of an
         off-host one, :func:`shareable_item`): the others get no vector and no
-        semantic edge.
+        semantic edge. Without ``admit``, an off-host embedder
+        (``embedder_sends_off_host``) gets nothing at all unless
+        ``allow_remote`` (``None``: ``MEMFW_EMBEDDING_ALLOW_REMOTE``) opts in:
+        the caller must say which items are shareable.
         """
+        if admit is None:
+            from .notes.http import embedder_sends_off_host
+            from .notes.index import remote_embedding_allowed
+
+            allowed = remote_embedding_allowed() if allow_remote is None else allow_remote
+            if not allowed and embedder_sends_off_host(embedder):
+                admit = shareable_item()  # no source to read: nothing is shareable
         try:
             import sqlite_vec  # type: ignore[import-untyped]
         except ImportError as exc:  # pragma: no cover - optional dependency
@@ -663,8 +674,23 @@ def shareable_item(
             legacy = LEGACY_PRIVACY_FALLBACK
     notes: dict[str, str] = {}
     if notes_db is not None and Path(notes_db).is_file():
+        from .notes.index import FRONTMATTER_SPLIT_VERSION
+
         with sqlite3.connect(notes_db) as connection:
-            for path, frontmatter in connection.execute("SELECT path, frontmatter FROM notes"):
+            try:
+                version = connection.execute(
+                    "SELECT value FROM index_versions WHERE key='frontmatter_split'"
+                ).fetchone()
+            except sqlite3.Error:
+                version = None
+            # Frontmatter stored by an older split cannot be trusted: no note is
+            # shareable until ``memfw notes index`` has re-read the tree.
+            rows = (
+                connection.execute("SELECT path, frontmatter FROM notes").fetchall()
+                if version is not None and str(version[0]) == FRONTMATTER_SPLIT_VERSION
+                else []
+            )
+            for path, frontmatter in rows:
                 try:
                     loaded = json.loads(frontmatter or "{}")
                     level = metadata_level(

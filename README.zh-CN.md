@@ -51,7 +51,7 @@ agent CLI / 应用 ──reader──► 会话库（本地、已脱敏）
 
 1. **本地优先。** vault、索引和会话库都在你自己的机器上。核心不调用任何模型，也不需要联网；凡是可能连到云端模型的功能，默认关闭，必须显式打开开关：会话 worker 和交接用 `--allow-cloud` 或 `conversations.cloud: true`，适配器在配置里写 `cloud: true`。所有适配器默认关闭，自带的适配器都不会把 `local-private` 记忆或附件发给非本地服务。
 
-   **Embedding 端点：** 不是 loopback 地址的 embedding 端点（`MEMFW_EMBEDDING_URL`，或 `notes` 系列命令和 `memory-related-build` 的 `--embedding-url` / `--endpoint`）只会收到 `public` / `shared` 的记忆和笔记，收不到任何查询文本，所以 `hybrid` / `vector` 搜索改由 FTS 回答（`degraded`，`semantic_query_withheld`）；除非用 `MEMFW_EMBEDDING_ALLOW_REMOTE=1`、`runtime.embedding.allow_remote: true` 或命令的 `--allow-remote` 明确放开。有一处需要你自己把关：`code index` / `code search --embedding-url` 会把源代码按原样发过去，只把它指向 loopback 服务。`notes search --rerank-endpoint` 的重排服务和配置的查询改写器也会按原样收到查询文本。
+   **模型端点：** 不是 loopback 地址的 embedding 端点（`MEMFW_EMBEDDING_URL`，或 `notes` 系列命令、`memfw-notes-mcp` 和 `memory-related-build` 的 `--embedding-url` / `--endpoint`）只会收到 `public` / `shared` 的记忆和笔记，收不到任何查询文本，所以 `hybrid` / `vector` 搜索改由 FTS 回答（`degraded`，`semantic_query_withheld`）；不是 loopback 的笔记重排服务（`--rerank-endpoint`）或查询改写器会被跳过（`rerank_withheld` / `rewrite_withheld`），笔记的访问级别过滤在重排之前就生效。用 `MEMFW_EMBEDDING_ALLOW_REMOTE=1`、`runtime.embedding.allow_remote: true`（vault 相关命令）或 `--allow-remote`（所有接受端点的命令）明确放开。有一处需要你自己把关：`code index` / `code search --embedding-url` 会把源代码按原样发过去，只把它指向 loopback 服务。
 2. **以事件为后盾的 Markdown。** Markdown 文件是权威来源。每次状态变化都追加到哈希链 JSONL 事件链里，`memfw log verify` 可以证明它没被动过。SQLite 索引只是派生投影，删了也能重建。
 3. **先核对。** 模型提出的任何东西，都要先对照证据核实、再经人批准，才会成为记忆。dream 和会话 worker 只暂存候选，从不直接写 vault。
 4. **人 > 机制 > 模型。** 模型可以提议；确定性的机制负责检查预算、来源和状态迁移；内容和锚点记忆最终由人负责。

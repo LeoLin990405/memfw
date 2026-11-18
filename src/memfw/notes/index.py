@@ -52,6 +52,9 @@ class NoteParseError(RuntimeError):
 
 #: ``(path relative to the indexed root, parsed frontmatter) -> may it be embedded``.
 EmbedFilter = Callable[[str, Mapping[str, Any]], bool]
+#: Version of the frontmatter split the stored frontmatter came from
+#: (``index_versions``); an index from another version is re-read once.
+FRONTMATTER_SPLIT_VERSION = "2"
 #: ``errors`` code when a search's query was not embedded (an off-host embedder
 #: without the opt-in): the semantic side did not run.
 SEMANTIC_QUERY_WITHHELD = "semantic_query_withheld"
@@ -1020,6 +1023,10 @@ class NotesIndex:
         seen: set[str] = set()
         with self._connect() as connection:
             self._load_vec(connection)
+            # Frontmatter stored by an older split may be wrong (a ``---``
+            # inside a block scalar): every note is re-read once, and its
+            # stored frontmatter replaced, before anything trusts it.
+            reparse = self._split_version(connection) != FRONTMATTER_SPLIT_VERSION
             for path in paths:
                 try:
                     note = parse_markdown(path, root)
@@ -1031,8 +1038,11 @@ class NotesIndex:
                     "SELECT id,content_hash FROM notes WHERE path=?", (note.path,)
                 ).fetchone()
                 if row is not None and row["content_hash"] == note.content_hash:
-                    counts["unchanged"] += 1
-                    continue
+                    if reparse and not self._refresh_frontmatter(connection, int(row["id"]), note):
+                        self._delete_note(connection, int(row["id"]))
+                    else:
+                        counts["unchanged"] += 1
+                        continue
                 if row is not None:
                     self._delete_note(connection, int(row["id"]))
                 cursor = connection.execute(
@@ -1109,11 +1119,63 @@ class NotesIndex:
                         self._delete_note(connection, int(row["id"]))
                         counts["deleted"] += 1
             connection.commit()
+            if reparse and max_files is None:
+                self._set_split_version(connection)
             if self.embed_filter is not None and self.embedder is not None:
                 counts["embedding_withheld"] = self._withhold_vectors(connection)
             counts["embedded"] += self._backfill_vectors(connection)
             connection.commit()
         return counts
+
+    def _split_version(self, connection: sqlite3.Connection) -> str:
+        """The frontmatter split the stored frontmatter came from (``""``: before versions)."""
+
+        if not self._has_table(connection, "index_versions"):
+            return ""
+        row = connection.execute(
+            "SELECT value FROM index_versions WHERE key='frontmatter_split'"
+        ).fetchone()
+        return str(row[0]) if row is not None else ""
+
+    def _set_split_version(self, connection: sqlite3.Connection) -> None:
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS index_versions (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO index_versions(key,value) VALUES ('frontmatter_split',?)",
+            (FRONTMATTER_SPLIT_VERSION,),
+        )
+        connection.commit()
+
+    def _refresh_frontmatter(
+        self, connection: sqlite3.Connection, note_id: int, note: ParsedNote
+    ) -> bool:
+        """Store ``note``'s freshly split frontmatter; ``False`` when its sections changed too.
+
+        With the same sections (the split moved nothing, the usual case) only
+        the note row is rewritten and its vectors are kept; otherwise the
+        caller re-indexes the note in full.
+        """
+
+        stored = [
+            str(row[0])
+            for row in connection.execute(
+                "SELECT hash FROM sections WHERE note_id=? ORDER BY ordinal, id", (note_id,)
+            )
+        ]
+        if stored != [section.hash for section in note.sections]:
+            return False
+        connection.execute(
+            "UPDATE notes SET title=?, frontmatter=?, tags=?, tags_json=? WHERE id=?",
+            (
+                note.title,
+                json.dumps(note.frontmatter, ensure_ascii=False, default=str),
+                " ".join(note.tags),
+                json.dumps(note.tags, ensure_ascii=False),
+                note_id,
+            ),
+        )
+        return True
 
     def _withhold_vectors(self, connection: sqlite3.Connection) -> int:
         """Drop stored vectors of notes ``embed_filter`` refuses; how many notes it refuses.
