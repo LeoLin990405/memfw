@@ -25,7 +25,7 @@ import sqlite3
 import time
 import urllib.request
 from array import array
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -48,6 +48,48 @@ _TOKENIZE_RE = re.compile(r"tokenize\s*=\s*['\"]?(\w+)")
 
 class NoteParseError(RuntimeError):
     """A Markdown note could not be parsed."""
+
+
+#: ``(path relative to the indexed root, parsed frontmatter) -> may it be embedded``.
+EmbedFilter = Callable[[str, Mapping[str, Any]], bool]
+#: Version of the frontmatter split the stored frontmatter came from
+#: (``index_versions``); an index from another version is re-read once.
+FRONTMATTER_SPLIT_VERSION = "2"
+#: ``errors`` code when a search's query was not embedded (an off-host embedder
+#: without the opt-in): the semantic side did not run.
+SEMANTIC_QUERY_WITHHELD = "semantic_query_withheld"
+
+
+#: The opt-in that lets an off-host embedder receive every note, memory and query.
+ALLOW_REMOTE_ENV = "MEMFW_EMBEDDING_ALLOW_REMOTE"
+
+
+def remote_embedding_allowed(environ: Mapping[str, str] | None = None) -> bool:
+    """``MEMFW_EMBEDDING_ALLOW_REMOTE`` is ``1``/``true``/``yes``/``on`` (anything else: no)."""
+
+    import os
+
+    value = (os.environ if environ is None else environ).get(ALLOW_REMOTE_ENV, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _shareable(frontmatter: Mapping[str, Any], legacy: str) -> bool:
+    """Whether a note's level (``metadata_level``) is ``public`` or ``shared``."""
+
+    from ..ports.privacy import metadata_level
+
+    try:
+        return metadata_level(dict(frontmatter), legacy) in ("public", "shared")
+    except Exception:  # noqa: BLE001 - an odd value is never shared
+        return False
+
+
+def _stored_frontmatter(raw: Any) -> dict[str, Any]:
+    try:
+        loaded = json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        return {"privacy": "unknown"}  # unreadable: never shared
+    return loaded if isinstance(loaded, dict) else {"privacy": "unknown"}
 
 
 class EmbeddingProvider(Protocol):
@@ -216,27 +258,176 @@ def _sha256(value: str | bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _split_frontmatter(text: str) -> tuple[dict[str, Any], str, int]:
+#: A line that sets a frontmatter key deciding a note's privacy
+#: (``memfw.ports.privacy.metadata_level`` reads ``privacy``, ``sensitivity``
+#: and the ``tags``/``tag`` lists), quoted or not, an explicit ``? key`` or a
+#: merge key ``<<`` (which can carry any of them).
+_PRIVACY_KEY_LINE_RE = re.compile(
+    r"""^(?:\?\s+)?["']?(?:privacy|sensitivity|tags?|<<)["']?\s*(?::|$)""", re.IGNORECASE
+)
+_PRIVACY_KEYS = ("privacy", "sensitivity", "tags", "tag")
+#: Most closing candidates tried when the first one is ambiguous; more is
+#: itself ambiguous.
+_MAX_CLOSE_CANDIDATES = 64
+#: Longest frontmatter region (bytes before the first column-0 ``---``, or the
+#: whole note) resolved with YAML; a longer one is ambiguous.
+_MAX_CLOSE_SCAN = 256 * 1024
+#: Most YAML bytes parsed while resolving one close; past it, ambiguous.
+_MAX_CLOSE_PARSE = 1024 * 1024
+_KNOWN_LEVELS = ("public", "shared", "local-private")
+
+
+def _indented(line: str) -> bool:
+    return line[:1] in (" ", "\t")
+
+
+def _yaml_mapping(lines: Sequence[str]) -> dict[str, Any] | None:
+    try:
+        loaded = yaml.safe_load("".join(lines)) or {}
+    except (yaml.YAMLError, RecursionError, ValueError, TypeError):
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
+def _privacy_view(mapping: dict[str, Any] | None) -> list[Any] | None:
+    if mapping is None:
+        return None
+    return [mapping.get(key) for key in _PRIVACY_KEYS]
+
+
+def forced_privacy(*values: Any) -> Any:
+    """The ``privacy`` an ambiguous close is read with: never looser than any reading.
+
+    ``local-private``, unless one of ``values`` (the ``privacy`` of each
+    reading) is an unrecognised value: that one is kept, so the note stays
+    ``unknown`` (stricter still) instead of being relaxed to ``local-private``.
+    """
+
+    for value in values:
+        if value is None:
+            continue
+        if not isinstance(value, str) or value.strip().lower() not in _KNOWN_LEVELS:
+            return value
+    return "local-private"
+
+
+def frontmatter_close(lines: Sequence[str]) -> tuple[int | None, bool]:
+    """``(index of the line that closes the frontmatter, ambiguous)``.
+
+    ``lines`` is the note split with ``str.splitlines(keepends=True)``, its
+    first line the opening ``---``. A closing candidate is any later line that
+    is ``---`` once surrounding whitespace is stripped; ``None`` when there
+    is none (no frontmatter).
+
+    - The first candidate at column 0 closes the block: YAML ends every
+      scalar at a column-0 ``---`` (a document marker), so nothing after it
+      can be frontmatter. Ordinary notes always take this path.
+    - An indented first candidate may be scalar content instead (a line of a
+      ``|``/``>`` block scalar, or of a multi-line plain or quoted scalar).
+      The block then closes at the last candidate, up to and including the
+      first column-0 one, whose text before it still parses as a YAML
+      mapping, so a ``privacy`` key after a ``---`` inside a block scalar is
+      read as frontmatter, not body.
+    - ``ambiguous`` (the caller fails closed: ``forced_privacy``) when that
+      longer reading and the reading that stops at the first candidate give
+      different ``privacy``/``sensitivity``/``tags``/``tag`` values; when any
+      reading up to a candidate does not parse as a mapping; when there are
+      more than ``_MAX_CLOSE_CANDIDATES`` candidates, the region is longer
+      than ``_MAX_CLOSE_SCAN`` bytes or the parsing budget runs out; or when
+      a line setting a privacy key is left between the chosen close and the
+      first column-0 candidate (the end of the note without one).
+
+    The same rule is mirrored, for parity, by the PageIndex and QMD adapters.
+    """
+
+    candidates = [index for index in range(1, len(lines)) if lines[index].strip() == "---"]
+    if not candidates:
+        return None, False
+    first = candidates[0]
+    if not _indented(lines[first]):
+        return first, False
+    hard = next((index for index in candidates if not _indented(lines[index])), None)
+    limit = hard if hard is not None else len(lines)
+    if sum(len(line) for line in lines[1:limit]) > _MAX_CLOSE_SCAN:
+        return first, True  # too large to resolve: fail closed
+    budget = _MAX_CLOSE_PARSE
+    budget -= sum(len(line) for line in lines[1:first])
+    short = _yaml_mapping(lines[1:first])
+    ambiguous = short is None
+    end, chosen = first, short
+    later = [index for index in candidates[1:] if index <= limit]
+    if len(later) > _MAX_CLOSE_CANDIDATES:
+        ambiguous = True
+        later = later[:_MAX_CLOSE_CANDIDATES]
+    for index in later:
+        budget -= sum(len(line) for line in lines[1:index])
+        if budget < 0:
+            ambiguous = True
+            break
+        loaded = _yaml_mapping(lines[1:index])
+        if loaded is None:
+            ambiguous = True
+            continue
+        end, chosen = index, loaded
+    if end != first and _privacy_view(short) != _privacy_view(chosen):
+        ambiguous = True
+    if any(_PRIVACY_KEY_LINE_RE.match(line) for line in lines[end + 1 : limit]):
+        ambiguous = True
+    return end, ambiguous
+
+
+def split_frontmatter(text: str) -> tuple[dict[str, Any], str, int]:
+    """``(frontmatter, body, index of the first body line)`` of a note's text.
+
+    The block opens only when the text starts with ``---`` and its first line
+    is ``---``, and closes as :func:`frontmatter_close` says (no close: no
+    frontmatter). A YAML error (or a value the YAML constructors reject, or
+    nesting too deep) or a block that is not a mapping raises
+    ``NoteParseError``. When the close is ambiguous the frontmatter's
+    ``privacy`` is :func:`forced_privacy` of every reading's (fail closed:
+    ``local-private``, or the unrecognised value one reading gave).
+    """
+
     if not text.startswith("---"):
         return {}, text, 0
     lines = text.splitlines(keepends=True)
     if not lines or lines[0].strip() != "---":
         return {}, text, 0
-    end = None
-    for index in range(1, len(lines)):
-        if lines[index].strip() == "---":
-            end = index
-            break
+    end, ambiguous = frontmatter_close(lines)
     if end is None:
         return {}, text, 0
     raw = "".join(lines[1:end])
     try:
         loaded = yaml.safe_load(raw) or {}
-    except yaml.YAMLError as exc:
+    except (yaml.YAMLError, RecursionError, ValueError, TypeError) as exc:
         raise NoteParseError(f"invalid frontmatter: {exc}") from exc
     if not isinstance(loaded, dict):
         raise NoteParseError("frontmatter must be a mapping")
-    return dict(loaded), "".join(lines[end + 1 :]), end + 1
+    frontmatter = dict(loaded)
+    if ambiguous:
+        frontmatter["privacy"] = forced_privacy(
+            frontmatter.get("privacy"), *_first_reading_privacy(lines)
+        )
+    return frontmatter, "".join(lines[end + 1 :]), end + 1
+
+
+def _first_reading_privacy(lines: Sequence[str]) -> tuple[Any, ...]:
+    """``privacy`` of the reading that stops at the first ``---`` candidate.
+
+    ``"unknown"`` when that reading does not parse: before the YAML-aware
+    split such a note was withheld altogether, so it must not come back less
+    private than ``unknown`` (never admitted by any clearance).
+    """
+
+    first = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+    if first is None or sum(len(line) for line in lines[1:first]) > _MAX_CLOSE_SCAN:
+        return ("unknown",)
+    short = _yaml_mapping(lines[1:first])
+    return ("unknown",) if short is None else (short.get("privacy"),)
+
+
+#: The name this helper had before it was public (kept for existing callers).
+_split_frontmatter = split_frontmatter
 
 
 def _tags(frontmatter: dict[str, Any]) -> list[str]:
@@ -291,7 +482,7 @@ def parse_markdown(path: Path, root: Path) -> ParsedNote:
     except OSError as exc:
         raise NoteParseError(str(exc)) from exc
     relative = path.relative_to(root).as_posix()
-    frontmatter, body, offset = _split_frontmatter(text)
+    frontmatter, body, offset = split_frontmatter(text)
     title = str(frontmatter.get("title") or "").strip()
     if not title:
         match = re.search(r"^#\s+(.+?)\s*$", body, re.MULTILINE)
@@ -335,7 +526,7 @@ def parse_markdown(path: Path, root: Path) -> ParsedNote:
     )
 
 
-def _note_file_inside_root(path: Path, root: Path) -> bool:
+def note_file_inside_root(path: Path, root: Path) -> bool:
     """False for symlinks and for files that resolve outside ``root``."""
 
     try:
@@ -366,6 +557,10 @@ def _note_file_inside_root(path: Path, root: Path) -> bool:
 
 Filters = tuple[list[str], list[object]]
 NO_FILTERS: Filters = ([], [])
+
+
+#: The name this helper had before it was public (kept for existing callers).
+_note_file_inside_root = note_file_inside_root
 
 
 def _where(filters: Filters) -> tuple[str, list[object]]:
@@ -419,9 +614,42 @@ def _has_tags(tags: object, tags_json: object, wanted_json: str) -> int:
 class NotesIndex:
     """SQLite-backed section index. All writes are explicit; search is read-only."""
 
-    def __init__(self, db_path: Path | str, *, embedder: EmbeddingProvider | None = None) -> None:
+    def __init__(
+        self,
+        db_path: Path | str,
+        *,
+        embedder: EmbeddingProvider | None = None,
+        embed_filter: EmbedFilter | None = None,
+        allow_remote: bool | None = None,
+        legacy_privacy_default: str = "local-private",
+    ) -> None:
         self.db_path = Path(db_path)
         self.embedder = embedder
+        #: The locality gate: the embedder sends text off this machine
+        #: (``notes_http.embedder_sends_off_host``) and ``allow_remote`` is off.
+        #: Then no query text is embedded (``_vector_search`` returns nothing,
+        #: ``query_withheld`` is set) and only notes ``embed_filter`` admits are
+        #: (by default the notes whose level is ``public`` or ``shared``).
+        #: A loopback or in-process embedder, or the opt-in: as before.
+        if allow_remote is None:
+            allow_remote = remote_embedding_allowed()
+        self.remote_gated = (
+            embedder is not None
+            and not allow_remote
+            and notes_http.embedder_sends_off_host(embedder)
+        )
+        self.query_withheld = False
+        if embed_filter is None and self.remote_gated:
+            legacy = legacy_privacy_default
+
+            def embed_filter(_path: str, frontmatter: Mapping[str, Any]) -> bool:
+                return _shareable(frontmatter, legacy)
+
+        #: Which notes (path relative to the indexed root, parsed frontmatter)
+        #: may be sent to the embedder; ``None`` embeds every note (the
+        #: default). A note it refuses is indexed for FTS only, gets no vector,
+        #: and loses any stored one.
+        self.embed_filter = embed_filter
         self.vec_enabled = False
         self.fts_tokenizer = ""
         self._segment: Callable[[str], str] | None = None
@@ -589,10 +817,17 @@ class NotesIndex:
         if not self._has_table(connection, table):
             return 0
         rows = connection.execute(
-            "SELECT s.id, s.heading, s.content, n.title FROM sections s "
+            "SELECT s.id, s.heading, s.content, n.title, n.path, n.frontmatter FROM sections s "
             f"JOIN notes n ON n.id=s.note_id WHERE s.id NOT IN (SELECT section_id FROM {table}) "
             "ORDER BY s.id"
         ).fetchall()
+        if self.embed_filter is not None:
+            allowed: dict[str, bool] = {}
+            for row in rows:
+                path = str(row["path"])
+                if path not in allowed:
+                    allowed[path] = self.embed_filter(path, _stored_frontmatter(row["frontmatter"]))
+            rows = [row for row in rows if allowed[str(row["path"])]]
         embedded = 0
         for start in range(0, len(rows), BACKFILL_BATCH):
             batch = rows[start : start + BACKFILL_BATCH]
@@ -782,98 +1017,247 @@ class NotesIndex:
             "sections": 0,
             "embedded": 0,
         }
-        paths = [path for path in sorted(root.rglob("*.md")) if _note_file_inside_root(path, root)]
+        paths = [path for path in sorted(root.rglob("*.md")) if note_file_inside_root(path, root)]
         if max_files is not None:
             paths = paths[: max(0, max_files)]
-        seen: set[str] = set()
         with self._connect() as connection:
             self._load_vec(connection)
-            for path in paths:
-                try:
-                    note = parse_markdown(path, root)
-                except NoteParseError:
-                    continue
-                counts["files"] += 1
-                seen.add(note.path)
-                row = connection.execute(
-                    "SELECT id,content_hash FROM notes WHERE path=?", (note.path,)
-                ).fetchone()
-                if row is not None and row["content_hash"] == note.content_hash:
+            # Frontmatter stored by an older split may be wrong (a ``---``
+            # inside a block scalar): every note is re-read once, and its
+            # stored frontmatter replaced, before anything trusts it.
+            reparse = self._split_version(connection) != FRONTMATTER_SPLIT_VERSION
+            # Until every note has been re-read, only a note re-read in this run
+            # may be embedded (the stored frontmatter of the others is stale):
+            # this covers the backfill and the withholding below as well.
+            reread: set[str] = set()
+            original_filter = self.embed_filter
+            if reparse and original_filter is not None:
+                trusted = original_filter
+
+                def reread_only(path: str, frontmatter: Mapping[str, Any]) -> bool:
+                    return path in reread and trusted(path, frontmatter)
+
+                self.embed_filter = reread_only
+            try:
+                return self._index_paths(
+                    connection,
+                    root,
+                    paths,
+                    counts,
+                    reparse,
+                    reread,
+                    max_files,
+                    progress,
+                    commit_every,
+                )
+            finally:
+                self.embed_filter = original_filter
+
+    def _index_paths(
+        self,
+        connection: sqlite3.Connection,
+        root: Path,
+        paths: Sequence[Path],
+        counts: dict[str, int],
+        reparse: bool,
+        reread: set[str],
+        max_files: int | None,
+        progress: Any | None,
+        commit_every: int,
+    ) -> dict[str, int]:
+        """The body of :meth:`index` over ``paths`` (``reread`` collects what it read)."""
+
+        seen: set[str] = set()
+        for path in paths:
+            try:
+                note = parse_markdown(path, root)
+            except NoteParseError:
+                continue
+            counts["files"] += 1
+            seen.add(note.path)
+            reread.add(note.path)
+            row = connection.execute(
+                "SELECT id,content_hash FROM notes WHERE path=?", (note.path,)
+            ).fetchone()
+            if row is not None and row["content_hash"] == note.content_hash:
+                if reparse and not self._refresh_frontmatter(connection, int(row["id"]), note):
+                    self._delete_note(connection, int(row["id"]))
+                else:
                     counts["unchanged"] += 1
                     continue
-                if row is not None:
-                    self._delete_note(connection, int(row["id"]))
-                cursor = connection.execute(
-                    "INSERT INTO notes("
-                    "path,title,content_hash,mtime,frontmatter,tags,course,tags_json"
+            if row is not None:
+                self._delete_note(connection, int(row["id"]))
+            cursor = connection.execute(
+                "INSERT INTO notes("
+                "path,title,content_hash,mtime,frontmatter,tags,course,tags_json"
+                ") VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    note.path,
+                    note.title,
+                    note.content_hash,
+                    note.mtime,
+                    json.dumps(note.frontmatter, ensure_ascii=False, default=str),
+                    " ".join(note.tags),
+                    note.course,
+                    json.dumps(note.tags, ensure_ascii=False),
+                ),
+            )
+            note_id = int(cursor.lastrowid or 0)
+            for target in note.links:
+                connection.execute(
+                    "INSERT INTO links(note_id,target) VALUES (?,?)", (note_id, target)
+                )
+            section_rows: list[tuple[int, str, str]] = []
+            for section in note.sections:
+                section_cursor = connection.execute(
+                    "INSERT INTO sections("
+                    "note_id,heading,level,ordinal,content,hash,start_line,end_line"
                     ") VALUES (?,?,?,?,?,?,?,?)",
                     (
-                        note.path,
-                        note.title,
-                        note.content_hash,
-                        note.mtime,
-                        json.dumps(note.frontmatter, ensure_ascii=False, default=str),
-                        " ".join(note.tags),
-                        note.course,
-                        json.dumps(note.tags, ensure_ascii=False),
+                        note_id,
+                        section.heading,
+                        section.level,
+                        section.ordinal,
+                        section.content,
+                        section.hash,
+                        section.start_line,
+                        section.end_line,
                     ),
                 )
-                note_id = int(cursor.lastrowid or 0)
-                for target in note.links:
-                    connection.execute(
-                        "INSERT INTO links(note_id,target) VALUES (?,?)", (note_id, target)
-                    )
-                section_rows: list[tuple[int, str, str]] = []
-                for section in note.sections:
-                    section_cursor = connection.execute(
-                        "INSERT INTO sections("
-                        "note_id,heading,level,ordinal,content,hash,start_line,end_line"
-                        ") VALUES (?,?,?,?,?,?,?,?)",
-                        (
-                            note_id,
-                            section.heading,
-                            section.level,
-                            section.ordinal,
-                            section.content,
-                            section.hash,
-                            section.start_line,
-                            section.end_line,
-                        ),
-                    )
-                    section_id = int(section_cursor.lastrowid or 0)
-                    connection.execute(
-                        "INSERT INTO sections_fts(rowid,heading,content,title) VALUES (?,?,?,?)",
-                        (
-                            section_id,
-                            self._tokenize(section.heading),
-                            self._tokenize(section.content),
-                            self._tokenize(note.title),
-                        ),
-                    )
-                    section_rows.append((section_id, section.heading, section.content))
-                    counts["sections"] += 1
-                if self.embedder is not None and section_rows:
-                    texts = [
-                        (note.title + "\n" + heading + "\n" + content)[:EMBED_MAX_CHARS]
-                        for _, heading, content in section_rows
-                    ]
-                    vectors = _embed(self.embedder, texts, role="document")
-                    self._store_vectors(connection, [row[0] for row in section_rows], vectors)
-                    counts["embedded"] += len(section_rows)
-                counts["updated"] += 1
-                if commit_every > 0 and counts["updated"] % commit_every == 0:
-                    connection.commit()
-                if progress is not None:
-                    progress(counts)
-            if max_files is None:
-                for row in connection.execute("SELECT id,path FROM notes").fetchall():
-                    if row["path"] not in seen:
-                        self._delete_note(connection, int(row["id"]))
-                        counts["deleted"] += 1
-            connection.commit()
+                section_id = int(section_cursor.lastrowid or 0)
+                connection.execute(
+                    "INSERT INTO sections_fts(rowid,heading,content,title) VALUES (?,?,?,?)",
+                    (
+                        section_id,
+                        self._tokenize(section.heading),
+                        self._tokenize(section.content),
+                        self._tokenize(note.title),
+                    ),
+                )
+                section_rows.append((section_id, section.heading, section.content))
+                counts["sections"] += 1
+            if (
+                self.embedder is not None
+                and section_rows
+                and (self.embed_filter is None or self.embed_filter(note.path, note.frontmatter))
+            ):
+                texts = [
+                    (note.title + "\n" + heading + "\n" + content)[:EMBED_MAX_CHARS]
+                    for _, heading, content in section_rows
+                ]
+                vectors = _embed(self.embedder, texts, role="document")
+                self._store_vectors(connection, [row[0] for row in section_rows], vectors)
+                counts["embedded"] += len(section_rows)
+            counts["updated"] += 1
+            if commit_every > 0 and counts["updated"] % commit_every == 0:
+                connection.commit()
+            if progress is not None:
+                progress(counts)
+        if max_files is None:
+            for row in connection.execute("SELECT id,path FROM notes").fetchall():
+                if row["path"] not in seen:
+                    self._delete_note(connection, int(row["id"]))
+                    counts["deleted"] += 1
+        connection.commit()
+        if reparse and max_files is None:
+            self._set_split_version(connection)
+        if self.embed_filter is not None and self.embedder is not None:
+            counts["embedding_withheld"] = self._withhold_vectors(connection)
+        if not (reparse and max_files is not None):
+            # A partial run over an index from an older split backfills
+            # nothing: most notes have not been re-read yet.
             counts["embedded"] += self._backfill_vectors(connection)
-            connection.commit()
+        connection.commit()
         return counts
+
+    def _split_version(self, connection: sqlite3.Connection) -> str:
+        """The frontmatter split the stored frontmatter came from (``""``: before versions)."""
+
+        if not self._has_table(connection, "index_versions"):
+            return ""
+        row = connection.execute(
+            "SELECT value FROM index_versions WHERE key='frontmatter_split'"
+        ).fetchone()
+        return str(row[0]) if row is not None else ""
+
+    def _set_split_version(self, connection: sqlite3.Connection) -> None:
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS index_versions (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO index_versions(key,value) VALUES ('frontmatter_split',?)",
+            (FRONTMATTER_SPLIT_VERSION,),
+        )
+        connection.commit()
+
+    def _refresh_frontmatter(
+        self, connection: sqlite3.Connection, note_id: int, note: ParsedNote
+    ) -> bool:
+        """Store ``note``'s freshly split frontmatter; ``False`` when its sections changed too.
+
+        With the same sections (the split moved nothing, the usual case) only
+        the note row is rewritten and its vectors are kept; otherwise the
+        caller re-indexes the note in full.
+        """
+
+        stored = [
+            str(row[0])
+            for row in connection.execute(
+                "SELECT hash FROM sections WHERE note_id=? ORDER BY ordinal, id", (note_id,)
+            )
+        ]
+        if stored != [section.hash for section in note.sections]:
+            return False
+        connection.execute(
+            "UPDATE notes SET title=?, frontmatter=?, tags=?, tags_json=? WHERE id=?",
+            (
+                note.title,
+                json.dumps(note.frontmatter, ensure_ascii=False, default=str),
+                " ".join(note.tags),
+                json.dumps(note.tags, ensure_ascii=False),
+                note_id,
+            ),
+        )
+        return True
+
+    def _withhold_vectors(self, connection: sqlite3.Connection) -> int:
+        """Drop stored vectors of notes ``embed_filter`` refuses; how many notes it refuses.
+
+        A note that became private since it was embedded keeps no vector.
+        """
+
+        assert self.embed_filter is not None
+        table = "vec_sections" if self.vec_enabled else "section_vectors"
+        has_table = self._has_table(connection, table)
+        withheld = 0
+        rows = connection.execute("SELECT id, path, frontmatter FROM notes ORDER BY id").fetchall()
+        for row in rows:
+            if self.embed_filter(str(row["path"]), _stored_frontmatter(row["frontmatter"])):
+                continue
+            withheld += 1
+            if has_table:
+                connection.execute(
+                    f"DELETE FROM {table} WHERE section_id IN "
+                    "(SELECT id FROM sections WHERE note_id = ?)",
+                    (int(row["id"]),),
+                )
+        connection.commit()
+        return withheld
+
+    def unembedded_sections(self) -> int:
+        """Sections with no stored vector (0 without an embedder or a vector table)."""
+
+        if self.embedder is None or not self.db_path.is_file():
+            return 0
+        with self._connect() as connection:
+            self._load_vec(connection)
+            table = "vec_sections" if self.vec_enabled else "section_vectors"
+            if not self._has_table(connection, table):
+                return 0
+            row = connection.execute(
+                f"SELECT COUNT(*) FROM sections WHERE id NOT IN (SELECT section_id FROM {table})"
+            ).fetchone()
+        return int(row[0] or 0)
 
     def _fts_terms(self, needle: str) -> list[str]:
         """Terms for ``needle`` against this index's tokenizer.
@@ -979,6 +1363,10 @@ class NotesIndex:
         filters: Filters = NO_FILTERS,
     ) -> list[tuple[int, float]]:
         if self.embedder is None:
+            return []
+        if self.remote_gated:
+            # The query may be private: never sent off this machine.
+            self.query_withheld = True
             return []
         try:
             vector = _embed(self.embedder, [query], role="query")[0]

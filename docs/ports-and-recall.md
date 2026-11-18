@@ -102,10 +102,10 @@ do not contain `memfw/__init__.py`, so this does not affect them.
 | `memfw-adapter-deepseek` | 0.1.1 | `ModelBackend` | 1 |
 | `memfw-adapter-bm25s` | 0.1.1 | `RecallProvider` | 1 |
 | `memfw-adapter-qdrant` | 0.1.2 | `RecallProvider` | 1 |
-| `memfw-adapter-qmd` | 0.1.0 | `RecallProvider` | 1 |
+| `memfw-adapter-qmd` | 0.1.1 | `RecallProvider` | 1 |
 | `memfw-adapter-ocr` | 0.1.0 | `Deriver` | 1 |
-| `memfw-adapter-pageindex` | 0.1.0 | `RecallProvider` | 1 |
-| `memfw-adapter-pageindex` | 0.1.0 | `ModelBackend` | 1 |
+| `memfw-adapter-pageindex` | 0.1.1 | `RecallProvider` | 1 |
+| `memfw-adapter-pageindex` | 0.1.1 | `ModelBackend` | 1 |
 | `memfw-adapter-langextract` | 0.1.0 | `Deriver` | 1 |
 | `memfw-adapter-langextract` | 0.1.0 | `ModelBackend` | 1 |
 | `memfw-adapter-lightrag` | 0.1.0 | `Deriver` | 1 |
@@ -444,7 +444,7 @@ providers alike. `join_lifecycle` merges, each only ever restricting:
 
 | Meta-index field | Merged into | Strict effect |
 |---|---|---|
-| `lifecycle`, `lifecycle_override` | `lifecycle` (strongest of these and the `lifecycle:` tags) | `retired`, `superseded`, other non-active → `lifecycle` |
+| `lifecycle`, `lifecycle_override` (a string only; the boolean flag is ignored) | `lifecycle` (strongest of these and the `lifecycle:` tags) | `retired`, `superseded`, other non-active → `lifecycle` |
 | `superseded_by` (non-empty) | `lifecycle = superseded` | `superseded` |
 | `valid_until` | `valid_until` | `expired` / `expiry_unparsable` |
 | `valid_to` | `meta_valid_to` | `expired` / `expiry_unparsable` (earliest end wins) |
@@ -619,7 +619,7 @@ hits. It is opt-in; nothing else changes. The wiring (providers, resolvers, poli
 index and builds the rows.
 
 - **Providers.** `FtsProvider` always; `HybridProvider` (`mode=hybrid`) only when the server
-  has an embedder (`MEMFW_EMBEDDING_URL`). Both get the server's `allowed_sources`, the
+  has an embedder (`MEMFW_EMBEDDING_URL`; see the locality gate below). Both get the server's `allowed_sources`, the
   call's `source`, `include_history` and (FTS only) `scope`. Each provider may take 3 s;
   all providers and resolvers together get **4 s** (the total deadline). The index staleness
   check (`Runtime.ensure_index`) runs before the deadline starts. Resolvers are `default_resolvers(root)`.
@@ -739,6 +739,48 @@ runtime:
 - **Adapters.** [`memfw-adapter-bm25s`](adapter-bm25s.md) (in-process BM25 over memories);
   `memfw-adapter-qmd` (`memfw_adapter_qmd:memory_factory`, QMD over a memory projection;
   see [`qmd-projection.md`](qmd-projection.md#qmd-recall-adapter)).
+
+### 4.1d Memory embedding locality gate
+
+The memory vector index (`.memory-hybrid.sqlite`, built by `MemoryHybridRetriever` for
+`memory_search` `hybrid`/`vector`, the `two_stage` hybrid provider and `memory_remember`'s
+related suggestions) sends each memory's text to the embedder. When the embedder sends text
+off this machine (`memfw.notes.http.embedder_sends_off_host`: an `endpoint` whose host is not
+a loopback literal, the strict rule `is_loopback_url`, never DNS), it receives no text that
+is not `public`/`shared`, and query text counts as possibly private:
+
+- a `local-private` or `unknown` memory is indexed for FTS only and gets no vector; a vector
+  stored earlier is dropped when the index is next rebuilt (the manifest records the gate as
+  the label `embedding_gate: public,shared`, so turning the gate on or off rebuilds);
+- no query is embedded: a `hybrid`/`vector` search answers from FTS (`mode: fts`,
+  `degraded: true`, `semantic_query_withheld` in `errors`, plus `semantic_partial` when the
+  index holds memories without vectors); the `two_stage` hybrid provider reports itself
+  unavailable and FTS answers;
+- `memory_remember`'s related suggestions are lexical (the candidate's text is a query); they
+  are also bounded to the caller (tenant, allowed sources, privacy clearance), and only a
+  suggestion that is shown is warmed and access-logged;
+- the same gate covers the notes index (`NotesIndex`: `memfw notes index/search/serve/...`
+  with `--endpoint`; a note is embedded only when its frontmatter level is `public`/`shared`,
+  no `privacy` field meaning `local-private`) and `memfw memory-related-build` /
+  `notes related-build --embedding-url` (`RelatedIndex.build_semantic(admit=...)`).
+
+The same rule covers the notes reranker and query rewriter (`NotesRetriever`): one off this
+machine is skipped, with neither the query nor a passage sent (`rerank_withheld`,
+`rewrite_withheld`, the search `degraded`), and the notes server's clearance is applied to
+every hit before fusion, so a withheld note never reaches even a local reranker. Notes
+indexes record the frontmatter split they were built with (`index_versions`); an older index
+re-reads every note once before anything is embedded, and `shareable_item` trusts no stored
+note frontmatter until it has. `build_semantic` without an `admit` sends nothing to an
+off-host embedder.
+
+One switch opts in to all of it, stored text and queries: `MEMFW_EMBEDDING_ALLOW_REMOTE=1`
+(wins), `vault.yaml` `runtime: {embedding: {allow_remote: true}}` (the MCP server and
+`memory-related-build`), or `--allow-remote` on every command that takes an endpoint
+(`notes index/search/serve`, `memfw-notes-mcp`, `memory-related-build`, `notes
+related-build`). A loopback endpoint or an in-process embedder is unchanged (every memory
+embedded, queries embedded, no setting read). Not covered: `memfw code index/search
+--embedding-url` (source code, sent as given) and adapters that embed on their own (each has
+its own clearance setting).
 
 ### 4.2 MCP `memory_context` `v=2` (ContextPack)
 
@@ -995,7 +1037,7 @@ neither appends to the event chain. Reads keep it as follows:
 | `memory_context` (v1, v2, every slot, `current` included) and `memfw://context/*` | never |
 | `memory_search` `fts`, `multihop` | never |
 | `memory_used` | never (writes only its store outside the vault) |
-| `memory_search` `hybrid`, `vector` | by default yes: one `memory_access` event per returned hit, and a cold or stub hit is warmed (autowarm: `tier_change`/`memory_restore` events, the memory file, history and archive change). Off with `record_access: false` |
+| `memory_search` `hybrid`, `vector` | by default yes: one `memory_access` event per returned hit, and a cold or stub hit is warmed (autowarm: `tier_change`/`memory_restore` events, the memory file, history and archive change), never for a hit the server clearance withholds (its row is never shown; the internal FTS fallback included). Off with `record_access: false` |
 | `memory_search` `two_stage` | by default yes: the same, for each hit the coordinator returns after the filter (never for a hit the policy dropped; #55). Off with `record_access: false` |
 
 The exception is access recording, which feeds strength and tier signals and has always been

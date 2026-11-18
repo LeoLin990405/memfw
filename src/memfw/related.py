@@ -12,7 +12,7 @@ import json
 import re
 import sqlite3
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -460,12 +460,27 @@ class RelatedIndex:
         embedder: EmbeddingProvider,
         *,
         limit: int = 10,
+        admit: Callable[[str, str, str], bool] | None = None,
+        allow_remote: bool | None = None,
     ) -> int:
         """Build semantic edges across all indexed sources with one model.
 
         The embedding fingerprint is recorded in each edge. This method is opt-in
-        and never runs automatically.
+        and never runs automatically. ``admit(source, id, path)``, when given, decides
+        which items may be sent to the embedder (the locality gate of an
+        off-host one, :func:`shareable_item`): the others get no vector and no
+        semantic edge. Without ``admit``, an off-host embedder
+        (``embedder_sends_off_host``) gets nothing at all unless
+        ``allow_remote`` (``None``: ``MEMFW_EMBEDDING_ALLOW_REMOTE``) opts in:
+        the caller must say which items are shareable.
         """
+        if admit is None:
+            from .notes.http import embedder_sends_off_host
+            from .notes.index import remote_embedding_allowed
+
+            allowed = remote_embedding_allowed() if allow_remote is None else allow_remote
+            if not allowed and embedder_sends_off_host(embedder):
+                admit = shareable_item()  # no source to read: nothing is shareable
         try:
             import sqlite_vec  # type: ignore[import-untyped]
         except ImportError as exc:  # pragma: no cover - optional dependency
@@ -481,8 +496,14 @@ class RelatedIndex:
                     "ALTER TABLE related_items ADD COLUMN text TEXT NOT NULL DEFAULT ''"
                 )
             rows = connection.execute(
-                "SELECT rowid,source,id,title,text FROM related_items ORDER BY rowid"
+                "SELECT rowid,source,id,title,text,path FROM related_items ORDER BY rowid"
             ).fetchall()
+            if admit is not None:
+                rows = [
+                    row
+                    for row in rows
+                    if admit(str(row["source"]), str(row["id"]), str(row["path"] or ""))
+                ]
             if not rows:
                 return 0
             connection.execute("DROP TABLE IF EXISTS related_vectors")
@@ -628,3 +649,73 @@ class RelatedIndex:
 
 
 __all__ = ["RelatedEdge", "RelatedIndex", "RelatedItem"]
+
+
+def shareable_item(
+    *, repository: Repository | None = None, notes_db: Path | str | None = None
+) -> Callable[[str, str, str], bool]:
+    """``admit(source, id, path)`` for ``build_semantic`` under the locality gate.
+
+    A ``memory`` item is shareable when ``repository`` holds it and its
+    effective level (the vault's ``legacy_privacy_default`` for a memory
+    without ``privacy``) is ``public`` or ``shared``; a ``notes`` or ``notes_sections``
+    item when ``notes_db`` lists its path and its indexed frontmatter reads ``public`` or
+    ``shared`` (a note without ``privacy`` is ``local-private``). Anything
+    else, or an item that cannot be read, is not.
+    """
+
+    from .ports.privacy import LEGACY_PRIVACY_FALLBACK, effective_level, metadata_level
+
+    legacy = LEGACY_PRIVACY_FALLBACK
+    if repository is not None:
+        try:
+            legacy = repository.legacy_privacy_default()
+        except Exception:  # noqa: BLE001 - unreadable config: the strict default
+            legacy = LEGACY_PRIVACY_FALLBACK
+    notes: dict[str, str] = {}
+    if notes_db is not None and Path(notes_db).is_file():
+        from .notes.index import FRONTMATTER_SPLIT_VERSION
+
+        with sqlite3.connect(notes_db) as connection:
+            try:
+                version = connection.execute(
+                    "SELECT value FROM index_versions WHERE key='frontmatter_split'"
+                ).fetchone()
+            except sqlite3.Error:
+                version = None
+            # Frontmatter stored by an older split cannot be trusted: no note is
+            # shareable until ``memfw notes index`` has re-read the tree.
+            rows = (
+                connection.execute("SELECT path, frontmatter FROM notes").fetchall()
+                if version is not None and str(version[0]) == FRONTMATTER_SPLIT_VERSION
+                else []
+            )
+            for path, frontmatter in rows:
+                try:
+                    loaded = json.loads(frontmatter or "{}")
+                    level = metadata_level(
+                        loaded if isinstance(loaded, dict) else {"privacy": "unknown"},
+                        LEGACY_PRIVACY_FALLBACK,
+                    )
+                except Exception:  # noqa: BLE001 - unreadable: not shared
+                    level = "unknown"
+                notes[str(path)] = level
+
+    def admit(source: str, item_id: str, path: str) -> bool:
+        if source == "memory" and repository is not None:
+            try:
+                document = repository.get(item_id)
+            except Exception:  # noqa: BLE001 - unreadable: never sent
+                return False
+            level = effective_level(
+                document.privacy,
+                document.tags,
+                legacy=legacy,
+                sensitivity=document.top_level_sensitivity,
+            )
+            return level in ("public", "shared")
+        if source in ("notes", "notes_sections"):
+            return notes.get(path or item_id) in ("public", "shared")
+        return False
+
+    return admit

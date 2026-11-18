@@ -69,10 +69,16 @@ agent CLIs / apps ──readers──► conversation store (local, redacted)
    by default, and no bundled adapter sends a `local-private` memory or attachment to a non-local
    service.
 
-   **One exception to check yourself:** the optional embedding endpoint (`MEMFW_EMBEDDING_URL`,
-   or `--embedding-url`) is used exactly as configured, with no locality check, and hybrid search
-   and related-memory builds embed every memory at every privacy level. Point it only at a
-   loopback service.
+   **Model endpoints:** an embedding endpoint that is not a loopback address
+   (`MEMFW_EMBEDDING_URL`, or `--embedding-url` / `--endpoint` on the `notes`,
+   `memfw-notes-mcp` and `memory-related-build` commands) receives only `public` / `shared`
+   memories and notes and no query text at all, so `hybrid` / `vector` search answers from FTS
+   (`degraded`, `semantic_query_withheld`); a non-loopback notes reranker (`--rerank-endpoint`)
+   or query rewriter is skipped (`rerank_withheld` / `rewrite_withheld`), and a notes clearance
+   applies before reranking. Opt in with `MEMFW_EMBEDDING_ALLOW_REMOTE=1`,
+   `runtime.embedding.allow_remote: true` (the vault's commands) or `--allow-remote` (every
+   command that takes an endpoint). One exception to check yourself: `code index` / `code
+   search --embedding-url` send source code as given; point them only at a loopback service.
 2. **Event-backed Markdown.** Markdown files are the authority. Every state change is appended to
    a hash-linked JSONL event chain (`memfw log verify` proves it is intact). SQLite indexes are
    derived projections that can be deleted and rebuilt.
@@ -185,8 +191,9 @@ rebuild: it detects the missing tables and degrades instead (no temporal filteri
 
 Search matches each query word on its own and ranks by bm25, so a whole sentence finds relevant
 memories. `memory_search` `mode` defaults to `hybrid`, which is FTS5 unless an OpenAI-compatible
-embedding endpoint (`MEMFW_EMBEDDING_URL`) is configured; memfw does not check that it is local,
-and it embeds memories of every privacy level, so point it only at a loopback service. Every command prints
+embedding endpoint (`MEMFW_EMBEDDING_URL`) is configured. An endpoint that is not loopback gets no
+query and only `public` / `shared` memories, so the search is FTS (`semantic_query_withheld`)
+unless `MEMFW_EMBEDDING_ALLOW_REMOTE=1` (or `runtime.embedding.allow_remote: true`) is set. Every command prints
 `--help`; global `--now` and `--id-seed` make runs deterministic for tests. Which capability is
 reachable from the CLI, MCP and HTTP (and why a gap is there) is in
 [`docs/cli-mcp-parity.md`](docs/cli-mcp-parity.md).
@@ -699,8 +706,8 @@ only as staged candidates or an explicit `attach proxy import`.
 | `memfw-adapter-deepseek` (0.1.1) | `ModelBackend` | `conv-v2` summary and tags for the conversations worker; needs `conversations.cloud: true` and `DEEPSEEK_API_KEY` | merged |
 | `memfw-adapter-bm25s` (0.1.1) | `RecallProvider` | in-process bm25s 0.3.16 ranking with jieba; indexes only its `clearance` (default `public,shared`), hashed tokens outside the vault; `memfw-adapter-bm25s build` | merged |
 | `memfw-adapter-qdrant` (0.1.2) | `RecallProvider` | semantic recall over a Qdrant v1.20.x service (REST, stdlib); loopback unless `allow_remote: true`; `memfw-adapter-qdrant sync` sends only `public` / `shared` memories and stores no text | merged |
-| `memfw-adapter-qmd` (0.1.0) | `RecallProvider` ×2 | `qmd` (memory projections → memory ids) and `qmd-notes` (notes → `kh:` refs) over a running QMD 2.5.3 MCP server; never returns `local-private` or `unknown` | merged |
-| `memfw-adapter-pageindex` (0.1.0) | `RecallProvider` | PageIndex-style tree search over long documents (`kh:` and `att:…#page=` refs); `mode: titles` needs no model; `memfw-pageindex build-md \| import-tree \| list` | merged |
+| `memfw-adapter-qmd` (0.1.1) | `RecallProvider` ×2 | `qmd` (memory projections → memory ids) and `qmd-notes` (notes → `kh:` refs) over a running QMD 2.5.3 MCP server; never returns `local-private` or `unknown` | merged |
+| `memfw-adapter-pageindex` (0.1.1) | `RecallProvider` | PageIndex-style tree search over long documents (`kh:` and `att:…#page=` refs); `mode: titles` needs no model; `memfw-pageindex build-md \| import-tree \| list` | merged |
 | `memfw-adapter-ocr` (0.1.0) | proxy producer (`ocr` deriver) | turns a PDF or image attachment into a `memfw.proxy` v1 import file through a local engine (an MCP stdio OCR server, `pdftotext`, or a `module:factory`); nothing uploaded; `memfw-ocr-proxy run \| check` | merged |
 | `memfw-adapter-langextract` (0.1.0) | `Deriver` (`entities`) | character-grounded entities and relations from `public` / `shared` memories with LangExtract 1.7.2; a memfw `ModelBackend` (a loopback Ollama backend ships with it) inside a per-run token budget | merged |
 | `memfw-adapter-lightrag` (0.1.0) | `Deriver` (`graph`, `answer`) | loopback HTTP client of an operator-run `lightrag-server` 1.5.7; sends only `public` / `shared` memories; every kept row's sources must be requested, shareable, current memories | merged |

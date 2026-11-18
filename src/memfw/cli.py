@@ -163,6 +163,40 @@ def _notes_embedder(
     )
 
 
+def _semantic_admit(
+    embedder: Any,
+    allow_remote: bool,
+    *,
+    repository: Repository | None = None,
+    notes_db: Path | None = None,
+) -> Callable[[str, str, str], bool] | None:
+    """The ``build_semantic`` gate: ``None`` (embed all) unless the embedder is off-host.
+
+    Off-host and not opted in (``--allow-remote`` / ``MEMFW_EMBEDDING_ALLOW_REMOTE``):
+    only a ``public``/``shared`` memory (read from ``repository``) or note
+    (its indexed frontmatter in ``notes_db``) is embedded; anything else,
+    including an item whose privacy cannot be read, is not.
+    """
+
+    from .notes.http import embedder_sends_off_host
+    from .notes.index import remote_embedding_allowed
+    from .related import shareable_item
+
+    if allow_remote or remote_embedding_allowed() or not embedder_sends_off_host(embedder):
+        return None
+    if repository is not None:
+        # The vault's own switch (``runtime.embedding.allow_remote``), as the
+        # MCP server reads it: one opt-in everywhere.
+        try:
+            section = repository.read_config().get("runtime")
+        except Exception:  # noqa: BLE001 - unreadable: not opted in
+            section = None
+        embedding = section.get("embedding") if isinstance(section, dict) else None
+        if isinstance(embedding, dict) and embedding.get("allow_remote") is True:
+            return None
+    return shareable_item(repository=repository, notes_db=notes_db)
+
+
 @notes_app.command("index")
 def notes_index(
     root: Annotated[Path, typer.Option("--root", "-r", help="Markdown notes root")] = Path("."),
@@ -177,10 +211,26 @@ def notes_index(
     batch_size: Annotated[int, typer.Option("--batch-size")] = 16,
     max_files: Annotated[int | None, typer.Option("--max-files")] = None,
     commit_every: Annotated[int, typer.Option("--commit-every")] = 100,
+    allow_remote: Annotated[
+        bool,
+        typer.Option(
+            "--allow-remote",
+            help="Let a non-loopback embedder receive local-private text and queries "
+            "(also MEMFW_EMBEDDING_ALLOW_REMOTE=1)",
+        ),
+    ] = False,
 ) -> None:
-    """Build or incrementally update a section-level notes index."""
+    """Build or incrementally update a section-level notes index.
 
-    index = NotesIndex(db, embedder=_notes_embedder(endpoint, model, dimension, batch_size))
+    A non-loopback ``--endpoint`` embeds only public/shared notes unless
+    ``--allow-remote`` (or ``MEMFW_EMBEDDING_ALLOW_REMOTE=1``) is given.
+    """
+
+    index = NotesIndex(
+        db,
+        embedder=_notes_embedder(endpoint, model, dimension, batch_size),
+        allow_remote=True if allow_remote else None,
+    )
     counts = index.index(root, max_files=max_files, commit_every=commit_every)
     typer.echo(
         json.dumps({"counts": counts, "status": index.status()}, ensure_ascii=False, indent=2)
@@ -225,10 +275,27 @@ def notes_search(
     task_id: Annotated[str | None, typer.Option("--task-id")] = None,
     tenant: Annotated[str, typer.Option("--tenant")] = "",
     source: Annotated[str, typer.Option("--source-name")] = "",
+    allow_remote: Annotated[
+        bool,
+        typer.Option(
+            "--allow-remote",
+            help="Let a non-loopback embedder receive local-private text and queries "
+            "(also MEMFW_EMBEDDING_ALLOW_REMOTE=1)",
+        ),
+    ] = False,
 ) -> None:
-    """Search the notes index; automatically degrades to FTS without an embedder."""
+    """Search the notes index; automatically degrades to FTS without an embedder.
 
-    index = NotesIndex(db, embedder=_notes_embedder(endpoint, model, dimension, 16))
+    A non-loopback ``--endpoint`` never receives the query unless
+    ``--allow-remote`` (or ``MEMFW_EMBEDDING_ALLOW_REMOTE=1``): the search is
+    FTS, with ``semantic_query_withheld`` in ``errors``.
+    """
+
+    index = NotesIndex(
+        db,
+        embedder=_notes_embedder(endpoint, model, dimension, 16),
+        allow_remote=True if allow_remote else None,
+    )
     reranker = None
     if rerank_endpoint:
         reranker = HttpRerankerProvider(
@@ -248,6 +315,7 @@ def notes_search(
         ),
         reranker=reranker,
         trace_store=FeedbackStore(feedback_db) if feedback_db else None,
+        allow_remote=True if allow_remote else None,
     )
     metadata: dict[str, str] = {}
     for item in meta or []:
@@ -314,6 +382,14 @@ def notes_serve(
         str,
         typer.Option("--legacy-privacy-default", help="Level of notes without a privacy field"),
     ] = "local-private",
+    allow_remote: Annotated[
+        bool,
+        typer.Option(
+            "--allow-remote",
+            help="Let a non-loopback embedder receive local-private text and queries "
+            "(also MEMFW_EMBEDDING_ALLOW_REMOTE=1)",
+        ),
+    ] = False,
 ) -> None:
     """Serve read-only notes tools over stdio MCP."""
 
@@ -328,6 +404,7 @@ def notes_serve(
             related_db=related_db,
             clearance=clearance,
             legacy_privacy_default=legacy_privacy_default,
+            allow_remote=True if allow_remote else None,
         )
     )
 
@@ -566,15 +643,27 @@ def notes_related_build(
     endpoint: Annotated[str | None, typer.Option("--embedding-url")] = None,
     model: Annotated[str, typer.Option("--embedding-model")] = "embedding-model",
     dimension: Annotated[int, typer.Option("--dimension")] = 1024,
+    allow_remote: Annotated[
+        bool,
+        typer.Option(
+            "--allow-remote",
+            help="Let a non-loopback embedder receive local-private text and queries "
+            "(also MEMFW_EMBEDDING_ALLOW_REMOTE=1)",
+        ),
+    ] = False,
 ) -> None:
-    """Rebuild note-to-note relatedness edges, optionally with semantic edges."""
+    """Rebuild note-to-note relatedness edges, optionally with semantic edges.
+
+    A non-loopback ``--embedding-url`` embeds only public/shared notes unless
+    ``--allow-remote`` (or ``MEMFW_EMBEDDING_ALLOW_REMOTE=1``).
+    """
     index = RelatedIndex(related_db)
     count = index.rebuild_notes(notes_db)
     semantic = 0
     if endpoint:
-        semantic = index.build_semantic(
-            HttpEmbeddingProvider(endpoint, model=model, dimension=dimension)
-        )
+        embedder = HttpEmbeddingProvider(endpoint, model=model, dimension=dimension)
+        admit = _semantic_admit(embedder, allow_remote, notes_db=notes_db)
+        semantic = index.build_semantic(embedder, admit=admit, allow_remote=admit is None)
     typer.echo(
         json.dumps(
             {"related_db": str(related_db), "edges": count, "semantic_edges": semantic},
@@ -958,15 +1047,28 @@ def memory_related_build(
     endpoint: Annotated[str | None, typer.Option("--embedding-url")] = None,
     model: Annotated[str, typer.Option("--embedding-model")] = "embedding-model",
     dimension: Annotated[int, typer.Option("--dimension")] = 1024,
+    allow_remote: Annotated[
+        bool,
+        typer.Option(
+            "--allow-remote",
+            help="Let a non-loopback embedder receive local-private text and queries "
+            "(also MEMFW_EMBEDDING_ALLOW_REMOTE=1)",
+        ),
+    ] = False,
 ) -> None:
-    """Rebuild memory-to-memory relatedness edges, optionally with semantics."""
+    """Rebuild memory-to-memory relatedness edges, optionally with semantics.
+
+    A non-loopback ``--embedding-url`` embeds only public/shared memories
+    unless ``--allow-remote`` (or ``MEMFW_EMBEDDING_ALLOW_REMOTE=1``).
+    """
+    repository = _repo(root)
     index = RelatedIndex(related_db)
-    count = index.rebuild_memory(_repo(root))
+    count = index.rebuild_memory(repository)
     semantic = 0
     if endpoint:
-        semantic = index.build_semantic(
-            HttpEmbeddingProvider(endpoint, model=model, dimension=dimension)
-        )
+        embedder = HttpEmbeddingProvider(endpoint, model=model, dimension=dimension)
+        admit = _semantic_admit(embedder, allow_remote, repository=repository)
+        semantic = index.build_semantic(embedder, admit=admit, allow_remote=admit is None)
     typer.echo(
         json.dumps(
             {"related_db": str(related_db), "edges": count, "semantic_edges": semantic},

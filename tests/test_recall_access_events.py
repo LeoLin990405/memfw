@@ -286,6 +286,51 @@ def test_vault_retriever_admit_skips_warm_and_access(tmp_path: Path) -> None:
     assert repository.get("m-cold-own").tier == Tier.HOT
 
 
+# --- the MM0 clearance applies before access and warming (direct modes) -------
+
+REMOTE = frozenset({"public", "shared"})
+
+
+@pytest.mark.parametrize("mode", ["hybrid", "vector", "fts_fallback"])
+def test_direct_modes_never_log_or_warm_what_the_clearance_withholds(
+    tmp_path: Path, mode: str
+) -> None:
+    """As in ``two_stage``: a withheld hit gets no ``memory_access`` and stays cold."""
+
+    repository = _cold_vault(tmp_path)
+    # Public notes need a level: the vault default makes unlabelled memories public.
+    config = repository.root / "vault.yaml"
+    config.write_text(
+        config.read_text(encoding="utf-8") + "legacy_privacy_default: public\n", encoding="utf-8"
+    )
+    embedder = None if mode == "fts_fallback" else _embedder()
+    gateway = _gateway(repository.root, embedder=embedder, clearance=REMOTE)
+    before = _files(repository, ("m-cold-priv",))
+    payload = gateway.search(WARM_QUERY, limit=10, mode="hybrid" if embedder is None else mode)
+    returned = [row["id"] for row in payload["results"]]
+    assert "m-cold-own" in returned and "m-cold-priv" not in returned
+    logged = [memory_id for memory_id, _ in _accesses(repository)]
+    assert "m-cold-priv" not in logged
+    assert set(logged) == set(returned)
+    assert repository.get("m-cold-priv").tier == Tier.COLD
+    assert _files(repository, ("m-cold-priv",)) == before
+    assert repository.get("m-cold-own").tier == Tier.HOT  # an admitted hit is still warmed
+
+
+def test_hybrid_retriever_admit_skips_warm_and_access(tmp_path: Path) -> None:
+    repository = _cold_vault(tmp_path)
+    retriever = MemoryHybridRetriever(
+        repository,
+        embedder=_embedder(),
+        admit=lambda document: "sensitivity:private" not in document.tags,
+    )
+    result = retriever.search(WARM_QUERY, limit=10, mode="hybrid")
+    ids = [row["id"] for row in result["results"]]
+    assert "m-cold-priv" in ids  # still returned, for the caller to drop
+    assert "m-cold-priv" not in {memory_id for memory_id, _ in _accesses(repository)}
+    assert repository.get("m-cold-priv").tier == Tier.COLD
+
+
 # --- best effort: a read-only log never fails recall --------------------------
 
 

@@ -410,7 +410,7 @@ requires-dist = [{ name = "memfw-ports", editable = "packages/memfw-ports" }]
 
 [[package]]
 name = "memfw-adapter-pageindex"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/adapters/memfw-adapter-pageindex" }
 dependencies = [
     { name = "memfw-ports" },
@@ -440,7 +440,7 @@ requires-dist = [
 
 [[package]]
 name = "memfw-adapter-qmd"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/adapters/memfw-adapter-qmd" }
 dependencies = [
     { name = "memfw-ports" },

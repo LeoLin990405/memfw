@@ -11,7 +11,7 @@ import json
 import re
 import urllib.request
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
@@ -19,7 +19,12 @@ import jieba  # type: ignore[import-untyped]
 
 from . import http as notes_http
 from .feedback import CandidateTrace, FeedbackStore, RetrievalTrace
-from .index import NoteHit, NotesIndex
+from .index import SEMANTIC_QUERY_WITHHELD, NoteHit, NotesIndex, remote_embedding_allowed
+
+#: ``errors`` codes: an off-host reranker or query rewriter was skipped (no
+#: query or passage sent) because the operator did not opt in.
+RERANK_WITHHELD = "rerank_withheld"
+REWRITE_WITHHELD = "rewrite_withheld"
 
 Mode = Literal["fts", "vector", "hybrid"]
 
@@ -255,6 +260,8 @@ class NotesRetriever:
         language_model: LanguageModelProvider | None = None,
         sparse: SparseRetriever | None = None,
         trace_store: FeedbackStore | None = None,
+        allow_remote: bool | None = None,
+        admit: Callable[[NoteHit], bool] | None = None,
     ) -> None:
         self.index = index
         self.config = config or RetrievalConfig()
@@ -262,6 +269,26 @@ class NotesRetriever:
         self.language_model = language_model
         self.sparse = sparse
         self.trace_store = trace_store
+        #: The locality rule of the embedder, for the reranker and the query
+        #: rewriter too: one off this machine (``embedder_sends_off_host``)
+        #: gets no query and no passage unless ``allow_remote`` (``None``:
+        #: ``MEMFW_EMBEDDING_ALLOW_REMOTE``). Withheld, it is skipped and the
+        #: search reports ``rerank_withheld`` / ``rewrite_withheld``.
+        if allow_remote is None:
+            allow_remote = remote_embedding_allowed()
+        self.rerank_withheld = (
+            reranker is not None
+            and not allow_remote
+            and notes_http.embedder_sends_off_host(reranker)
+        )
+        self.rewrite_withheld = (
+            language_model is not None
+            and not allow_remote
+            and notes_http.embedder_sends_off_host(language_model)
+        )
+        #: The caller's admission (a clearance): a hit it refuses is dropped
+        #: before anything else sees it (the reranker included).
+        self.admit = admit
 
     def _record_trace(
         self,
@@ -321,6 +348,9 @@ class NotesRetriever:
     def _rewrite(self, query: str, errors: list[str]) -> list[str]:
         if not self.config.rewrite or self.language_model is None:
             return [query]
+        if self.rewrite_withheld:
+            errors.append(REWRITE_WITHHELD)
+            return [query]
         try:
             rewrite = self.language_model.rewrite_query(query, limit=self.config.max_rewrites)
         except Exception as exc:  # noqa: BLE001 - query rewrite is optional
@@ -352,6 +382,9 @@ class NotesRetriever:
     ) -> RetrievalResult:
         final_k = limit or self.config.final_k
         errors: list[str] = []
+        if getattr(self.index, "remote_gated", False) and self.config.mode != "fts":
+            # An off-host embedder without the opt-in: no query is embedded.
+            errors.append(SEMANTIC_QUERY_WITHHELD)
         rewrites = self._rewrite(query, errors)
         fused: dict[tuple[str, int | None], tuple[float, NoteHit, int]] = {}
         for text in rewrites:
@@ -369,6 +402,8 @@ class NotesRetriever:
                 rrf_k=self.config.rrf_k,
             )
             for rank, hit in enumerate(hits, start=1):
+                if self.admit is not None and not self.admit(hit):
+                    continue  # never fused, reranked or returned (its rank stays used)
                 contribution = 1.0 / (self.config.rrf_k + rank)
                 key = (hit.path, hit.section_id)
                 if key in fused:
@@ -405,6 +440,7 @@ class NotesRetriever:
                         auto_degrade=False,
                         min_query_coverage=self.config.min_query_coverage,
                     ),
+                    admit=self.admit,
                 ).search(
                     query,
                     limit=final_k,
@@ -415,7 +451,14 @@ class NotesRetriever:
                     since=since,
                     until=until,
                 )
-                fallback.errors = [*errors, *fallback.errors, "vector recall unavailable; used FTS"]
+                # With an admission (a clearance) the note is silent: "nothing
+                # vector-recalled" must read the same whether nothing matched
+                # or every match was withheld, so no oracle.
+                fallback.errors = [
+                    *errors,
+                    *fallback.errors,
+                    *(() if self.admit is not None else ("vector recall unavailable; used FTS",)),
+                ]
                 return self._record_trace(fallback, task_id=task_id, tenant=tenant, source=source)
             return self._record_trace(
                 RetrievalResult(
@@ -438,7 +481,11 @@ class NotesRetriever:
         # reranker relabels sources as "rerank:<source>".
         vector_recall = any(hit.source in {"vector", "hybrid"} for hit in candidates)
         reranked = False
-        if self.reranker is not None and self.config.rerank_candidates > 0:
+        withheld = False
+        if self.reranker is not None and self.config.rerank_candidates > 0 and self.rerank_withheld:
+            errors.append(RERANK_WITHHELD)
+            withheld = True
+        elif self.reranker is not None and self.config.rerank_candidates > 0:
             head = candidates[: self.config.rerank_candidates]
             tail = candidates[self.config.rerank_candidates :]
             try:
@@ -484,7 +531,7 @@ class NotesRetriever:
                 query=query,
                 hits=hits,
                 mode_used=self.config.mode,
-                degraded=self.config.mode != "fts" and not vector_recall,
+                degraded=(self.config.mode != "fts" and not vector_recall) or withheld,
                 rewrites=rewrites,
                 reranked=reranked,
                 errors=errors,

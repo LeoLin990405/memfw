@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from collections.abc import Callable, Mapping
 from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
@@ -18,7 +19,10 @@ from .core.models import EventKind, MemoryDocument, Tier
 from .core.repository import Repository
 from .entities import EntityIndex, load_dictionary
 from .index.readonly import shared_readonly as shared_readonly  # re-export for old callers
+from .index.readonly import vault_legacy_privacy
 from .notes import HttpEmbeddingProvider, NotesIndex, NotesRetriever, RetrievalConfig
+from .notes.http import embedder_sends_off_host
+from .notes.index import SEMANTIC_QUERY_WITHHELD
 from .notes.versioning import (
     IndexCompatibilityError,
     IndexManifest,
@@ -27,7 +31,17 @@ from .notes.versioning import (
     verify_manifest,
     write_manifest,
 )
+from .ports.privacy import effective_level
 from .retrieval import VaultRetriever
+
+#: ``errors`` code of a ``hybrid``/``vector`` search whose semantic side skips
+#: memories the locality gate kept from an off-host embedder.
+SEMANTIC_PARTIAL = "semantic_partial"
+#: Levels an off-host embedder may receive without the opt-in.
+_EMBEDDABLE_LEVELS = frozenset({"public", "shared"})
+#: Manifest label recording that the index was built under the gate.
+EMBEDDING_GATE_LABEL = "embedding_gate"
+EMBEDDING_GATE_VALUE = "public,shared"
 
 
 class MemoryHybridRetriever:
@@ -48,6 +62,21 @@ class MemoryHybridRetriever:
     after the hit passed the tenant, source and visibility checks: a memory
     the retriever does not return is never warmed. The ``two_stage`` provider
     passes false; the Runtime warms only the hits it returns.
+
+    **Embedding locality gate.** When the embedder sends text off this machine
+    (an ``endpoint`` that is not a loopback literal,
+    :func:`memfw.notes.http.embedder_sends_off_host`) and
+    ``embedding_allow_remote`` is false (the default), only ``public`` and
+    ``shared`` memories are embedded: a ``local-private`` or ``unknown`` one
+    is indexed for FTS only, gets no vector (a stored one is dropped on the
+    next rebuild), and a ``hybrid``/``vector`` search over an index with such
+    memories reports ``degraded`` with ``semantic_partial`` in ``errors``. A
+    loopback or in-process embedder, or the opt-in, embeds every memory, as
+    before.
+
+    ``admit`` (default none) is asked about each hit's document after those
+    checks: a hit it rejects is still returned, for the caller to drop (the
+    MCP server's privacy clearance, MM0), but is neither warmed nor logged.
     """
 
     def __init__(
@@ -65,14 +94,25 @@ class MemoryHybridRetriever:
         allowed_sources: tuple[str, ...] = (),
         record_access: bool = True,
         autowarm: bool = True,
+        admit: Callable[[MemoryDocument], bool] | None = None,
+        embedding_allow_remote: bool = False,
     ) -> None:
         self.repository = repository
         self.embedder = embedder
         self.record_access = record_access
         self.autowarm = autowarm
+        self.admit = admit
+        #: The locality gate is on (see the class docstring).
+        self.embedding_gated = (
+            embedder is not None
+            and not embedding_allow_remote
+            and embedder_sends_off_host(embedder)
+        )
         self.notes_index = NotesIndex(
             index_path or (repository.root / ".memory-hybrid.sqlite"),
             embedder=embedder,
+            embed_filter=self._embeddable if self.embedding_gated else None,
+            allow_remote=embedding_allow_remote,
         )
         self.manifest_path = Path(
             manifest_path or (repository.root / ".memory-hybrid.manifest.json")
@@ -87,13 +127,50 @@ class MemoryHybridRetriever:
             dictionary=load_dictionary(entity_dictionary),
         )
         self.last_metrics: dict[str, Any] = {}
+        self._legacy: str | None = None
+        #: The ``memory_access`` operation of the path that answered the last
+        #: ``search`` (``hybrid_retrieve``, ``fts_retrieve`` or ``retrieve``),
+        #: for a caller that records access itself for the hits it keeps.
+        self.last_access_operation = ""
+
+    def _embeddable(self, path: str, _frontmatter: Mapping[str, Any] | None = None) -> bool:
+        """Under the gate: whether the memory at ``path`` (``<id>.md``) may be embedded.
+
+        Only a readable memory whose effective MM0 level is ``public`` or
+        ``shared``; anything else (``local-private``, ``unknown``, unreadable)
+        stays on this machine.
+        """
+
+        try:
+            document = self.repository.get(Path(path).stem)
+        except Exception:  # noqa: BLE001 - unreadable: never sent
+            return False
+        level = effective_level(
+            document.privacy,
+            document.tags,
+            legacy=self._legacy_privacy(),
+            sensitivity=document.top_level_sensitivity,
+        )
+        return level in _EMBEDDABLE_LEVELS
+
+    def _legacy_privacy(self) -> str:
+        if self._legacy is None:
+            self._legacy = vault_legacy_privacy(self.repository.root)
+        return self._legacy
+
+    def _manifest_labels(self) -> dict[str, str]:
+        labels = {"kind": "memory-vault"}
+        if self.embedding_gated:
+            labels[EMBEDDING_GATE_LABEL] = EMBEDDING_GATE_VALUE
+        return labels
 
     def rebuild(self) -> dict[str, Any]:
         self.repository.init()
+        self._legacy = None
         counts = self.notes_index.index(self.repository.memories_dir)
         if self.entity_enabled:
             counts["entities"] = self.entity_index.rebuild(self.repository)
-        manifest = build_manifest(self.notes_index, labels={"kind": "memory-vault"})
+        manifest = build_manifest(self.notes_index, labels=self._manifest_labels())
         write_manifest(self.manifest_path, manifest)
         return {**counts, "manifest": manifest.as_dict()}
 
@@ -102,6 +179,10 @@ class MemoryHybridRetriever:
             self.rebuild()
             return
         if not self.manifest_path.exists():
+            if self.embedding_gated:
+                # An index from before the gate (or without a manifest) may
+                # hold vectors of private memories: rebuild, which drops them.
+                self.rebuild()
             return
         try:
             manifest = read_manifest(self.manifest_path)
@@ -110,6 +191,12 @@ class MemoryHybridRetriever:
                 getattr(self.embedder, "fingerprint", "") if self.embedder else ""
             )
             if manifest.embedding_fingerprint != current_fingerprint:
+                self.rebuild()
+            elif manifest.labels.get(EMBEDDING_GATE_LABEL) != self._manifest_labels().get(
+                EMBEDDING_GATE_LABEL
+            ):
+                # The gate turned on (drop vectors of private memories) or off
+                # (the opt-in: embed what was withheld).
                 self.rebuild()
         except IndexCompatibilityError:
             self.rebuild()
@@ -190,6 +277,11 @@ class MemoryHybridRetriever:
             version = str(frontmatter["version"])
         return version, digest
 
+    def _admitted(self, document: MemoryDocument) -> bool:
+        """Whether ``admit`` lets this call warm and log ``document`` (always without one)."""
+
+        return self.admit is None or self.admit(document)
+
     def _fts_search(
         self,
         query: str,
@@ -217,6 +309,7 @@ class MemoryHybridRetriever:
         except Exception as exc:  # noqa: BLE001
             errors.append(f"fts index unavailable: {exc}")
         if notes_result is not None:
+            self.last_access_operation = "fts_retrieve"
             results: list[dict[str, Any]] = []
             for hit in notes_result.hits:
                 memory_id = Path(hit.path).stem
@@ -230,10 +323,11 @@ class MemoryHybridRetriever:
                     continue
                 if not self._source_allowed(document.source, source):
                     continue
-                if self.autowarm and (document.is_stub or document.tier == Tier.COLD):
+                admitted = self._admitted(document)
+                if admitted and self.autowarm and (document.is_stub or document.tier == Tier.COLD):
                     self.repository.autowarm(document.id, actor="mechanism")
                     document = self.repository.get(document.id)
-                if self.record_access:
+                if admitted and self.record_access:
                     self.repository.capture_event(
                         EventKind.MEMORY_ACCESS,
                         actor="mechanism",
@@ -260,8 +354,10 @@ class MemoryHybridRetriever:
                 document.tenant == tenant
                 and self._visible(document, include_history=include_history, as_of=as_of)
                 and self._source_allowed(document.source, source)
+                and self._admitted(document)
             )
 
+        self.last_access_operation = "retrieve"
         legacy = VaultRetriever(
             self.repository,
             record_access=self.record_access,
@@ -315,7 +411,9 @@ class MemoryHybridRetriever:
         degraded = mode != "fts"
         results: list[dict[str, Any]] = []
         started = time.perf_counter()
-        if mode != "fts" and self.embedder is not None:
+        # Under the gate no query is embedded either (it may be private):
+        # hybrid and vector answer from FTS, degraded, with a fixed code.
+        if mode != "fts" and self.embedder is not None and not self.embedding_gated:
             try:
                 self._ensure_index()
                 retriever = NotesRetriever(
@@ -328,6 +426,7 @@ class MemoryHybridRetriever:
                     ),
                 )
                 notes_result = retriever.search(query, limit=max(1, limit))
+                self.last_access_operation = "hybrid_retrieve"
                 for hit in notes_result.hits:
                     if hit.path.startswith("/"):
                         path = Path(hit.path)
@@ -346,10 +445,15 @@ class MemoryHybridRetriever:
                         continue
                     if not self._visible(document, include_history=include_history, as_of=as_of_dt):
                         continue
-                    if self.autowarm and (document.is_stub or document.tier == Tier.COLD):
+                    admitted = self._admitted(document)
+                    if (
+                        admitted
+                        and self.autowarm
+                        and (document.is_stub or document.tier == Tier.COLD)
+                    ):
                         self.repository.autowarm(memory_id, actor="mechanism")
                         document = self.repository.get(memory_id)
-                    if self.record_access:
+                    if admitted and self.record_access:
                         self.repository.capture_event(
                             EventKind.MEMORY_ACCESS,
                             actor="mechanism",
@@ -386,6 +490,11 @@ class MemoryHybridRetriever:
             errors.extend(fts_errors)
             mode_used = "fts"
             degraded = mode != "fts"
+            if self.embedding_gated and mode != "fts":
+                errors.append(SEMANTIC_QUERY_WITHHELD)
+                if self.notes_index.unembedded_sections():
+                    # Private memories were not sent to the off-host embedder.
+                    errors.append(SEMANTIC_PARTIAL)
         if self.entity_enabled:
             if not self.entity_index.path.exists():
                 self.entity_index.rebuild(self.repository)

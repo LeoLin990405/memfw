@@ -241,13 +241,81 @@ def test_all_tools_byte_identical_to_base_ref() -> None:
         )
         new, dropped = without_u5_changes(result.new, labelled=_all_tools_labelled)
         removed += len(dropped)
-        expected = byte_identical.Comparison(
-            payload=result.payload,
-            old=_without_server_version(old),
-            new=_without_server_version(new),
-        )
+        old, new = _without_server_version(old), _without_server_version(new)
+        if result.payload.get("tenant") or result.payload.get("allowed_sources"):
+            old, new = _with_remember_visibility_fix(
+                old, new, empty=bool(result.payload.get("tenant"))
+            )
+        expected = byte_identical.Comparison(payload=result.payload, old=old, new=new)
         assert expected.identical, f"{result.payload}:\n{expected.diff[:4000]}"
     assert removed, "labels=true calls must carry corroboration"
+
+
+#: Values that follow from the number of events but cannot be recomputed here
+#: (the log head hash and ids drawn from the probe's counter). The event count
+#: itself is checked exactly (``_EVENT_COUNT``).
+_COUNTED = (
+    (re.compile(r"dream-20260101T000000Z-[0-9a-f]{8}"), "dream-<id>"),
+    (re.compile(r"t-mcp-[0-9a-f]{32}"), "t-mcp-<n>"),
+    (re.compile(r'"head": "[0-9a-f]{64}"'), '"head": "<head>"'),
+)
+_EVENT_COUNT = re.compile(r'"event_count": ([0-9]+)')
+
+
+def _with_remember_visibility_fix(old: str, new: str, *, empty: bool) -> tuple[str, str]:
+    """The one intended change for a tenant- or source-bound server (#104 review, HIGH 3).
+
+    ``memory_remember`` used to suggest (and access-log) memories outside the
+    caller's tenant or allowed sources. Now it suggests only what the caller
+    may read: the new suggestions must be a subset of the old ones (empty for
+    the tenant-bound variant, whose tenant holds no memory in the probe
+    vault). The suggestions and the values that follow from the fewer events
+    (event count, log head, counter-drawn ids) are then masked in both
+    outputs. Nothing else may differ.
+    """
+
+    def suggestions(text: str) -> list[list[str]]:
+        found: list[list[str]] = []
+        for item in _messages(text):
+            content = (item.get("result") or {}).get("content") if isinstance(item, dict) else None
+            for block in content or []:
+                payload = block.get("text") if isinstance(block, dict) else None
+                if isinstance(payload, dict) and "staged_candidate" in payload:
+                    found.append([row["memory_id"] for row in payload.get("suggestions") or []])
+        return found
+
+    before, after = suggestions(old), suggestions(new)
+    assert len(before) == len(after)
+    dropped = 0
+    for was, now in zip(before, after, strict=True):
+        assert set(now) <= set(was), (was, now)
+        if empty:
+            assert not now, now
+        dropped += len(set(was) - set(now))
+    # Exactly one ``memory_access`` event fewer per dropped suggestion (the probe
+    # vault's memories are hot: no warm events), from the first remember on.
+    old_counts = [int(value) for value in _EVENT_COUNT.findall(old)]
+    new_counts = [int(value) for value in _EVENT_COUNT.findall(new)]
+    deltas = [was - now for was, now in zip(old_counts, new_counts, strict=True)]
+    assert all(delta in (0, dropped) for delta in deltas), (deltas, dropped)
+    assert deltas == sorted(deltas) and (dropped == 0 or deltas[-1] == dropped), deltas
+    replacement = iter(new_counts)
+    old = _EVENT_COUNT.sub(lambda _m: f'"event_count": {next(replacement)}', old)
+
+    def masked(text: str) -> str:
+        messages = _messages(text)
+        for item in messages:
+            content = (item.get("result") or {}).get("content") if isinstance(item, dict) else None
+            for block in content or []:
+                payload = block.get("text") if isinstance(block, dict) else None
+                if isinstance(payload, dict) and "staged_candidate" in payload:
+                    payload["suggestions"] = "<masked>"
+        rendered = _render(messages)
+        for pattern, replacement in _COUNTED:
+            rendered = pattern.sub(replacement, rendered)
+        return rendered
+
+    return masked(old), masked(new)
 
 
 def test_mcp_search_policies_are_the_runtime_ones() -> None:

@@ -170,8 +170,11 @@ class Runtime:
         usage_sink: UsageSink | None = None,
         clearance: frozenset[str] | None = None,
         context_current: bool | None = None,
+        embedding_allow_remote: bool | None = None,
     ) -> None:
         self.root = root
+        #: ``MEMFW_EMBEDDING_ALLOW_REMOTE``; ``None``: ``runtime.embedding.allow_remote``.
+        self._embedding_allow_remote = embedding_allow_remote
         self.tenant = tenant
         #: Privacy levels this interface may return (MM0). ``None`` filters
         #: nothing, the behaviour before MM0.
@@ -333,6 +336,38 @@ class Runtime:
                 self._options = options
             return options
 
+    def embedding_allow_remote(self, repository: Repository | None = None) -> bool:
+        """Whether an off-host embedder may receive ``local-private``/``unknown`` memories.
+
+        The explicit setting (``MEMFW_EMBEDDING_ALLOW_REMOTE``) wins; otherwise
+        ``vault.yaml`` ``runtime.embedding.allow_remote`` (a boolean, default
+        ``false``; anything else, a missing vault or an unreadable file is
+        ``false``). Read only when the embedder is off-host
+        (``memfw.notes.http.embedder_sends_off_host``), so a loopback or
+        in-process embedder never reads it. Off, only ``public``/``shared``
+        memories are embedded (``memfw.memory_hybrid``).
+        """
+
+        if self._embedding_allow_remote is not None:
+            return self._embedding_allow_remote
+        if self.embedder is None:
+            return False
+        from memfw.notes.http import embedder_sends_off_host
+
+        if not embedder_sends_off_host(self.embedder):
+            return False
+        try:
+            config = (repository or self.open_repository()).read_config()
+        except (MemfwError, OSError, ValueError):
+            return False
+        section = config.get("runtime")
+        if not isinstance(section, dict):
+            return False
+        embedding = section.get("embedding")
+        if not isinstance(embedding, dict):
+            return False
+        return embedding.get("allow_remote") is True
+
     def usage_enabled(self) -> bool:
         """Whether ``memory_used`` is registered (default off)."""
 
@@ -491,6 +526,12 @@ class Runtime:
             tags=tags,
             related=related,
             privacy=checked_privacy,
+            embedding_allow_remote=self.embedding_allow_remote(repository),
+            allowed_sources=tuple(self.allowed_sources),
+            # Tenant, allowed sources and the privacy clearance: a suggestion
+            # never names a memory this caller could not read.
+            visible=self._visible,
+            record_access=self.record_access(),
         )
 
     def related(self, repository: Repository, memory_id: str, limit: int) -> dict[str, Any]:
@@ -641,6 +682,7 @@ class Runtime:
                     allowed_sources=allowed,
                     entity_enabled=self.entity_enabled,
                     observe=observe("hybrid"),
+                    embedding_allow_remote=self.embedding_allow_remote(),
                 )
             )
             configs["hybrid"] = ProviderConfig(budget=budget)
@@ -1172,6 +1214,7 @@ def build_runtime(
     usage_sink: UsageSink | None = None,
     clearance: frozenset[str] | None = None,
     context_current: bool | None = None,
+    embedding_allow_remote: bool | None = None,
 ) -> Runtime:
     """The default assembly: today's behaviour unless a switch is set.
 
@@ -1198,6 +1241,7 @@ def build_runtime(
         usage_sink=usage_sink,
         clearance=clearance,
         context_current=context_current,
+        embedding_allow_remote=embedding_allow_remote,
     )
 
 

@@ -40,7 +40,7 @@ import re
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -49,7 +49,7 @@ from memfw.core.epistemic import OPEN_QUESTION_TYPE
 from memfw.core.errors import MemfwError
 from memfw.core.models import MemoryDocument
 from memfw.core.repository import Repository
-from memfw.notes.index import NoteParseError, _note_file_inside_root, _split_frontmatter
+from memfw.notes.index import NoteParseError, note_file_inside_root, split_frontmatter
 from memfw.ports.privacy import (
     LEGACY_PRIVACY_FALLBACK,
     PRIVACY_LEVELS,
@@ -67,11 +67,11 @@ from memfw.ports.types import (
     RefKind,
 )
 from memfw.projection import (
-    MetaIndex,
-    ProjectionError,
+    DEFAULT_LIFECYCLE_SOURCE,
+    Lifecycle,
     fleet_paths,
     join_meta,
-    load_meta_index,
+    load_lifecycle,
     tag_privacy_class,
 )
 
@@ -180,44 +180,9 @@ def meta_from_document(document: MemoryDocument) -> MemoryMeta:
     )
 
 
-#: The lifecycle meta-index read when none is named (relative to the vault);
-#: the same default as ``memfw dream`` (``memfw.dream.questions``).
-DEFAULT_LIFECYCLE_SOURCE = Path("status") / "memory-meta-index.json"
-
 #: Stands in for a meta-index temporal value that is not a string: the strict
 #: policy cannot parse it, so it fails closed (``expiry_unparsable``).
 _UNPARSABLE = "unparsable"
-
-
-@dataclass(frozen=True)
-class Lifecycle:
-    """The lifecycle meta-index for one resolve call (``meta=None``: none present)."""
-
-    meta: MetaIndex | None = None
-    unreadable: bool = False
-
-
-def load_lifecycle(root: Path, source: Path | str | None = None) -> Lifecycle:
-    """Read the lifecycle meta-index: ``source``, else ``<vault>/status/memory-meta-index.json``.
-
-    No default file means no meta-index: the vault alone decides, as before.
-    A named file that is missing or unreadable, or a default file that is a
-    symlink, unreadable or malformed, is ``unreadable``: every document with
-    a ``fleet_path`` tag then fails closed under the strict policy.
-    """
-
-    if source is None:
-        path = Path(root) / DEFAULT_LIFECYCLE_SOURCE
-        if path.is_symlink():
-            return Lifecycle(unreadable=True)
-        if not path.exists():
-            return Lifecycle()
-    else:
-        path = Path(source).expanduser()
-    try:
-        return Lifecycle(meta=load_meta_index(path))
-    except ProjectionError:
-        return Lifecycle(unreadable=True)
 
 
 def _temporal(value: Any) -> str | None:
@@ -244,9 +209,13 @@ def join_lifecycle(meta: MemoryMeta, tags: Sequence[str], lifecycle: Lifecycle) 
     which the strict policy drops. A joined item adds, each only ever
     restricting:
 
-    - ``lifecycle`` and ``lifecycle_override``: the strongest of them and the
-      vault's ``lifecycle:`` tags (retired > superseded > other non-active >
-      active);
+    - ``lifecycle``, and ``lifecycle_override`` when it is a string: the
+      strongest of them and the vault's ``lifecycle:`` tags (retired >
+      superseded > other non-active > active). A boolean
+      ``lifecycle_override`` (the real meta-index's flag that ``lifecycle``
+      was set by hand) is not a lifecycle and is ignored, and so is a
+      ``null`` one (absent, as before); any other non-string value fails
+      closed;
     - ``superseded_by`` (non-empty): counts as ``lifecycle: superseded``;
     - ``valid_until`` and ``valid_to``: the strict expiry (the earlier of
       every end date; a value that does not parse fails closed);
@@ -267,10 +236,17 @@ def join_lifecycle(meta: MemoryMeta, tags: Sequence[str], lifecycle: Lifecycle) 
         return replace(meta, lifecycle_join="unjoined")
     item = join.item
     lifecycles = [meta.lifecycle] if meta.lifecycle else []
-    for key in ("lifecycle", "lifecycle_override"):
-        value = item.get(key)
-        if value is not None:
-            lifecycles.append(value if isinstance(value, str) else _UNPARSABLE)
+    value = item.get("lifecycle")
+    if value is not None:
+        lifecycles.append(value if isinstance(value, str) else _UNPARSABLE)
+    # In the real meta-index ``lifecycle_override`` is a boolean flag (the
+    # ``lifecycle`` value was set by hand), not a lifecycle: only a string
+    # one is ranked. Another non-boolean shape still fails closed.
+    override = item.get("lifecycle_override")
+    if isinstance(override, str):
+        lifecycles.append(override)
+    elif override is not None and not isinstance(override, bool):
+        lifecycles.append(_UNPARSABLE)
     if item.get("superseded_by") not in (None, ""):
         lifecycles.append("superseded")
     privacy_values = [value for value in (meta.privacy, _declared(item.get("privacy"))) if value]
@@ -381,7 +357,7 @@ class NotesSegmentResolver:
 
     def _level(self, text: str) -> str | None:
         try:
-            frontmatter, _body, _offset = _split_frontmatter(text)
+            frontmatter, _body, _offset = split_frontmatter(text)
         except NoteParseError:
             return None
         return metadata_level(frontmatter, self.legacy_privacy_default)
@@ -394,7 +370,7 @@ class NotesSegmentResolver:
         """
 
         path = self.root / rel
-        if not _note_file_inside_root(path, self.root):
+        if not note_file_inside_root(path, self.root):
             return None
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
@@ -781,6 +757,7 @@ class HybridProvider:
         allowed_sources: tuple[str, ...] = (),
         entity_enabled: bool = False,
         observe: Observe | None = None,
+        embedding_allow_remote: bool = False,
     ) -> None:
         if mode not in {"hybrid", "vector"}:
             raise ValueError("mode must be hybrid or vector")
@@ -793,6 +770,8 @@ class HybridProvider:
         self.allowed_sources = tuple(allowed_sources)
         self.entity_enabled = entity_enabled
         self.observe = observe
+        #: The memory embedding locality opt-in (``MemoryHybridRetriever``).
+        self.embedding_allow_remote = embedding_allow_remote
         self.projection_version = ""
 
     def available(self) -> Availability:
@@ -830,6 +809,7 @@ class HybridProvider:
             # Nor does it warm cold or stub hits: the Runtime warms the ones
             # it returns, after the filter.
             autowarm=False,
+            embedding_allow_remote=self.embedding_allow_remote,
         )
         result = retriever.search(
             query,

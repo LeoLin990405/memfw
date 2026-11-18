@@ -115,7 +115,7 @@ CI 的 `standalone-wheels` 任务会构建两者，装进一个没有 memfw 的�
 
 ## QMD 召回适配器
 
-`packages/adapters/memfw-adapter-qmd`（wheel 名 `memfw_adapter_qmd`，版本 0.1.0）只用标准库和 PyYAML，对一个正在运行的 [QMD](https://github.com/tobi/qmd)（MIT，锁定 2.5.3）MCP 服务实现了两个 `RecallProvider`：`qmd` 查由 `memfw projection export` 建成的 collection，按投影 manifest 映射回记忆 id；`qmd-notes` 查 Knowledge-Hub 的 collection，返回 `kh:<路径>#<标题>` 引用。两者都只返回引用、QMD 的分数和来源标签；映射不到可见文档的结果一律丢弃（`local-private` 和 `unknown` 永远不返回）；**默认关闭**（要在 `AdaptersConfig` 的 `enabled` 里打开）。端点默认必须是 loopback（除非设 `allow_remote`），loopback 请求不走代理。QMD 不可用或超时时，协调层把它标成降级，由 FTS 回答。memfw 本身从不导入这个适配器。见 [`qmd-projection.md`](qmd-projection.md#qmd-recall-adapter) 和包内 README。
+`packages/adapters/memfw-adapter-qmd`（wheel 名 `memfw_adapter_qmd`，版本 0.1.1）只用标准库和 PyYAML，对一个正在运行的 [QMD](https://github.com/tobi/qmd)（MIT，锁定 2.5.3）MCP 服务实现了两个 `RecallProvider`：`qmd` 查由 `memfw projection export` 建成的 collection，按投影 manifest 映射回记忆 id；`qmd-notes` 查 Knowledge-Hub 的 collection，返回 `kh:<路径>#<标题>` 引用。两者都只返回引用、QMD 的分数和来源标签；映射不到可见文档的结果一律丢弃（`local-private` 和 `unknown` 永远不返回）；**默认关闭**（要在 `AdaptersConfig` 的 `enabled` 里打开）。端点默认必须是 loopback（除非设 `allow_remote`），loopback 请求不走代理。QMD 不可用或超时时，协调层把它标成降级，由 FTS 回答。memfw 本身从不导入这个适配器。见 [`qmd-projection.md`](qmd-projection.md#qmd-recall-adapter) 和包内 README。
 
 ## LangExtract 派生适配器
 
@@ -123,7 +123,7 @@ CI 的 `standalone-wheels` 任务会构建两者，装进一个没有 memfw 的�
 
 ## PageIndex 召回适配器
 
-`packages/adapters/memfw-adapter-pageindex`（wheel 名 `memfw_adapter_pageindex`，版本 0.1.0）是一个面向长文档的 `RecallProvider`，按 PageIndex 风格搜索目录树（标题、节点 id、页码范围、可选的简短摘要；从不含正文）。由 memfw 的 `ModelBackend` 挑选章节，或者用 `mode: titles` 不经模型直接给标题排序。它只返回 `kh:<路径>#<标题>` 和 `att:<id>#page=<n>` 引用。非本地后端需要 `cloud: true`，`local-private` 的目录树从不发给它，每轮有 token 和调用次数预算。目录树用 `memfw-pageindex build-md | import-tree | list` 离线构建或导入，以 `0600` 的 JSON 存在 vault 之外。**默认关闭**；memfw 本身从不导入它。见包内 README。
+`packages/adapters/memfw-adapter-pageindex`（wheel 名 `memfw_adapter_pageindex`，版本 0.1.1）是一个面向长文档的 `RecallProvider`，按 PageIndex 风格搜索目录树（标题、节点 id、页码范围、可选的简短摘要；从不含正文）。由 memfw 的 `ModelBackend` 挑选章节，或者用 `mode: titles` 不经模型直接给标题排序。它只返回 `kh:<路径>#<标题>` 和 `att:<id>#page=<n>` 引用。非本地后端需要 `cloud: true`，`local-private` 的目录树从不发给它，每轮有 token 和调用次数预算。目录树用 `memfw-pageindex build-md | import-tree | list` 离线构建或导入，以 `0600` 的 JSON 存在 vault 之外。**默认关闭**；memfw 本身从不导入它。见包内 README。
 
 ## OCR 代理适配器
 

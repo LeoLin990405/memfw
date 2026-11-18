@@ -75,12 +75,12 @@ from memfw.ports.privacy import (
     strictest,
 )
 from memfw.projection import (
-    MetaIndex,
-    ProjectionError,
+    DEFAULT_LIFECYCLE_SOURCE,
+    Lifecycle,
     classify_privacy,
     fleet_paths,
     join_meta,
-    load_meta_index,
+    load_lifecycle,
     tag_privacy_class,
 )
 
@@ -96,9 +96,6 @@ EVIDENCE_PREFIX = "dream:"
 
 REJECTIONS_DIR = Path("_candidates") / "dream-rejections"
 """Where :func:`reject_question` records rejected pairs (one JSON file each)."""
-
-DEFAULT_LIFECYCLE_SOURCE = Path("status") / "memory-meta-index.json"
-"""The lifecycle meta-index read when none is named (relative to the vault)."""
 
 MISSING = (
     "A dated, checkable source (a record, a test, a config or a decision) that shows "
@@ -134,36 +131,6 @@ def pair_key(left: str, right: str) -> Pair:
 
 
 # --- privacy ---------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class Lifecycle:
-    """The lifecycle meta-index the privacy check joins (``None``: not present)."""
-
-    meta: MetaIndex | None = None
-    unreadable: bool = False
-
-
-def load_lifecycle(root: Path, source: Path | None = None) -> Lifecycle:
-    """Read the lifecycle meta-index: ``source``, else the vault's default file.
-
-    No file is no meta-index (tags decide). A named or default file that
-    cannot be read, or a symlinked default, makes every memory with a
-    ``fleet_path`` tag count as private.
-    """
-
-    path = source
-    if path is None:
-        default = Path(root) / DEFAULT_LIFECYCLE_SOURCE
-        if default.is_symlink():
-            return Lifecycle(unreadable=True)
-        if not default.is_file():
-            return Lifecycle()
-        path = default
-    try:
-        return Lifecycle(meta=load_meta_index(path))
-    except ProjectionError:
-        return Lifecycle(unreadable=True)
 
 
 def is_private(document: MemoryDocument, lifecycle: Lifecycle | None = None) -> bool:

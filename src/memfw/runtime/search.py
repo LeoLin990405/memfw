@@ -420,6 +420,11 @@ def _retriever(runtime: Runtime, repository: Repository) -> MemoryHybridRetrieve
         allowed_sources=runtime.allowed_sources,
         record_access=record,
         autowarm=record,
+        # MM0: a hit the clearance withholds (``_cleared_rows`` drops its row)
+        # is neither warmed nor access-logged, as in ``two_stage``. No
+        # clearance: none, exactly as before.
+        admit=None if runtime.clearance is None else runtime.privacy_admits,
+        embedding_allow_remote=runtime.embedding_allow_remote(repository),
     )
 
 

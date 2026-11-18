@@ -35,11 +35,14 @@ import os
 import re
 import secrets
 import shutil
+import stat as stat_mode
+import threading
 import time
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Literal
 
 import yaml
@@ -324,6 +327,107 @@ def load_meta_index(path: Path | None) -> MetaIndex | None:
     except (OSError, ValueError) as exc:
         raise ProjectionError(f"lifecycle source unreadable: {path}: {exc}") from exc
     return parse_meta_index(raw)
+
+
+#: The lifecycle meta-index read when none is named (relative to the vault),
+#: shared by recall (``memfw.recall.builtin``) and ``memfw dream``.
+DEFAULT_LIFECYCLE_SOURCE = Path("status") / "memory-meta-index.json"
+
+
+@dataclass(frozen=True)
+class Lifecycle:
+    """The lifecycle meta-index for one reader (``meta=None``: none present).
+
+    ``unreadable`` means a meta-index should be there but cannot be used;
+    every document with a ``fleet_path`` tag then fails closed.
+    """
+
+    meta: MetaIndex | None = None
+    unreadable: bool = False
+
+
+#: Parsed meta-indexes by path, each with the ``(device, inode, mtime_ns,
+#: ctime_ns, size)`` it was read at (``ctime`` catches an in-place rewrite
+#: whose mtime was restored, as ``cp -p``, ``rsync -t`` or ``tar x`` do).
+#: A small bound: one Runtime reads one or two files.
+_LIFECYCLE_CACHE: dict[str, tuple[tuple[int, int, int, int, int], MetaIndex]] = {}
+_LIFECYCLE_CACHE_MAX = 8
+_LIFECYCLE_LOCK = threading.Lock()
+
+
+def _frozen(value: Any) -> Any:
+    """``value`` with every dict a read-only mapping and every list a tuple, all the way down."""
+
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _frozen(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_frozen(item) for item in value)
+    return value
+
+
+def _cached_meta_index(path: Path, info: os.stat_result) -> MetaIndex:
+    """``load_meta_index(path)``, re-read only when the file's stat key changes."""
+
+    key = (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns, info.st_size)
+    name = str(path)
+    with _LIFECYCLE_LOCK:
+        cached = _LIFECYCLE_CACHE.get(name)
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    loaded = load_meta_index(path)
+    if loaded is None:  # pragma: no cover - a path was given
+        raise ProjectionError("lifecycle source unavailable")
+    # Shared by every caller until the file changes: read-only views, so no
+    # caller can change what another one reads.
+    meta = replace(
+        loaded,
+        items=MappingProxyType({rel: _frozen(item) for rel, item in loaded.items.items()}),
+    )
+    with _LIFECYCLE_LOCK:
+        if name not in _LIFECYCLE_CACHE and len(_LIFECYCLE_CACHE) >= _LIFECYCLE_CACHE_MAX:
+            _LIFECYCLE_CACHE.pop(next(iter(_LIFECYCLE_CACHE)))
+        _LIFECYCLE_CACHE[name] = (key, meta)
+    return meta
+
+
+def load_lifecycle(root: Path | str, source: Path | str | None = None) -> Lifecycle:
+    """The lifecycle meta-index: ``source``, else ``<root>/status/memory-meta-index.json``.
+
+    The one reader for every caller (recall's ``VaultIdResolver``, the
+    Runtime's context and open-question filters, ``memfw dream``), so they
+    all treat the same file the same way:
+
+    - no ``source`` and no default file: ``Lifecycle()`` (the vault alone
+      decides, as without a meta-index);
+    - a default file that is a symlink, a directory or anything but a regular
+      file: ``unreadable``;
+    - a named ``source`` (``~`` expanded; symlinks followed, the operator
+      named it) that is missing or not a regular file: ``unreadable``;
+    - a file that cannot be read or parsed: ``unreadable``.
+
+    A parsed file is kept and reused while its device, inode, modification
+    and change times and size stay the same, so a long-running server reads
+    it once per change rather than once per call. The cached items are
+    read-only mappings.
+    """
+
+    try:
+        if source is None:
+            path = Path(root) / DEFAULT_LIFECYCLE_SOURCE
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                return Lifecycle()
+            if stat_mode.S_ISLNK(info.st_mode) or not stat_mode.S_ISREG(info.st_mode):
+                return Lifecycle(unreadable=True)
+        else:
+            path = Path(source).expanduser()
+            info = path.stat()
+            if not stat_mode.S_ISREG(info.st_mode):
+                return Lifecycle(unreadable=True)
+        return Lifecycle(meta=_cached_meta_index(path, info))
+    except (OSError, ProjectionError):
+        return Lifecycle(unreadable=True)
 
 
 # ----------------------------------------------------------------------------- join

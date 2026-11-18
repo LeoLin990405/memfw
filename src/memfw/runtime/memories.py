@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,9 @@ from memfw.capture.suggestions import suggest_related
 from memfw.core.errors import NotFoundError
 from memfw.core.models import Layer, MemoryDocument, Tier
 from memfw.core.repository import Repository
+from memfw.index.readonly import vault_legacy_privacy
+from memfw.notes.http import embedder_sends_off_host
+from memfw.ports.privacy import effective_level
 from memfw.related import RelatedIndex
 
 #: The largest ``memory_remember`` content, in UTF-8 bytes (64 KiB).
@@ -44,14 +48,40 @@ def stage_remember(
     tags: list[str] | None,
     related: list[str] | None,
     privacy: str | None = None,
+    embedding_allow_remote: bool = False,
+    allowed_sources: tuple[str, ...] = (),
+    visible: Callable[[MemoryDocument], bool] | None = None,
+    record_access: bool = True,
 ) -> dict[str, Any]:
     """Stage one candidate under ``_candidates/remember/`` of ``root``.
 
     ``text`` is already stripped and non-empty; ``repository`` is the open
-    vault the related suggestions are read from.
+    vault the related suggestions are read from. The suggestions embed the
+    candidate's title or text as the query: with an off-host embedder and no
+    ``embedding_allow_remote``, a candidate that is not ``public``/``shared``
+    (its ``privacy``, tags and the vault default) gets lexical suggestions
+    only, so its text never leaves the machine.
     """
 
-    suggestions = suggest_related(repository, title, text, embedder=embedder)
+    if (
+        embedder is not None
+        and not embedding_allow_remote
+        and embedder_sends_off_host(embedder)
+        and effective_level(privacy, list(tags or []), legacy=vault_legacy_privacy(repository.root))
+        not in ("public", "shared")
+    ):
+        embedder = None
+    suggestions = suggest_related(
+        repository,
+        title,
+        text,
+        embedder=embedder,
+        embedding_allow_remote=embedding_allow_remote,
+        tenant=tenant,
+        allowed_sources=allowed_sources,
+        admit=visible,
+        record_access=record_access,
+    )
     suggestion_rows = [item.as_dict() for item in suggestions]
     related_ids = list(related) if related else [item.memory_id for item in suggestions]
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())

@@ -17,7 +17,7 @@ directly with :func:`memory_factory` / :func:`notes_factory`. See
 
 from __future__ import annotations
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 from ._ports import AdapterSpec  # noqa: E402
 from .mcp import McpHttpClient, QmdResponseError  # noqa: E402

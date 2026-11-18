@@ -176,7 +176,7 @@ only as staged candidates. See [`adapter-graphrag.md`](adapter-graphrag.md).
 
 ## QMD recall adapter
 
-`packages/adapters/memfw-adapter-qmd` (wheel `memfw_adapter_qmd`, version 0.1.0) implements
+`packages/adapters/memfw-adapter-qmd` (wheel `memfw_adapter_qmd`, version 0.1.1) implements
 the `RecallProvider` port twice, with the standard library and PyYAML, over a running
 [QMD](https://github.com/tobi/qmd) (MIT, pinned 2.5.3) MCP server: `qmd` searches a collection
 built from a `memfw projection export` and returns memory ids mapped through the projection
@@ -199,7 +199,7 @@ default**; its rows become memory only as staged candidates. See
 
 ## PageIndex recall adapter
 
-`packages/adapters/memfw-adapter-pageindex` (wheel `memfw_adapter_pageindex`, version 0.1.0) is
+`packages/adapters/memfw-adapter-pageindex` (wheel `memfw_adapter_pageindex`, version 0.1.1) is
 a `RecallProvider` for long documents that searches PageIndex-style table-of-contents trees
 (titles, node ids, page ranges, optional short summaries; never body text). A memfw
 `ModelBackend` picks the sections, or `mode: titles` ranks titles without a model. It returns
