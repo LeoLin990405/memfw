@@ -19,6 +19,8 @@ Markdown is the source of truth · hash-linked JSONL events · rebuildable FTS5 
 <a href="#-optional-adapters"><img src="https://img.shields.io/badge/adapters-9_(off_by_default)-64748B?style=flat-square" alt="9 adapters (off by default)"></a>
 <a href="#-evaluation-summary"><img src="https://img.shields.io/badge/evaluation-bounded-D97706?style=flat-square" alt="Bounded evaluation"></a>
 
+<sub>Counts reflect <code>main</code>; the release badge is the latest tagged release (v0.3.0).</sub>
+
 </div>
 
 ## What is memfw?
@@ -62,9 +64,15 @@ agent CLIs / apps ──readers──► conversation store (local, redacted)
 
 1. **Local-first.** The vault, the indexes and the conversation store live on your machine. The
    core calls no model and needs no network; anything that could reach a cloud model is off by
-   default and needs an explicit `--allow-cloud` (or `cloud: true` in an adapter's settings).
-   Every adapter is off by default, and no bundled adapter sends a `local-private` memory or
-   attachment to a non-local service.
+   default and needs an explicit switch: `--allow-cloud` or `conversations.cloud: true` for the
+   conversations worker and handoff, `cloud: true` in an adapter's settings. Every adapter is off
+   by default, and no bundled adapter sends a `local-private` memory or attachment to a non-local
+   service.
+
+   **One exception to check yourself:** the optional embedding endpoint (`MEMFW_EMBEDDING_URL`,
+   or `--embedding-url`) is used exactly as configured, with no locality check, and hybrid search
+   and related-memory builds embed every memory at every privacy level. Point it only at a
+   loopback service.
 2. **Event-backed Markdown.** Markdown files are the authority. Every state change is appended to
    a hash-linked JSONL event chain (`memfw log verify` proves it is intact). SQLite indexes are
    derived projections that can be deleted and rebuilt.
@@ -139,13 +147,14 @@ name (see [`docs/conversations-share.md`](docs/conversations-share.md)).
 | `attachments/<att-id>.md` | one small record per registered attachment (never under `memories/`); the original is a blob outside the vault or a referenced file |
 | `attachments/proxies/<prx-id>.md` | text proxies of an attachment (OCR, transcript, keyframes, extract, caption) with canonical locators |
 | `index.sqlite3`, `.memfw-history.sqlite` | derived FTS5 indexes (disposable; rebuild any time) |
+| `.memfw-related.sqlite` | derived related-memory edges from `memory-related-build` (MCP `memory_related` reads it at the vault root; the CLI's `--related-db` defaults to this name) |
 
 The conversation store, the worker state, attachment blobs (`blobs/`) and the rebuildable
 projections (`edges/`, `corroboration/`, `proxy_index/`, the bm25s adapter's index under `adapters/`) are kept **outside**
 the vault, by default under `~/.local/share/memfw/` (see [Privacy](#-privacy-and-permissions)).
 Each out-of-vault projection records which vault it belongs to and refuses to answer for another
 vault at the same path ("projection belongs to another vault: rebuild it"). If the vault is a
-git repository, add `index.sqlite3` and `.memfw-history.sqlite*` to its `.gitignore`.
+git repository, add `index.sqlite3`, `.memfw-history.sqlite*` and `.memfw-related.sqlite` to its `.gitignore`.
 
 An index written by an older memfw has no temporal projections. Writers are lazy about it:
 the MCP server (`memfw-mcp`) and `memfw index search` check the schema generation (`PRAGMA user_version`)
@@ -175,8 +184,9 @@ rebuild: it detects the missing tables and degrades instead (no temporal filteri
 | Evaluation | `eval context SNAPSHOT` (context-pack coverage, waste, latency and token cost on a read-only snapshot), `eval causal` |
 
 Search matches each query word on its own and ranks by bm25, so a whole sentence finds relevant
-memories. `memory_search` `mode` defaults to `hybrid`, which is FTS5 unless a local OpenAI-compatible
-embedding endpoint is configured. Every command prints
+memories. `memory_search` `mode` defaults to `hybrid`, which is FTS5 unless an OpenAI-compatible
+embedding endpoint (`MEMFW_EMBEDDING_URL`) is configured; memfw does not check that it is local,
+and it embeds memories of every privacy level, so point it only at a loopback service. Every command prints
 `--help`; global `--now` and `--id-seed` make runs deterministic for tests. Which capability is
 reachable from the CLI, MCP and HTTP (and why a gap is there) is in
 [`docs/cli-mcp-parity.md`](docs/cli-mcp-parity.md).
@@ -518,7 +528,11 @@ makes a session write nothing to the vault.
   services, and no bundled adapter sends a `local-private` memory or attachment to a non-local
   service: whatever may go to another machine (Qdrant `sync`, LangExtract, LightRAG, PageIndex
   trees for a non-local model, GraphRAG's input documents when `cloud: true` points its local
-  `graphrag index` run at a non-loopback model) is limited to `public` / `shared`. Local indexes are not
+  `graphrag index` run at a non-loopback model) is limited to `public` / `shared`. The one
+  adapter that sends something other than memories is DeepSeek: it sends redacted
+  conversation text (never memories or attachments) to DeepSeek's API, only with
+  `conversations.cloud: true` and `DEEPSEEK_API_KEY`, and apps marked not readable are never
+  processed. Local indexes are not
   limited that way: QMD indexes a `memfw projection export`, which can include `local-private`
   memories unless `--skip-privacy` (or the projection policy) leaves them out, so that index stays on this machine (the QMD
   adapter never returns `local-private` hits). The OCR adapter's custom `module:factory`
@@ -739,8 +753,6 @@ changes no default. Full evidence and limits: [`docs/evaluation.md`](docs/evalua
 | [`docs/obsidian-projection.md`](docs/obsidian-projection.md) | the read-only Obsidian board: layout, clearance, rebuild rules |
 | [`docs/COMPONENTS.md`](docs/COMPONENTS.md) | notes index, code retrieval, read-only HTTP service, standalone wheels, the adapters, corroboration, Obsidian projection, relatedness |
 | [`docs/adapter-bm25s.md`](docs/adapter-bm25s.md), [`docs/adapter-qdrant.md`](docs/adapter-qdrant.md), [`docs/adapter-langextract.md`](docs/adapter-langextract.md), [`docs/adapter-lightrag.md`](docs/adapter-lightrag.md), [`docs/adapter-graphrag.md`](docs/adapter-graphrag.md), [`docs/qmd-projection.md`](docs/qmd-projection.md) | adapter setup, privacy rules and contract tests (OCR and PageIndex: their package READMEs) |
-| [`docs/adapter-lightrag.md`](docs/adapter-lightrag.md) | LightRAG deriver adapter |
-| [`docs/adapter-graphrag.md`](docs/adapter-graphrag.md) | GraphRAG deriver adapter |
 | [`docs/retrieval-architecture.md`](docs/retrieval-architecture.md) | retrieval design |
 | [`docs/architecture.md`](docs/architecture.md) | package layers, import guards, the shrinking allowlist, the composition root, the byte-identical harness |
 | [`docs/ports-and-recall.md`](docs/ports-and-recall.md) | port contracts, the recall coordinator, `two_stage`, configured recall adapters, context packs, slots (including `current`) and cache, standalone wheels, writing an adapter |
@@ -755,11 +767,11 @@ Release status: **v0.3.0** (2026-11-17). Apache-2.0; runs offline on one machine
 to PyPI. Implemented: the vault and hash-linked event log, retention and the `10MB` budget, the
 disposable FTS5 index and the read path (per-term matching, concept aliases, multi-hop),
 epistemic types, causal grades and reviewed experience points, the layered core with eleven
-ports and the `memfw.runtime` composition root, `two_stage` recall, context packs v2 with
+ports (the twelfth, `ProjectionStore`, is on `main`) and the `memfw.runtime` composition root, `two_stage` recall, context packs v2 with
 slots, resources and `if_version`, open questions, recall labels and corroboration, the concept
 taxonomy and relation-type table, privacy levels with opt-in clearance, the MCP servers, the
-notes index and code retrieval, the read-only transcript index, the conversation store with 15
-readers, settled ingest, sharing and the worker (with an optional, off-by-default DeepSeek
+notes index and code retrieval, the read-only transcript index, the conversation store with 14
+readers (Qwen Code, the 15th, is on `main`), settled ingest, sharing and the worker (with an optional, off-by-default DeepSeek
 tagging adapter), handoff packs, dream (verify, curate, distill, budget, skills, open-question
 candidates), OKF v0.2 export and import, the Obsidian projection and the read-only HTTP service
 (`memfw-http/2`). Changes are listed in [`CHANGELOG.md`](CHANGELOG.md).

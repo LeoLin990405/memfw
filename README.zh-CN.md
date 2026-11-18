@@ -19,6 +19,8 @@ Markdown 即真相 · 哈希链 JSONL 事件 · 可重建 FTS5 索引 · 先核�
 <a href="#-可选适配器"><img src="https://img.shields.io/badge/adapters-9_(off_by_default)-64748B?style=flat-square" alt="9 adapters (off by default)"></a>
 <a href="#-评估结果摘要"><img src="https://img.shields.io/badge/evaluation-bounded-D97706?style=flat-square" alt="Bounded evaluation"></a>
 
+<sub>数字以 <code>main</code> 为准；release 徽章是最近一次打标签的版本（v0.3.0）。</sub>
+
 </div>
 
 ## memfw 是什么？
@@ -47,7 +49,9 @@ agent CLI / 应用 ──reader──► 会话库（本地、已脱敏）
 
 ## 🧭 设计原则
 
-1. **本地优先。** vault、索引和会话库都在你自己的机器上。核心不调用任何模型，也不需要联网；凡是可能连到云端模型的功能，默认关闭，必须显式加 `--allow-cloud`（或在适配器配置里写 `cloud: true`）。所有适配器默认关闭，自带的适配器都不会把 `local-private` 记忆或附件发给非本地服务。
+1. **本地优先。** vault、索引和会话库都在你自己的机器上。核心不调用任何模型，也不需要联网；凡是可能连到云端模型的功能，默认关闭，必须显式打开开关：会话 worker 和交接用 `--allow-cloud` 或 `conversations.cloud: true`，适配器在配置里写 `cloud: true`。所有适配器默认关闭，自带的适配器都不会把 `local-private` 记忆或附件发给非本地服务。
+
+   **有一处需要你自己把关：** 可选的 embedding 端点（`MEMFW_EMBEDDING_URL`，或 `--embedding-url`）按配置原样使用，不检查是否在本机；hybrid 搜索和关联记忆构建会对所有隐私级别的记忆做 embedding。只把它指向 loopback 服务。
 2. **以事件为后盾的 Markdown。** Markdown 文件是权威来源。每次状态变化都追加到哈希链 JSONL 事件链里，`memfw log verify` 可以证明它没被动过。SQLite 索引只是派生投影，删了也能重建。
 3. **先核对。** 模型提出的任何东西，都要先对照证据核实、再经人批准，才会成为记忆。dream 和会话 worker 只暂存候选，从不直接写 vault。
 4. **人 > 机制 > 模型。** 模型可以提议；确定性的机制负责检查预算、来源和状态迁移；内容和锚点记忆最终由人负责。
@@ -110,8 +114,9 @@ Claude Code 可以直接运行 `claude mcp add memfw -- memfw-mcp --root /path/t
 | `attachments/<att-id>.md` | 每登记一个附件就有一份小记录（从不放在 `memories/` 下）；原件是 vault 之外的 blob，或一个被引用的文件 |
 | `attachments/proxies/<prx-id>.md` | 附件的文本代理（OCR、转写、关键帧、抽取、说明文字），带规范化的定位信息 |
 | `index.sqlite3`、`.memfw-history.sqlite` | 派生的 FTS5 索引（可随时删除重建） |
+| `.memfw-related.sqlite` | 由 `memory-related-build` 生成的派生关联边（MCP `memory_related` 在 vault 根目录读取它；命令行的 `--related-db` 默认也是这个文件名） |
 
-会话库、worker 状态、附件 blob（`blobs/`）和各种可重建投影（`edges/`、`corroboration/`、`proxy_index/`，以及 bm25s 适配器放在 `adapters/` 下的索引）都放在 vault **之外**，默认在 `~/.local/share/memfw/`（见[隐私与权限](#-隐私与权限)）。每个 vault 外的投影都记着自己属于哪个 vault，同一路径换成另一个 vault 时会拒绝回答（“projection belongs to another vault: rebuild it”）。如果 vault 本身是 git 仓库，记得把 `index.sqlite3` 和 `.memfw-history.sqlite*` 加进 `.gitignore`。
+会话库、worker 状态、附件 blob（`blobs/`）和各种可重建投影（`edges/`、`corroboration/`、`proxy_index/`，以及 bm25s 适配器放在 `adapters/` 下的索引）都放在 vault **之外**，默认在 `~/.local/share/memfw/`（见[隐私与权限](#-隐私与权限)）。每个 vault 外的投影都记着自己属于哪个 vault，同一路径换成另一个 vault 时会拒绝回答（“projection belongs to another vault: rebuild it”）。如果 vault 本身是 git 仓库，记得把 `index.sqlite3`、`.memfw-history.sqlite*` 和 `.memfw-related.sqlite` 加进 `.gitignore`。
 
 旧版 memfw 写出的索引里没有时间投影。使用索引的写侧命令是惰性重建的：MCP 服务（`memfw-mcp`）和 `memfw index search` 会先检查 schema 世代（`PRAGMA user_version`），过时就在使用前重建，所以从旧版本升级不需要手动操作。只读 HTTP 服务（`scripts/memfw_readonly_service.py`）完全不写盘，因此**不会**重建：它检测到表缺失就降级（没有 `memory_temporal` 时不做时间过滤，没有 `memory_access` 时不返回结果）。升级后如果要用只读服务，先跑一次 `memfw index rebuild`。
 
@@ -134,7 +139,7 @@ Claude Code 可以直接运行 `claude mcp add memfw -- memfw-mcp --root /path/t
 | 投影 | `okf export` / `okf validate` / `okf import`（[OKF v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format) 包）、`projection export`（给 QMD 等外部召回后端导出的文件）、`project obsidian`（只读的 Obsidian 看板）、`notes`（Markdown 笔记索引）、`code`（本地代码检索） |
 | 评估 | `eval context SNAPSHOT`（在只读快照上测上下文包的覆盖率、浪费、延迟和 token 开销）、`eval causal` |
 
-搜索时每个查询词单独匹配、按 bm25 排序，所以直接输入一整句话也能找到相关记忆。`memory_search` 的 `mode` 默认是 `hybrid`：没有配置本地 OpenAI 兼容的 embedding 服务时，它就是 FTS5。每个命令都有 `--help`；全局的 `--now` 和 `--id-seed` 可以让运行结果完全确定，方便测试。哪些功能能从命令行、MCP、HTTP 调用（以及为什么某处没有），见 [`docs/cli-mcp-parity.md`](docs/cli-mcp-parity.md)。
+搜索时每个查询词单独匹配、按 bm25 排序，所以直接输入一整句话也能找到相关记忆。`memory_search` 的 `mode` 默认是 `hybrid`：没有配置 OpenAI 兼容的 embedding 端点（`MEMFW_EMBEDDING_URL`）时，它就是 FTS5；memfw 不检查这个端点是否在本机，而且会对所有隐私级别的记忆做 embedding，所以只把它指向 loopback 服务。每个命令都有 `--help`；全局的 `--now` 和 `--id-seed` 可以让运行结果完全确定，方便测试。哪些功能能从命令行、MCP、HTTP 调用（以及为什么某处没有），见 [`docs/cli-mcp-parity.md`](docs/cli-mcp-parity.md)。
 
 ### 知道自己不知道什么
 
@@ -320,7 +325,7 @@ memfw dream skills --root /path/to/vault --from-queue          # 用 worker 排�
 - **退出与可见性。** `conversation_optout` 让某个 agent 处处被排除并删掉它的数据；`conversation_share.apps` 决定谁能读谁、worker 处理哪些应用。
 - **隐私级别与 clearance。** 记忆可以带 `privacy: public | shared | local-private`。reader 实际采用的级别取以下几项中最严的一个：这个字段（缺省时用 vault 的 `legacy_privacy_default`，它也没设就是 `local-private`）、`privacy:` 和 `sensitivity:` 标签，以及顶层的 `sensitivity:` 键；认不出的值一律不放行。每个出口都可以按需开启 clearance：HTTP 服务（`MEMFW_READONLY_CLEARANCE`）、`okf export --clearance`、notes 服务，以及 memfw MCP 服务（`MEMFW_MCP_CLEARANCE`）。写入时级别保持不变，只有人能放宽。
 - **不偷偷调用模型。** 所有模型钩子（`--backend`、`--summarize`、`--judge`、`--drafter`）默认关闭，非本地的还要加 `--allow-cloud`；非本地的会话后端或交接摘要器，还要求 `vault.yaml` 里有 `conversations.cloud: true`。MCP 的 `dream_run` 不能指定任何要运行的代码。
-- **适配器默认把数据留在本机。** 每个适配器不配置就不启用，memfw 也从不导入它们。默认情况下每个适配器只和进程内代码或 loopback 服务打交道，自带的适配器都不会把 `local-private` 的记忆或附件发给非本地服务：可能发往另一台机器的内容（Qdrant `sync`、LangExtract、LightRAG、发给非本地模型的 PageIndex 目录树，以及 `cloud: true` 让本地 `graphrag index` 改连非 loopback 模型时 GraphRAG 的输入文档）只限 `public` / `shared`。本地索引没有这个限制：QMD 索引的是 `memfw projection export` 的输出，除非用 `--skip-privacy`（或投影策略）把它们排除，其中可能包括 `local-private` 记忆，所以这份索引只留在本机（QMD 适配器从不返回 `local-private` 命中）。OCR 适配器的自定义 `module:factory` 引擎不在它“只用本地”的保证范围内。非本地模型要在适配器配置里写 `cloud: true`，非 loopback 的服务端点要写 `allow_remote: true`；loopback 请求从不走 `HTTP(S)_PROXY`，重定向一律拒绝。
+- **适配器默认把数据留在本机。** 每个适配器不配置就不启用，memfw 也从不导入它们。默认情况下每个适配器只和进程内代码或 loopback 服务打交道，自带的适配器都不会把 `local-private` 的记忆或附件发给非本地服务：可能发往另一台机器的内容（Qdrant `sync`、LangExtract、LightRAG、发给非本地模型的 PageIndex 目录树，以及 `cloud: true` 让本地 `graphrag index` 改连非 loopback 模型时 GraphRAG 的输入文档）只限 `public` / `shared`。唯一发送记忆以外内容的适配器是 DeepSeek：它把脱敏后的会话文本（从不包括记忆或附件）发往 DeepSeek 的 API，只有设置了 `conversations.cloud: true` 并提供 `DEEPSEEK_API_KEY` 时才会这样做，被标为不可读的应用从不处理。本地索引没有这个限制：QMD 索引的是 `memfw projection export` 的输出，除非用 `--skip-privacy`（或投影策略）把它们排除，其中可能包括 `local-private` 记忆，所以这份索引只留在本机（QMD 适配器从不返回 `local-private` 命中）。OCR 适配器的自定义 `module:factory` 引擎不在它“只用本地”的保证范围内。非本地模型要在适配器配置里写 `cloud: true`，非 loopback 的服务端点要写 `allow_remote: true`；loopback 请求从不走 `HTTP(S)_PROXY`，重定向一律拒绝。
 - **附件默认私密。** 附件记录默认是 `local-private`，原件放在 vault 之外的私密目录里，代理的隐私级别永远不会比它的附件更宽松；HTTP、OKF 和投影从不提供附件，MCP 工具只有在 `mcp.attachments: true` 时才存在。
 - **遗忘先是请求，再做核查。** `memfw-http/3` 的 `POST /forget` 只暂存一份请求，等人处理；被隐藏的目标和不存在的目标都返回同样的 404，删除之后重放也一样。`memfw forget residue ID` 只读地核查一条被遗忘的记忆是否已经从 FTS 索引以及关联、佐证、使用记录和（可选的）实体投影里消失，并对仍残留的每个存储给出对应的重建命令。
 - **人工关口。** vault 默认 `permissions: propose_then_confirm`：agent 提议，人来落地（`candidate-apply`、`update`、`supersede`）。
@@ -428,8 +433,6 @@ memfw 分成若干层，只允许向下依赖，并由 CI 强制检查：
 | [`docs/obsidian-projection.md`](docs/obsidian-projection.md) | 只读 Obsidian 看板：目录结构、clearance、重建规则 |
 | [`docs/COMPONENTS.zh-CN.md`](docs/COMPONENTS.zh-CN.md) | 笔记索引、代码检索、只读 HTTP 服务、独立 wheel、各适配器、佐证投影、Obsidian 投影、关联投影 |
 | [`docs/adapter-bm25s.md`](docs/adapter-bm25s.md)、[`docs/adapter-qdrant.md`](docs/adapter-qdrant.md)、[`docs/adapter-langextract.md`](docs/adapter-langextract.md)、[`docs/adapter-lightrag.md`](docs/adapter-lightrag.md)、[`docs/adapter-graphrag.md`](docs/adapter-graphrag.md)、[`docs/qmd-projection.md`](docs/qmd-projection.md) | 适配器的配置、隐私规则和契约测试（OCR 和 PageIndex 见各自包内的 README） |
-| [`docs/adapter-lightrag.md`](docs/adapter-lightrag.md) | LightRAG 派生适配器 |
-| [`docs/adapter-graphrag.md`](docs/adapter-graphrag.md) | GraphRAG 派生适配器 |
 | [`docs/retrieval-architecture.md`](docs/retrieval-architecture.md) | 检索架构 |
 | [`docs/architecture.md`](docs/architecture.md) | 包的分层、导入守卫、只减不增的白名单、组装根、逐字节一致性测试工具 |
 | [`docs/ports-and-recall.md`](docs/ports-and-recall.md) | 端口契约、召回协调器、`two_stage`、通过配置加载的召回适配器、上下文包及其槽位（含 `current`）与缓存、独立 wheel、如何写适配器 |
@@ -442,7 +445,7 @@ memfw 分成若干层，只允许向下依赖，并由 CI 强制检查：
 
 ## 📍 现状与边界
 
-发版状态：**v0.3.0**（2026-11-17）。Apache-2.0 许可，在单机上离线运行，没有发布到 PyPI。已经实现：vault 与哈希链事件日志、保留策略与 `10MB` 预算、可重建的 FTS5 索引与读路径（按词匹配、概念别名、多跳）、认知类型、因果分级与经人审核的经验点、带十一个端口和 `memfw.runtime` 组装根的分层内核、`two_stage` 召回、带槽位、资源和 `if_version` 的上下文包 v2、待解问题、召回标签与佐证、概念层级与关系类型表、隐私级别与按需开启的 clearance、MCP 服务、notes 索引与代码检索、只读转录索引、带 15 个 reader 的会话库、跳过进行中会话的 settled 导入、共享与 worker（附一个默认关闭的 DeepSeek 打标签适配器）、交接包、dream（核对、整理、提炼、预算、技能、待解问题候选）、OKF v0.2 导出与导入、Obsidian 投影，以及只读 HTTP 服务（`memfw-http/2`）。逐条变更见 [`CHANGELOG.md`](CHANGELOG.md)。
+发版状态：**v0.3.0**（2026-11-17）。Apache-2.0 许可，在单机上离线运行，没有发布到 PyPI。已经实现：vault 与哈希链事件日志、保留策略与 `10MB` 预算、可重建的 FTS5 索引与读路径（按词匹配、概念别名、多跳）、认知类型、因果分级与经人审核的经验点、带十一个端口（第十二个 `ProjectionStore` 在 `main` 上）和 `memfw.runtime` 组装根的分层内核、`two_stage` 召回、带槽位、资源和 `if_version` 的上下文包 v2、待解问题、召回标签与佐证、概念层级与关系类型表、隐私级别与按需开启的 clearance、MCP 服务、notes 索引与代码检索、只读转录索引、带 14 个 reader（第 15 个 Qwen Code 在 `main` 上） 的会话库、跳过进行中会话的 settled 导入、共享与 worker（附一个默认关闭的 DeepSeek 打标签适配器）、交接包、dream（核对、整理、提炼、预算、技能、待解问题候选）、OKF v0.2 导出与导入、Obsidian 投影，以及只读 HTTP 服务（`memfw-http/2`）。逐条变更见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 **已在 `main` 上、尚未发版（计划放进 v0.4.0）：** 需显式开启的 `current` 上下文槽位；带标签过滤的两阶段会话搜索；附件（内嵌与引用两种原件、detach、relink、purge、scan、`memfw.proxy` v1 格式的文本代理、写入闸门里把附件当作观察类证据、带需显式开启的 MCP 工具 `attachment_search` / `attachment_get` 的代理搜索）；`ProjectionStore` 端口之后的类型化边投影与有界路径模式；C4 上下文包评估；带 `/context`、`/forget` 请求和 `forget residue` 的 `memfw-http/3`；事件日志向前兼容；vault 外投影记录所属 vault（佐证投影搬出 vault）；召回里的生命周期元索引和 `kh:` 笔记解析器；`runtime.recall.adapters`；Qwen Code reader；以及 DeepSeek 之外新增的八个适配器（bm25s、Qdrant、QMD、PageIndex、OCR、LangExtract、LightRAG、GraphRAG），全部默认关闭。
 
