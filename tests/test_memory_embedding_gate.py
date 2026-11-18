@@ -488,10 +488,7 @@ def test_frontmatter_stored_by_the_old_split_is_re_read(
 ) -> None:
     """An index written before the YAML-aware split: re-read before anything is embedded."""
 
-    import yaml
-
     from memfw.notes import NotesIndex
-    from memfw.notes import index as notes_index
 
     root = tmp_path / "notes"
     root.mkdir()
@@ -501,17 +498,7 @@ def test_frontmatter_stored_by_the_old_split_is_re_read(
         + "\n"
     )
     db = tmp_path / "n.sqlite"
-
-    def old_split(text: str) -> tuple[dict[str, Any], str, int]:
-        lines = text.splitlines(keepends=True)
-        end = next(i for i in range(1, len(lines)) if lines[i].strip() == "---")
-        loaded = yaml.safe_load("".join(lines[1:end])) or {}
-        return dict(loaded), "".join(lines[end + 1 :]), end + 1
-
-    with monkeypatch.context() as patch:
-        patch.setattr(notes_index, "split_frontmatter", old_split)
-        patch.setattr(notes_index, "FRONTMATTER_SPLIT_VERSION", "1")  # the old index
-        NotesIndex(db).index(root)
+    _old_index(db, root, monkeypatch)
     embedder = Remote()
     NotesIndex(db, embedder=embedder).index(root)  # upgraded, remote, no opt-in
     assert not any(SECRET in text for _role, text in embedder.sent), embedder.sent
@@ -565,3 +552,152 @@ def test_notes_servers_take_allow_remote() -> None:
 
     assert "allow_remote" in inspect.signature(notes_serve).parameters
     assert "--allow-remote" in inspect.getsource(mcp.main)
+
+
+STALE = (
+    "---\nprivacy: public\nnote: |\n  a\n  ---\nprivacy: local-private\n---\n# B\n" + SECRET + "\n"
+)
+
+
+def _old_split(text: str) -> tuple[dict[str, Any], str, int]:
+    """The split before the fix: the first ``---`` line closes the block."""
+
+    import yaml
+
+    lines = text.splitlines(keepends=True)
+    end = next(i for i in range(1, len(lines)) if lines[i].strip() == "---")
+    return dict(yaml.safe_load("".join(lines[1:end])) or {}), "".join(lines[end + 1 :]), end + 1
+
+
+def _old_index(db: Path, root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An index as the old version wrote it: old split, no ``index_versions`` table."""
+
+    import sqlite3
+
+    from memfw.notes import NotesIndex
+    from memfw.notes import index as notes_index
+
+    with monkeypatch.context() as patch:
+        patch.setattr(notes_index, "split_frontmatter", _old_split)
+        NotesIndex(db).index(root)
+    with sqlite3.connect(db) as connection:
+        connection.execute("DROP TABLE IF EXISTS index_versions")
+        stored = connection.execute("SELECT frontmatter FROM notes WHERE path='b.md'").fetchone()
+    if stored is not None:
+        assert json.loads(stored[0]).get("privacy") == "public"  # the stale reading
+
+
+def test_a_partial_run_over_an_old_index_embeds_only_what_it_re_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reviewer repro (round 3): ``--max-files`` must not backfill stale notes."""
+
+    from memfw.notes import NotesIndex
+
+    root = tmp_path / "notes"
+    root.mkdir()
+    (root / "a.md").write_text("---\nprivacy: public\n---\n# A\nopen text\n")
+    (root / "b.md").write_text(STALE)
+    db = tmp_path / "n.sqlite"
+    _old_index(db, root, monkeypatch)
+    embedder = Remote()
+    NotesIndex(db, embedder=embedder).index(root, max_files=1)
+    assert not any(SECRET in text for _role, text in embedder.sent), embedder.sent
+    NotesIndex(db, embedder=embedder).index(root)  # the full re-read
+    assert not any(SECRET in text for _role, text in embedder.sent), embedder.sent
+
+
+def test_an_interrupted_re_read_leaves_the_version_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sqlite3
+
+    from memfw.notes import NotesIndex
+    from memfw.notes import index as notes_index
+    from memfw.related import shareable_item
+
+    root = tmp_path / "notes"
+    root.mkdir()
+    for number in range(5):
+        (root / f"n{number}.md").write_text(f"---\nprivacy: public\n---\n# N{number}\nbody\n")
+    (root / "z.md").write_text(STALE)
+    db = tmp_path / "n.sqlite"
+    _old_index(db, root, monkeypatch)
+    real = notes_index.parse_markdown
+    calls = {"n": 0}
+
+    def interrupted(path: Path, base: Path) -> Any:
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise KeyboardInterrupt
+        return real(path, base)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(notes_index, "parse_markdown", interrupted)
+        with pytest.raises(KeyboardInterrupt):
+            NotesIndex(db).index(root, commit_every=1)
+    with sqlite3.connect(db) as connection:
+        try:
+            row = connection.execute("SELECT value FROM index_versions").fetchone()
+        except sqlite3.Error:
+            row = None
+    assert row is None
+    admit = shareable_item(notes_db=db)
+    assert not admit("notes", "z.md", "z.md") and not admit("notes", "n0.md", "n0.md")
+
+
+def test_gateway_all_withheld_reads_like_no_match(tmp_path: Path) -> None:
+    """No oracle: every hit withheld and nothing matching give the same answer."""
+
+    from memfw.notes import NotesIndex
+    from memfw.notes.mcp import NotesGateway
+
+    root = tmp_path / "notes"
+    root.mkdir()
+    (root / "s.md").write_text("---\nprivacy: local-private\n---\n# S\n" + SECRET + "\n")
+    db = tmp_path / "n.sqlite"
+    NotesIndex(db).index(root)
+    gateway = NotesGateway(root, db, embedder=None, clearance="public")
+    withheld = gateway.call("notes_search", {"query": "zebra vault", "mode": "hybrid"})
+    nothing = gateway.call("notes_search", {"query": "quokka", "mode": "hybrid"})
+    assert withheld["results"] == [] == nothing["results"]
+    for key in ("errors", "degraded", "mode", "candidates"):
+        assert withheld[key] == nothing[key], key
+    assert "vector recall unavailable; used FTS" not in withheld["errors"]
+
+
+def test_gateway_reranker_order_and_opt_in(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from memfw.notes import NotesIndex, NotesRetriever, RetrievalConfig
+    from memfw.notes.mcp import NotesGateway
+
+    root = tmp_path / "notes"
+    root.mkdir()
+    for number in range(4):
+        text = f"---\nprivacy: public\n---\n# P{number}\nzebra {'zebra ' * number}\n"
+        (root / f"p{number}.md").write_text(text)
+    (root / "s.md").write_text("---\nprivacy: local-private\n---\n# S\n" + SECRET + "\n")
+    db = tmp_path / "n.sqlite"
+    NotesIndex(db).index(root)
+    withheld = RemoteReranker()
+    gateway = NotesGateway(root, db, embedder=None, reranker=withheld, clearance="public")
+    out = gateway.call("notes_search", {"query": "zebra", "mode": "fts", "rerank_candidates": 10})
+    assert withheld.sent == [] and "rerank_withheld" in out["errors"] and out["degraded"]
+    opted = RemoteReranker()
+    gateway = NotesGateway(
+        root, db, embedder=None, reranker=opted, clearance="public", allow_remote=True
+    )
+    gateway.call("notes_search", {"query": "zebra", "mode": "fts", "rerank_candidates": 10})
+    assert opted.sent and SECRET not in json.dumps(opted.sent)
+    plain = NotesGateway(root, db, embedder=None).call(
+        "notes_search", {"query": "zebra", "mode": "fts"}
+    )
+    direct = NotesRetriever(NotesIndex(db), config=RetrievalConfig(mode="fts")).search(
+        "zebra", limit=10
+    )
+    assert [row["path"] for row in plain["results"]] == [hit.path for hit in direct.hits]
+    monkeypatch.setenv("MEMFW_EMBEDDING_ALLOW_REMOTE", "1")
+    by_env = RemoteReranker()
+    NotesGateway(root, db, embedder=None, reranker=by_env).call(
+        "notes_search", {"query": "zebra", "mode": "fts", "rerank_candidates": 10}
+    )
+    assert by_env.sent

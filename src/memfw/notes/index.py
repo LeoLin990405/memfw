@@ -1020,111 +1020,154 @@ class NotesIndex:
         paths = [path for path in sorted(root.rglob("*.md")) if note_file_inside_root(path, root)]
         if max_files is not None:
             paths = paths[: max(0, max_files)]
-        seen: set[str] = set()
         with self._connect() as connection:
             self._load_vec(connection)
             # Frontmatter stored by an older split may be wrong (a ``---``
             # inside a block scalar): every note is re-read once, and its
             # stored frontmatter replaced, before anything trusts it.
             reparse = self._split_version(connection) != FRONTMATTER_SPLIT_VERSION
-            for path in paths:
-                try:
-                    note = parse_markdown(path, root)
-                except NoteParseError:
-                    continue
-                counts["files"] += 1
-                seen.add(note.path)
-                row = connection.execute(
-                    "SELECT id,content_hash FROM notes WHERE path=?", (note.path,)
-                ).fetchone()
-                if row is not None and row["content_hash"] == note.content_hash:
-                    if reparse and not self._refresh_frontmatter(connection, int(row["id"]), note):
-                        self._delete_note(connection, int(row["id"]))
-                    else:
-                        counts["unchanged"] += 1
-                        continue
-                if row is not None:
+            # Until every note has been re-read, only a note re-read in this run
+            # may be embedded (the stored frontmatter of the others is stale):
+            # this covers the backfill and the withholding below as well.
+            reread: set[str] = set()
+            original_filter = self.embed_filter
+            if reparse and original_filter is not None:
+                trusted = original_filter
+
+                def reread_only(path: str, frontmatter: Mapping[str, Any]) -> bool:
+                    return path in reread and trusted(path, frontmatter)
+
+                self.embed_filter = reread_only
+            try:
+                return self._index_paths(
+                    connection,
+                    root,
+                    paths,
+                    counts,
+                    reparse,
+                    reread,
+                    max_files,
+                    progress,
+                    commit_every,
+                )
+            finally:
+                self.embed_filter = original_filter
+
+    def _index_paths(
+        self,
+        connection: sqlite3.Connection,
+        root: Path,
+        paths: Sequence[Path],
+        counts: dict[str, int],
+        reparse: bool,
+        reread: set[str],
+        max_files: int | None,
+        progress: Any | None,
+        commit_every: int,
+    ) -> dict[str, int]:
+        """The body of :meth:`index` over ``paths`` (``reread`` collects what it read)."""
+
+        seen: set[str] = set()
+        for path in paths:
+            try:
+                note = parse_markdown(path, root)
+            except NoteParseError:
+                continue
+            counts["files"] += 1
+            seen.add(note.path)
+            reread.add(note.path)
+            row = connection.execute(
+                "SELECT id,content_hash FROM notes WHERE path=?", (note.path,)
+            ).fetchone()
+            if row is not None and row["content_hash"] == note.content_hash:
+                if reparse and not self._refresh_frontmatter(connection, int(row["id"]), note):
                     self._delete_note(connection, int(row["id"]))
-                cursor = connection.execute(
-                    "INSERT INTO notes("
-                    "path,title,content_hash,mtime,frontmatter,tags,course,tags_json"
+                else:
+                    counts["unchanged"] += 1
+                    continue
+            if row is not None:
+                self._delete_note(connection, int(row["id"]))
+            cursor = connection.execute(
+                "INSERT INTO notes("
+                "path,title,content_hash,mtime,frontmatter,tags,course,tags_json"
+                ") VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    note.path,
+                    note.title,
+                    note.content_hash,
+                    note.mtime,
+                    json.dumps(note.frontmatter, ensure_ascii=False, default=str),
+                    " ".join(note.tags),
+                    note.course,
+                    json.dumps(note.tags, ensure_ascii=False),
+                ),
+            )
+            note_id = int(cursor.lastrowid or 0)
+            for target in note.links:
+                connection.execute(
+                    "INSERT INTO links(note_id,target) VALUES (?,?)", (note_id, target)
+                )
+            section_rows: list[tuple[int, str, str]] = []
+            for section in note.sections:
+                section_cursor = connection.execute(
+                    "INSERT INTO sections("
+                    "note_id,heading,level,ordinal,content,hash,start_line,end_line"
                     ") VALUES (?,?,?,?,?,?,?,?)",
                     (
-                        note.path,
-                        note.title,
-                        note.content_hash,
-                        note.mtime,
-                        json.dumps(note.frontmatter, ensure_ascii=False, default=str),
-                        " ".join(note.tags),
-                        note.course,
-                        json.dumps(note.tags, ensure_ascii=False),
+                        note_id,
+                        section.heading,
+                        section.level,
+                        section.ordinal,
+                        section.content,
+                        section.hash,
+                        section.start_line,
+                        section.end_line,
                     ),
                 )
-                note_id = int(cursor.lastrowid or 0)
-                for target in note.links:
-                    connection.execute(
-                        "INSERT INTO links(note_id,target) VALUES (?,?)", (note_id, target)
-                    )
-                section_rows: list[tuple[int, str, str]] = []
-                for section in note.sections:
-                    section_cursor = connection.execute(
-                        "INSERT INTO sections("
-                        "note_id,heading,level,ordinal,content,hash,start_line,end_line"
-                        ") VALUES (?,?,?,?,?,?,?,?)",
-                        (
-                            note_id,
-                            section.heading,
-                            section.level,
-                            section.ordinal,
-                            section.content,
-                            section.hash,
-                            section.start_line,
-                            section.end_line,
-                        ),
-                    )
-                    section_id = int(section_cursor.lastrowid or 0)
-                    connection.execute(
-                        "INSERT INTO sections_fts(rowid,heading,content,title) VALUES (?,?,?,?)",
-                        (
-                            section_id,
-                            self._tokenize(section.heading),
-                            self._tokenize(section.content),
-                            self._tokenize(note.title),
-                        ),
-                    )
-                    section_rows.append((section_id, section.heading, section.content))
-                    counts["sections"] += 1
-                if (
-                    self.embedder is not None
-                    and section_rows
-                    and (
-                        self.embed_filter is None or self.embed_filter(note.path, note.frontmatter)
-                    )
-                ):
-                    texts = [
-                        (note.title + "\n" + heading + "\n" + content)[:EMBED_MAX_CHARS]
-                        for _, heading, content in section_rows
-                    ]
-                    vectors = _embed(self.embedder, texts, role="document")
-                    self._store_vectors(connection, [row[0] for row in section_rows], vectors)
-                    counts["embedded"] += len(section_rows)
-                counts["updated"] += 1
-                if commit_every > 0 and counts["updated"] % commit_every == 0:
-                    connection.commit()
-                if progress is not None:
-                    progress(counts)
-            if max_files is None:
-                for row in connection.execute("SELECT id,path FROM notes").fetchall():
-                    if row["path"] not in seen:
-                        self._delete_note(connection, int(row["id"]))
-                        counts["deleted"] += 1
-            connection.commit()
-            if reparse and max_files is None:
-                self._set_split_version(connection)
-            if self.embed_filter is not None and self.embedder is not None:
-                counts["embedding_withheld"] = self._withhold_vectors(connection)
+                section_id = int(section_cursor.lastrowid or 0)
+                connection.execute(
+                    "INSERT INTO sections_fts(rowid,heading,content,title) VALUES (?,?,?,?)",
+                    (
+                        section_id,
+                        self._tokenize(section.heading),
+                        self._tokenize(section.content),
+                        self._tokenize(note.title),
+                    ),
+                )
+                section_rows.append((section_id, section.heading, section.content))
+                counts["sections"] += 1
+            if (
+                self.embedder is not None
+                and section_rows
+                and (self.embed_filter is None or self.embed_filter(note.path, note.frontmatter))
+            ):
+                texts = [
+                    (note.title + "\n" + heading + "\n" + content)[:EMBED_MAX_CHARS]
+                    for _, heading, content in section_rows
+                ]
+                vectors = _embed(self.embedder, texts, role="document")
+                self._store_vectors(connection, [row[0] for row in section_rows], vectors)
+                counts["embedded"] += len(section_rows)
+            counts["updated"] += 1
+            if commit_every > 0 and counts["updated"] % commit_every == 0:
+                connection.commit()
+            if progress is not None:
+                progress(counts)
+        if max_files is None:
+            for row in connection.execute("SELECT id,path FROM notes").fetchall():
+                if row["path"] not in seen:
+                    self._delete_note(connection, int(row["id"]))
+                    counts["deleted"] += 1
+        connection.commit()
+        if reparse and max_files is None:
+            self._set_split_version(connection)
+        if self.embed_filter is not None and self.embedder is not None:
+            counts["embedding_withheld"] = self._withhold_vectors(connection)
+        if not (reparse and max_files is not None):
+            # A partial run over an index from an older split backfills
+            # nothing: most notes have not been re-read yet.
             counts["embedded"] += self._backfill_vectors(connection)
-            connection.commit()
+        connection.commit()
         return counts
 
     def _split_version(self, connection: sqlite3.Connection) -> str:

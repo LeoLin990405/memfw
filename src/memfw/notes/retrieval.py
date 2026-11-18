@@ -451,7 +451,14 @@ class NotesRetriever:
                     since=since,
                     until=until,
                 )
-                fallback.errors = [*errors, *fallback.errors, "vector recall unavailable; used FTS"]
+                # With an admission (a clearance) the note is silent: "nothing
+                # vector-recalled" must read the same whether nothing matched
+                # or every match was withheld, so no oracle.
+                fallback.errors = [
+                    *errors,
+                    *fallback.errors,
+                    *(() if self.admit is not None else ("vector recall unavailable; used FTS",)),
+                ]
                 return self._record_trace(fallback, task_id=task_id, tenant=tenant, source=source)
             return self._record_trace(
                 RetrievalResult(

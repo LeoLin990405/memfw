@@ -52,8 +52,9 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   `semantic_partial` when vectors are missing); stored vectors of private
   items are dropped on the next rebuild. Opt in with
   `MEMFW_EMBEDDING_ALLOW_REMOTE=1`, `runtime.embedding.allow_remote: true`
-  (vault commands) or `--allow-remote` (every command that takes an endpoint). Loopback endpoints are unchanged. **Upgrade note:** a
-  remote embedding endpoint without the opt-in means no semantic search.
+  (vault commands) or `--allow-remote` (every command that takes an
+  endpoint). Loopback endpoints are unchanged. **Upgrade note:** a remote
+  embedding endpoint without the opt-in means no semantic search.
 - `memory_remember` suggestions are bounded to the caller (tenant, allowed
   sources, privacy clearance); only a suggestion that is shown is warmed and
   access-logged (and only with `record_access` on).
