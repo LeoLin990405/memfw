@@ -338,13 +338,14 @@ must be booleans.
 * A detached, missing or purged attachment (MM1b states, when present) is
   "not found", and so is a damaged record asked for under any clearance (only
   an unfiltered local caller sees the integrity error).
-* Only embedded originals are served (referenced ones arrive with MM1b).
+* Only embedded originals are served: `_original` refuses a referenced
+  attachment. Serving referenced originals is deferred (not part of MM2b).
 
 ## Not yet
 
 * Attachment records do not carry `pages`/`width`/`height`/`duration`; once
   they do, imports are bounded by them as well (`known=`).
-* Marking a proxy `reviewed`; purging proxies with their attachment (MM1b
-  `purge` must also delete `proxy_index.sqlite3`).
+* Marking a proxy `reviewed`.
+* Serving referenced originals through `attachment_get(original=...)`.
 * A refused original does not yet append an `attach_missing` event (design
   H5); that event's writer belongs to MM1b's `verify`/`relink`.
