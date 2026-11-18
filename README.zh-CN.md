@@ -14,7 +14,7 @@ Markdown 即真相 · 哈希链 JSONL 事件 · 可重建 FTS5 索引 · 先核�
 <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.11+"></a>
 <a href="#-现状与边界"><img src="https://img.shields.io/badge/release-v0.3.0-2563EB?style=flat-square" alt="Release v0.3.0"></a>
 <a href="#-mcp-工具"><img src="https://img.shields.io/badge/MCP-15_tools_(%2B1_opt--in),_3_resources-8B5CF6?style=flat-square" alt="15 MCP tools (+1 opt-in), 3 resources"></a>
-<a href="#-会话库所有-agent-汇到一处"><img src="https://img.shields.io/badge/agent_readers-14-10B981?style=flat-square" alt="14 agent readers"></a>
+<a href="#-会话库所有-agent-汇到一处"><img src="https://img.shields.io/badge/agent_readers-15-10B981?style=flat-square" alt="15 agent readers"></a>
 <a href="#-架构分层与端口"><img src="https://img.shields.io/badge/ports-11-0EA5E9?style=flat-square" alt="11 ports"></a>
 <a href="#-评估结果摘要"><img src="https://img.shields.io/badge/evaluation-bounded-D97706?style=flat-square" alt="Bounded evaluation"></a>
 
@@ -25,7 +25,7 @@ Markdown 即真相 · 哈希链 JSONL 事件 · 可重建 FTS5 索引 · 先核�
 memfw 是一个跑在本机的 AI agent 记忆引擎，主要做三件事：
 
 1. **把记忆存成文件。** 每条记忆都是 vault 文件夹里的一个普通 Markdown 文件；每次改动都追加进一条哈希链事件日志；搜索用的索引随时可以重建。
-2. **把 agent 说过的话收拢起来。** 它读取 14 种 agent CLI 和应用各自的会话文件，汇入一个本地、已脱敏的会话库。任何一个 agent 都能搜索、阅读并接手另一个 agent 的工作。
+2. **把 agent 说过的话收拢起来。** 它读取 15 种 agent CLI 和应用各自的会话文件，汇入一个本地、已脱敏的会话库。任何一个 agent 都能搜索、阅读并接手另一个 agent 的工作。
 3. **小心地把这些变成更好的记忆。** “做梦”（dream）会拿会话记录去核对记忆，提出确认、改正、合并、经验总结和技能草稿。它只会暂存候选，进不进 vault 由人决定。
 
 agent 通过本地 **MCP 服务**（`memfw-mcp`）使用它，人通过 `memfw` 命令行使用它。内部是一个小内核加一组端口契约：检索后端、投影器、导入器都通过端口接入，从不直接碰 vault（见[架构](#-架构分层与端口)）。
@@ -140,7 +140,7 @@ Claude Code 可以直接运行 `claude mcp add memfw -- memfw-mcp --root /path/t
 
 `memfw history ingest` 读取各个 agent 自己的会话文件，把规范化后的对话轮次写进同一个本地库（`~/.local/share/memfw/conversations.sqlite`）。它是增量的：没变的会话直接跳过，追加的部分从上次存到的那一轮接着读。每一轮写入前，所有文本字段都要过一遍密钥扫描：一旦命中，整轮扣下不存；其余内容一律脱敏后再写。原始行从不复制，memfw 也从不改动 agent 自己的存储。加上 `--settled-minutes N` 会跳过最近 `N` 分钟内还有动静的会话，并把已经沉淀下来的会话标为已归档（`memfw conversations list --with-archive-state` / `--archived-only` 可以查看）。
 
-**已注册 14 个 reader**（`memfw history agents` 会列出它们，以及本机上实际存在哪些会话目录，包括编排 worker 的隔离 HOME）：
+**已注册 15 个 reader**（`memfw history agents` 会列出它们，以及本机上实际存在哪些会话目录，包括编排 worker 的隔离 HOME）：
 
 | reader | agent 或应用 | 默认会话目录 |
 |---|---|---|
@@ -158,6 +158,9 @@ Claude Code 可以直接运行 `claude mcp add memfw -- memfw-mcp --root /path/t
 | `deepseek` | DeepSeek harness CLI（`dsh`） | `~/.dsh/sessions` |
 | `minimax` | MiniMax Agent CLI | `~/.minimax/v2/sessions` |
 | `stepfun` | 阶跃星辰 `stepcode` | `~/.stepcode/agent/sessions` |
+| `qwen` | Qwen Code CLI | `~/.qwen/projects` |
+
+无法读取：TRAE SOLO 把 agent 会话存在一个不是普通 SQLite 的数据库文件里（看起来是加密的），因此没有 reader。
 
 ```sh
 memfw history agents
@@ -369,7 +372,7 @@ memfw 分成若干层，只允许向下依赖，并由 CI 强制检查：
 
 ## 📍 现状与边界
 
-发版状态：**v0.3.0**（2026-11-17）。Apache-2.0 许可，在单机上离线运行，没有发布到 PyPI。已经实现：vault 与哈希链事件日志、保留策略与 `10MB` 预算、可重建的 FTS5 索引与读路径（按词匹配、概念别名、多跳）、认知类型、因果分级与经人审核的经验点、带十一个端口和 `memfw.runtime` 组装根的分层内核、`two_stage` 召回、带槽位、资源和 `if_version` 的上下文包 v2、待解问题、召回标签与佐证、概念层级与关系类型表、隐私级别与按需开启的 clearance、MCP 服务、notes 索引与代码检索、只读转录索引、带 14 个 reader 的会话库、跳过进行中会话的 settled 导入、共享与 worker（附一个默认关闭的 DeepSeek 打标签适配器）、交接包、dream（核对、整理、提炼、预算、技能、待解问题候选）、OKF v0.2 导出与导入、Obsidian 投影，以及只读 HTTP 服务（`memfw-http/2`）。逐条变更见 [`CHANGELOG.md`](CHANGELOG.md)。
+发版状态：**v0.3.0**（2026-11-17）。Apache-2.0 许可，在单机上离线运行，没有发布到 PyPI。已经实现：vault 与哈希链事件日志、保留策略与 `10MB` 预算、可重建的 FTS5 索引与读路径（按词匹配、概念别名、多跳）、认知类型、因果分级与经人审核的经验点、带十一个端口和 `memfw.runtime` 组装根的分层内核、`two_stage` 召回、带槽位、资源和 `if_version` 的上下文包 v2、待解问题、召回标签与佐证、概念层级与关系类型表、隐私级别与按需开启的 clearance、MCP 服务、notes 索引与代码检索、只读转录索引、带 15 个 reader 的会话库、跳过进行中会话的 settled 导入、共享与 worker（附一个默认关闭的 DeepSeek 打标签适配器）、交接包、dream（核对、整理、提炼、预算、技能、待解问题候选）、OKF v0.2 导出与导入、Obsidian 投影，以及只读 HTTP 服务（`memfw-http/2`）。逐条变更见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 **升级边界。** `vault.yaml` 仍是 `schema_version: 1`；不带新键的文件解析再渲染后保持原字节。新的 frontmatter（`epistemic`、`causal`、`causal_record`、`limitations`、`experience`、`open_question`、`privacy`、顶层 `sensitivity:`）只在设置时才写出，而 memfw 0.2.0 改写文件时会把它们丢掉，所以共用一个 vault 的机器要一次性全部升级。FTS5 索引是可丢弃的投影，**不会就地迁移**：MCP 服务（`memfw-mcp`）和 `memfw index search` 会在使用前重建过期索引；只读 HTTP 服务从不写盘，所以要把它的三个文件一起部署，并先跑一次 `memfw index rebuild` 再指向升级后的 vault。
 

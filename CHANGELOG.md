@@ -14,6 +14,26 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 
 ## [Unreleased]
 
+### Added — Qwen Code reader; reader coverage notes
+
+- New conversation reader `qwen` (alias `qwen-code`) for the Qwen Code CLI:
+  `~/.qwen/projects/<project>/chats/<session>.jsonl`, `chats/archive/` and
+  `subagents/<parent>/agent-<id>.jsonl` (labelled `subagent`, session id
+  `<parent>:agent-<id>`). An archived session keeps one locator: moving it
+  between `chats/` and `chats/archive/` never stores it twice, and the active
+  copy wins when both exist. Thoughts are
+  dropped, function calls become tool calls, tool results become `tool`
+  turns, notification and goal-runtime prompts are `system` turns; a
+  `script` / `scheduled_task` session source labels the session `automated`.
+  Redaction is the store's, as for every reader. `qwen` edit tools
+  (`edit`, `write_file`, `notebook_edit`) are known to the handoff pack. Other readers'
+  output and `memfw history agents` entries are unchanged.
+- `antigravity`: documented that a root with no `brain/<id>/.system_generated/logs`
+  (only `tempmediaStorage`, empty `conversations/`, opaque `implicit/*.pb`)
+  correctly yields zero sessions; no parser change.
+- README: TRAE SOLO is listed as not readable (its agent database is not
+  plain SQLite).
+
 ### Fixed — bm25s adapter data_dir checks (memfw-adapter-bm25s 0.1.1)
 
 - A `data_dir` that names the vault in another case on a case-insensitive file

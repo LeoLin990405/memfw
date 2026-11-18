@@ -138,6 +138,7 @@ def test_registry_covers_every_worker_cli() -> None:
         "opencode",
         "gemini",
         "antigravity",
+        "qwen",
     }
     assert set(agent_names()) == expected
     for name, reader in READERS.items():
