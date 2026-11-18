@@ -69,6 +69,8 @@ memfw code map --db /tmp/memfw-code.sqlite
 
 `--clearance` / `MEMFW_READONLY_CLEARANCE`（例如 `public,shared`）把 `/search` 和 `/related` 限制在这些隐私级别；不设置就不过滤。没有 `privacy` 字段的记忆按 vault 的 `legacy_privacy_default` 处理（没设时是 `local-private`），所以要先设好它，否则旧记忆会全部被挡掉。见 [`READONLY-SERVICE-UPGRADE.md`](READONLY-SERVICE-UPGRADE.md)。
 
+同样这三个文件还提供 `memfw-http/3`，按每个请求的 `MemFW-Contract: memfw-http/3` 头选择；不带这个头时，每个回应都和 v2 逐字节相同。v3 给 `/search` 命中加上 `recorded_at`，给 `/related` 加上 `why` 和 `provenance_type`，并新增 `POST /context`（只读地构建 `memory_context` v2 的 `core` 包；需要装好 `memfw` 包并配置 clearance，否则返回 404，`/health` 里也不列出）和 `POST /forget`（只认写令牌：在 `<vault>/_candidates/forget/` 下记一份删除请求候选，从不真正删除；被隐藏的目标和不存在的目标返回同样的 404；同一租户内按 `request_id` 幂等；每个租户最多 1000 份待审）。`memfw forget requests` 列出这些请求，`memfw forget residue ID` 核查被遗忘的记忆是否已从所有投影里消失。见 [`v1-integration.md`](v1-integration.md)。
+
 
 ## 独立 wheel：`memfw-ports` 与 `memfw-recall`
 
@@ -103,9 +105,29 @@ CI 的 `standalone-wheels` 任务会构建两者，装进一个没有 memfw 的�
 `packages/adapters/memfw-adapter-qdrant`（wheel 名 `memfw_adapter_qdrant`，版本 0.1.2）是一个语义 `RecallProvider`，后端是运维自己运行的 Qdrant v1.20.x 服务（只绑 loopback，遥测关闭：`QDRANT__TELEMETRY_DISABLED=true`）。查询用 memfw 自己的 embedder 向量化，只取回记忆 id。它**默认关闭**；`memfw-adapter-qdrant sync` 只发送 `public`/`shared` 记忆，从不发送 `local-private`，也不在 Qdrant 里存正文。memfw 本身从不导入它。见 [`adapter-qdrant.md`](adapter-qdrant.md)。
 
 
+## LightRAG 派生适配器
+
+`packages/adapters/memfw-adapter-lightrag`（wheel 名 `memfw_adapter_lightrag`，版本 0.1.0）实现了 `Deriver` 端口，是运维自己运行的 `lightrag-server` 1.5.7（绑定在 `127.0.0.1`，带 API key）的 loopback HTTP 客户端：产出图谱视图和问答视图，其中每一条的来源都必须是请求过的、可共享的、现行的记忆。**默认关闭**；它产出的行只能以暂存候选的形式成为记忆。见 [`adapter-lightrag.md`](adapter-lightrag.md)。
+
+## GraphRAG 派生适配器
+
+`packages/adapters/memfw-adapter-graphrag`（wheel 名 `memfw_adapter_graphrag`，版本 0.1.0）实现了 `Deriver` 端口，把 GraphRAG 3.3.0 当作离线批处理任务：输入是一代 `memfw projection export` 里可共享的文档；只有运维主动调用时，才以子进程方式运行 `graphrag index`（除非 `cloud: true`，只连 loopback 的模型端点）；它输出的 CSV 表再读回来，成为图谱视图和社区报告视图。**默认关闭**；它产出的行只能以暂存候选的形式成为记忆。见 [`adapter-graphrag.md`](adapter-graphrag.md)。
+
 ## QMD 召回适配器
 
 `packages/adapters/memfw-adapter-qmd`（wheel 名 `memfw_adapter_qmd`，版本 0.1.0）只用标准库和 PyYAML，对一个正在运行的 [QMD](https://github.com/tobi/qmd)（MIT，锁定 2.5.3）MCP 服务实现了两个 `RecallProvider`：`qmd` 查由 `memfw projection export` 建成的 collection，按投影 manifest 映射回记忆 id；`qmd-notes` 查 Knowledge-Hub 的 collection，返回 `kh:<路径>#<标题>` 引用。两者都只返回引用、QMD 的分数和来源标签；映射不到可见文档的结果一律丢弃（`local-private` 和 `unknown` 永远不返回）；**默认关闭**（要在 `AdaptersConfig` 的 `enabled` 里打开）。端点默认必须是 loopback（除非设 `allow_remote`），loopback 请求不走代理。QMD 不可用或超时时，协调层把它标成降级，由 FTS 回答。memfw 本身从不导入这个适配器。见 [`qmd-projection.md`](qmd-projection.md#qmd-recall-adapter) 和包内 README。
+
+## LangExtract 派生适配器
+
+`packages/adapters/memfw-adapter-langextract`（wheel 名 `memfw_adapter_langextract`，版本 0.1.0）实现了 `Deriver` 端口：用 LangExtract 1.7.2（由运维自行安装）从 `public`/`shared` 记忆里抽取能对应到原文字符位置的实体和关系，模型是 memfw 的 `ModelBackend`（自带一个只连 loopback 的 Ollama 后端），每轮有 token 预算。**默认关闭**；它产出的行只能以暂存候选的形式成为记忆。见 [`adapter-langextract.md`](adapter-langextract.md)。
+
+## PageIndex 召回适配器
+
+`packages/adapters/memfw-adapter-pageindex`（wheel 名 `memfw_adapter_pageindex`，版本 0.1.0）是一个面向长文档的 `RecallProvider`，按 PageIndex 风格搜索目录树（标题、节点 id、页码范围、可选的简短摘要；从不含正文）。由 memfw 的 `ModelBackend` 挑选章节，或者用 `mode: titles` 不经模型直接给标题排序。它只返回 `kh:<路径>#<标题>` 和 `att:<id>#page=<n>` 引用。非本地后端需要 `cloud: true`，`local-private` 的目录树从不发给它，每轮有 token 和调用次数预算。目录树用 `memfw-pageindex build-md | import-tree | list` 离线构建或导入，以 `0600` 的 JSON 存在 vault 之外。**默认关闭**；memfw 本身从不导入它。见包内 README。
+
+## OCR 代理适配器
+
+`packages/adapters/memfw-adapter-ocr`（wheel 名 `memfw_adapter_ocr`，版本 0.1.0，只用标准库）把 PDF 或图片附件转成 `memfw.proxy` v1 导入文件：带规范化定位信息的文本片段、`coverage`、`source_sha256`、生成者，以及引擎给出时的逐段置信度。可用的引擎：以子进程方式通过 MCP stdio 调用的 OCR 服务（有截止时间和页数预算，结束时停掉整个进程组）、处理带文字层 PDF 的 `pdftotext`，或一个 `module:factory`（不在“只用本地”的保证范围内）。什么都不上传；只有隐私级别在 `clearance` 内（默认 `public,shared`）的附件才会交给引擎，处理前后都会核对原件的 sha256。`memfw-ocr-proxy run | check` 生成文件，`memfw attach proxy import` 把它存进来。**默认关闭**；memfw 本身从不导入它。见包内 README 和 [`attachment-proxies.md`](attachment-proxies.md)。
 
 
 ## 佐证投影
