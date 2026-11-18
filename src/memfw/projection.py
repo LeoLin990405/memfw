@@ -390,6 +390,43 @@ def _cached_meta_index(path: Path, info: os.stat_result) -> MetaIndex:
     return meta
 
 
+_MAX_SOURCE_PATH = 4096
+
+
+def lifecycle_source_from_config(config: Mapping[str, Any], root: Path | str) -> Path | None:
+    """``runtime.recall.lifecycle_source`` of a parsed ``vault.yaml`` (``None``: not set).
+
+    The one parser of the key, for the Runtime (``memfw.runtime.recall_wiring``)
+    and ``memfw dream`` (its default when ``--lifecycle-source`` is not given).
+    A relative path is relative to ``root``; ``~`` is expanded. A ``runtime``
+    or ``recall`` that is not a mapping, or a value that is not a non-empty
+    path string, raises :class:`ProjectionError` (fail closed).
+    """
+
+    section = config.get("runtime")
+    if section is None:
+        return None
+    if not isinstance(section, Mapping):
+        raise ProjectionError("runtime must be a mapping")
+    recall = section.get("recall")
+    if recall is None:
+        return None
+    if not isinstance(recall, Mapping):
+        raise ProjectionError("runtime.recall must be a mapping")
+    value = recall.get("lifecycle_source")
+    if value is None:
+        return None
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or len(value) > _MAX_SOURCE_PATH
+        or "\x00" in value
+    ):
+        raise ProjectionError("runtime.recall.lifecycle_source must be a path")
+    path = Path(value.strip()).expanduser()
+    return path if path.is_absolute() else Path(root) / path
+
+
 def load_lifecycle(root: Path | str, source: Path | str | None = None) -> Lifecycle:
     """The lifecycle meta-index: ``source``, else ``<root>/status/memory-meta-index.json``.
 

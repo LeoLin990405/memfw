@@ -352,8 +352,166 @@ def test_wiring_defaults_are_byte_identical_to_base_ref() -> None:
         pytest.skip("git is not available")
     results = byte_identical.compare(
         "tests.harness.recall_wiring_probe:default_outputs",
-        [{"meta": "none"}, {"meta": "vault"}],
+        [
+            {"meta": "none"},
+            {"meta": "vault"},
+            {"meta": "vault", "clearance": "public,shared"},
+        ],
         old_ref=os.environ["MEMFW_ARCH_BASE_REF"],
     )
     for result in results:
         assert result.identical, f"{result.payload}:\n{result.diff[:4000]}"
+
+
+# --- review fixes: fail closed on vault.yaml, dream, the C4 evaluation --------------------
+
+
+@pytest.mark.parametrize("damage", ["malformed", "unreadable"])
+def test_a_vault_yaml_that_cannot_be_read_fails_closed(tmp_path: Path, damage: str) -> None:
+    """It might name a ``lifecycle_source``: never fall back to the vault-only reading."""
+
+    repository, outside = _imported_vault(tmp_path)
+    _append_config(repository, {"lifecycle_source": str(outside)})
+    config = repository.root / "vault.yaml"
+    if damage == "malformed":
+        config.write_text(config.read_text(encoding="utf-8") + "  : [unclosed\n", "utf-8")
+    runtime = build_runtime(repository.root)
+    if damage == "unreadable":
+        if os.geteuid() == 0:
+            pytest.skip("root ignores file modes")
+        config.chmod(0)
+    try:
+        with pytest.raises(RecallAdapterError) as search:
+            runtime.search("backup target", limit=10, mode="two_stage", policy="strict")
+        assert search.value.code == "bad_config"
+        with pytest.raises(RecallAdapterError) as context:
+            runtime.context_pack(repository, policy_name="strict", limit_tokens=2000)
+        assert context.value.code == "bad_config"
+    finally:
+        config.chmod(0o644)
+    assert runtime._recall_wiring is None  # never cached: the next call reads again
+
+
+def test_no_vault_yaml_gives_the_defaults(tmp_path: Path) -> None:
+    runtime = build_runtime(tmp_path / "absent")
+    assert runtime.recall_wiring() == RecallWiring()
+    assert runtime.configured_lifecycle() is None
+
+
+def test_one_meta_index_snapshot_per_recall_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from memfw import projection
+    from memfw.recall import builtin
+
+    repository, outside = _imported_vault(tmp_path)
+    _append_config(repository, {"lifecycle_source": str(outside)})
+    runtime = build_runtime(repository.root)
+    calls: list[object] = []
+    real = projection.load_lifecycle
+
+    def counting(*args: Any, **kwargs: Any) -> Any:
+        calls.append(args)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(projection, "load_lifecycle", counting)
+    monkeypatch.setattr(builtin, "load_lifecycle", counting)
+    runtime.search("backup target", limit=10, mode="two_stage", policy="strict", labels=True)
+    assert len(calls) == 1
+
+
+def test_dream_defaults_to_the_configured_lifecycle_source(tmp_path: Path) -> None:
+    from memfw.dream.questions import accept_question, lifecycle_source_from_config
+    from memfw.dream.run import DreamOptions
+
+    repository, outside = _imported_vault(tmp_path)
+    assert lifecycle_source_from_config(repository.read_config(), repository.root) is None
+    _append_config(repository, {"lifecycle_source": str(outside)})
+    assert lifecycle_source_from_config(repository.read_config(), repository.root) == outside
+    assert DreamOptions().lifecycle_source is None  # the flag stays unset by default
+    # accept_question reads the key when no flag is given: a malformed key fails.
+    config = repository.root / "vault.yaml"
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(str(outside), ""), encoding="utf-8"
+    )
+    from memfw.projection import ProjectionError
+
+    with pytest.raises(ProjectionError):
+        accept_question(repository, "dream-x", ["m-keep", "m-retired"], dry_run=True)
+
+
+class _Stop(Exception):
+    pass
+
+
+class _Supersede:
+    action = "supersede"
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_dream_privacy_reads_the_configured_meta_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, explicit: bool
+) -> None:
+    """``run_dream`` joins the configured meta-index unless ``--lifecycle-source`` is given."""
+
+    from memfw.dream import run as dream_run
+
+    repository, outside = _imported_vault(tmp_path)
+    _append_config(repository, {"lifecycle_source": str(outside)})
+    named = tmp_path / "explicit.json"
+    _meta_index(named, [])
+    seen: list[Any] = []
+
+    def capture(*_args: Any, lifecycle: Any, **_kwargs: Any) -> Any:
+        seen.append(lifecycle)
+        raise _Stop
+
+    # A conflict is what makes the dream run the open-question privacy check.
+    monkeypatch.setattr(dream_run, "curate", lambda *a, **k: [_Supersede()])
+    monkeypatch.setattr(dream_run, "conflict_questions", capture)
+    options = dream_run.DreamOptions(refresh=False, lifecycle_source=named if explicit else None)
+    with pytest.raises(_Stop):
+        dream_run.run_dream(repository.root, now=NOW, dry_run=True, options=options)
+    (lifecycle,) = seen
+    assert lifecycle.meta is not None
+    retired = lifecycle.meta.lookup("m-retired.md")
+    if explicit:
+        assert retired is None  # the flag's (empty) meta-index wins
+    else:
+        assert retired is not None and retired["lifecycle"] == "retired"
+
+
+def test_c4_evaluation_reads_a_private_copy_of_an_external_meta_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from memfw import projection
+    from memfw.runtime import context_eval as ce
+    from memfw.runtime.context_eval import EvalOptions, SnapshotChanged, evaluate_snapshot
+
+    options = EvalOptions(policy="strict", slots=("core",), repeats=1, environ={})
+    repository, outside = _imported_vault(tmp_path)
+    plain = evaluate_snapshot(repository.root, options=options)["snapshot"]["visible"]
+    _append_config(repository, {"lifecycle_source": str(outside)})
+    reads: list[Path] = []
+    real = projection.load_lifecycle
+
+    def recording(root: Any, source: Any = None) -> Any:
+        if source is not None:
+            reads.append(Path(source))
+        return real(root, source)
+
+    monkeypatch.setattr(projection, "load_lifecycle", recording)
+    joined = evaluate_snapshot(repository.root, options=options)["snapshot"]["visible"]
+    assert joined == plain - 3  # m-retired, m-expired, q-retired
+    assert reads and all(path != outside and path.name == outside.name for path in reads)
+
+    real_copy = ce._evaluate_copy
+
+    def touching(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        out = real_copy(*args, **kwargs)
+        _meta_index(outside, [{"path": "m-keep.md", "lifecycle": "retired"}])
+        return out
+
+    monkeypatch.setattr(ce, "_evaluate_copy", touching)
+    with pytest.raises(SnapshotChanged):
+        evaluate_snapshot(repository.root, options=options)

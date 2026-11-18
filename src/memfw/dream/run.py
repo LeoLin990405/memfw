@@ -40,6 +40,7 @@ from .questions import ACTION as OPEN_QUESTION_ACTION
 from .questions import (
     check_candidate,
     conflict_questions,
+    lifecycle_source_from_config,
     load_lifecycle,
     rejections,
     staged_questions,
@@ -229,7 +230,11 @@ def run_dream(
             tenant=options.tenant,
             staged=staged_questions(repository.root, tenant=options.tenant),
             rejected=rejections(repository.root, tenant=options.tenant),
-            lifecycle=load_lifecycle(repository.root, options.lifecycle_source),
+            # ``--lifecycle-source`` wins; else ``runtime.recall.lifecycle_source``.
+            lifecycle=load_lifecycle(
+                repository.root,
+                options.lifecycle_source or lifecycle_source_from_config(config, repository.root),
+            ),
             legacy_privacy=repository.legacy_privacy_default(),
         )
     distilled, distill_stats = distill(documents, verified, min_events=options.min_events)

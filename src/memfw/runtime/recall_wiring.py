@@ -30,7 +30,9 @@ Both keys are off by default; without them every output is what it was::
     ``public,shared``. Sections come back under ``notes`` in the
     ``two_stage`` payload, apart from memory hits.
 
-Relative paths are relative to the vault root; ``~`` is expanded. A
+A ``vault.yaml`` that exists but cannot be read or parsed fails closed
+(``Runtime.recall_wiring`` raises ``bad_config``). Relative paths are
+relative to the vault root; ``~`` is expanded. A
 malformed value raises ``RecallAdapterError`` (``bad_lifecycle_source``,
 ``bad_notes``, or ``bad_config`` for a ``runtime``/``recall`` that is not a
 mapping), so the call fails instead of silently running without it.
@@ -44,6 +46,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from memfw.ports.privacy import PRIVACY_LEVELS
+from memfw.projection import ProjectionError, lifecycle_source_from_config
 
 from .recall_adapters import RecallAdapterError
 
@@ -110,8 +113,10 @@ def parse_wiring(config: Mapping[str, Any], *, root: Path) -> RecallWiring:
         return RecallWiring()
     if not isinstance(recall, Mapping):
         raise RecallAdapterError("bad_config")
-    source = recall.get("lifecycle_source")
-    lifecycle = None if source is None else _path(source, root, "bad_lifecycle_source")
+    try:
+        lifecycle = lifecycle_source_from_config(config, root)
+    except ProjectionError:
+        raise RecallAdapterError("bad_lifecycle_source") from None
     return RecallWiring(lifecycle_source=lifecycle, notes=_notes(recall.get("notes"), root))
 
 

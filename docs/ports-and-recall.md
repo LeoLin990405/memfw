@@ -771,10 +771,13 @@ runtime:
 - **`lifecycle_source`** (relative to the vault root; `~` expanded). Production keeps the
   meta-index at `<base>/status/`, outside the vault, where the default
   (`<vault>/status/memory-meta-index.json`) does not find it. Set, it is the meta-index of
-  every `two_stage` resolve (all providers: FTS, hybrid, adapters), of `memory_context`
-  `strict` (MCP and HTTP `/context`), and of the open-question queue and labels
-  (`document_meta`). One reader serves them and `memfw dream`
-  (`memfw.projection.load_lifecycle`, cached per file until it changes); a missing or
+  every MCP `two_stage` resolve (all providers: FTS, hybrid, adapters; one snapshot per
+  call, labels included), of `memory_context` `strict` (MCP, and HTTP `/context`; the
+  read-only HTTP `/search` is `mode=fts` only and reads no lifecycle field), and of the
+  open-question queue and labels (`document_meta`). `memfw dream` uses it too when
+  `--lifecycle-source` is not given (the flag wins), and the C4 context evaluation reads a
+  private copy of an external one and fingerprints it like a store. One reader serves them
+  all (`memfw.projection.load_lifecycle`, cached per file until it changes); a missing or
   unreadable file fails closed (`unjoined`). Unset: `two_stage` reads the vault's default file
   if any (as before) and the others read the vault alone (as before).
 - **`notes`**: registers `NotesSegmentResolver` as the `kh:` scheme of `two_stage`, with the
@@ -783,7 +786,9 @@ runtime:
   memory `results`.
 - **Fail closed.** A malformed value raises `RecallAdapterError` (`bad_lifecycle_source`,
   `bad_notes`, `bad_config`): `two_stage`, strict `memory_context` and the queue then error.
-  An unreadable `vault.yaml` gives the defaults and is read again next time.
+  A `vault.yaml` that exists but cannot be read or parsed fails closed too (`bad_config`,
+  never cached, read again next call): it might name a `lifecycle_source`, so the vault-only
+  reading is never assumed. Only a vault without `vault.yaml` gives the defaults.
 
 ### 4.1d Memory embedding locality gate
 

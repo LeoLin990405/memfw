@@ -19,10 +19,13 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 - `vault.yaml` `runtime.recall.lifecycle_source` (default unset): the lifecycle
   meta-index path (production keeps it outside the vault, at
   `<base>/status/memory-meta-index.json`). Set, it is the meta-index of every
-  `two_stage` resolve (FTS, hybrid and adapter providers; MCP and HTTP), of
-  `memory_context` `strict` and of the open-question queue and labels
-  (`memfw.recall.builtin.document_meta`). Unset: byte-identical to before
-  (harness test against the base ref).
+  MCP `two_stage` resolve (FTS, hybrid and adapter providers), of
+  `memory_context` `strict` (MCP and HTTP `/context`), of the open-question
+  queue and labels (`memfw.recall.builtin.document_meta`) and of `memfw dream`
+  when `--lifecycle-source` is not given. A `vault.yaml` that cannot be read
+  fails closed (`bad_config`). Unset: byte-identical to before (harness test
+  against the base ref, with and without a clearance, HTTP `/context`
+  included).
 - `runtime.recall.notes` (`root`, `index`, optional `legacy_privacy`, `tenant`;
   default unset): registers `NotesSegmentResolver` as the `kh:` resolver of
   `two_stage`, so QMD notes and PageIndex `kh:` refs come back as note sections

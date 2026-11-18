@@ -174,8 +174,12 @@ class Runtime:
         clearance: frozenset[str] | None = None,
         context_current: bool | None = None,
         embedding_allow_remote: bool | None = None,
+        lifecycle_source: Path | None = None,
     ) -> None:
         self.root = root
+        #: Replaces ``runtime.recall.lifecycle_source`` when set (the C4
+        #: evaluation points it at its private copy of the meta-index).
+        self._lifecycle_source_override = lifecycle_source
         #: ``MEMFW_EMBEDDING_ALLOW_REMOTE``; ``None``: ``runtime.embedding.allow_remote``.
         self._embedding_allow_remote = embedding_allow_remote
         self.tenant = tenant
@@ -735,22 +739,35 @@ class Runtime:
 
         ``lifecycle_source`` and ``notes``, read on first use and kept for the
         Runtime's life (restart to pick up a change). No key: the defaults
-        (``RecallWiring()``), and every output is what it was. A missing
-        vault or an unreadable ``vault.yaml`` gives the defaults and is read
-        again next time; a malformed value raises ``RecallAdapterError``
-        every time (fail closed).
+        (``RecallWiring()``), and every output is what it was. No vault (no
+        ``vault.yaml``) gives the defaults and is checked again next time.
+        A ``vault.yaml`` that exists but cannot be read or parsed raises
+        ``RecallAdapterError("bad_config")`` (not cached): it might name a
+        ``lifecycle_source``, so it never silently widens strict recall. A
+        malformed value raises ``RecallAdapterError`` every time (fail
+        closed).
         """
 
         with self._recall_adapters_lock:
             if self._recall_wiring is not None:
                 return self._recall_wiring
-        try:
-            if repository is None:
+        if repository is None:
+            try:
                 repository = self.open_repository()
+            except ValueError:
+                return RecallWiring()  # no vault: nothing is configured
+        config_path = repository.config_path
+        if not config_path.exists() and not config_path.is_symlink():
+            return RecallWiring()
+        try:
             config = repository.read_config()
         except (MemfwError, OSError, ValueError):
-            return RecallWiring()
+            raise RecallAdapterError("bad_config") from None
         wiring = parse_wiring(config, root=repository.root)
+        if self._lifecycle_source_override is not None:
+            from dataclasses import replace
+
+            wiring = replace(wiring, lifecycle_source=self._lifecycle_source_override)
         with self._recall_adapters_lock:
             if self._recall_wiring is None:
                 self._recall_wiring = wiring
@@ -895,6 +912,8 @@ class Runtime:
             policy_name, source=source, include_history=include_history, as_of=as_of
         )
         wiring = self.recall_wiring(repository)
+        # One meta-index snapshot judges the whole call (resolve and labels).
+        lifecycle = self.configured_lifecycle(repository)
         coordinator = Coordinator(
             providers,
             # ``lifecycle_source`` unset: the vault's default meta-index, as
@@ -903,6 +922,7 @@ class Runtime:
                 root,
                 lifecycle_source=wiring.lifecycle_source,
                 schemes=self._notes_schemes(repository),
+                lifecycle=lifecycle,
             ),
             configs=configs,
             inflight=self.recall_inflight,
@@ -918,7 +938,7 @@ class Runtime:
             filter_policy,
             now=moment,
             keep=self._question_keep(),
-            lifecycle=self.configured_lifecycle(repository),
+            lifecycle=lifecycle,
         )
         errors: tuple[str, ...] = ()
         if self.record_access():
@@ -1321,6 +1341,7 @@ def build_runtime(
     clearance: frozenset[str] | None = None,
     context_current: bool | None = None,
     embedding_allow_remote: bool | None = None,
+    lifecycle_source: Path | None = None,
 ) -> Runtime:
     """The default assembly: today's behaviour unless a switch is set.
 
@@ -1348,6 +1369,7 @@ def build_runtime(
         clearance=clearance,
         context_current=context_current,
         embedding_allow_remote=embedding_allow_remote,
+        lifecycle_source=lifecycle_source,
     )
 
 

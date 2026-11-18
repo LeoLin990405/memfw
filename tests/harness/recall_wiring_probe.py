@@ -6,8 +6,12 @@ some memories and flags another (``lifecycle_override: true``, which ``main``
 reads differently, so that row is left out here), plus an open question.
 Runs every ``memory_search`` mode, ``memory_context`` v2 (``compat_fts`` and
 ``strict``), the open-question queue and records the ``memory_access`` events
-the calls appended. No clearance: the outputs and events must be identical
-across trees. Uses only APIs present before the wiring PR.
+the calls appended, plus the HTTP ``/context`` strict pack. ``"clearance":
+"public,shared"`` runs the same calls under an MCP clearance; its
+``memory_access`` events are left out (part A of the wiring work stops
+logging withheld hybrid hits on purpose), everything else must match. No
+wiring keys: outputs must be identical across trees. Uses only APIs present
+before the wiring PR.
 """
 
 from __future__ import annotations
@@ -41,6 +45,7 @@ def default_outputs(payload: dict[str, Any], workdir: Path) -> str:
     from memfw.index import MemoryIndex
     from memfw.mcp.server import Gateway
     from memfw.runtime import build_runtime
+    from memfw.runtime.http import http_context_pack
 
     counter = iter(range(1, 1_000_000))
     repository = Repository(
@@ -77,9 +82,22 @@ def default_outputs(payload: dict[str, Any], workdir: Path) -> str:
             json.dumps({"generated_at": "2026-01-01T00:00:00Z", "items": items}),
             encoding="utf-8",
         )
+    if payload.get("clearance"):
+        # Unlabelled memories public, so the clearance withholds only the tagged one.
+        config = repository.root / "vault.yaml"
+        config.write_text(
+            config.read_text(encoding="utf-8") + "legacy_privacy_default: public\n",
+            encoding="utf-8",
+        )
     MemoryIndex(repository.index_path).rebuild(repository)
     root = repository.root
-    gateway = Gateway(root, tenant="", entity_enabled=False, allowed_sources=())
+    raw_clearance = payload.get("clearance")
+    clearance = (
+        frozenset(part.strip() for part in str(raw_clearance).split(",")) if raw_clearance else None
+    )
+    gateway = Gateway(
+        root, tenant="", entity_enabled=False, allowed_sources=(), clearance=raw_clearance
+    )
     sent: list[dict[str, Any]] = []
     gateway.respond = sent.append  # type: ignore[method-assign]
     calls = [("memory_search", arguments) for arguments in SEARCHES]
@@ -105,13 +123,14 @@ def default_outputs(payload: dict[str, Any], workdir: Path) -> str:
     queue = build_runtime(root).open_question_queue(
         Repository(root), app="operator", allow_operator=True, now=T0
     )
+    http = http_context_pack(root, tenant="", clearance=clearance, policy="strict", now=T0)
     events = [
         (event.memory_id, str(event.details.get("operation") or ""))
         for event in Repository(root).events()
         if event.kind == EventKind.MEMORY_ACCESS
     ]
+    tail: list[Any] = [queue, http] if clearance is not None else [queue, http, events]
     text = "\n".join(
-        json.dumps(item, ensure_ascii=False, sort_keys=True, indent=1)
-        for item in [*sent, queue, events]
+        json.dumps(item, ensure_ascii=False, sort_keys=True, indent=1) for item in [*sent, *tail]
     )
     return text.replace(str(root), "<vault>").replace(str(workdir), "<workdir>")

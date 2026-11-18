@@ -284,17 +284,26 @@ class VaultIdResolver:
     :func:`load_lifecycle` and :func:`join_lifecycle`). The meta-index is
     read at most once per ``resolve`` call, and only when such a document is
     resolved, so a vault without imported documents never reads it.
+    ``lifecycle`` (an already loaded meta-index) is used as given instead of
+    reading one, so a caller can judge a whole call by one snapshot.
     """
 
-    def __init__(self, root: Path | str, *, lifecycle_source: Path | str | None = None) -> None:
+    def __init__(
+        self,
+        root: Path | str,
+        *,
+        lifecycle_source: Path | str | None = None,
+        lifecycle: Lifecycle | None = None,
+    ) -> None:
         self.root = Path(root).expanduser().resolve()
         self.lifecycle_source = lifecycle_source
+        self.lifecycle = lifecycle
         self._repository = Repository(self.root)
 
     def resolve(self, refs: Sequence[str]) -> Mapping[str, Resolution]:
         out: dict[str, Resolution] = {}
         memories = self.root / "memories"
-        lifecycle: Lifecycle | None = None
+        lifecycle: Lifecycle | None = self.lifecycle
         for ref in refs:
             if ref in out or not _ID_RE.fullmatch(ref):
                 continue
@@ -466,6 +475,7 @@ def default_resolvers(
     lifecycle_source: Path | str | None = None,
     schemes: Mapping[str, Resolver] | None = None,
     extra: Mapping[RefKind, Resolver] | None = None,
+    lifecycle: Lifecycle | None = None,
 ) -> dict[RefKind, Resolver]:
     """The vault resolvers: ``memory_id`` and ``path`` (``memories/<id>.md``).
 
@@ -476,10 +486,11 @@ def default_resolvers(
     MM2b proxy segments (``<prx-id>:<n>``); it may not replace ``memory_id``
     or ``path`` (``ValueError``). None by default, so ``kh:``/``att:`` and
     segment refs stay unresolved and the output is what it was without these
-    arguments.
+    arguments. ``lifecycle`` passes an already loaded meta-index to the id
+    resolver (see ``VaultIdResolver``).
     """
 
-    ids = VaultIdResolver(root, lifecycle_source=lifecycle_source)
+    ids = VaultIdResolver(root, lifecycle_source=lifecycle_source, lifecycle=lifecycle)
     path = SchemePathResolver(MemoryPathResolver(ids), schemes)
     resolvers: dict[RefKind, Resolver] = {"memory_id": ids, "path": path}
     for kind, resolver in (extra or {}).items():

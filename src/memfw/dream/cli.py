@@ -80,7 +80,10 @@ def dream_run(
         Path | None,
         typer.Option(
             "--lifecycle-source",
-            help="memory-meta-index.json for the open-question privacy check",
+            help=(
+                "memory-meta-index.json for the open-question privacy check "
+                "(default: vault.yaml runtime.recall.lifecycle_source)"
+            ),
         ),
     ] = None,
 ) -> None:
@@ -128,7 +131,13 @@ def dream_accept_question(
     dry_run: Annotated[bool, typer.Option("--dry-run/--apply")] = True,
     lifecycle_source: Annotated[
         Path | None,
-        typer.Option("--lifecycle-source", help="memory-meta-index.json for the privacy check"),
+        typer.Option(
+            "--lifecycle-source",
+            help=(
+                "memory-meta-index.json for the privacy check "
+                "(default: runtime.recall.lifecycle_source)"
+            ),
+        ),
     ] = None,
 ) -> None:
     """Human-accept a staged open-question candidate: write it to the vault.

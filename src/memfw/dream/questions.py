@@ -80,6 +80,7 @@ from memfw.projection import (
     classify_privacy,
     fleet_paths,
     join_meta,
+    lifecycle_source_from_config,
     load_lifecycle,
     tag_privacy_class,
 )
@@ -637,6 +638,9 @@ def accept_question(
     """
 
     pair = _check_args(dream_id, memory_ids, actor)
+    # ``lifecycle_source`` wins; else the vault's ``runtime.recall.lifecycle_source``.
+    if lifecycle_source is None:
+        lifecycle_source = lifecycle_source_from_config(repository.read_config(), repository.root)
     lifecycle = load_lifecycle(repository.root, lifecycle_source)
     with repository._locked():
         staged = _find_staged(repository, dream_id, pair)
@@ -869,6 +873,7 @@ __all__ = [
     "check_candidate",
     "conflict_questions",
     "is_private",
+    "lifecycle_source_from_config",
     "load_lifecycle",
     "pair_key",
     "reject_question",
