@@ -394,7 +394,7 @@ memfw 分成若干层，只允许向下依赖，并由 CI 强制检查：
 | `memfw-adapter-qdrant`（0.1.2） | `RecallProvider` | 基于 Qdrant v1.20.x 服务的语义召回（REST，只用标准库）；除非 `allow_remote: true`，只连 loopback；`memfw-adapter-qdrant sync` 只发送 `public` / `shared` 记忆，不存正文 | 已合并 |
 | `memfw-adapter-qmd`（0.1.1） | `RecallProvider` ×2 | 基于运行中的 QMD 2.5.3 MCP 服务：`qmd`（记忆投影 → 记忆 id）和 `qmd-notes`（笔记 → `kh:` 引用）；从不返回 `local-private` 或 `unknown` | 已合并 |
 | `memfw-adapter-pageindex`（0.1.1） | `RecallProvider` | 对长文档做 PageIndex 风格的目录树搜索（返回 `kh:` 和 `att:…#page=` 引用）；`mode: titles` 不需要模型；`memfw-pageindex build-md \| import-tree \| list` | 已合并 |
-| `memfw-adapter-ocr`（0.1.0） | 代理生成器（`ocr` deriver） | 用本地引擎（MCP stdio OCR 服务、`pdftotext` 或 `module:factory`）把 PDF 或图片附件转成 `memfw.proxy` v1 导入文件；什么都不上传；`memfw-ocr-proxy run \| check` | 已合并 |
+| `memfw-adapter-ocr`（0.1.1） | 代理生成器（`ocr` deriver） | 用本地引擎（MCP stdio OCR 服务、`pdftotext` 或 `module:factory`）把 PDF 或图片附件转成 `memfw.proxy` v1 导入文件；什么都不上传；`memfw-ocr-proxy run \| check` | 已合并 |
 | `memfw-adapter-langextract`（0.1.0） | `Deriver`（`entities`） | 用 LangExtract 1.7.2 从 `public` / `shared` 记忆里抽取能对应到原文字符位置的实体和关系；模型是 memfw 的 `ModelBackend`（自带一个只连 loopback 的 Ollama 后端），每轮有 token 预算 | 已合并 |
 | `memfw-adapter-lightrag`（0.1.0） | `Deriver`（`graph`、`answer`） | 运维自己运行的 `lightrag-server` 1.5.7 的 loopback HTTP 客户端；只发送 `public` / `shared` 记忆；保留下来的每一行，其来源都必须是请求过的、可共享的、现行的记忆 | 已合并 |
 | `memfw-adapter-graphrag`（0.1.0） | `Deriver`（`graph`、`reports`） | 把 GraphRAG 3.3.0 当作离线批处理，输入是一代 `memfw projection export`（只取 `public` / `shared`）；`graphrag index` 只在被调用时运行，是一个本地子进程，除非 `cloud: true`，只连 loopback 的模型端点 | 已合并 |

@@ -766,8 +766,8 @@ def test_control_and_invisible_characters_do_not_sink_the_proxy() -> None:
 
     lines = (
         OcrLine("form\x0cfeed and\x02control", bbox=(72.0, 74.0, 300.0, 96.0)),
-        OcrLine("zero​width ‮override‬ and ﻿bom"),
-        OcrLine("\x0c​"),  # nothing left: skipped
+        OcrLine("zero\u200bwidth \u202eoverride\u202c and \ufeffbom"),
+        OcrLine("\x0c\u200b"),  # nothing left: skipped
         OcrLine("tab\tand\r\nnewline stay"),
     )
     page = OcrPage(1, lines, width=612.0, height=792.0, unit="pt", origin="top-left")
@@ -787,3 +787,17 @@ def test_control_and_invisible_characters_do_not_sink_the_proxy() -> None:
         "tab\tand\nnewline stay",
     ]
     assert candidate["coverage"]["status"] == "full"
+
+
+def test_cleaned_character_sets_match_the_kernel() -> None:
+    """The adapter mirrors MM2a's refused characters (every code point): no drift."""
+
+    from memfw_adapter_ocr import proxy as adapter
+
+    from memfw.ports import proxies as kernel
+
+    everything = [chr(code) for code in range(0x110000)]
+    kernel_controls = {c for c in everything if kernel._FORBIDDEN_CHAR.match(c)} - {"\n", "\t"}
+    kernel_invisible = {c for c in everything if kernel._INVISIBLE_CHAR.match(c)}
+    assert {c for c in everything if adapter._CONTROL_CHARS.match(c)} == kernel_controls
+    assert {c for c in everything if adapter._INVISIBLE_CHARS.match(c)} == kernel_invisible
