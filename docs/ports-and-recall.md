@@ -791,6 +791,35 @@ runtime:
   never cached, read again next call): it might name a `lifecycle_source`, so the vault-only
   reading is never assumed. Only a vault without `vault.yaml` gives the defaults.
 
+### 4.1c-bis Known limitations (v0.4, found by the T1–T7 tests)
+
+What the knowledge base ↔ memory tests (`tests/integration/test_kb_memory_t1_t7.py`)
+had to work around. These are facts about the current code, not planned changes.
+
+- **No built-in notes recall provider for `two_stage`.** `runtime.recall.notes` registers
+  only the `kh:` *resolver*; note candidates come from an adapter (QMD notes). The tests
+  use a test-only factory over memfw's own notes index, `tests.integration.kb_support:notes_factory`.
+- **`two_stage` returns no attachment segments.** Its payload carries memory `results` and
+  note sections (`notes`); `ProxyProvider` is used only by MCP `attachment_search`. A query
+  over memories, notes and attachment proxies at once needs a hand-built `Coordinator`.
+- **No note → citing-memories API.** The K3 edge projection has `cites` edges whose target is
+  the raw `kh:` text, so a section ref is not its note and a percent-encoded and a plain
+  spelling are different nodes; callers normalise with `parse_kh_ref`.
+- **No broken `kh:` link checker.** A ref that does not resolve (missing note or heading) is
+  left out silently and only counted as `recall_metrics.dropped.unresolved`.
+- **Short queries skip non-lexical adapters.** A query the router classes as `exact` (up to
+  three name-like tokens, ids, quotes, …) goes only to lexical providers, so QMD notes is
+  not asked and is not reported as degraded for it.
+- **A bare `Coordinator` treats an unlabeled memory as public.** Without a `privacy` field
+  or tag, `meta_from_document` declares no privacy, which the recall policy classes as
+  `none`. The vault's `legacy_privacy_default` (MM0) is applied by the runtime's clearance
+  (`Runtime.privacy_admits`) on every exit, not by the coordinator.
+- **The total deadline is shared with resolve.** The two_stage call has one deadline
+  (`total_timeout`, 4 s by default) for recall *and* resolve. An adapter whose
+  `timeout_seconds` reaches it (the key accepts up to 30 s) leaves the resolvers no time
+  when its service hangs: every candidate is dropped (`resolvers_degraded: timeout`), FTS
+  hits included. With the defaults (3 s per provider) about 1 s is left for resolve.
+
 ### 4.1d Memory embedding locality gate
 
 The memory vector index (`.memory-hybrid.sqlite`, built by `MemoryHybridRetriever` for

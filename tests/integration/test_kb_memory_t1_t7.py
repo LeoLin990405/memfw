@@ -693,13 +693,13 @@ def qmd_slow() -> Iterator[Any]:
     from memfw_adapter_qmd.fake import FakeQmd
 
     with FakeQmd() as fake:
-        fake.delay = 2.0
+        fake.delay = 3.0  # longer than the coordinator's deadline below
         yield fake
 
 
-def _qmd_adapter(kb: KB, endpoint: str) -> dict[str, Any]:
+def _qmd_adapter(kb: KB, endpoint: str, *, factory: str = "") -> dict[str, Any]:
     return {
-        "factory": "memfw_adapter_qmd:notes_factory",
+        "factory": factory or "memfw_adapter_qmd:notes_factory",
         "options": {
             "endpoint": endpoint,
             "notes_root": str(kb.notes_root),
@@ -739,7 +739,10 @@ def test_t7_qmd_or_qdrant_down_falls_back_to_fts_and_flags_degraded(
     if failure in ("qmd_closed", "both"):
         adapters.append(_qmd_adapter(kb, dead + "/mcp"))
     if failure == "qmd_timeout":
-        adapters.append(_qmd_adapter(kb, qmd_slow.url))
+        # The adapter gets a 30 s budget of its own (its socket deadline); the
+        # coordinator waits 0.5 s, so the coordinator's timeout path is the one hit.
+        long_budget = "tests.integration.kb_support:qmd_notes_long_budget_factory"
+        adapters.append(_qmd_adapter(kb, qmd_slow.url, factory=long_budget))
     if failure in ("qdrant_closed", "both"):
         adapters.append(_qdrant_adapter(dead))
     _append_recall(kb, {"adapters": adapters, "notes": _notes_wiring(kb)})
@@ -754,8 +757,13 @@ def test_t7_qmd_or_qdrant_down_falls_back_to_fts_and_flags_degraded(
         "both": {"qmd-notes", "qdrant"},
     }[failure]
     assert set(degraded) == want
-    for name in want:
-        assert degraded[name].startswith(("unavailable", "timeout")), degraded
+    codes = {
+        "qmd_closed": {"qmd-notes": "unavailable"},
+        "qmd_timeout": {"qmd-notes": "timeout"},
+        "qdrant_closed": {"qdrant": "unavailable:unreachable"},
+        "both": {"qmd-notes": "unavailable", "qdrant": "unavailable:unreachable"},
+    }[failure]
+    assert degraded == codes
     assert "fts" in payload["recall"]["providers"] and not payload["recall"]["fail_closed"]
     # FTS (and the builtin notes index) answer as if the adapter were not configured.
     assert [row["id"] for row in payload["results"]] == [row["id"] for row in expected["results"]]
