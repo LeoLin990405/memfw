@@ -418,7 +418,9 @@ Decisions the implementation took where the spec left a choice open:
   this host (`notes_root`) and returns `kh:<path>#<heading>` refs (the heading
   of the hit's best line, as memfw's notes index names sections; characters a
   recall ref cannot hold are percent-encoded; `parse_kh_ref` decodes them, so
-  `NotesSegmentResolver` resolves these refs when it is registered). A note is
+  `NotesSegmentResolver` resolves these refs when it is registered, which the Runtime does
+  when `vault.yaml` sets `runtime.recall.notes`; see
+  [ports-and-recall §4.1c](ports-and-recall.md#41c-lifecycle-source-and-notes-index-runtimerecall)). A note is
   returned only when its privacy level, read like memfw's notes reader
   (`yaml.safe_load` + `metadata_level`; anything unreadable is `unknown`), is
   `public`/`shared` and in the configured clearance; `legacy_privacy` (default
@@ -432,9 +434,10 @@ bodies from QMD are never returned. When QMD is unreachable, slow or answers
 off-protocol, `search` raises and the coordinator reports the provider in
 `labels.degraded` while FTS answers (compat framework T7).
 
-The vault resolver reads privacy and lifecycle from the vault file only, so
-the meta-index-only fields (`privacy`, `lifecycle`, `valid_until`) are checked
-by the adapter from the manifest; QMD hits therefore never include history.
+The adapter checks the meta-index-only fields (`privacy`, `lifecycle`,
+`valid_until`) from the manifest itself; QMD hits therefore never include
+history. The vault resolver checks them again from the lifecycle meta-index
+(`runtime.recall.lifecycle_source`, else the vault's default file).
 
 The contract fixtures (`tests/fixtures/qmd_contract/`) were recorded from a
 live QMD 2.5.3 `qmd mcp --http` on loopback, over a throwaway index of two

@@ -91,6 +91,8 @@ from itertools import product
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from memfw.context import (
     CURRENT_SLOT,
     HANDOFF_SLOT,
@@ -284,6 +286,39 @@ def fingerprint(paths: Iterable[Path | None]) -> str:
                 )
             )
     return digest.hexdigest()
+
+
+def _configured_meta_index(snapshot: Path) -> Path | None:
+    """The snapshot's ``runtime.recall.lifecycle_source``, absolute with symlinks resolved.
+
+    A ``vault.yaml`` that cannot be read, or a malformed key, is refused.
+    """
+
+    from memfw.projection import ProjectionError, lifecycle_source_from_config
+
+    try:
+        config = yaml.safe_load((snapshot / "vault.yaml").read_text(encoding="utf-8"))
+        source = lifecycle_source_from_config(config if isinstance(config, dict) else {}, snapshot)
+    except (OSError, ValueError, yaml.YAMLError, ProjectionError) as exc:
+        raise SnapshotRefused(f"the snapshot's vault.yaml cannot be read: {exc}") from None
+    # Symlinks resolved: the fingerprint and the private copy follow the
+    # file the Runtime would read, not a link to it.
+    return None if source is None else Path(os.path.abspath(source)).resolve()
+
+
+def _private_meta_index(source: Path, workdir: Path) -> Path:
+    """Copy the external meta-index to ``workdir/lifecycle/``; the copy is what is read.
+
+    A missing source is not copied: the copy's path is then missing too, and
+    the Runtime reads it as unreadable (fail closed), as it would live.
+    """
+
+    target_dir = workdir / "lifecycle"
+    target_dir.mkdir(mode=0o700, exist_ok=True)
+    target = target_dir / "memory-meta-index.json"
+    if source.is_file():
+        shutil.copyfile(source, target)
+    return target
 
 
 def private_copy(snapshot: Path, workdir: Path) -> Path:
@@ -837,15 +872,32 @@ def evaluate_snapshot(
         for output in outputs:
             if Path(output).expanduser().resolve() == store:
                 raise SnapshotRefused("an output path is a store path")
+    meta_index = _configured_meta_index(snapshot)
+    external = meta_index is not None and not _inside(meta_index, snapshot)
+    if meta_index is not None and external:
+        for output in outputs:
+            if Path(output).expanduser().resolve() == meta_index:
+                raise SnapshotRefused("an output path is the lifecycle source")
     watched = [snapshot, *(path for store in stores for path in store_files(store))]
+    if meta_index is not None and external:
+        # A ``lifecycle_source`` outside the snapshot is part of the input:
+        # fingerprinted like a store and read only from a private copy.
+        watched.append(meta_index)
     before = fingerprint(watched)
     own_workdir = workdir is None
     base = Path(tempfile.mkdtemp(prefix="memfw-c4-")) if workdir is None else Path(workdir)
     try:
         conversations_path = Path(conversations).expanduser().resolve() if conversations else None
         usage_path = Path(usage).expanduser().resolve() if usage else None
+        copy = private_copy(snapshot, base)
+        if meta_index is None:
+            private_meta: Path | None = None
+        elif external:
+            private_meta = _private_meta_index(meta_index, base)
+        else:  # inside the snapshot: its place in the private copy
+            private_meta = copy / meta_index.relative_to(snapshot)
         report = _evaluate_copy(
-            private_copy(snapshot, base),
+            copy,
             options,
             conversations=(
                 private_store(conversations_path, base, "conversations.sqlite")
@@ -858,6 +910,7 @@ def evaluate_snapshot(
                 if state
                 else None
             ),
+            lifecycle_source=private_meta,
         )
     finally:
         if own_workdir:
@@ -874,6 +927,7 @@ def _evaluate_copy(
     conversations: Path | None,
     usage: Path | None,
     state: Path | None = None,
+    lifecycle_source: Path | None = None,
 ) -> dict[str, Any]:
     environ = os.environ if options.environ is None else options.environ
     settings = resolve_settings(
@@ -897,12 +951,13 @@ def _evaluate_copy(
         clearance=settings.clearance,
         # ``--current`` simulates the vault switch; otherwise ``vault.yaml`` decides.
         context_current=True if options.current else None,
+        lifecycle_source=lifecycle_source,
     )
     repository = runtime.open_repository()
     documents = repository.list()
     events = repository.events()
     now = options.now or _default_now(documents, events)
-    keep = runtime.context_keep(options.policy, now=now)
+    keep = runtime.context_keep(options.policy, now=now, repository=repository)
     visible_documents = [document for document in documents if keep(document)]
     visible_ids = {document.id for document in visible_documents}
 

@@ -11,24 +11,30 @@ internals. Here:
   (``kh:``, ``att:``) go to that scheme's resolver, every other path ref to
   the fallback (a ``MemoryPathResolver``, which leaves ``kh:``/``att:`` refs
   unresolved, as before).
-- ``SegmentResolution``: what a scheme resolver returns for a ref that names
-  something other than a memory, a note section (``kh:``) or, later, an
-  attachment segment (``att:``). The coordinator keeps these apart from
-  memory hits (``RecallResult.segments``).
+- ``SegmentResolution``: what a resolver returns for a ref that names
+  something other than a memory: a note section (``kh:`` path refs) or an
+  attachment proxy segment (``attachment_segment`` refs, MM2b). The
+  coordinator keeps these apart from memory hits (``RecallResult.segments``).
 - ``parse_kh_ref``: the ``kh:<path>#<heading>`` grammar the notes providers
   emit (QMD notes, PageIndex).
 
 The vault-reading ``VaultIdResolver`` and the notes-index
 ``NotesSegmentResolver`` live in ``memfw.recall.builtin``.
 
-**The ``att:`` extension point.** Attachment and proxy resolution belongs to
-MM2b. An ``att:<id>#<locator>`` resolver plugs in with
-``SchemePathResolver.register("att", resolver)`` (or ``schemes={"att": …}``
-on ``memfw.recall.builtin.default_resolvers``): a ``Resolver`` whose
-``resolve`` returns ``SegmentResolution(source="attachments", path=<id>,
-anchor=<locator>, …)`` for each ref it can show, after its own privacy and
-tenant checks, and omits the rest. No ``att:`` resolver is registered by
-default, so ``att:`` refs stay unresolved.
+**Attachment segments (MM2b) and the ``att:`` extension point.** Proxy
+segments do not use a path scheme: ``ProxyProvider`` returns candidates with
+``ref_kind="attachment_segment"`` and ``ref=<prx-id>:<n>``, and
+``memfw.recall.builtin.ProxySegmentResolver`` answers them, registered as
+``resolvers["attachment_segment"]`` (or
+``default_resolvers(extra={"attachment_segment": ...})``). It returns
+``SegmentResolution(source="attachments", path=<att-id>, anchor=<prx-id>:<n>,
+title=<proxy kind>, snippet="", privacy=<MM0 level>, tenant=<bound tenant>)``
+and leaves a segment of another tenant unresolved. ``att:<id>#<locator>``
+path refs remain an unused extension point: a resolver for them would plug in
+with ``SchemePathResolver.register("att", resolver)`` (``schemes={"att": …}``)
+and return ``SegmentResolution(source="attachments", …)`` after its own
+privacy and tenant checks. None is registered, so ``att:`` path refs stay
+unresolved.
 """
 
 from __future__ import annotations
@@ -47,7 +53,7 @@ _SCHEME_RE = re.compile(r"^[a-z][a-z0-9]{0,15}$")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 #: Where a ``SegmentResolution`` comes from: note sections (``kh:``) and
-#: attachment segments (``att:``, MM2b).
+#: attachment proxy segments (``attachment_segment``, MM2b).
 SEGMENT_SOURCES: tuple[str, ...] = ("notes", "attachments")
 #: Longest snippet a segment may carry (the notes index's section cap is 4000).
 MAX_SEGMENT_SNIPPET = 8000

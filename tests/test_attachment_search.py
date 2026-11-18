@@ -463,6 +463,42 @@ def test_proxy_provider_passes_the_recall_contract(tmp_path: Path) -> None:
     assert ProxyProvider(tmp_path / "nowhere").available().reason == "no_vault"
 
 
+def test_proxy_segment_resolver_is_bound_to_a_tenant(tmp_path: Path) -> None:
+    """MM2b on the #98 hook: ``source="attachments"``, the bound tenant, via ``extra``."""
+
+    from memfw.recall import Coordinator, FilterPolicy
+    from memfw.recall.builtin import default_resolvers
+    from memfw.recall.policy import GRANTABLE_PRIVACY
+
+    repository, _ids = _corpus(tmp_path)
+    ensure_proxy_index(repository, now=NOW)
+    provider = ProxyProvider(repository.root)
+    (first, *_rest) = provider.search(
+        "backup schedule",
+        limit=10,
+        budget=__import__("memfw.ports").ports.RecallBudget(),
+        tenant="",
+        as_of=None,
+    )
+    index = proxy_index_path(repository)
+    bound = ProxySegmentResolver(index, tenant="").resolve([first.ref])
+    assert bound[first.ref].tenant == "" and bound[first.ref].source == "attachments"
+    assert ProxySegmentResolver(index, tenant="work").resolve([first.ref]) == {}
+    with pytest.raises(ValueError):
+        ProxySegmentResolver(index, tenant=3)  # type: ignore[arg-type]
+    resolvers = default_resolvers(
+        repository.root, extra={"attachment_segment": ProxySegmentResolver(index, tenant="")}
+    )
+    assert set(resolvers) == {"memory_id", "path", "attachment_segment"}
+    result = Coordinator([provider], resolvers=resolvers).search(
+        "backup schedule", limit=5, policy=FilterPolicy(privacy_clearance=GRANTABLE_PRIVACY)
+    )
+    assert result.hits == () and {hit.source for hit in result.segments} == {"attachments"}
+    with pytest.raises(ValueError):
+        default_resolvers(repository.root, extra={"memory_id": ProxySegmentResolver(index)})
+    assert set(default_resolvers(repository.root)) == {"memory_id", "path"}
+
+
 # --- MCP --------------------------------------------------------------------------------
 
 

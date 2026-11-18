@@ -41,6 +41,7 @@ from .context_cache import ContextCache, cached_core_candidates
 from .context_sources import concept_catalogue, share_feed
 from .index import ensure_search_index
 from .recall_adapters import LoadedAdapter, RecallAdapterError, load_adapters, parse_entries
+from .recall_wiring import RecallWiring, parse_wiring
 from .usage import (
     RuntimeOptions,
     checked_used_request,
@@ -52,7 +53,9 @@ from .usage import (
 if TYPE_CHECKING:
     from memfw.conversations import ConversationShare
     from memfw.history import TranscriptIndex
+    from memfw.projection import Lifecycle
     from memfw.recall import RecallResult
+    from memfw.recall.resolve import Resolver
 
 #: Default per-provider wait in ``mode=two_stage`` (the coordinator's total
 #: deadline still applies). Above the 1.5 s port default so a cold SQLite page
@@ -171,8 +174,12 @@ class Runtime:
         clearance: frozenset[str] | None = None,
         context_current: bool | None = None,
         embedding_allow_remote: bool | None = None,
+        lifecycle_source: Path | None = None,
     ) -> None:
         self.root = root
+        #: Replaces ``runtime.recall.lifecycle_source`` when set (the C4
+        #: evaluation points it at its private copy of the meta-index).
+        self._lifecycle_source_override = lifecycle_source
         #: ``MEMFW_EMBEDDING_ALLOW_REMOTE``; ``None``: ``runtime.embedding.allow_remote``.
         self._embedding_allow_remote = embedding_allow_remote
         self.tenant = tenant
@@ -202,6 +209,8 @@ class Runtime:
         #: ``runtime.recall.adapters`` (built once, on the first ``recall``).
         self._recall_adapters: tuple[LoadedAdapter, ...] | None = None
         self._recall_adapters_lock = threading.Lock()
+        #: ``runtime.recall`` ``lifecycle_source`` and ``notes`` (read once, on first use).
+        self._recall_wiring: RecallWiring | None = None
         #: The time a usage signal is stamped with (a seam for tests).
         self.usage_clock: Callable[[], datetime] = lambda: datetime.now(UTC)
 
@@ -725,6 +734,87 @@ class Runtime:
                 self._recall_adapters = loaded
             return self._recall_adapters
 
+    def recall_wiring(self, repository: Repository | None = None) -> RecallWiring:
+        """The operator's ``runtime.recall`` wiring (``memfw.runtime.recall_wiring``).
+
+        ``lifecycle_source`` and ``notes``, read on first use and kept for the
+        Runtime's life (restart to pick up a change). No key: the defaults
+        (``RecallWiring()``), and every output is what it was. No vault (no
+        ``vault.yaml``) gives the defaults and is checked again next time.
+        A ``vault.yaml`` that exists but cannot be read or parsed raises
+        ``RecallAdapterError("bad_config")`` (not cached): it might name a
+        ``lifecycle_source``, so it never silently widens strict recall. A
+        malformed value raises ``RecallAdapterError`` every time (fail
+        closed).
+        """
+
+        with self._recall_adapters_lock:
+            if self._recall_wiring is not None:
+                return self._recall_wiring
+        if repository is None:
+            try:
+                repository = self.open_repository()
+            except ValueError:
+                return RecallWiring()  # no vault: nothing is configured
+        config_path = repository.config_path
+        if not config_path.exists() and not config_path.is_symlink():
+            return RecallWiring()
+        try:
+            config = repository.read_config()
+        except (MemfwError, OSError, ValueError):
+            raise RecallAdapterError("bad_config") from None
+        wiring = parse_wiring(config, root=repository.root)
+        if self._lifecycle_source_override is not None:
+            from dataclasses import replace
+
+            wiring = replace(wiring, lifecycle_source=self._lifecycle_source_override)
+        with self._recall_adapters_lock:
+            if self._recall_wiring is None:
+                self._recall_wiring = wiring
+            return self._recall_wiring
+
+    def configured_lifecycle(self, repository: Repository | None = None) -> Lifecycle | None:
+        """The ``lifecycle_source`` meta-index, or ``None`` when none is configured.
+
+        ``None`` keeps the vault-only reading of ``memory_context`` strict and
+        the open-question queue and labels. A configured file is read through
+        ``memfw.projection.load_lifecycle`` (cached while it is unchanged; a
+        missing or unreadable one is ``unreadable``, which fails closed).
+        """
+
+        source = self.recall_wiring(repository).lifecycle_source
+        if source is None:
+            return None
+        from memfw.projection import load_lifecycle
+
+        root = repository.root if repository is not None else self.root
+        return load_lifecycle(root, source)
+
+    def _notes_schemes(self, repository: Repository) -> dict[str, Resolver] | None:
+        """``{"kh": NotesSegmentResolver}`` when ``runtime.recall.notes`` is set, else ``None``.
+
+        The resolver's clearance is this Runtime's (``MEMFW_MCP_CLEARANCE``),
+        else ``public,shared``: without a clearance, ``local-private`` notes
+        are never resolved.
+        """
+
+        notes = self.recall_wiring(repository).notes
+        if notes is None:
+            return None
+        from memfw.ports.privacy import REMOTE_CLEARANCE
+        from memfw.recall.builtin import NotesSegmentResolver
+
+        clearance = REMOTE_CLEARANCE if self.clearance is None else self.clearance
+        return {
+            "kh": NotesSegmentResolver(
+                notes.root,
+                notes.index,
+                clearance=clearance,
+                legacy_privacy_default=notes.legacy_privacy,
+                tenant=notes.tenant,
+            )
+        }
+
     def recall(
         self,
         repository: Repository,
@@ -821,9 +911,19 @@ class Runtime:
         filter_policy = self._filter_policy(
             policy_name, source=source, include_history=include_history, as_of=as_of
         )
+        wiring = self.recall_wiring(repository)
+        # One meta-index snapshot judges the whole call (resolve and labels).
+        lifecycle = self.configured_lifecycle(repository)
         coordinator = Coordinator(
             providers,
-            resolvers=default_resolvers(root),
+            # ``lifecycle_source`` unset: the vault's default meta-index, as
+            # before; ``notes`` unset: no ``kh:`` resolver, as before.
+            resolvers=default_resolvers(
+                root,
+                lifecycle_source=wiring.lifecycle_source,
+                schemes=self._notes_schemes(repository),
+                lifecycle=lifecycle,
+            ),
             configs=configs,
             inflight=self.recall_inflight,
             total_timeout=self.total_timeout,
@@ -833,7 +933,12 @@ class Runtime:
         )
         result = coordinator.search(query, limit=limit, policy=filter_policy)
         result = _with_open_question_labels(
-            repository, result, filter_policy, now=moment, keep=self._question_keep()
+            repository,
+            result,
+            filter_policy,
+            now=moment,
+            keep=self._question_keep(),
+            lifecycle=lifecycle,
         )
         errors: tuple[str, ...] = ()
         if self.record_access():
@@ -915,7 +1020,12 @@ class Runtime:
         self.ensure_index(repository)
         moment = now if now is not None else datetime.now(UTC)
         return open_question_labels_for(
-            repository, memory_ids, policy, now=moment, keep=self._question_keep()
+            repository,
+            memory_ids,
+            policy,
+            now=moment,
+            keep=self._question_keep(),
+            lifecycle=self.configured_lifecycle(repository),
         )
 
     def open_question_queue(
@@ -943,22 +1053,26 @@ class Runtime:
         if policy_name not in RECALL_POLICIES:
             raise ValueError("unknown policy")
         from memfw.recall import evaluate
-        from memfw.recall.builtin import meta_from_document, open_questions
+        from memfw.recall.builtin import document_meta, open_questions
 
         from .corroboration import open_question_queue
 
         policy = self._filter_policy(policy_name, source="", include_history=False, as_of=None)
         self.ensure_index(repository)
         moment = now if now is not None else datetime.now(UTC)
+        # ``lifecycle_source`` set: questions and conflicts are judged with the
+        # meta-index lifecycle (as ``two_stage``); unset, the vault alone.
+        lifecycle = self.configured_lifecycle(repository)
 
         def keep(document: MemoryDocument) -> bool:
             if not self._visible(document):
                 return False
-            return evaluate(meta_from_document(document), policy, now=moment).kept
+            return evaluate(document_meta(document, lifecycle), policy, now=moment).kept
 
+        questions = open_questions(repository, policy, now=moment, lifecycle=lifecycle)
         queue = open_question_queue(
             repository,
-            [item for item in open_questions(repository, policy, now=moment) if keep(item)],
+            [item for item in questions if keep(item)],
             app=app,
             visible=keep,
             allow_operator=allow_operator,
@@ -998,15 +1112,20 @@ class Runtime:
             return False
         return self.privacy_admits(document)
 
-    def context_keep(self, policy_name: str, *, now: datetime) -> Keep:
+    def context_keep(
+        self, policy_name: str, *, now: datetime, repository: Repository | None = None
+    ) -> Keep:
         """Who may see a memory in a context pack under ``policy_name``.
 
         ``compat_fts`` is v1's tenant/source rule (what
         ``FilterPolicy.compat_fts`` checks when the slot does its own temporal
         filtering). ``strict`` is the recall strict ``FilterPolicy`` evaluated on
         ``meta_from_document``: privacy clearance ``none`` (fail-closed tag
-        reading), status, lifecycle, supersession, validity and archive. Any
-        other name raises ``ValueError`` (fail closed).
+        reading), status, lifecycle, supersession, validity and archive; with
+        ``runtime.recall.lifecycle_source`` set, imported documents are joined
+        to that meta-index first (``document_meta``), as in ``two_stage``.
+        ``repository`` is the caller's open vault (opened here when omitted,
+        only for ``strict``). Any other name raises ``ValueError`` (fail closed).
         """
 
         if policy_name not in RECALL_POLICIES:
@@ -1015,14 +1134,15 @@ class Runtime:
             return self._visible
         # Imported here so callers that never use strict never load them.
         from memfw.recall import FilterPolicy, evaluate
-        from memfw.recall.builtin import meta_from_document
+        from memfw.recall.builtin import document_meta
 
         rules = FilterPolicy(tenant=self.tenant, allowed_sources=tuple(self.allowed_sources))
+        lifecycle = self.configured_lifecycle(repository)
 
         def keep(document: MemoryDocument) -> bool:
             if not self.privacy_admits(document):
                 return False
-            return evaluate(meta_from_document(document), rules, now=now).kept
+            return evaluate(document_meta(document, lifecycle), rules, now=now).kept
 
         return keep
 
@@ -1125,7 +1245,7 @@ class Runtime:
         """
 
         moment = now if now is not None else datetime.now(UTC)
-        keep = self.context_keep(policy_name, now=moment)
+        keep = self.context_keep(policy_name, now=moment, repository=repository)
         names = tuple(slots)
         known = SLOT_NAMES if set(names) <= set(SLOT_NAMES) else self.context_slot_names()
         if not names or any(name not in known for name in names):
@@ -1178,6 +1298,7 @@ def _with_open_question_labels(
     *,
     now: datetime,
     keep: Callable[[MemoryDocument], bool] | None = None,
+    lifecycle: Lifecycle | None = None,
 ) -> RecallResult:
     """``result`` with each hit's open-question labels appended to its ``labels``."""
 
@@ -1188,7 +1309,12 @@ def _with_open_question_labels(
     from memfw.recall.builtin import open_question_labels_for
 
     extra = open_question_labels_for(
-        repository, [hit.memory_id for hit in result.hits], policy, now=now, keep=keep
+        repository,
+        [hit.memory_id for hit in result.hits],
+        policy,
+        now=now,
+        keep=keep,
+        lifecycle=lifecycle,
     )
     if not extra:
         return result
@@ -1215,6 +1341,7 @@ def build_runtime(
     clearance: frozenset[str] | None = None,
     context_current: bool | None = None,
     embedding_allow_remote: bool | None = None,
+    lifecycle_source: Path | None = None,
 ) -> Runtime:
     """The default assembly: today's behaviour unless a switch is set.
 
@@ -1242,6 +1369,7 @@ def build_runtime(
         clearance=clearance,
         context_current=context_current,
         embedding_allow_remote=embedding_allow_remote,
+        lifecycle_source=lifecycle_source,
     )
 
 
