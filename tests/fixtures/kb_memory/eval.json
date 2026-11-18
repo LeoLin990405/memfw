@@ -1,0 +1,19 @@
+{
+  "_comment": "T1 evaluation questions over corpus.json and notes/. Each question lists the memory ids, note paths and attachment names a unified top-10 should contain, under the remote clearance public,shared. R@10 = targets found in the first 10 memory hits or the first 10 segments / all targets.",
+  "clearance": "public,shared",
+  "questions": [
+    {"id": "q01", "query": "restic nightly snapshot", "memories": ["m-nightly-backup"], "notes": ["ops/backup-runbook.md"]},
+    {"id": "q02", "query": "restore drill checksum mismatch", "memories": ["m-restore-mismatch"], "notes": ["ops/backup-runbook.md"], "attachments": ["restore-report"]},
+    {"id": "q03", "query": "iot cameras vlan", "memories": ["m-iot-vlan"], "notes": ["ops/network.md"]},
+    {"id": "q04", "query": "graphics card throttles degrees", "memories": ["m-gpu-throttle"], "notes": ["ops/gpu-box.md"]},
+    {"id": "q05", "query": "weak instruments two stage", "memories": ["m-iv-weak"], "notes": ["courses/causal-inference/week-03.md"]},
+    {"id": "q06", "query": "parallel trends event study", "notes": ["courses/causal-inference/week-03.md"]},
+    {"id": "q07", "query": "fixed effects time-invariant confounder", "notes": ["courses/econometrics/panel-data.md"]},
+    {"id": "q08", "query": "reciprocal rank fusion", "notes": ["papers/reading-list.md"]},
+    {"id": "q09", "query": "UPS battery swapped", "memories": ["m-rack-ups"], "attachments": ["rack-photo"]},
+    {"id": "q10", "query": "snapshot retention ninety days", "notes": ["ops/backup-runbook.md"], "attachments": ["restore-report"]},
+    {"id": "q11", "query": "暂停定时任务", "memories": ["m-db-migration"], "notes": ["迁移/数据库迁移.md"]},
+    {"id": "q12", "query": "release freezes integration tests", "memories": ["m-freeze"], "notes": ["projects/memfw-roadmap.md"]},
+    {"id": "q13", "query": "rack four patch panel", "attachments": ["rack-photo"]}
+  ]
+}

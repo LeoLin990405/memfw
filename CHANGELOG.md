@@ -14,6 +14,27 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 
 ## [Unreleased]
 
+### Tests — knowledge base ↔ memory integration (T1–T7)
+
+- `tests/integration/test_kb_memory_t1_t7.py`: the T1–T7 scenarios that gate
+  v0.4.0, on synthetic committed fixtures (`tests/fixtures/kb_memory`: a small
+  notes tree, memories citing it, an eval question set, recorded OCR output).
+  T1 unified recall over memories, `kh:` note sections and attachment proxy
+  segments with R@10; T2 `kh:` evidence both ways and broken links; T3
+  referenced PDF/PNG → OCR proxy → locator → original + hash; T4 the evidence
+  gate with a note and an attachment; T5 `local-private` leaks = 0 over
+  notes, HTTP, OKF and MCP plus the off-host embedder/reranker gate; T6 the
+  builtin vs QMD notes overlap report (not a gate); T7 QMD or Qdrant down →
+  FTS, flagged degraded. No network (loopback fakes only); no code changes (#106).
+- Known limitations the tests work around are recorded in
+  [`docs/ports-and-recall.md`](docs/ports-and-recall.md) §4.1c-bis: no built-in
+  notes recall provider for `two_stage`, no attachment segments in `two_stage`,
+  no note → citing-memories API, no broken `kh:` link checker, short queries
+  skip non-lexical adapters, a bare `Coordinator` treats unlabeled memories as
+  public (the runtime clearance applies the vault default), and one total
+  deadline for recall and resolve (an adapter timeout at or above it can drop
+  every hit when its service hangs).
+
 ### Fixed — OCR proxy adapter keeps proxies with control characters (`memfw-adapter-ocr` 0.1.1)
 
 - `memfw-adapter-ocr`: segment text from an engine (a real `pdftotext` text
