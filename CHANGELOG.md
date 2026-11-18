@@ -14,6 +14,16 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 
 ## [Unreleased]
 
+### Fixed — deterministic usage-retention cost test
+
+- `test_a_write_at_the_row_cap_does_not_scan_the_table` no longer times the
+  write (a 20 ms wall-clock bound failed on a loaded CI runner). It now counts
+  work: both retention `DELETE`s traced from the real write must plan as a
+  `SEARCH` on `used` (an index or rowid range, never a `SCAN` of the table),
+  nothing may be sorted (`TEMP B-TREE`), and the whole write must stay under
+  3 SQLite VM steps per capped row (about 200k today; the old `NOT IN`
+  delete took about 1.4M).
+
 ### Added — Qwen Code reader; reader coverage notes
 
 - New conversation reader `qwen` (alias `qwen-code`) for the Qwen Code CLI:
