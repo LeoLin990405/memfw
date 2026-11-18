@@ -874,6 +874,10 @@ def evaluate_snapshot(
                 raise SnapshotRefused("an output path is a store path")
     meta_index = _configured_meta_index(snapshot)
     external = meta_index is not None and not _inside(meta_index, snapshot)
+    if meta_index is not None and external:
+        for output in outputs:
+            if Path(output).expanduser().resolve() == meta_index:
+                raise SnapshotRefused("an output path is the lifecycle source")
     watched = [snapshot, *(path for store in stores for path in store_files(store))]
     if meta_index is not None and external:
         # A ``lifecycle_source`` outside the snapshot is part of the input:

@@ -543,3 +543,18 @@ def test_c4_fingerprint_follows_a_symlinked_external_meta_index(
     with pytest.raises(SnapshotChanged):
         evaluate_snapshot(repository.root, options=options)
     assert joined > 0
+
+
+def test_c4_refuses_an_output_that_is_the_external_meta_index(tmp_path: Path) -> None:
+    from memfw.runtime.context_eval import EvalOptions, SnapshotRefused, evaluate_snapshot
+
+    repository, outside = _imported_vault(tmp_path)
+    link = tmp_path / "linked-meta-index.json"
+    link.symlink_to(outside)
+    _append_config(repository, {"lifecycle_source": str(outside)})
+    options = EvalOptions(policy="strict", slots=("core",), repeats=1, environ={})
+    before = outside.read_bytes()
+    for output in (outside, link):  # the file itself, or a link resolving to it
+        with pytest.raises(SnapshotRefused, match="lifecycle source"):
+            evaluate_snapshot(repository.root, options=options, outputs=[output])
+    assert outside.read_bytes() == before

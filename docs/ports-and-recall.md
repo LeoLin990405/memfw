@@ -421,7 +421,7 @@ all leave the ref `unresolved`, and it is dropped:
 A `Resolution` whose `meta.memory_id` differs from its `memory_id` is dropped as
 `id_mismatch`.
 `memfw.recall.builtin.default_resolvers(root, *, lifecycle_source=None, schemes=None, extra=None,
-lifecycle=None)` (``lifecycle``: an already loaded meta-index, one snapshot per call)
+lifecycle=None)` (`lifecycle`: an already loaded meta-index, one snapshot per call)
 returns (plus one resolver per `extra` ref kind, e.g. `{"attachment_segment":
 ProxySegmentResolver(...)}`; `extra` may not replace `memory_id` or `path`):
 
