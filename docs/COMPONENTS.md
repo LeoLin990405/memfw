@@ -78,7 +78,7 @@ remain authoritative.
 The two library files need only the standard library and PyYAML. The script loads its read
 path from `readonly.py` beside it, else the checkout's `src/memfw/index/`, else an installed
 `memfw`, and logs which one it chose; with none of them it exits with an error naming the
-missing files. `read_path.py` carries `READ_PATH_VERSION` (2 in 0.3.0); the script and
+missing files. `read_path.py` carries `READ_PATH_VERSION` (2 in 0.3.0 and 0.4.0); the script and
 `readonly.py` refuse to start with an older copy, so a partial upgrade fails at startup instead
 of on every `/search`. It never writes, so run `memfw index rebuild` once after an upgrade.
 

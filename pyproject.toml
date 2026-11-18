@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "memfw"
-version = "0.3.0"
+version = "0.4.0"
 description = "A local-first, event-backed Markdown memory vault for long-lived AI agents"
 readme = "README.md"
 requires-python = ">=3.11"

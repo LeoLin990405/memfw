@@ -5,14 +5,151 @@ All notable changes to memfw. The format follows
 [Semantic Versioning](https://semver.org/). Entries name the pull request that
 carried the change; `#N` links to `LeoLin990405/memfw` pull request `N`.
 
-The vault format did not change in `0.3.0` either: `vault.yaml` stays at
+The vault format did not change in `0.4.0` either: `vault.yaml` stays at
 `schema_version: 1`, and files written by an earlier version keep their bytes.
-`0.3.0` adds optional frontmatter that is written only when set and that memfw
-0.2.0 drops on rewrite; see the 0.3.0
-[Compatibility / upgrade notes](#compatibility--upgrade-notes) (and, for
-`0.1.x` → `0.2.0`, [Compatibility and upgrade](#compatibility-and-upgrade)).
+`0.4.0` adds attachments (a vault with an `attach` event cannot go back to
+0.3.0) and moves two derived projections out of the vault; see the 0.4.0
+[Upgrade notes](#upgrade-notes), the 0.3.0
+[Compatibility / upgrade notes](#compatibility--upgrade-notes) and, for
+`0.1.x` → `0.2.0`, [Compatibility and upgrade](#compatibility-and-upgrade).
 
 ## [Unreleased]
+
+## [0.4.0] — 2026-11-18
+
+The third numbered release: attachments and their text proxies as a third
+source beside memories and notes, a typed-edge knowledge graph, `memfw-http/3`
+with `/context` and reviewed `/forget` requests, operator-configured recall and
+deriver adapters (all off by default), and the recall wiring that joins them:
+the meta-index lifecycle for every provider and `kh:` / attachment-segment
+resolvers. The T1–T7 knowledge base ↔ memory tests gate the release. New
+behaviour is off by default or additive: with no new flag, setting or
+`vault.yaml` key, outputs match 0.3.0 except for the fail-closed privacy fixes
+(notes frontmatter split, the embedding locality gate, clearance before access
+logging) listed in the upgrade notes below. `PORTS_API_VERSION` is 0.3.0
+(twelve ports; `ProjectionStore` and `memfw.ports.proxies` are new); the
+`memfw-http/2` contract is unchanged. The entries after this summary give the
+details, newest first.
+
+### Summary
+
+- **Attachments (MM1a, MM1b).** A content-addressed blob store outside the
+  vault, attachment records and `memfw attach add/list/show/verify`; referenced
+  originals, `detach`, `relink`, `purge`, `scan` and `reown`; quota, staging and
+  location guards (#75, #79, #80, #82, #96).
+- **Attachment proxies and search (MM2a, MM2b).** The `memfw.proxy` v1 import
+  format with canonical locators, `memfw attach proxy import`, a
+  `proxy_segments` index, `ProxyProvider` and the opt-in MCP tools
+  `attachment_search` / `attachment_get` behind `mcp.attachments` (#91, #93).
+- **Attachments as evidence (MM3).** `att:` evidence is the `observation`
+  class in the write gate (it caps fact and causal grades); `memfw eval causal
+  --multimodal` (#95). An OCR proxy adapter, `memfw-adapter-ocr` 0.1.1
+  (#86, #107).
+- **Knowledge graph (K3, K4).** A typed-edge projection, bounded path patterns,
+  `memfw graph rebuild/match` and the `ProjectionStore` port (#77). Projections
+  outside the vault record the vault they belong to, and the corroboration
+  projection moves out of the vault (#90).
+- **Recall adapters, off by default.** `runtime.recall.adapters` loads
+  operator-configured `RecallProvider`s: bm25s (#88, #99), Qdrant (#94, #100,
+  #101), QMD notes (#89) and PageIndex (#85).
+- **Deriver adapters, off by default.** GraphRAG (#97), LightRAG (#92) and
+  LangExtract (#84) stage derived candidates for review; none writes the vault.
+- **Recall wiring.** The meta-index lifecycle (`valid_until`, `superseded_by`,
+  `lifecycle`) filters every provider, `kh:` note sections resolve through
+  `NotesSegmentResolver` (#98); `runtime.recall.lifecycle_source`,
+  `runtime.recall.notes` and attachment segments on the same resolver hook
+  (#105).
+- **Privacy hardening.** The notes frontmatter split follows YAML block
+  scalars and fails closed when ambiguous; embedders, rerankers and query
+  rewriters off this machine receive no private text and no queries unless
+  allowed; `hybrid`/`vector` apply the clearance before access logging;
+  `memory_remember` suggestions are bounded to the caller (#104).
+- **HTTP and forgetting (R5, R6).** `memfw-http/3` beside `memfw-http/2`
+  (selected per request), `POST /context`, `POST /forget` requests and
+  `memfw forget requests/residue` (#78); a replay after deletion respects the
+  caller's clearance (#87).
+- **Event log forward compatibility.** A 0.4.x reader keeps and skips an
+  unknown event kind marked `details.projection: "none"` (#81).
+- **Context and evaluation.** The opt-in `current` context slot (U6, #71) and
+  the C4 context pack evaluation `memfw eval context` (#76).
+- **Conversations.** Two-stage conversation search with tag filters (M3c,
+  #72) and a Qwen Code reader, the 15th (#83).
+- **Tests and docs.** The T1–T7 knowledge base ↔ memory integration tests
+  (#106), a deterministic usage-retention test (#102), README and COMPONENTS
+  updates (#103).
+
+### Upgrade notes
+
+- **Embedding, reranker and rewriter locality gate.** An embedder whose
+  endpoint is not a loopback literal (`localhost`, `127.0.0.0/8`, `::1`; never
+  resolved through DNS) — an off-host `MEMFW_EMBEDDING_URL`, a `notes` /
+  `memfw-notes-mcp` `--endpoint`, `memory-related-build` / `notes related-build
+  --embedding-url` — now receives only `public`/`shared` memories and notes and
+  no query text, and an off-host notes reranker (`--rerank-endpoint`) or query
+  rewriter is skipped. Without the opt-in that means **no semantic search over
+  non-public/shared text and degraded results**: `hybrid`/`vector` searches
+  answer from FTS (`mode_used: fts`, `degraded: true`, `semantic_query_withheld`
+  in `errors`, plus `semantic_partial` when the index holds memories without
+  vectors), notes searches report `rerank_withheld` / `rewrite_withheld`, the
+  `two_stage` hybrid provider reports itself unavailable, and stored vectors of
+  private items are dropped on the next index rebuild (the manifest label
+  `embedding_gate: public,shared` forces it). To opt in, accepting that private
+  text leaves the machine: `MEMFW_EMBEDDING_ALLOW_REMOTE=1` (wins),
+  `vault.yaml` `runtime: {embedding: {allow_remote: true}}` (MCP server, Runtime
+  and vault commands) or `--allow-remote` on every command that takes an
+  endpoint. A loopback endpoint or an in-process embedder is unchanged. See
+  [`docs/ports-and-recall.md`](docs/ports-and-recall.md) §4.1d.
+- **Attachments are one-way.** memfw 0.3.0 fails closed on a vault with an
+  `attach` event (every command that reads the event log), so **upgrade every
+  host that reads the vault before the first `memfw attach add`**; there is no
+  downgrade to 0.3.0 after it. A vault that only gained `vault_id` stays
+  readable by 0.3.0. See [`docs/attachments.md`](docs/attachments.md)
+  (Compatibility).
+- **Rebuild the edge and corroboration projections.** Both now live outside
+  the vault, keyed by the vault's resolved path
+  (`~/.local/share/memfw/edges/<key>.sqlite3`,
+  `~/.local/share/memfw/corroboration/<key>.sqlite3`, schema 2), and record the
+  vault's identity (path, `vault_id`, first event). After upgrading run
+  `memfw graph rebuild` and `memfw corroboration rebuild` on every vault that
+  uses them. Until then `graph match` refuses the old file ("rebuild it"),
+  corroboration shows `{"degraded": "projection_missing"}`, and a file built
+  from another vault at the same path is refused ("projection belongs to
+  another vault: rebuild"; MCP `projection_other_vault`). An old vault-root
+  `corroboration.sqlite3` is reported as `legacy_file`, ignored and never
+  deleted; it counts toward the vault's size until you delete it.
+- **Notes indexes re-read every note once.** Notes indexes record the
+  frontmatter split they were built with (`index_versions`,
+  `frontmatter_split` 2). The first `memfw notes index` (or memory hybrid index
+  rebuild) after the upgrade re-reads every note before anything is embedded,
+  and `shareable_item` trusts no stored note frontmatter until then. Expect one
+  slower run.
+- **A broken `vault.yaml` fails recall wiring closed.** A `vault.yaml` that
+  exists but cannot be read or parsed now raises `recall adapter: bad_config`
+  (MCP `isError: true`) for `memory_search mode=two_stage`, strict
+  `memory_context` (MCP and HTTP `/context`) and the open-question queue and
+  labels, instead of falling back to defaults. A missing `vault.yaml` still
+  means defaults; a malformed key gives `bad_lifecycle_source` or `bad_notes`.
+- **Event log forward compatibility.** An unknown event kind is accepted only
+  with `details.projection: "none"`; an unmarked one is refused as in 0.3.0.
+  A later writer that knows a marked kind must still compact it in the foreign
+  format ([`docs/attachments.md`](docs/attachments.md)).
+- **Stricter evidence and private locations.** A new `att:` pointer that does
+  not resolve is refused (0.3.0 stored it as an opaque string). The
+  conversation store, worker state and handoff folders now refuse
+  `~/Documents`, `~/Desktop` and synced-folder symlink targets.
+- **HTTP.** Without a `MemFW-Contract: memfw-http/3` header every
+  `memfw-http/2` answer is byte-identical; the read-only service still deploys
+  as script + `readonly.py` + `read_path.py` (`READ_PATH_VERSION` 2).
+
+### Known limitations
+
+The T1–T7 tests found gaps that stay open in 0.4.0 (fixes after the freeze,
+except bug fixes): `two_stage` has no built-in notes provider and returns no
+attachment segments, there is no note → citing-memories lookup and no broken
+`kh:` link checker, short queries skip non-lexical adapters, a bare
+`Coordinator` treats unlabeled memories as public, and one total deadline
+covers recall and resolve. See
+[`docs/ports-and-recall.md`](docs/ports-and-recall.md) §4.1c-bis.
 
 ### Tests — knowledge base ↔ memory integration (T1–T7)
 
@@ -382,7 +519,7 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   open-question queue refuse a file built from another vault at the same path
   (before, deleting a vault and running `memfw init` there let the new vault
   read the old vault's edges, concept names included). The message is
-  "projection belongs to another vault: rebuild it"; MCP shows
+  "projection belongs to another vault: rebuild"; MCP shows
   `corroboration: {"degraded": "projection_other_vault"}`, and
   `memfw project obsidian` leaves the counts out with a warning.
 - **K4 live check:** a concept node that is neither a concept of the vault
@@ -539,7 +676,7 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 - `WorkState.session_labels` (read-only). Without the new options the output
   of every command and tool is byte-identical to before.
 
-### Added
+### Added — `memfw-http/3`, `/forget` and `forget residue` (R5/R6)
 
 - **`memfw-http/3` beside `memfw-http/2`; `POST /forget` and `memfw forget
   residue` (roadmap R5/R6).** The read-only service selects the contract per
@@ -621,7 +758,7 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   copies only a well-formed `broader`, and `broader_on_merged` is reported.
   See `docs/ontology.md`.
 
-### Added
+### Added — C4 context pack evaluation
 
 - **C4 context pack evaluation** (`memfw eval context SNAPSHOT`): coverage,
   waste, P50/P95 latency and token cost of the `memory_context` slots
