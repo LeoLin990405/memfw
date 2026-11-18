@@ -413,7 +413,8 @@ orchestrators. See [`docs/handoff.md`](docs/handoff.md).
 
 ### One ongoing conversation per app
 
-With every agent's sessions in the store and sharing on, an app no longer needs a new
+With every agent's sessions in the store and sharing on (`conversation_share.enabled: true`,
+see [Sharing across apps](#sharing-across-apps)), an app no longer needs a new
 conversation per task: a fresh or resumed session can pick up where the last one stopped. Put a
 session-start rule in each agent's global instructions (`CLAUDE.md`, `AGENTS.md`, …), for
 example:

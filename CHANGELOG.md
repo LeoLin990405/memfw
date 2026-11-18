@@ -17,10 +17,10 @@ The vault format did not change in `0.4.0` either: `vault.yaml` stays at
 
 ### Docs
 
-- README (both languages): "One ongoing conversation per app" — a session-start rule
-  built on `conversations_list` / `conversations_handoff`, how each app's `memfw-mcp` names
-  itself, and two setup pitfalls (unexpanded `${VAR}` in MCP `env`; editable source in an
-  OS-protected folder).
+- README (both languages): "One ongoing conversation per app", a session-start rule
+  built on `conversations_list` / `conversations_handoff`, how each app's `memfw-mcp`
+  names itself, and two setup pitfalls (unexpanded `${VAR}` in MCP `env`; editable
+  source in an OS-protected folder) (#109).
 
 ## [0.4.0] — 2026-11-18
 
