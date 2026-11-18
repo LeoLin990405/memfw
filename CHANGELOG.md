@@ -14,6 +14,29 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 
 ## [Unreleased]
 
+### Fixed — kernel privacy and lifecycle before v0.4.0 (wiring PR, part A)
+
+- Notes frontmatter: a `---` line inside a YAML block scalar (`|`/`>`) no
+  longer ends the frontmatter, so a later `privacy: local-private` is read as
+  frontmatter, not body (it used to make the note public to `notes_search`,
+  the `kh:` resolver and the PageIndex/QMD adapters). A column-0 `---` closes
+  the block as before (ordinary notes split byte for byte as before); an
+  indented first `---` is resolved with YAML, and an ambiguous close fails
+  closed to `local-private`. `memfw-adapter-pageindex` and `memfw-adapter-qmd`
+  (both 0.1.1) mirror the rule; parity tests. `split_frontmatter` and
+  `note_file_inside_root` are now public (old private names kept as aliases).
+- Recall lifecycle join: a boolean `lifecycle_override` (the real meta-index's
+  flag) is ignored instead of read as an unparsable lifecycle that the strict
+  policy dropped; a string one is ranked as before.
+- One lifecycle meta-index reader (`memfw.projection.load_lifecycle`) for
+  recall and `memfw dream`, cached on (device, inode, mtime, size); a default
+  path that is a directory now counts as unreadable for dream too (fail closed).
+- `memory_search` `hybrid`/`vector` (and their internal FTS fallback) apply the
+  MCP clearance before `memory_access` and autowarm: a withheld hit is neither
+  logged nor warmed (as `two_stage`). No clearance: unchanged.
+- Docs: `docs/attachments.md` states that a later version which knows a marked
+  kind must still compact it in the foreign format (`details` + `event_line`).
+
 ### Added — GraphRAG deriver adapter (wave 4, off by default)
 
 - New workspace package `packages/adapters/memfw-adapter-graphrag` (0.1.0,

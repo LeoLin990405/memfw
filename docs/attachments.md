@@ -258,6 +258,17 @@ explicit marker that it never changes memory state:
   memory must be written with the marker so that v0.4.x reads the log. A new
   kind that can change a memory must not carry it; v0.4.x then refuses the
   log, which is the intended fail-closed outcome.
+  * **Compaction keeps the foreign format.** A later version that *knows* a
+    marked kind X (say it learned `proxy_retire`) must still archive X in
+    `log compact` the way v0.4.x archives a foreign event: the summary row
+    carries all of the event's `details` plus its canonical line as
+    `event_line`. It must not switch to a compact summary of its own for X
+    (dropping `details` or `event_line`, as known kinds may). v0.4.x reads
+    an archived X only through that foreign form, so an archive written any
+    other way is refused by v0.4.x (`log verify`, `replay`, and every
+    command that reads the archive), and the vault could no longer be read
+    by the hosts still on v0.4.x. The rule holds for as long as any reader
+    of the vault may be on v0.4.x.
 * **The eight MM1a kinds do not carry the marker** and do not need it: every
   v0.4.x reader knows them (including the reserved MM1b/MM2 ones), and 0.3.0
   refuses them with or without it (its model has no such rule). Already
