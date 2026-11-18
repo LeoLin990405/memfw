@@ -531,6 +531,7 @@ class Runtime:
             # Tenant, allowed sources and the privacy clearance: a suggestion
             # never names a memory this caller could not read.
             visible=self._visible,
+            record_access=self.record_access(),
         )
 
     def related(self, repository: Repository, memory_id: str, limit: int) -> dict[str, Any]:

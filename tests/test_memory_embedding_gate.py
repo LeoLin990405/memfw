@@ -350,7 +350,7 @@ def test_missing_manifest_still_purges_private_vectors_under_the_gate(
 
 
 def test_remember_suggestions_follow_the_callers_visibility(tmp_path: Path) -> None:
-    """Reviewer repro: no private or cross-tenant suggestion, no access event, no warming."""
+    """Reviewer repro: no private or cross-tenant suggestion; a withheld one is never logged."""
 
     from memfw.core.models import EventKind, Tier
 
@@ -384,5 +384,6 @@ def test_remember_suggestions_follow_the_callers_visibility(tmp_path: Path) -> N
     out = gateway.remember("zebra vault keys new note", "zebra vault keys")
     ids = {item["memory_id"] for item in out["suggestions"]}
     assert ids == {"m-alpha"}
-    assert not [e for e in repository.events() if e.kind == EventKind.MEMORY_ACCESS]
+    logged = [e.memory_id for e in repository.events() if e.kind == EventKind.MEMORY_ACCESS]
+    assert logged == ["m-alpha"]  # only the suggestion that was shown
     assert repository.get("m-alpha-priv").tier == Tier.COLD

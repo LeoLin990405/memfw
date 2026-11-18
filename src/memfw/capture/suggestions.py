@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from ..core.models import MemoryDocument
+from ..core.models import EventKind, MemoryDocument, Tier
 from ..core.repository import Repository
 from ..memory_hybrid import MemoryHybridRetriever
 
@@ -47,14 +47,17 @@ def suggest_related(
     tenant: str = "",
     allowed_sources: tuple[str, ...] = (),
     admit: Callable[[MemoryDocument], bool] | None = None,
+    record_access: bool = True,
 ) -> list[CandidateSuggestion]:
     """Memories related to a candidate being staged; read-only.
 
     The search is the caller's: ``tenant`` and ``allowed_sources`` bound it,
     and ``admit`` (the interface's visibility and privacy clearance) drops a
-    memory the caller may not see, so its id and title never appear. No
-    ``memory_access`` event is written and nothing is warmed: a suggestion is
-    not a read by the caller.
+    memory the caller may not see, so its id and title never appear. The
+    retriever itself writes nothing; with ``record_access`` (the Runtime's
+    C6 switch) each suggestion that is shown, and only those, is warmed when
+    cold and gets the one ``memory_access`` event the search path writes, in
+    the same order as before, so a withheld memory is never logged or warmed.
     """
 
     retriever = MemoryHybridRetriever(
@@ -83,6 +86,21 @@ def suggest_related(
             continue
         if document.tenant != tenant or (admit is not None and not admit(document)):
             continue
+        if record_access:
+            try:
+                if document.is_stub or document.tier == Tier.COLD:
+                    repository.autowarm(document.id, actor="mechanism")
+                repository.capture_event(
+                    EventKind.MEMORY_ACCESS,
+                    actor="mechanism",
+                    details={
+                        "memory_id": document.id,
+                        "operation": retriever.last_access_operation or "retrieve",
+                    },
+                )
+                document = repository.get(document.id)
+            except Exception:  # noqa: BLE001 - best effort, as the search path
+                pass
         existing_norm = _norm(document.body)
         if source_norm and source_norm == existing_norm:
             kind = "duplicate"

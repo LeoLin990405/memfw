@@ -128,6 +128,10 @@ class MemoryHybridRetriever:
         )
         self.last_metrics: dict[str, Any] = {}
         self._legacy: str | None = None
+        #: The ``memory_access`` operation of the path that answered the last
+        #: ``search`` (``hybrid_retrieve``, ``fts_retrieve`` or ``retrieve``),
+        #: for a caller that records access itself for the hits it keeps.
+        self.last_access_operation = ""
 
     def _embeddable(self, path: str, _frontmatter: Mapping[str, Any] | None = None) -> bool:
         """Under the gate: whether the memory at ``path`` (``<id>.md``) may be embedded.
@@ -305,6 +309,7 @@ class MemoryHybridRetriever:
         except Exception as exc:  # noqa: BLE001
             errors.append(f"fts index unavailable: {exc}")
         if notes_result is not None:
+            self.last_access_operation = "fts_retrieve"
             results: list[dict[str, Any]] = []
             for hit in notes_result.hits:
                 memory_id = Path(hit.path).stem
@@ -352,6 +357,7 @@ class MemoryHybridRetriever:
                 and self._admitted(document)
             )
 
+        self.last_access_operation = "retrieve"
         legacy = VaultRetriever(
             self.repository,
             record_access=self.record_access,
@@ -420,6 +426,7 @@ class MemoryHybridRetriever:
                     ),
                 )
                 notes_result = retriever.search(query, limit=max(1, limit))
+                self.last_access_operation = "hybrid_retrieve"
                 for hit in notes_result.hits:
                     if hit.path.startswith("/"):
                         path = Path(hit.path)

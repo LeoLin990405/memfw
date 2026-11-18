@@ -51,6 +51,7 @@ def stage_remember(
     embedding_allow_remote: bool = False,
     allowed_sources: tuple[str, ...] = (),
     visible: Callable[[MemoryDocument], bool] | None = None,
+    record_access: bool = True,
 ) -> dict[str, Any]:
     """Stage one candidate under ``_candidates/remember/`` of ``root``.
 
@@ -79,6 +80,7 @@ def stage_remember(
         tenant=tenant,
         allowed_sources=allowed_sources,
         admit=visible,
+        record_access=record_access,
     )
     suggestion_rows = [item.as_dict() for item in suggestions]
     related_ids = list(related) if related else [item.memory_id for item in suggestions]
