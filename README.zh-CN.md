@@ -12,14 +12,14 @@ Markdown 即真相 · 哈希链 JSONL 事件 · 可重建 FTS5 索引 · 先核�
 
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="License"></a>
 <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.11+"></a>
-<a href="#-现状与边界"><img src="https://img.shields.io/badge/release-v0.3.0-2563EB?style=flat-square" alt="Release v0.3.0"></a>
+<a href="#-现状与边界"><img src="https://img.shields.io/badge/release-v0.4.0-2563EB?style=flat-square" alt="Release v0.4.0"></a>
 <a href="#-mcp-工具"><img src="https://img.shields.io/badge/MCP-15_tools_(%2B3_opt--in),_3_resources_(%2B1_opt--in)-8B5CF6?style=flat-square" alt="15 MCP tools (+3 opt-in), 3 resources (+1 opt-in)"></a>
 <a href="#-会话库所有-agent-汇到一处"><img src="https://img.shields.io/badge/agent_readers-15-10B981?style=flat-square" alt="15 agent readers"></a>
 <a href="#-架构分层与端口"><img src="https://img.shields.io/badge/ports-12-0EA5E9?style=flat-square" alt="12 ports"></a>
 <a href="#-可选适配器"><img src="https://img.shields.io/badge/adapters-9_(off_by_default)-64748B?style=flat-square" alt="9 adapters (off by default)"></a>
 <a href="#-评估结果摘要"><img src="https://img.shields.io/badge/evaluation-bounded-D97706?style=flat-square" alt="Bounded evaluation"></a>
 
-<sub>数字以 <code>main</code> 为准；release 徽章是最近一次打标签的版本（v0.3.0）。</sub>
+<sub>数字以 <code>main</code> 为准；release 徽章是最近一次打标签的版本（v0.4.0）。</sub>
 
 </div>
 
@@ -69,7 +69,7 @@ uv venv .venv && uv sync --frozen --extra dev   # 或：python -m venv .venv && 
 . .venv/bin/activate
 ```
 
-装好后有两个命令：`memfw`（命令行）和 `memfw-mcp`（stdio MCP 服务）。`memfw --version` 打印已安装的版本（`memfw 0.3.0`），发版冒烟测试会用它核对。`memfw --help` 把命令分成 Daily、Approval、Ops、Export 四组显示。
+装好后有两个命令：`memfw`（命令行）和 `memfw-mcp`（stdio MCP 服务）。`memfw --version` 打印已安装的版本（`memfw 0.4.0`），发版冒烟测试会用它核对。`memfw --help` 把命令分成 Daily、Approval、Ops、Export 四组显示。
 
 建一个 vault，加一条记忆，再搜出来：
 
@@ -343,13 +343,15 @@ memfw dream skills --root /path/to/vault --from-queue          # 用 worker 排�
 
 **从 0.2.0 升到 0.3.0 时，共用同一个 vault 的所有机器要一起升。** memfw 0.2.0 能读 0.3.0 写出的文件，但它一旦改写某条记忆，就会丢掉所有它不认识的字段：`epistemic`、`causal`、`causal_record`、`limitations`、`experience`、`open_question` 块、`privacy`，以及顶层的 `sensitivity:` 键（记忆因此可能被放宽）。0.3.0 压缩过事件日志之后，0.2.0 也再读不了这份日志。会话库在第一次打开时迁移到 schema 2（worker 可能把会话重新处理一次，最多是全部会话；开启云端后端之前，先用 extractive 后端跑一遍 worker）；`memfw-http/2` 有两处回应变了：不带租户的 `/related` 查有租户的记忆时返回 404，`/stage` 用已有的 `proposal_id` 提交不同内容时返回 409。见 [`CHANGELOG.md` → Compatibility / upgrade notes](CHANGELOG.md#compatibility--upgrade-notes)。
 
-**从 0.3.0 升到下一个版本（计划为 v0.4.0，现已在 `main` 上）：**
+**从 0.3.0 升到 0.4.0**（细节见 [`CHANGELOG.md` → Upgrade notes](CHANGELOG.md#upgrade-notes)）：
 
 - **附件只能单向升级。** memfw 0.3.0 遇到带 `attach` 事件的 vault 会直接拒绝工作（所有读事件日志的命令都是如此），所以在第一次 `memfw attach add` 之前，要把所有读这个 vault 的机器都升级好；之后就不能再降回 0.3.0。
 - **事件日志向前兼容。** 0.4.x 的 reader 遇到不认识的事件类型时，只有事件带着 `details.projection: "none"`（新版 writer 承诺这个事件从不改变记忆状态）才会接受。这类事件逐字节保留，replay 时跳过，`log verify` 会计数，`fsck` 会报告，`rollback` 会拒绝；不带这个标记的未知类型仍像 0.3.0 一样被拒绝。
 - **重建两份投影。** 边投影升到 schema 2，佐证投影搬到 vault 之外。在每个用到它们的 vault 上跑一次 `memfw graph rebuild` 和 `memfw corroboration rebuild`；vault 根目录下旧的 `corroboration.sqlite3` 会被忽略但不会删除，在你手动删掉之前仍计入 vault 大小。
 - **证据更严格。** 新加的 `att:` 指针如果解析不了会被拒绝（0.3.0 会把它当不透明字符串存下）。
 - **HTTP。** 不带 `MemFW-Contract: memfw-http/3` 请求头时，`memfw-http/2` 的每个回应都逐字节不变。
+- **嵌入本机闸门。** 嵌入、重排或查询改写服务的端点如果不是回环地址字面量（例如指向别的机器的 `MEMFW_EMBEDDING_URL`），就再也收不到 `local-private`/`unknown` 文本，也收不到任何查询：`hybrid`/`vector` 搜索改由 FTS 回答，并带上 `degraded: true` 和 `semantic_query_withheld`。要放开，设 `MEMFW_EMBEDDING_ALLOW_REMOTE=1`、`vault.yaml` 里的 `runtime: {embedding: {allow_remote: true}}`，或加 `--allow-remote`（[`docs/ports-and-recall.md`](docs/ports-and-recall.md) §4.1d）。
+- **notes 索引第一次运行时会把每篇笔记重读一遍**（`index_versions`）；`vault.yaml` 存在但读不了或解析失败时，召回接线不再退回默认值，而是直接拒绝（`recall adapter: bad_config`）。
 
 ## 🌐 集成与联邦
 
@@ -445,9 +447,9 @@ memfw 分成若干层，只允许向下依赖，并由 CI 强制检查：
 
 ## 📍 现状与边界
 
-发版状态：**v0.3.0**（2026-11-17）。Apache-2.0 许可，在单机上离线运行，没有发布到 PyPI。已经实现：vault 与哈希链事件日志、保留策略与 `10MB` 预算、可重建的 FTS5 索引与读路径（按词匹配、概念别名、多跳）、认知类型、因果分级与经人审核的经验点、带十一个端口（第十二个 `ProjectionStore` 在 `main` 上）和 `memfw.runtime` 组装根的分层内核、`two_stage` 召回、带槽位、资源和 `if_version` 的上下文包 v2、待解问题、召回标签与佐证、概念层级与关系类型表、隐私级别与按需开启的 clearance、MCP 服务、notes 索引与代码检索、只读转录索引、带 14 个 reader（第 15 个 Qwen Code 在 `main` 上） 的会话库、跳过进行中会话的 settled 导入、共享与 worker（附一个默认关闭的 DeepSeek 打标签适配器）、交接包、dream（核对、整理、提炼、预算、技能、待解问题候选）、OKF v0.2 导出与导入、Obsidian 投影，以及只读 HTTP 服务（`memfw-http/2`）。逐条变更见 [`CHANGELOG.md`](CHANGELOG.md)。
+发版状态：**v0.4.0**（2026-11-18）。Apache-2.0 许可，在单机上离线运行，没有发布到 PyPI。已经实现：vault 与哈希链事件日志、保留策略与 `10MB` 预算、可重建的 FTS5 索引与读路径（按词匹配、概念别名、多跳）、认知类型、因果分级与经人审核的经验点、带十二个端口和 `memfw.runtime` 组装根的分层内核、`two_stage` 召回、带槽位、资源和 `if_version` 的上下文包 v2、待解问题、召回标签与佐证、概念层级与关系类型表、隐私级别与按需开启的 clearance、MCP 服务、notes 索引与代码检索、只读转录索引、带 15 个 reader 的会话库、跳过进行中会话的 settled 导入、共享与 worker（附一个默认关闭的 DeepSeek 打标签适配器）、交接包、dream（核对、整理、提炼、预算、技能、待解问题候选）、OKF v0.2 导出与导入、Obsidian 投影，以及只读 HTTP 服务（`memfw-http/2`）。逐条变更见 [`CHANGELOG.md`](CHANGELOG.md)。
 
-**已在 `main` 上、尚未发版（计划放进 v0.4.0）：** 需显式开启的 `current` 上下文槽位；带标签过滤的两阶段会话搜索；附件（内嵌与引用两种原件、detach、relink、purge、scan、`memfw.proxy` v1 格式的文本代理、写入闸门里把附件当作观察类证据、带需显式开启的 MCP 工具 `attachment_search` / `attachment_get` 的代理搜索）；`ProjectionStore` 端口之后的类型化边投影与有界路径模式；C4 上下文包评估；带 `/context`、`/forget` 请求和 `forget residue` 的 `memfw-http/3`；事件日志向前兼容；vault 外投影记录所属 vault（佐证投影搬出 vault）；召回里的生命周期元索引和 `kh:` 笔记解析器；`runtime.recall.adapters`；Qwen Code reader；以及 DeepSeek 之外新增的八个适配器（bm25s、Qdrant、QMD、PageIndex、OCR、LangExtract、LightRAG、GraphRAG），全部默认关闭。
+**v0.4.0 新增：** 需显式开启的 `current` 上下文槽位；带标签过滤的两阶段会话搜索；附件（内嵌与引用两种原件、detach、relink、purge、scan、`memfw.proxy` v1 格式的文本代理、写入闸门里把附件当作观察类证据、带需显式开启的 MCP 工具 `attachment_search` / `attachment_get` 的代理搜索）；`ProjectionStore` 端口之后的类型化边投影与有界路径模式；C4 上下文包评估；带 `/context`、`/forget` 请求和 `forget residue` 的 `memfw-http/3`；事件日志向前兼容；vault 外投影记录所属 vault（佐证投影搬出 vault）；召回里的生命周期元索引和 `kh:` 笔记解析器；`runtime.recall.adapters`；Qwen Code reader；以及 DeepSeek 之外新增的八个适配器（bm25s、Qdrant、QMD、PageIndex、OCR、LangExtract、LightRAG、GraphRAG），全部默认关闭。v0.4.0 召回的已知局限见 [`docs/ports-and-recall.md`](docs/ports-and-recall.md) §4.1c-bis。
 
 **升级边界。** `vault.yaml` 仍是 `schema_version: 1`；不带新键的文件解析再渲染后保持原字节。新的 frontmatter（`epistemic`、`causal`、`causal_record`、`limitations`、`experience`、`open_question`、`privacy`、顶层 `sensitivity:`）只在设置时才写出，而 memfw 0.2.0 改写文件时会把它们丢掉，所以共用一个 vault 的机器要一次性全部升级。FTS5 索引是可丢弃的投影，**不会就地迁移**：MCP 服务（`memfw-mcp`）和 `memfw index search` 会在使用前重建过期索引；只读 HTTP 服务从不写盘，所以要把它的三个文件一起部署，并先跑一次 `memfw index rebuild` 再指向升级后的 vault。
 

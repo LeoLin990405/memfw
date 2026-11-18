@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -401,6 +402,14 @@ def test_live_current_memory_through_mcp(tmp_path: Path) -> None:
 
 # --- byte-identical against the base ref -------------------------------------------------
 
+#: A release bump changes ``serverInfo.version`` (memfw's own version) on purpose; it is the
+#: only handshake field masked before the comparison (as in ``tests/test_mcp_split.py``).
+_SERVER_VERSION = re.compile(r'("serverInfo": \{"name": "memfw", "version": )"[^"]*"')
+
+
+def _without_server_version(rendered: str) -> str:
+    return _SERVER_VERSION.sub(r'\1"<memfw version>"', rendered)
+
 
 @pytest.mark.skipif(
     not os.environ.get("MEMFW_ARCH_BASE_REF"),
@@ -420,7 +429,9 @@ def test_default_context_is_byte_identical_to_base_ref() -> None:
         # M3c changes only the conversations_search entry of tools/list (checked
         # narrowly by with_m3c_tools_list); every other reply must be identical.
         expected = byte_identical.Comparison(
-            payload=result.payload, old=with_m3c_tools_list(result.old), new=result.new
+            payload=result.payload,
+            old=_without_server_version(with_m3c_tools_list(result.old)),
+            new=_without_server_version(result.new),
         )
         assert expected.identical, f"{result.payload}:\n{expected.diff[:4000]}"
     assert '"memfw://context/topics"' in results[0].new

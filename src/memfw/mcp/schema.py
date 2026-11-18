@@ -6,7 +6,7 @@ from typing import Any
 
 from memfw.ports.models import TAG_OUTCOMES, TASK_TYPES
 
-SERVER_INFO = {"name": "memfw", "version": "0.3.0"}
+SERVER_INFO = {"name": "memfw", "version": "0.4.0"}
 PROTOCOL = "2024-11-05"
 INSTRUCTIONS = (
     "memfw exposes a local Markdown memory vault. Use memory_search before answering "

@@ -65,7 +65,7 @@ memfw code map --db /tmp/memfw-code.sqlite
 2. `src/memfw/index/readonly.py`（查询规则、`search_vault`）；
 3. `src/memfw/index/read_path.py`（读路径共用字段）。
 
-两个库文件只依赖标准库和 PyYAML。脚本按顺序加载读路径：先找旁边的 `readonly.py`，再找仓库里的 `src/memfw/index/`，最后找已安装的 `memfw`，并在日志里写明用了哪一个；三者都没有就报错退出，并指出缺了哪些文件。`read_path.py` 带有 `READ_PATH_VERSION`（0.3.0 中为 2）；脚本和 `readonly.py` 遇到更旧的副本会拒绝启动，这样只升级了一部分时，启动就会失败，而不是每次 `/search` 都报错。它从不写盘，所以升级后要先跑一次 `memfw index rebuild`。
+两个库文件只依赖标准库和 PyYAML。脚本按顺序加载读路径：先找旁边的 `readonly.py`，再找仓库里的 `src/memfw/index/`，最后找已安装的 `memfw`，并在日志里写明用了哪一个；三者都没有就报错退出，并指出缺了哪些文件。`read_path.py` 带有 `READ_PATH_VERSION`（0.3.0 和 0.4.0 中为 2）；脚本和 `readonly.py` 遇到更旧的副本会拒绝启动，这样只升级了一部分时，启动就会失败，而不是每次 `/search` 都报错。它从不写盘，所以升级后要先跑一次 `memfw index rebuild`。
 
 `--clearance` / `MEMFW_READONLY_CLEARANCE`（例如 `public,shared`）把 `/search` 和 `/related` 限制在这些隐私级别；不设置就不过滤。没有 `privacy` 字段的记忆按 vault 的 `legacy_privacy_default` 处理（没设时是 `local-private`），所以要先设好它，否则旧记忆会全部被挡掉。见 [`READONLY-SERVICE-UPGRADE.md`](READONLY-SERVICE-UPGRADE.md)。
 

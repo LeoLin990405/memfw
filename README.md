@@ -12,14 +12,14 @@ Markdown is the source of truth · hash-linked JSONL events · rebuildable FTS5 
 
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="License"></a>
 <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.11+"></a>
-<a href="#-status-and-boundaries"><img src="https://img.shields.io/badge/release-v0.3.0-2563EB?style=flat-square" alt="Release v0.3.0"></a>
+<a href="#-status-and-boundaries"><img src="https://img.shields.io/badge/release-v0.4.0-2563EB?style=flat-square" alt="Release v0.4.0"></a>
 <a href="#-mcp-tools"><img src="https://img.shields.io/badge/MCP-15_tools_(%2B3_opt--in),_3_resources_(%2B1_opt--in)-8B5CF6?style=flat-square" alt="15 MCP tools (+3 opt-in), 3 resources (+1 opt-in)"></a>
 <a href="#-conversation-store-every-agent-one-place"><img src="https://img.shields.io/badge/agent_readers-15-10B981?style=flat-square" alt="15 agent readers"></a>
 <a href="#-architecture-layers-and-ports"><img src="https://img.shields.io/badge/ports-12-0EA5E9?style=flat-square" alt="12 ports"></a>
 <a href="#-optional-adapters"><img src="https://img.shields.io/badge/adapters-9_(off_by_default)-64748B?style=flat-square" alt="9 adapters (off by default)"></a>
 <a href="#-evaluation-summary"><img src="https://img.shields.io/badge/evaluation-bounded-D97706?style=flat-square" alt="Bounded evaluation"></a>
 
-<sub>Counts reflect <code>main</code>; the release badge is the latest tagged release (v0.3.0).</sub>
+<sub>Counts reflect <code>main</code>; the release badge is the latest tagged release (v0.4.0).</sub>
 
 </div>
 
@@ -104,7 +104,7 @@ uv venv .venv && uv sync --frozen --extra dev   # or: python -m venv .venv && pi
 ```
 
 This installs two commands: `memfw` (CLI) and `memfw-mcp` (stdio MCP server).
-`memfw --version` prints the installed version (`memfw 0.3.0`); the release smoke test checks it.
+`memfw --version` prints the installed version (`memfw 0.4.0`); the release smoke test checks it.
 `memfw --help` groups the commands into Daily, Approval, Ops and Export panels.
 
 Create a vault, add a memory and search it:
@@ -590,7 +590,7 @@ before enabling a cloud backend), and two `memfw-http/2` answers changed:
 `proposal_id` but changed content gives 409. See
 [`CHANGELOG.md` → Compatibility / upgrade notes](CHANGELOG.md#compatibility--upgrade-notes).
 
-**From 0.3.0 to the next release (planned v0.4.0, on `main` now):**
+**From 0.3.0 to 0.4.0** (details: [`CHANGELOG.md` → Upgrade notes](CHANGELOG.md#upgrade-notes)):
 
 - **Attachments are one-way.** memfw 0.3.0 fails closed on a vault with an `attach` event (every
   command that reads the event log), so upgrade every host that reads the vault before the first
@@ -608,6 +608,15 @@ before enabling a cloud backend), and two `memfw-http/2` answers changed:
   as an opaque string).
 - **HTTP.** Without a `MemFW-Contract: memfw-http/3` header every `memfw-http/2` answer is
   byte-identical.
+- **Embedding locality gate.** An embedder, reranker or query rewriter whose endpoint is not a
+  loopback literal (for example an off-host `MEMFW_EMBEDDING_URL`) no longer receives
+  `local-private`/`unknown` text or any query: `hybrid`/`vector` search answers from FTS with
+  `degraded: true` and `semantic_query_withheld`. Opt in with `MEMFW_EMBEDDING_ALLOW_REMOTE=1`,
+  `vault.yaml` `runtime: {embedding: {allow_remote: true}}` or `--allow-remote`
+  ([`docs/ports-and-recall.md`](docs/ports-and-recall.md) §4.1d).
+- **Notes indexes re-read every note once** on their first run (`index_versions`), and a
+  `vault.yaml` that exists but cannot be read or parsed now fails recall wiring closed
+  (`recall adapter: bad_config`) instead of using defaults.
 
 ## 🌐 Integration and federation
 
@@ -770,20 +779,20 @@ changes no default. Full evidence and limits: [`docs/evaluation.md`](docs/evalua
 
 ## 📍 Status and boundaries
 
-Release status: **v0.3.0** (2026-11-17). Apache-2.0; runs offline on one machine; not published
+Release status: **v0.4.0** (2026-11-18). Apache-2.0; runs offline on one machine; not published
 to PyPI. Implemented: the vault and hash-linked event log, retention and the `10MB` budget, the
 disposable FTS5 index and the read path (per-term matching, concept aliases, multi-hop),
-epistemic types, causal grades and reviewed experience points, the layered core with eleven
-ports (the twelfth, `ProjectionStore`, is on `main`) and the `memfw.runtime` composition root, `two_stage` recall, context packs v2 with
+epistemic types, causal grades and reviewed experience points, the layered core with twelve
+ports and the `memfw.runtime` composition root, `two_stage` recall, context packs v2 with
 slots, resources and `if_version`, open questions, recall labels and corroboration, the concept
 taxonomy and relation-type table, privacy levels with opt-in clearance, the MCP servers, the
-notes index and code retrieval, the read-only transcript index, the conversation store with 14
-readers (Qwen Code, the 15th, is on `main`), settled ingest, sharing and the worker (with an optional, off-by-default DeepSeek
+notes index and code retrieval, the read-only transcript index, the conversation store with 15
+readers, settled ingest, sharing and the worker (with an optional, off-by-default DeepSeek
 tagging adapter), handoff packs, dream (verify, curate, distill, budget, skills, open-question
 candidates), OKF v0.2 export and import, the Obsidian projection and the read-only HTTP service
 (`memfw-http/2`). Changes are listed in [`CHANGELOG.md`](CHANGELOG.md).
 
-**On `main`, not yet released (planned for v0.4.0):** the opt-in `current` context slot,
+**New in v0.4.0:** the opt-in `current` context slot,
 two-stage conversation search with tag filters, attachments (embedded and referenced originals,
 detach, relink, purge, scan, text proxies in the `memfw.proxy` v1 format, attachments as
 observation evidence in the write gate, proxy search with the opt-in MCP tools
@@ -793,7 +802,8 @@ behind the `ProjectionStore` port, the C4 context pack evaluation, `memfw-http/3
 identity for out-of-vault projections (corroboration moved out of the vault), the lifecycle
 meta-index and `kh:` note resolver in recall, `runtime.recall.adapters`, the Qwen Code reader
 and eight new adapters beside the DeepSeek one (bm25s, Qdrant, QMD, PageIndex, OCR, LangExtract,
-LightRAG, GraphRAG), all off by default.
+LightRAG, GraphRAG), all off by default. Known limitations of v0.4.0 recall are listed in
+[`docs/ports-and-recall.md`](docs/ports-and-recall.md) §4.1c-bis.
 
 **Upgrade boundary.** `vault.yaml` stays at `schema_version: 1`, and a file without the new
 keys keeps its bytes through parse → render. New frontmatter (`epistemic`, `causal`,
