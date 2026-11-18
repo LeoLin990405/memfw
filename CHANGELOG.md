@@ -25,7 +25,7 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   gate with a note and an attachment; T5 `local-private` leaks = 0 over
   notes, HTTP, OKF and MCP plus the off-host embedder/reranker gate; T6 the
   builtin vs QMD notes overlap report (not a gate); T7 QMD or Qdrant down →
-  FTS, flagged degraded. No network (loopback fakes only); no code changes.
+  FTS, flagged degraded. No network (loopback fakes only); no code changes (#106).
 
 ### Fixed — OCR proxy adapter keeps proxies with control characters (`memfw-adapter-ocr` 0.1.1)
 
