@@ -515,3 +515,31 @@ def test_c4_evaluation_reads_a_private_copy_of_an_external_meta_index(
     monkeypatch.setattr(ce, "_evaluate_copy", touching)
     with pytest.raises(SnapshotChanged):
         evaluate_snapshot(repository.root, options=options)
+
+
+def test_c4_fingerprint_follows_a_symlinked_external_meta_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``lifecycle_source`` that is a link: the run tracks (and copies) the target."""
+
+    from memfw.runtime import context_eval as ce
+    from memfw.runtime.context_eval import EvalOptions, SnapshotChanged, evaluate_snapshot
+
+    options = EvalOptions(policy="strict", slots=("core",), repeats=1, environ={})
+    repository, outside = _imported_vault(tmp_path)
+    link = tmp_path / "current-meta-index.json"
+    link.symlink_to(outside)
+    _append_config(repository, {"lifecycle_source": str(link)})
+    assert ce._configured_meta_index(repository.root) == outside.resolve()
+    joined = evaluate_snapshot(repository.root, options=options)["snapshot"]["visible"]
+    real_copy = ce._evaluate_copy
+
+    def rewriting(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        out = real_copy(*args, **kwargs)
+        _meta_index(outside, [{"path": "m-keep.md", "lifecycle": "retired"}])  # the target
+        return out
+
+    monkeypatch.setattr(ce, "_evaluate_copy", rewriting)
+    with pytest.raises(SnapshotChanged):
+        evaluate_snapshot(repository.root, options=options)
+    assert joined > 0

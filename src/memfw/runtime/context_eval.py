@@ -289,7 +289,7 @@ def fingerprint(paths: Iterable[Path | None]) -> str:
 
 
 def _configured_meta_index(snapshot: Path) -> Path | None:
-    """The snapshot's ``runtime.recall.lifecycle_source`` (absolute), or ``None`` when unset.
+    """The snapshot's ``runtime.recall.lifecycle_source``, absolute with symlinks resolved.
 
     A ``vault.yaml`` that cannot be read, or a malformed key, is refused.
     """
@@ -301,7 +301,9 @@ def _configured_meta_index(snapshot: Path) -> Path | None:
         source = lifecycle_source_from_config(config if isinstance(config, dict) else {}, snapshot)
     except (OSError, ValueError, yaml.YAMLError, ProjectionError) as exc:
         raise SnapshotRefused(f"the snapshot's vault.yaml cannot be read: {exc}") from None
-    return None if source is None else Path(os.path.abspath(source))
+    # Symlinks resolved: the fingerprint and the private copy follow the
+    # file the Runtime would read, not a link to it.
+    return None if source is None else Path(os.path.abspath(source)).resolve()
 
 
 def _private_meta_index(source: Path, workdir: Path) -> Path:

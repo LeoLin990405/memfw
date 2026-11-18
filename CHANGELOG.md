@@ -22,8 +22,10 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   MCP `two_stage` resolve (FTS, hybrid and adapter providers), of
   `memory_context` `strict` (MCP and HTTP `/context`), of the open-question
   queue and labels (`memfw.recall.builtin.document_meta`) and of `memfw dream`
-  when `--lifecycle-source` is not given. A `vault.yaml` that cannot be read
-  fails closed (`bad_config`). Unset: byte-identical to before (harness test
+  when `--lifecycle-source` is not given. The C4 context evaluation reads a
+  private copy of an external `lifecycle_source` (symlinks resolved) and
+  fingerprints it like a store. A `vault.yaml` that cannot be read fails
+  closed (`bad_config`). Unset: byte-identical to before (harness test
   against the base ref, with and without a clearance, HTTP `/context`
   included).
 - `runtime.recall.notes` (`root`, `index`, optional `legacy_privacy`, `tenant`;
