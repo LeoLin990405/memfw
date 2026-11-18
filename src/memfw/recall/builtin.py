@@ -11,8 +11,9 @@ the adapter between it and today's vault and retrievers.
   built-in notes index (``memfw.notes``), with the ``notes_search`` privacy
   rules, as ``SegmentResolution``s.
 - ``default_resolvers``: the id resolver plus ``MemoryPathResolver`` on top,
-  behind a ``SchemePathResolver`` where ``kh:`` (and, from MM2b, ``att:``)
-  resolvers can be registered.
+  behind a ``SchemePathResolver`` where ``kh:`` (and a future ``att:``)
+  resolvers can be registered, plus ``extra`` ref kinds
+  (``attachment_segment``: ``ProxySegmentResolver``, MM2b).
 - ``FtsProvider``: the shared ``search_vault`` that MCP ``memory_search``
   ``mode=fts`` and HTTP ``/search`` use.
 - ``HybridProvider``: ``MemoryHybridRetriever`` in ``hybrid`` or ``vector``
@@ -28,8 +29,8 @@ the adapter between it and today's vault and retrievers.
   unresolved open questions (``memfw.recall.labels``).
 
 None of them changes the code it wraps; index preparation is injected
-(``prepare``) so the wiring PR can pass the same staleness check the MCP
-server uses.
+(``prepare``) so the Runtime passes the same staleness check the MCP server
+uses.
 """
 
 from __future__ import annotations
@@ -260,6 +261,21 @@ def join_lifecycle(meta: MemoryMeta, tags: Sequence[str], lifecycle: Lifecycle) 
     )
 
 
+def document_meta(document: MemoryDocument, lifecycle: Lifecycle | None = None) -> MemoryMeta:
+    """``meta_from_document``, joined to ``lifecycle`` when one is given (``join_lifecycle``).
+
+    ``None`` (no ``lifecycle_source`` configured) is the vault-only reading,
+    exactly ``meta_from_document``. The Runtime's ``memory_context`` strict
+    filter and the open-question queue and labels use it, so they read the
+    same lifecycle as ``two_stage`` once the operator names a meta-index.
+    """
+
+    meta = meta_from_document(document)
+    if lifecycle is not None and fleet_paths(document.tags):
+        meta = join_lifecycle(meta, document.tags, lifecycle)
+    return meta
+
+
 class VaultIdResolver:
     """``memory_id`` refs → the vault document's metadata. Read-only.
 
@@ -326,7 +342,13 @@ class NotesSegmentResolver:
       removed line is never returned);
     - the note has a section with exactly that heading (the first, by
       position, when it has several); no heading means the note's first
-      section.
+      section. The ref grammar carries no line, so a bare ``kh:<path>``
+      cannot name a later section: the QMD notes provider turns its hit's
+      line hint into the heading above it and emits a bare ref only for a
+      hit above the first heading (the preamble, which is the first
+      section) or without a usable heading (no line, or one too long for a
+      ref); only that last case may land on another section than the hit,
+      which affects relevance, never visibility.
 
     The resolution carries the note's title, the section heading and the
     section text exactly as ``notes_search`` returns them (``title``,
@@ -443,18 +465,28 @@ def default_resolvers(
     *,
     lifecycle_source: Path | str | None = None,
     schemes: Mapping[str, Resolver] | None = None,
+    extra: Mapping[RefKind, Resolver] | None = None,
 ) -> dict[RefKind, Resolver]:
     """The vault resolvers: ``memory_id`` and ``path`` (``memories/<id>.md``).
 
     ``schemes`` registers resolvers for scheme path refs: ``{"kh":
-    NotesSegmentResolver(...)}`` for notes, and (MM2b) ``{"att": …}`` for
-    attachment segments. None by default, so ``kh:``/``att:`` refs stay
-    unresolved and the output is what it was without this argument.
+    NotesSegmentResolver(...)}`` for notes (and ``{"att": …}`` for a future
+    ``att:<id>#<locator>`` path resolver). ``extra`` adds resolvers for other
+    ref kinds: ``{"attachment_segment": ProxySegmentResolver(...)}`` for the
+    MM2b proxy segments (``<prx-id>:<n>``); it may not replace ``memory_id``
+    or ``path`` (``ValueError``). None by default, so ``kh:``/``att:`` and
+    segment refs stay unresolved and the output is what it was without these
+    arguments.
     """
 
     ids = VaultIdResolver(root, lifecycle_source=lifecycle_source)
     path = SchemePathResolver(MemoryPathResolver(ids), schemes)
-    return {"memory_id": ids, "path": path}
+    resolvers: dict[RefKind, Resolver] = {"memory_id": ids, "path": path}
+    for kind, resolver in (extra or {}).items():
+        if kind in resolvers:
+            raise ValueError(f"ref kind {kind!r} is a vault resolver")
+        resolvers[kind] = resolver
+    return resolvers
 
 
 def _indexed_question_ids(repository: Repository, tenant: str) -> list[str] | None:
@@ -501,7 +533,12 @@ def _scanned_question_ids(repository: Repository) -> list[str]:
     return found
 
 
-def _is_open(document: MemoryDocument, policy: FilterPolicy, now: datetime) -> bool:
+def _is_open(
+    document: MemoryDocument,
+    policy: FilterPolicy,
+    now: datetime,
+    lifecycle: Lifecycle | None = None,
+) -> bool:
     """An unresolved, current open question that ``policy`` would keep.
 
     A question with ``valid_to`` set is never shown, even for an ``as_of``
@@ -514,11 +551,15 @@ def _is_open(document: MemoryDocument, policy: FilterPolicy, now: datetime) -> b
         return False
     if block.resolved_by or document.valid_to is not None or document.superseded_by:
         return False
-    return evaluate(meta_from_document(document), policy, now=now).kept
+    return evaluate(document_meta(document, lifecycle), policy, now=now).kept
 
 
 def open_questions(
-    repository: Repository, policy: FilterPolicy, *, now: datetime
+    repository: Repository,
+    policy: FilterPolicy,
+    *,
+    now: datetime,
+    lifecycle: Lifecycle | None = None,
 ) -> list[MemoryDocument]:
     """The unresolved open questions ``policy`` lets this caller see, by id.
 
@@ -530,7 +571,9 @@ def open_questions(
     ``_is_open``) and ``evaluate`` keeps it under ``policy`` (tenant, source,
     ``as_of``; for ``strict`` also privacy, status, lifecycle, archive): a
     question in another tenant, or one the policy drops, is never returned.
-    An unreadable file is skipped.
+    An unreadable file is skipped. ``lifecycle`` (the configured meta-index,
+    see :func:`document_meta`) joins imported questions to it; ``None``
+    reads the vault alone.
     """
 
     ids = _indexed_question_ids(repository, policy.tenant)
@@ -547,7 +590,7 @@ def open_questions(
             document = repository.get(memory_id)
         except (MemfwError, OSError, UnicodeDecodeError, ValueError):
             continue
-        if document.open_question is None or not _is_open(document, policy, now):
+        if document.open_question is None or not _is_open(document, policy, now, lifecycle):
             continue
         found.append(document)
     return found
@@ -559,6 +602,7 @@ def open_question_index(
     *,
     now: datetime,
     keep: Callable[[MemoryDocument], bool] | None = None,
+    lifecycle: Lifecycle | None = None,
 ) -> OpenQuestionIndex:
     """The open questions ``policy`` lets this caller see, keyed for labelling.
 
@@ -570,7 +614,7 @@ def open_question_index(
 
     return OpenQuestionIndex.build(
         (document.id, list(document.about), list(document.open_question.conflicts))
-        for document in open_questions(repository, policy, now=now)
+        for document in open_questions(repository, policy, now=now, lifecycle=lifecycle)
         if document.open_question is not None and (keep is None or keep(document))
     )
 
@@ -582,10 +626,11 @@ def open_question_labels_for(
     *,
     now: datetime,
     keep: Callable[[MemoryDocument], bool] | None = None,
+    lifecycle: Lifecycle | None = None,
 ) -> dict[str, tuple[str, ...]]:
     """Open-question labels for each hit id that has any (others are absent).
 
-    ``keep`` filters the questions as in :func:`open_question_index`.
+    ``keep`` and ``lifecycle`` filter the questions as in :func:`open_question_index`.
 
     ``now`` is the instant the policy is evaluated at (the coordinator's, for
     ``two_stage``). The hit's ``about`` is read from the vault; a hit outside
@@ -595,7 +640,7 @@ def open_question_labels_for(
 
     if not memory_ids:
         return {}
-    index = open_question_index(repository, policy, now=now, keep=keep)
+    index = open_question_index(repository, policy, now=now, keep=keep, lifecycle=lifecycle)
     if not index:
         return {}
     out: dict[str, tuple[str, ...]] = {}
@@ -968,18 +1013,27 @@ ATTACHMENTS_SOURCE = "attachments"
 class ProxySegmentResolver:
     """``attachment_segment`` refs → ``SegmentResolution``s, not memory hits.
 
-    Registered as ``resolvers["attachment_segment"]``. Each ref ``<prx-id>:<n>``
-    the proxy index holds resolves to ``SegmentResolution(source="attachments",
-    path=<att-id>, anchor=<prx-id>:<n>, title=<proxy kind>, snippet="",
-    privacy=<effective MM0 level>, tenant=<the index row's tenant>)``; the
-    coordinator fuses these into ``RecallResult.segments`` and filters them by
-    tenant and privacy class. ``tenant`` is the tenant the attachments are
-    bound to (the vault's default tenant ``""``). The snippet stays empty: the
-    caller reads the text from the proxy file after its own re-checks.
+    Registered as ``resolvers["attachment_segment"]`` (or through
+    ``default_resolvers(extra={"attachment_segment": ...})``). Each ref
+    ``<prx-id>:<n>`` the proxy index holds resolves to
+    ``SegmentResolution(source="attachments", path=<att-id>,
+    anchor=<prx-id>:<n>, title=<proxy kind>, snippet="", privacy=<effective
+    MM0 level>, tenant=<bound tenant>)``; the coordinator fuses these into
+    ``RecallResult.segments`` and filters them by tenant and privacy class.
+
+    ``tenant`` is the tenant the resolver is bound to (the caller's): a row of
+    any other tenant is left unresolved, the same answer as a missing one, and
+    every resolution carries the bound tenant. ``None`` (no binding) passes
+    each row's own tenant on for the coordinator to check. The snippet stays
+    empty: the caller reads the text from the proxy file after its own
+    re-checks.
     """
 
-    def __init__(self, index_path: Path) -> None:
+    def __init__(self, index_path: Path, *, tenant: str | None = None) -> None:
+        if tenant is not None and not isinstance(tenant, str):
+            raise ValueError("tenant must be a string")
         self.index_path = Path(index_path)
+        self.tenant = tenant
 
     def resolve(self, refs: Sequence[str]) -> Mapping[str, SegmentResolution]:
         from memfw.ports.proxies import SEGMENT_REF_RE
@@ -999,6 +1053,8 @@ class ProxySegmentResolver:
                     ).fetchone()
                     if row is None:
                         continue
+                    if self.tenant is not None and str(row[3]) != self.tenant:
+                        continue  # withheld like a missing segment
                     out[ref] = SegmentResolution(
                         source=ATTACHMENTS_SOURCE,
                         path=str(row[0]),
@@ -1006,7 +1062,7 @@ class ProxySegmentResolver:
                         title=str(row[1]),
                         snippet="",
                         privacy=str(row[2]),
-                        tenant=str(row[3]),
+                        tenant=str(row[3]) if self.tenant is None else self.tenant,
                     )
         except (OSError, sqlite3.Error):
             return {}
@@ -1029,6 +1085,7 @@ __all__ = [
     "ATTACHMENTS_SOURCE",
     "VaultIdResolver",
     "default_resolvers",
+    "document_meta",
     "join_lifecycle",
     "load_lifecycle",
     "meta_from_document",

@@ -156,7 +156,7 @@ def attachment_search(
         return empty
     coordinator = Coordinator(
         [ProxyProvider(runtime.root, clearance=runtime.clearance, index_path=built.path)],
-        resolvers={"attachment_segment": ProxySegmentResolver(built.path)},
+        resolvers={"attachment_segment": ProxySegmentResolver(built.path, tenant=runtime.tenant)},
         inflight=runtime.recall_inflight,
         total_timeout=runtime.total_timeout,
         clock=lambda: moment,
