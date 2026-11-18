@@ -970,7 +970,8 @@ def notes_factory(settings: Mapping[str, Any]) -> QmdNotesProvider:
     """Factory for ``qmd-notes`` (same two entry routes as :func:`memory_factory`).
 
     Its ``kh:`` path refs resolve to note sections through memfw's
-    ``NotesSegmentResolver`` when the coordinator registers it (not by default);
-    otherwise they are dropped as unresolved."""
+    ``NotesSegmentResolver`` when the coordinator registers it (the Runtime
+    does when ``runtime.recall.notes`` is set; not by default); otherwise they
+    are dropped as unresolved."""
 
     return QmdNotesProvider(NotesSettings.from_mapping(settings))

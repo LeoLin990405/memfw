@@ -14,6 +14,27 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 
 ## [Unreleased]
 
+### Added — runtime recall wiring before v0.4.0 (wiring PR, part B)
+
+- `vault.yaml` `runtime.recall.lifecycle_source` (default unset): the lifecycle
+  meta-index path (production keeps it outside the vault, at
+  `<base>/status/memory-meta-index.json`). Set, it is the meta-index of every
+  `two_stage` resolve (FTS, hybrid and adapter providers; MCP and HTTP), of
+  `memory_context` `strict` and of the open-question queue and labels
+  (`memfw.recall.builtin.document_meta`). Unset: byte-identical to before
+  (harness test against the base ref).
+- `runtime.recall.notes` (`root`, `index`, optional `legacy_privacy`, `tenant`;
+  default unset): registers `NotesSegmentResolver` as the `kh:` resolver of
+  `two_stage`, so QMD notes and PageIndex `kh:` refs come back as note sections
+  under `notes`, apart from memory hits; its clearance is the server's, else
+  `public,shared`. A malformed key raises `RecallAdapterError`
+  (`bad_lifecycle_source`, `bad_notes`).
+- MM2b on the #98 hook: `ProxySegmentResolver(index, tenant=...)` returns
+  `SegmentResolution(source="attachments", tenant=<bound tenant>)` and leaves
+  another tenant's segment unresolved; `default_resolvers(extra=...)` takes
+  extra ref kinds (`attachment_segment`); the `att:` docstrings now describe
+  the `attachment_segment` ref kind.
+
 ### Fixed — kernel privacy and lifecycle before v0.4.0 (wiring PR, part A)
 
 - Notes frontmatter: a `---` line inside a YAML block scalar (`|`/`>`) no

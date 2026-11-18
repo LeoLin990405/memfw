@@ -41,3 +41,33 @@ class Down:
 def down_factory(settings: Mapping[str, Any]) -> Down:
     CALLS.append(frozenset(settings))
     return Down()
+
+
+class FixedRefs:
+    """Returns the ``refs`` it was built with as ``path`` candidates (``kh:`` notes)."""
+
+    lexical = False
+    projection_version = ""
+
+    def __init__(self, name: str, refs: list[str]) -> None:
+        self.name = name
+        self.refs = refs
+
+    def available(self) -> Availability:
+        return Availability.ok()
+
+    def search(self, query: str, *, limit: int, **kwargs: Any) -> list[Any]:
+        from memfw.ports import Candidate
+
+        return [
+            Candidate(ref=ref, ref_kind="path", score=1.0 / rank, provider=self.name, rank=rank)
+            for rank, ref in enumerate(self.refs[:limit], start=1)
+        ]
+
+
+def refs_factory(settings: Mapping[str, Any]) -> FixedRefs:
+    CALLS.append(frozenset(settings))
+    refs = settings.get("refs")
+    if not isinstance(refs, list) or not all(isinstance(ref, str) for ref in refs):
+        raise ValueError("refs must be a list of strings")
+    return FixedRefs(str(settings.get("name", "refs")), refs)

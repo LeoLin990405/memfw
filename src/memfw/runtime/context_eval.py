@@ -902,7 +902,7 @@ def _evaluate_copy(
     documents = repository.list()
     events = repository.events()
     now = options.now or _default_now(documents, events)
-    keep = runtime.context_keep(options.policy, now=now)
+    keep = runtime.context_keep(options.policy, now=now, repository=repository)
     visible_documents = [document for document in documents if keep(document)]
     visible_ids = {document.id for document in visible_documents}
 

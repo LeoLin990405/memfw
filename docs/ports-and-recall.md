@@ -420,8 +420,9 @@ all leave the ref `unresolved`, and it is dropped:
 
 A `Resolution` whose `meta.memory_id` differs from its `memory_id` is dropped as
 `id_mismatch`.
-`memfw.recall.builtin.default_resolvers(root, *, lifecycle_source=None, schemes=None)`
-returns:
+`memfw.recall.builtin.default_resolvers(root, *, lifecycle_source=None, schemes=None, extra=None)`
+returns (plus one resolver per `extra` ref kind, e.g. `{"attachment_segment":
+ProxySegmentResolver(...)}`; `extra` may not replace `memory_id` or `path`):
 
 - `VaultIdResolver(root, lifecycle_source=...)` for `memory_id`: reads `memories/<id>.md`
   (no symlinks). An unreadable file gives `meta=None`, which fails closed.
@@ -481,11 +482,20 @@ and `snippet` (section text) are what `notes_search` returns for that section. R
 with `default_resolvers(root, schemes={"kh": NotesSegmentResolver(...)})`. MCP
 `memory_search mode=two_stage` lists such sections under a separate `notes` key
 (`source: notes`, `title`, `heading`, `content`, ...; the Runtime clearance applies), present
-only when there are any; the Runtime registers no notes resolver yet.
+only when there are any. The Runtime registers it when `runtime.recall.notes` is set (§4.1c).
+A bare `kh:<path>` resolves to the note's first section: the ref carries no line, and the
+QMD notes provider already turns its hit's line into the heading above it, so it emits a
+bare ref only for a hit above the first heading (the preamble, the first section) or without
+a usable heading (no line, an over-long heading), where the section may differ from the hit
+(relevance only).
 
-`att:<id>#<locator>` refs are left to MM2b: an attachment resolver registers as
-`schemes={"att": resolver}` and returns `SegmentResolution(source="attachments", ...)`
-after its own privacy and tenant checks. None is registered by default.
+Attachment proxy segments (MM2b) are not path refs: `ProxyProvider` returns
+`ref_kind="attachment_segment"` candidates (`<prx-id>:<n>`) and `ProxySegmentResolver(index,
+tenant=<caller's tenant>)`, registered as `resolvers["attachment_segment"]`, returns
+`SegmentResolution(source="attachments", path=<att-id>, anchor=<prx-id>:<n>, ...,
+tenant=<bound tenant>)`; a segment of another tenant is left unresolved. Only
+`attachment_search` builds a coordinator with it. `att:<id>#<locator>` path refs remain an
+unused extension point (`schemes={"att": resolver}`); none is registered.
 
 ### 3.4 Filter
 
@@ -739,6 +749,41 @@ runtime:
 - **Adapters.** [`memfw-adapter-bm25s`](adapter-bm25s.md) (in-process BM25 over memories);
   `memfw-adapter-qmd` (`memfw_adapter_qmd:memory_factory`, QMD over a memory projection;
   see [`qmd-projection.md`](qmd-projection.md#qmd-recall-adapter)).
+
+### 4.1c Lifecycle source and notes index (`runtime.recall`)
+
+Two more `runtime.recall` keys wire production paths in (`memfw.runtime.recall_wiring`, read
+once per Runtime by `Runtime.recall_wiring`). Without them every output is unchanged
+(`tests/test_runtime_recall_wiring.py`, byte-identical to the base ref with
+`MEMFW_ARCH_BASE_REF`):
+
+```yaml
+runtime:
+  recall:
+    lifecycle_source: /srv/memfw/status/memory-meta-index.json  # outside the vault
+    notes:
+      root: /srv/notes                 # the Markdown tree
+      index: /srv/notes/.notes.sqlite3 # its memfw notes index
+      legacy_privacy: local-private    # level of notes without `privacy` (default)
+      tenant: ""                       # the tenant the notes are bound to (default "")
+```
+
+- **`lifecycle_source`** (relative to the vault root; `~` expanded). Production keeps the
+  meta-index at `<base>/status/`, outside the vault, where the default
+  (`<vault>/status/memory-meta-index.json`) does not find it. Set, it is the meta-index of
+  every `two_stage` resolve (all providers: FTS, hybrid, adapters), of `memory_context`
+  `strict` (MCP and HTTP `/context`), and of the open-question queue and labels
+  (`document_meta`). One reader serves them and `memfw dream`
+  (`memfw.projection.load_lifecycle`, cached per file until it changes); a missing or
+  unreadable file fails closed (`unjoined`). Unset: `two_stage` reads the vault's default file
+  if any (as before) and the others read the vault alone (as before).
+- **`notes`**: registers `NotesSegmentResolver` as the `kh:` scheme of `two_stage`, with the
+  server clearance (`MEMFW_MCP_CLEARANCE`), else `public,shared` (a `local-private` note is
+  never resolved without an explicit clearance). Sections come back under `notes`, apart from
+  memory `results`.
+- **Fail closed.** A malformed value raises `RecallAdapterError` (`bad_lifecycle_source`,
+  `bad_notes`, `bad_config`): `two_stage`, strict `memory_context` and the queue then error.
+  An unreadable `vault.yaml` gives the defaults and is read again next time.
 
 ### 4.1d Memory embedding locality gate
 
