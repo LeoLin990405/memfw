@@ -1,0 +1,1 @@
+{"thinking": "The query asks about drift; node d1:0002 covers temperature drift, its parent d1:0001 covers calibration.", "node_list": ["d1:0002", "d1:9999", "d1:0001", "d1:0002"]}
