@@ -1,0 +1,30 @@
+# memfw-adapter-lightrag: a Deriver that reads graph and answer views from a
+# LightRAG server (HKUDS/LightRAG, MIT, lightrag-server pinned 1.5.7) over
+# loopback HTTP only. The operator runs the server (bound to 127.0.0.1, with
+# an API key); memfw never imports, vendors or starts it. Standard library
+# only (urllib); depends on memfw-ports. memfw never imports this package.
+#
+# Build a wheel:  uv build --wheel --package memfw-adapter-lightrag
+[build-system]
+requires = ["hatchling==1.33.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "memfw-adapter-lightrag"
+version = "0.1.0"
+description = "LightRAG graph/answer Deriver for memfw over a loopback lightrag-server"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+# Symlinks to memfw's own LICENSE and NOTICE (one copy of the text).
+license-files = ["LICENSE", "NOTICE"]
+dependencies = ["memfw-ports==0.3.0"]
+
+[project.entry-points."memfw.adapters"]
+lightrag = "memfw_adapter_lightrag:SPEC"
+
+[tool.uv.sources]
+memfw-ports = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/memfw_adapter_lightrag"]

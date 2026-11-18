@@ -146,6 +146,13 @@ and asks for memory ids only. It is **off by default**; `memfw-adapter-qdrant sy
 `public`/`shared` memories, never `local-private`, and stores no text. memfw never imports it. See
 [`adapter-qdrant.md`](adapter-qdrant.md).
 
+## LightRAG deriver adapter
+
+`packages/adapters/memfw-adapter-lightrag` (wheel `memfw_adapter_lightrag`, version 0.1.0)
+implements the `Deriver` port as a loopback HTTP client of an operator-run `lightrag-server`
+1.5.7 (bound to `127.0.0.1`, with an API key): graph and answer views whose every source is a
+requested, shareable, current memory. **Off by default**; rows become memory only as staged
+candidates. See [`adapter-lightrag.md`](adapter-lightrag.md).
 
 ## QMD recall adapter
 

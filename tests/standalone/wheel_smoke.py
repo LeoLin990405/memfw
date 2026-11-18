@@ -3,7 +3,7 @@
 Run it with the interpreter of a venv that has the wheels and NOT memfw:
 
     python -I tests/standalone/wheel_smoke.py [--recall] [--deepseek] [--bm25s] [--qdrant]
-        [--qmd] [--ocr] [--pageindex] [--langextract]
+        [--qmd] [--ocr] [--pageindex] [--langextract] [--lightrag]
 
 It refuses to run when ``memfw`` is importable, imports the wheels, and runs
 the contract kit (``memfw_ports.testing``) against the reference
@@ -24,7 +24,9 @@ in-process fake engine (no OCR tool); with ``--pageindex`` the
 over a tree it builds (titles mode, no model); with ``--langextract`` the
 ``memfw-adapter-langextract`` wheel's deriver passes ``check_deriver`` over a
 replayed LangExtract output (LangExtract itself is not installed, no model
-runs). Prints one
+runs); with ``--lightrag`` the
+``memfw-adapter-lightrag`` wheel's deriver passes ``check_deriver`` against an
+in-process fake server. Prints one
 ``ok`` line per check and exits non-zero on the first failure. Standard
 library only; not collected by pytest (``tests/test_standalone_ports_wheel.py``
 drives it).
@@ -518,6 +520,56 @@ def _langextract(root: Path) -> None:
     _ok("check_deriver LangExtractDeriver (replayed output)")
 
 
+def _lightrag(root: Path) -> None:
+    """The deriver wheel over the memfw-ports wheel, against an in-process fake server."""
+
+    import io
+    import json
+
+    from memfw_adapter_lightrag import LightRagDeriver, Settings, candidates
+    from memfw_adapter_lightrag import _ports as seam
+    from memfw_adapter_lightrag.deriver import source_name
+    from memfw_ports.reference._vault import read_memory
+    from memfw_ports.testing import check_deriver
+    from memfw_ports.types import DeriveRequest
+
+    assert seam.DerivedView.__module__.startswith("memfw_ports"), seam.DerivedView
+    _ok("import memfw_adapter_lightrag (ports from memfw_ports)")
+    vault = root / "lr-vault"
+    (vault / "memories").mkdir(parents=True)
+    (vault / "vault.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+    for memory_id, privacy in (("m-pub", "public"), ("m-priv", "local-private")):
+        (vault / "memories" / f"{memory_id}.md").write_text(
+            f"---\nid: {memory_id}\nprivacy: {privacy}\nversion: 2\ntags: []\n---\nbody\n",
+            encoding="utf-8",
+        )
+    sent: list[str] = []
+    memory = read_memory(vault, "m-pub")
+    assert memory is not None
+    name = source_name(memory, Settings().max_chars)
+    local = "http://127.0.0.1:11434"
+    config = {"llm_binding_host": local, "embedding_binding_host": local}
+    health = {"status": "healthy", "core_version": "1.5.7", "configuration": config}
+
+    def opener(request: object, timeout: float) -> io.BytesIO:
+        url = request.full_url  # type: ignore[attr-defined]
+        sent.append(url)
+        if url.endswith("/health"):
+            return io.BytesIO(json.dumps(health).encode("utf-8"))
+        entity = {"entity_name": "Backup", "entity_type": "service", "file_path": name}
+        data = {"entities": [entity], "relationships": []}
+        reply = {"status": "success", "message": "", "data": data, "metadata": {}}
+        return io.BytesIO(json.dumps(reply).encode("utf-8"))
+
+    deriver = LightRagDeriver(Settings(), environ={"LIGHTRAG_API_KEY": "smoke"}, opener=opener)
+    request = DeriveRequest("graph", ("m-pub", "m-priv"), {"query": "backup"})
+    view = check_deriver(deriver, vault=vault, request=request)
+    assert view.cited_ids() == ("m-pub",), view
+    assert sent[-2:] == ["http://127.0.0.1:9621/health", "http://127.0.0.1:9621/query/data"], sent
+    assert len(candidates(view)) == 1
+    _ok("check_deriver LightRagDeriver (fake server)")
+
+
 def main(argv: list[str]) -> int:
     if importlib.util.find_spec("memfw") is not None:
         print("memfw is importable here; run this in a venv without memfw", file=sys.stderr)
@@ -541,6 +593,8 @@ def main(argv: list[str]) -> int:
             _pageindex(root)
         if "--langextract" in argv:
             _langextract(root)
+        if "--lightrag" in argv:
+            _lightrag(root)
     print("standalone wheel smoke passed")
     return 0
 

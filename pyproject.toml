@@ -47,6 +47,7 @@ members = [
     "packages/adapters/memfw-adapter-ocr",
     "packages/adapters/memfw-adapter-pageindex",
     "packages/adapters/memfw-adapter-langextract",
+    "packages/adapters/memfw-adapter-lightrag",
 ]
 
 [tool.pytest.ini_options]
