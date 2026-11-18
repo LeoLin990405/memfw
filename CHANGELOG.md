@@ -45,7 +45,8 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   `--allow-remote`. Loopback endpoints are unchanged. **Upgrade note:** a
   remote embedding endpoint without the opt-in means no semantic search.
 - `memory_remember` suggestions are bounded to the caller (tenant, allowed
-  sources, privacy clearance) and no longer write `memory_access` or warm.
+  sources, privacy clearance); only a suggestion that is shown is warmed and
+  access-logged (and only with `record_access` on).
 - Lifecycle meta-index cache also keys on ctime (an in-place rewrite with the
   mtime restored is re-read) and hands out read-only items.
 - Ambiguous frontmatter keeps an `unknown` level (never relaxed to

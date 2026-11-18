@@ -757,8 +757,8 @@ is not `public`/`shared`, and query text counts as possibly private:
   index holds memories without vectors); the `two_stage` hybrid provider reports itself
   unavailable and FTS answers;
 - `memory_remember`'s related suggestions are lexical (the candidate's text is a query); they
-  are also bounded to the caller (tenant, allowed sources, privacy clearance) and write no
-  `memory_access` event and warm nothing;
+  are also bounded to the caller (tenant, allowed sources, privacy clearance), and only a
+  suggestion that is shown is warmed and access-logged;
 - the same gate covers the notes index (`NotesIndex`: `memfw notes index/search/serve/...`
   with `--endpoint`; a note is embedded only when its frontmatter level is `public`/`shared`,
   no `privacy` field meaning `local-private`) and `memfw memory-related-build` /
