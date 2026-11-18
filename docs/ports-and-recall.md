@@ -995,7 +995,7 @@ neither appends to the event chain. Reads keep it as follows:
 | `memory_context` (v1, v2, every slot, `current` included) and `memfw://context/*` | never |
 | `memory_search` `fts`, `multihop` | never |
 | `memory_used` | never (writes only its store outside the vault) |
-| `memory_search` `hybrid`, `vector` | by default yes: one `memory_access` event per returned hit, and a cold or stub hit is warmed (autowarm: `tier_change`/`memory_restore` events, the memory file, history and archive change). Off with `record_access: false` |
+| `memory_search` `hybrid`, `vector` | by default yes: one `memory_access` event per returned hit, and a cold or stub hit is warmed (autowarm: `tier_change`/`memory_restore` events, the memory file, history and archive change), never for a hit the server clearance withholds (its row is never shown; the internal FTS fallback included). Off with `record_access: false` |
 | `memory_search` `two_stage` | by default yes: the same, for each hit the coordinator returns after the filter (never for a hit the policy dropped; #55). Off with `record_access: false` |
 
 The exception is access recording, which feeds strength and tier signals and has always been

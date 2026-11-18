@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from collections.abc import Callable
 from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
@@ -48,6 +49,10 @@ class MemoryHybridRetriever:
     after the hit passed the tenant, source and visibility checks: a memory
     the retriever does not return is never warmed. The ``two_stage`` provider
     passes false; the Runtime warms only the hits it returns.
+
+    ``admit`` (default none) is asked about each hit's document after those
+    checks: a hit it rejects is still returned, for the caller to drop (the
+    MCP server's privacy clearance, MM0), but is neither warmed nor logged.
     """
 
     def __init__(
@@ -65,11 +70,13 @@ class MemoryHybridRetriever:
         allowed_sources: tuple[str, ...] = (),
         record_access: bool = True,
         autowarm: bool = True,
+        admit: Callable[[MemoryDocument], bool] | None = None,
     ) -> None:
         self.repository = repository
         self.embedder = embedder
         self.record_access = record_access
         self.autowarm = autowarm
+        self.admit = admit
         self.notes_index = NotesIndex(
             index_path or (repository.root / ".memory-hybrid.sqlite"),
             embedder=embedder,
@@ -190,6 +197,11 @@ class MemoryHybridRetriever:
             version = str(frontmatter["version"])
         return version, digest
 
+    def _admitted(self, document: MemoryDocument) -> bool:
+        """Whether ``admit`` lets this call warm and log ``document`` (always without one)."""
+
+        return self.admit is None or self.admit(document)
+
     def _fts_search(
         self,
         query: str,
@@ -230,10 +242,11 @@ class MemoryHybridRetriever:
                     continue
                 if not self._source_allowed(document.source, source):
                     continue
-                if self.autowarm and (document.is_stub or document.tier == Tier.COLD):
+                admitted = self._admitted(document)
+                if admitted and self.autowarm and (document.is_stub or document.tier == Tier.COLD):
                     self.repository.autowarm(document.id, actor="mechanism")
                     document = self.repository.get(document.id)
-                if self.record_access:
+                if admitted and self.record_access:
                     self.repository.capture_event(
                         EventKind.MEMORY_ACCESS,
                         actor="mechanism",
@@ -260,6 +273,7 @@ class MemoryHybridRetriever:
                 document.tenant == tenant
                 and self._visible(document, include_history=include_history, as_of=as_of)
                 and self._source_allowed(document.source, source)
+                and self._admitted(document)
             )
 
         legacy = VaultRetriever(
@@ -346,10 +360,15 @@ class MemoryHybridRetriever:
                         continue
                     if not self._visible(document, include_history=include_history, as_of=as_of_dt):
                         continue
-                    if self.autowarm and (document.is_stub or document.tier == Tier.COLD):
+                    admitted = self._admitted(document)
+                    if (
+                        admitted
+                        and self.autowarm
+                        and (document.is_stub or document.tier == Tier.COLD)
+                    ):
                         self.repository.autowarm(memory_id, actor="mechanism")
                         document = self.repository.get(memory_id)
-                    if self.record_access:
+                    if admitted and self.record_access:
                         self.repository.capture_event(
                             EventKind.MEMORY_ACCESS,
                             actor="mechanism",
