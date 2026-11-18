@@ -88,6 +88,17 @@ field takes the vault's `legacy_privacy_default` (`local-private` when unset), s
 first or every older memory is withheld. See
 [`READONLY-SERVICE-UPGRADE.md`](READONLY-SERVICE-UPGRADE.md).
 
+The same three files also serve `memfw-http/3`, chosen per request by the
+`MemFW-Contract: memfw-http/3` header; without it every answer is the v2 one, byte for byte.
+v3 adds `recorded_at` to `/search` hits, `why` and `provenance_type` to `/related`,
+`POST /context` (the `memory_context` v2 `core` pack, built read-only; it needs the `memfw`
+package and a configured clearance, else it is 404 and left out of `/health`) and
+`POST /forget` (write token only: one deletion-request candidate under
+`<vault>/_candidates/forget/`, never a deletion; hidden and missing targets answer the same
+404; `request_id` makes it idempotent within the tenant; at most 1000 waiting per tenant).
+`memfw forget requests` lists the requests and `memfw forget residue ID` checks that a
+forgotten memory is gone from every projection. See [`v1-integration.md`](v1-integration.md).
+
 
 ## Standalone wheels: `memfw-ports` and `memfw-recall`
 
@@ -185,6 +196,31 @@ memories via LangExtract 1.7.2 (installed by the operator), with a memfw `ModelB
 model (a loopback-only Ollama backend ships with it) and a per-run token budget. **Off by
 default**; its rows become memory only as staged candidates. See
 [`adapter-langextract.md`](adapter-langextract.md).
+
+## PageIndex recall adapter
+
+`packages/adapters/memfw-adapter-pageindex` (wheel `memfw_adapter_pageindex`, version 0.1.0) is
+a `RecallProvider` for long documents that searches PageIndex-style table-of-contents trees
+(titles, node ids, page ranges, optional short summaries; never body text). A memfw
+`ModelBackend` picks the sections, or `mode: titles` ranks titles without a model. It returns
+`kh:<path>#<heading>` and `att:<id>#page=<n>` refs only. A non-local backend needs `cloud: true`,
+`local-private` trees are never sent to one, and each run has a token and call budget. Trees are
+built or imported offline with `memfw-pageindex build-md | import-tree | list` and stored as
+`0600` JSON outside the vault. **Off by default**; memfw never imports it. See the package
+README.
+
+## OCR proxy adapter
+
+`packages/adapters/memfw-adapter-ocr` (wheel `memfw_adapter_ocr`, version 0.1.0, standard
+library only) turns a PDF or image attachment into a `memfw.proxy` v1 import file: text
+segments with canonical locators, `coverage`, `source_sha256`, the producer and per-segment
+confidence when the engine gives one. Engines: an OCR server run as a child process over MCP
+stdio (with a deadline, a page budget and the whole process group stopped at the end),
+`pdftotext` for text-layer PDFs, or a `module:factory` (outside the local-only guarantee).
+Nothing is uploaded; only privacy levels in its `clearance` (default `public,shared`) reach an
+engine, and the original's sha256 is checked before and after. `memfw-ocr-proxy run | check`
+writes the file; `memfw attach proxy import` stores it. **Off by default**; memfw never imports
+it. See the package README and [`attachment-proxies.md`](attachment-proxies.md).
 
 ## Corroboration projection
 

@@ -6,17 +6,20 @@
 
 **A long-term memory for AI agents that you can read, diff and trust.**
 
-Markdown is the source of truth · hash-linked JSONL events · rebuildable FTS5 · verify-first consolidation · one redacted conversation store for every agent · local MCP server · layered, swappable ports.
+Markdown is the source of truth · hash-linked JSONL events · rebuildable FTS5 · verify-first consolidation · one redacted conversation store for every agent · attachments as checked evidence · local MCP server · layered, swappable ports · optional adapters, all off by default.
 
 [**简体中文**](README.zh-CN.md) · **English**
 
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="License"></a>
 <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.11+"></a>
 <a href="#-status-and-boundaries"><img src="https://img.shields.io/badge/release-v0.3.0-2563EB?style=flat-square" alt="Release v0.3.0"></a>
-<a href="#-mcp-tools"><img src="https://img.shields.io/badge/MCP-15_tools_(%2B1_opt--in),_3_resources-8B5CF6?style=flat-square" alt="15 MCP tools (+1 opt-in), 3 resources"></a>
+<a href="#-mcp-tools"><img src="https://img.shields.io/badge/MCP-15_tools_(%2B3_opt--in),_3_resources_(%2B1_opt--in)-8B5CF6?style=flat-square" alt="15 MCP tools (+3 opt-in), 3 resources (+1 opt-in)"></a>
 <a href="#-conversation-store-every-agent-one-place"><img src="https://img.shields.io/badge/agent_readers-15-10B981?style=flat-square" alt="15 agent readers"></a>
-<a href="#-architecture-layers-and-ports"><img src="https://img.shields.io/badge/ports-11-0EA5E9?style=flat-square" alt="11 ports"></a>
+<a href="#-architecture-layers-and-ports"><img src="https://img.shields.io/badge/ports-12-0EA5E9?style=flat-square" alt="12 ports"></a>
+<a href="#-optional-adapters"><img src="https://img.shields.io/badge/adapters-9_(off_by_default)-64748B?style=flat-square" alt="9 adapters (off by default)"></a>
 <a href="#-evaluation-summary"><img src="https://img.shields.io/badge/evaluation-bounded-D97706?style=flat-square" alt="Bounded evaluation"></a>
+
+<sub>Counts reflect <code>main</code>; the release badge is the latest tagged release (v0.3.0).</sub>
 
 </div>
 
@@ -34,9 +37,16 @@ memfw is a local memory engine for AI agents. It does three jobs:
    transcripts and propose confirmations, corrections, merges, lessons and skill drafts. They
    only ever stage candidates; a person decides what goes into the vault.
 
+Memories can also cite **attachments** (PDFs, images, audio, video): the originals stay outside
+the vault, the vault keeps a small record, and a write gate makes sure a screenshot or a
+recording never counts as more than an observation (see [Attachments](#-attachments-evidence-beyond-text)).
+
 Agents use it through a local **MCP server** (`memfw-mcp`); people use the `memfw` CLI. Inside,
 memfw is a small kernel behind port contracts: search backends, projectors and ingestors plug in
 through a port, never into the vault (see [Architecture](#-architecture-layers-and-ports)).
+Other engines (bm25s, Qdrant, QMD, PageIndex, OCR, LangExtract, LightRAG, GraphRAG) are separate adapter packages
+that memfw never imports and that stay off until you configure them (see
+[Optional adapters](#-optional-adapters)).
 
 ```
 agent CLIs / apps ──readers──► conversation store (local, redacted)
@@ -45,6 +55,7 @@ agent CLIs / apps ──readers──► conversation store (local, redacted)
         ▼                              ├─► handoff packs (continue in another agent)
      memfw-mcp ──► vault ◄── human ◄───┴─► dream: verify · curate · distill · skills
                     ├─ memories/*.md      (source of truth)          (candidates only)
+                    ├─ attachments/*.md   (records; originals live outside the vault)
                     ├─ events.jsonl       (hash-linked audit log)
                     └─ index.sqlite3      (FTS5; rebuildable)
 ```
@@ -53,7 +64,15 @@ agent CLIs / apps ──readers──► conversation store (local, redacted)
 
 1. **Local-first.** The vault, the indexes and the conversation store live on your machine. The
    core calls no model and needs no network; anything that could reach a cloud model is off by
-   default and needs an explicit `--allow-cloud`.
+   default and needs an explicit switch: `--allow-cloud` or `conversations.cloud: true` for the
+   conversations worker and handoff, `cloud: true` in an adapter's settings. Every adapter is off
+   by default, and no bundled adapter sends a `local-private` memory or attachment to a non-local
+   service.
+
+   **One exception to check yourself:** the optional embedding endpoint (`MEMFW_EMBEDDING_URL`,
+   or `--embedding-url`) is used exactly as configured, with no locality check, and hybrid search
+   and related-memory builds embed every memory at every privacy level. Point it only at a
+   loopback service.
 2. **Event-backed Markdown.** Markdown files are the authority. Every state change is appended to
    a hash-linked JSONL event chain (`memfw log verify` proves it is intact). SQLite indexes are
    derived projections that can be deleted and rebuilt.
@@ -117,18 +136,25 @@ name (see [`docs/conversations-share.md`](docs/conversations-share.md)).
 
 | Path | What it is |
 |---|---|
-| `vault.yaml` | vault settings: layers, tiers, budgets, `permissions: propose_then_confirm`, history sources, sharing rules |
+| `vault.yaml` | vault settings: layers, tiers, budgets, `permissions: propose_then_confirm`, history sources, sharing rules, attachment settings (`attachments_*`, and `vault_id`, added by the first attach) |
 | `memories/<id>.md` | **the memories**: Markdown with YAML frontmatter (layer, tier, `about`, `related`, `valid_from` / `valid_to`, optional `status`, `evidence` and `privacy`) |
 | `events.jsonl`, `events.state.json`, `.log/segments/` | the hash-linked event log and its archived segments |
 | `.history/<id>/` | retained earlier versions (for `rollback`) |
 | `.proposals/` | agent proposals bound by hash to their exact payload |
 | `.archives/` | deterministic `tar.zst` cold archives (cold tier) |
 | `_candidates/remember/`, `_candidates/dream/`, `_candidates/skills/` | staged candidates waiting for a person (`_candidates/dream-rejections/` records rejected open-question candidates) |
+| `_candidates/forget/` | deletion requests from `memfw-http/3` `POST /forget`, waiting for a person (nothing is deleted) |
+| `attachments/<att-id>.md` | one small record per registered attachment (never under `memories/`); the original is a blob outside the vault or a referenced file |
+| `attachments/proxies/<prx-id>.md` | text proxies of an attachment (OCR, transcript, keyframes, extract, caption) with canonical locators |
 | `index.sqlite3`, `.memfw-history.sqlite` | derived FTS5 indexes (disposable; rebuild any time) |
+| `.memfw-related.sqlite` | derived related-memory edges from `memory-related-build` (MCP `memory_related` reads it at the vault root; the CLI's `--related-db` defaults to this name) |
 
-The conversation store and the worker state are kept **outside** the vault, by default under
-`~/.local/share/memfw/` (see [Privacy](#-privacy-and-permissions)). If the vault is a git
-repository, add `index.sqlite3` and `.memfw-history.sqlite*` to its `.gitignore`.
+The conversation store, the worker state, attachment blobs (`blobs/`) and the rebuildable
+projections (`edges/`, `corroboration/`, `proxy_index/`, the bm25s adapter's index under `adapters/`) are kept **outside**
+the vault, by default under `~/.local/share/memfw/` (see [Privacy](#-privacy-and-permissions)).
+Each out-of-vault projection records which vault it belongs to and refuses to answer for another
+vault at the same path ("projection belongs to another vault: rebuild it"). If the vault is a
+git repository, add `index.sqlite3`, `.memfw-history.sqlite*` and `.memfw-related.sqlite` to its `.gitignore`.
 
 An index written by an older memfw has no temporal projections. Writers are lazy about it:
 the MCP server (`memfw-mcp`) and `memfw index search` check the schema generation (`PRAGMA user_version`)
@@ -147,16 +173,20 @@ rebuild: it detects the missing tables and degrades instead (no temporal filteri
 | Search | `index rebuild`, `index search`; `resolve` (batch, read-only lifecycle/validity/privacy check of recall hits) |
 | Concepts | `concepts` (one canonical concept per thing, with aliases that may be scoped; optional `broader` parents, `narrower` derived), `concepts relations` (the versioned relation-type table), `concepts lint-relations` |
 | Uncertainty | `add --type open-question --question … [--conflicts ID …] [--missing …]`, `update ID --question/--conflicts/--missing`, `update ID --resolved-by ANSWER`; `corroboration rebuild`, `corroboration show ID --as-app APP`, `corroboration queue` (review order); `dream accept-question` / `reject-question` |
-| Epistemic and experience | `add` / `update --epistemic --causal --causal-record` (one write gate; `causal: verified` needs a human), `experience draft` / `from-github` / `invalidate` (reviewed experience points, staged as candidates), `eval causal` |
+| Epistemic and experience | `add` / `update --epistemic --causal --causal-record` (one write gate; `causal: verified` needs a human), `experience draft` / `from-github` / `invalidate` (reviewed experience points, staged as candidates), `eval causal [--multimodal]` |
+| Attachments | `attach add FILE [--embed \| --reference]`, `attach list` / `show` / `verify`, `attach detach` / `relink` / `purge` / `reown` / `scan`; `attach proxy import` / `list` / `show` / `budget` (see [Attachments](#-attachments-evidence-beyond-text)) |
+| Typed-edge graph | `graph rebuild`, `graph match --from X --path "about>broader*1..2><about" [--acyclic]` |
 | Privacy | `add --privacy LEVEL`, `update --privacy LEVEL`, `privacy legacy-default [LEVEL]`, `privacy new-default [LEVEL]` (levels `public`, `shared`, `local-private`) |
 | Review gate | `candidates`, `candidate-apply [--apply]`, `candidates-expire` (30-day TTL, never deletes), `record-proposal`, `approve-proposal`, `review` |
-| Retention | `budget`, `forget` (`fifo`, `lru`, `decay`, `salience`, `consolidate_then_forget`), `tiers` / `tier` (hot and cold), `cold-archive`, `cold-restore`, `layer` / `layer-set`, `consolidate` |
+| Retention | `budget`, `forget` (`fifo`, `lru`, `decay`, `salience`, `consolidate_then_forget`), `forget requests` (deletion requests staged over HTTP), `forget residue ID` (read-only: is a forgotten memory gone from every projection?), `tiers` / `tier` (hot and cold), `cold-archive`, `cold-restore`, `layer` / `layer-set`, `consolidate` |
 | Related memories | `memory-related-build`, `memory-related` |
-| Projections | `okf export` / `okf validate` / `okf import` ([OKF v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format) bundles), `project obsidian` (a read-only Obsidian board), `notes` (a Markdown notes index), `code` (local code retrieval) |
+| Projections | `okf export` / `okf validate` / `okf import` ([OKF v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format) bundles), `projection export` (files for an external recall backend such as QMD), `project obsidian` (a read-only Obsidian board), `notes` (a Markdown notes index), `code` (local code retrieval) |
+| Evaluation | `eval context SNAPSHOT` (context-pack coverage, waste, latency and token cost on a read-only snapshot), `eval causal` |
 
 Search matches each query word on its own and ranks by bm25, so a whole sentence finds relevant
-memories. `memory_search` `mode` defaults to `hybrid`, which is FTS5 unless a local OpenAI-compatible
-embedding endpoint is configured. Every command prints
+memories. `memory_search` `mode` defaults to `hybrid`, which is FTS5 unless an OpenAI-compatible
+embedding endpoint (`MEMFW_EMBEDDING_URL`) is configured; memfw does not check that it is local,
+and it embeds memories of every privacy level, so point it only at a loopback service. Every command prints
 `--help`; global `--now` and `--id-seed` make runs deterministic for tests. Which capability is
 reachable from the CLI, MCP and HTTP (and why a gap is there) is in
 [`docs/cli-mcp-parity.md`](docs/cli-mcp-parity.md).
@@ -183,8 +213,66 @@ reachable from the CLI, MCP and HTTP (and why a gap is there) is in
 - **Concept taxonomy.** Concept files may name `broader` parents; `narrower` is derived, never
   written, and nothing on the read path follows it (no query expansion). The relation-type
   table lists every typed relation memfw already stores. See [`docs/ontology.md`](docs/ontology.md).
+- **Typed edges and path patterns.** `memfw graph rebuild` builds a rebuildable edge projection
+  outside the vault from the relation table's fields (`about`, `applies_to`, `broader`,
+  `superseded_by`, evidence, causal and experience links, `related`, concept relations and the
+  open-question `conflicts` / `resolved_by`); each edge carries both ends' tenant and privacy,
+  and cross-tenant edges are never built. `memfw graph match --from X --path PATTERN` follows a
+  bounded path (at most 4 hops, capped fan-out and results, deterministic order), filtered by
+  tenant, clearance (default `public,shared`) and sources, with every memory re-checked against
+  the live vault: a hidden node never shows, and a hidden start answers like a missing one.
+  The projection sits behind the new `ProjectionStore` port. There is no MCP tool for it.
 
 Details: [`docs/epistemic-and-experience.md`](docs/epistemic-and-experience.md).
+
+## 📎 Attachments: evidence beyond text
+
+A memory can cite an original (a PDF, an image, a recording, a video) as `att:<id>[#locator]`.
+memfw keeps the original out of the vault and treats it as an **observation**, never as proof.
+
+- **Two ways to keep an original.** `memfw attach add FILE --embed` stores the bytes once per
+  sha256 as a blob outside the vault (default `~/.local/share/memfw/blobs`, directories `0700`,
+  files `0600`; git work trees, the vault, synced folders, `~/Documents` and `~/Desktop` are
+  refused). `--reference` (or `ROOT:PATH`) records only `<root>:<relative path>` plus sha256 and
+  size, under roots named per host in `vault.yaml` (`attachments_roots`); nothing is copied.
+  Audio and video inside a root default to a reference. Limits: `attachments_max_bytes`
+  (25 MiB) and `attachments_max_total_bytes` (2 GiB) for embedded originals.
+- **Records and privacy.** The vault keeps `attachments/<att-id>.md` with a `privacy` level
+  (default `local-private`; tags and `sensitivity` only tighten it). Referenced paths are opened
+  from the root with `O_NOFOLLOW`, component by component, so a symlink or a `..` never escapes.
+- **Lifecycle.** `attach verify` re-hashes (`referenced_missing` comes with same-hash candidates,
+  never relinked automatically), `attach relink ID PATH` accepts only the same sha256 and size,
+  `attach detach` is soft, `attach purge ID --yes` is the hard delete (without `--yes` it prints
+  the plan, including the memories that cite it), `attach scan ROOT:[DIR]` is a dry-run
+  inventory, and `attach reown` splits off or re-owns the blob directory of a copied vault.
+  A purge also deletes the attachment's proxy files and drops it from the proxy index.
+  `memfw recover` finishes an interrupted purge or relink.
+- **Text proxies.** `memfw attach proxy import ATT-ID FILE` stores an OCR text, transcript,
+  keyframe list, extract or caption in the versioned import format `memfw.proxy` v1
+  ([`docs/attachment-proxies.md`](docs/attachment-proxies.md)). `source_sha256` must equal the
+  attachment's hash; locators are stored in canonical units (PDF points with a bottom-left
+  origin, image pixels with a top-left origin, seconds for audio and video), and anything outside
+  the declared page, box or time range is refused. A proxy is never less private than its
+  attachment and has its own budget (`attachments_proxy_max_bytes`, 64 MiB). The optional
+  [OCR adapter](#-optional-adapters) produces such files from a local OCR engine.
+- **Observation evidence gate.** A memory whose evidence is only observations (an `att:`
+  pointer, or a `file:` / `sha256:` pointer that turns out to name a registered attachment in
+  any spelling) cannot be `epistemic: fact` and stops at `causal: hypothesis`. A new `att:`
+  pointer must resolve and its locator must fit the media type. `memfw eval causal --multimodal`
+  runs 59 synthetic cases, 37 of them bypass attempts; every bypass is blocked.
+- **Search.** Active proxies get their own rebuildable index outside the vault
+  (`~/.local/share/memfw/proxy_index/`), filtered by tenant and by the stricter privacy of
+  proxy and attachment; memory search, HTTP, OKF and projections never read it. The built-in
+  `ProxyProvider` returns `attachment_segment` refs (locator, never text) as
+  `RecallResult.segments`, never as memory hits. The MCP tools `attachment_search` /
+  `attachment_get` appear only with `vault.yaml` `mcp.attachments: true`; every result is
+  re-checked against the proxy file, the attachment record and `MEMFW_MCP_CLEARANCE`, and an
+  original is returned only with `mcp.local_originals: true`, after re-hashing the blob. The
+  HTTP service never serves attachments.
+
+A memfw 0.3.0 reader fails closed on a vault with an `attach` event, so upgrade every host before
+the first `attach add` (see Reader-upgrade order below). Details:
+[`docs/attachments.md`](docs/attachments.md).
 
 ## 💬 Conversation store: every agent, one place
 
@@ -251,6 +339,20 @@ conversation_optout:
 Every output is redacted again on the way out, size-capped and labelled as data, not
 instructions. A hidden session answers exactly like a missing one. This is a visibility setting
 between cooperating local apps, not authentication.
+
+**Two-stage search and tag filters.** `conversations search` (and MCP `conversations_search`)
+filters on the worker's `conv-v2` tags with `--task-type`, `--outcome`, `--project`,
+`--component` and `--intent-like`; an untagged session never matches a filter. `--mode
+two_stage` fuses, by reciprocal rank, the keyword search, a semantic match over "summary + tags"
+(the runtime's embedder; only a loopback one unless `conversations.cloud: true`, else it is
+reported `semantic_off`) and the tag filters, each list cut to the caller's visible apps first.
+Each session comes back with its summary and tags labelled `untrusted_model_output: true` and
+redacted turn windows around the hits, all within `max_bytes`. Without these options the output
+is unchanged.
+
+```sh
+memfw conversations search "flaky test" --mode two_stage --task-type debug --outcome done
+```
 
 ### Conversations worker
 
@@ -360,28 +462,37 @@ evidence. See [`docs/dream.md`](docs/dream.md).
 ## 🤖 MCP tools
 
 `memfw-mcp --root VAULT --app NAME` serves one vault over stdio. It has no write tool for the
-vault itself. It lists 15 tools; a 16th, `memory_used`, appears only when it is switched on.
+vault itself. It lists 15 tools; three more appear only when switched on: `memory_used`, and
+`attachment_search` / `attachment_get`.
 
 | Tool | Purpose |
 |---|---|
-| `memory_search` | search the vault; `mode` = `hybrid` (default), `fts`, `vector`, `multihop` or the opt-in `two_stage` (recall coordinator, `policy` `compat_fts` or `strict`); `source`, `include_history`, `as_of`, `labels` (open-question labels and corroboration) |
+| `memory_search` | search the vault; `mode` = `hybrid` (default), `fts`, `vector`, `multihop` or the opt-in `two_stage` (recall coordinator plus any configured [recall adapters](#-optional-adapters), `policy` `compat_fts` or `strict`; resolved note sections come back as a separate `notes` list); `source`, `include_history`, `as_of`, `labels` (open-question labels and corroboration) |
 | `memory_get` | read one memory by id |
 | `memory_remember` | stage a candidate under `_candidates/remember/` with tags, related ids, suggestions and an optional `privacy` level |
 | `memory_related` | derived related-memory edges (tenant-scoped) |
-| `memory_context` | token-budgeted resident context: anchors and procedural memories first; `v=2` returns a versioned `ContextPack` with slots `core`, `handoff` and `topics`, overflow, an optional `strict` policy and `if_version` (reply `unchanged: true` when nothing changed) |
+| `memory_context` | token-budgeted resident context: anchors and procedural memories first; `v=2` returns a versioned `ContextPack` with slots `core`, `handoff` and `topics` (plus the opt-in `current` slot), overflow, an optional `strict` policy and `if_version` (reply `unchanged: true` when nothing changed) |
 | `memory_status` | vault size, layer and tier counts, log summary |
 | `history_list`, `history_search`, `history_read` | the transcript index: sessions with lineage, redacted snippets with refs, capped windows |
-| `conversations_list`, `conversations_search`, `conversations_get` | the shared conversation store, filtered by the calling app's visibility |
+| `conversations_list`, `conversations_search`, `conversations_get` | the shared conversation store, filtered by the calling app's visibility; `conversations_search` takes the tag filters and `mode: two_stage` |
 | `conversations_handoff` | a lighter, policy-scoped continuation view for agent apps |
 | `dream_run` | one dream; a dry run by default, deterministic rules only, at most 50 staged dreams per tenant and one per minute |
 | `dream_list` | this tenant's staged dreams, newest first |
 | `memory_used` (opt-in) | record which memories a session used; listed only with `runtime: {usage: {enabled: true}}` or `MEMFW_USAGE_SIGNAL=1`; writes a store outside the vault, never the vault |
+| `attachment_search`, `attachment_get` (opt-in) | search attachment text proxies; read one attachment's metadata and proxy segments (optionally within a locator); listed only with `mcp.attachments: true`; originals only with `mcp.local_originals: true` |
 
 It also serves three **MCP resources**, `memfw://context/core`, `memfw://context/handoff` and
 `memfw://context/topics` (`?policy=` and `?if_version=` accepted): each is that slot's v=2
 pack for the calling app. A slot that fails or times out comes back empty with a `degraded`
 reason; the others are not affected. `pack_version` is computed from ids, versions and hashes
 only, never body text. Details: [`docs/ports-and-recall.md`](docs/ports-and-recall.md) §4.
+
+A fourth resource, `memfw://context/current`, and the `current` slot of `memory_context` appear
+only with `vault.yaml` `runtime.context.current: true`. The slot holds short-lived context (an
+active ticket, a meeting, the current task): memories tagged `current` that are valid now
+(`valid_from` / `valid_to`, else a TTL of `runtime.context.current_ttl_days`, default 7, from
+`created_at`), not superseded, newest first. It is never cached, so an expired memory is never
+served. Switched off, `tools/list`, `resources/list` and every pack are byte-identical.
 
 `MEMFW_MCP_CLEARANCE=public,shared` limits every read tool and resource to those privacy levels
 (unset: no filtering). `runtime: {search: {record_access: false}}` (or `MEMFW_RECORD_ACCESS=0`)
@@ -412,6 +523,31 @@ makes a session write nothing to the vault.
   conversation backend or handoff summariser also needs `conversations.cloud: true` in
   `vault.yaml`.
   The MCP `dream_run` cannot name any code to run.
+- **Adapters keep data on this machine by default.** Every adapter is off until configured,
+  and memfw never imports one. By default each one talks only to in-process code or loopback
+  services, and no bundled adapter sends a `local-private` memory or attachment to a non-local
+  service: whatever may go to another machine (Qdrant `sync`, LangExtract, LightRAG, PageIndex
+  trees for a non-local model, GraphRAG's input documents when `cloud: true` points its local
+  `graphrag index` run at a non-loopback model) is limited to `public` / `shared`. The one
+  adapter that sends something other than memories is DeepSeek: it sends redacted
+  conversation text (never memories or attachments) to DeepSeek's API, only with
+  `conversations.cloud: true` and `DEEPSEEK_API_KEY`, and apps marked not readable are never
+  processed. Local indexes are not
+  limited that way: QMD indexes a `memfw projection export`, which can include `local-private`
+  memories unless `--skip-privacy` (or the projection policy) leaves them out, so that index stays on this machine (the QMD
+  adapter never returns `local-private` hits). The OCR adapter's custom `module:factory`
+  engine is outside its local-only guarantee. A non-local model needs `cloud: true` in the
+  adapter's settings, a non-loopback service endpoint needs `allow_remote: true`, loopback
+  requests never go through `HTTP(S)_PROXY`, and redirects are refused.
+- **Attachments are private by default.** Records default to `local-private`, originals live
+  outside the vault in private directories, a proxy can never be less private than its
+  attachment, HTTP, OKF and projections never serve attachments, and the MCP tools exist only
+  with `mcp.attachments: true`.
+- **Forgetting is a request, then a check.** `memfw-http/3` `POST /forget` only stages a
+  request for a person; hidden and missing targets answer the same 404, also on replay after
+  deletion. `memfw forget residue ID` checks, read-only, that a forgotten memory is gone from
+  the FTS index and the related, corroboration, usage and (optionally) entity projections, and names the
+  rebuild for each store that still has it.
 - **Human gate.** `permissions: propose_then_confirm` is the vault default: agents propose, a
   person applies (`candidate-apply`, `update`, `supersede`).
 - **Fail closed.** Under the `strict` policy, privacy (`privacy:`, `sensitivity:`) and
@@ -447,6 +583,25 @@ before enabling a cloud backend), and two `memfw-http/2` answers changed:
 `proposal_id` but changed content gives 409. See
 [`CHANGELOG.md` → Compatibility / upgrade notes](CHANGELOG.md#compatibility--upgrade-notes).
 
+**From 0.3.0 to the next release (planned v0.4.0, on `main` now):**
+
+- **Attachments are one-way.** memfw 0.3.0 fails closed on a vault with an `attach` event (every
+  command that reads the event log), so upgrade every host that reads the vault before the first
+  `memfw attach add`; there is no downgrade to 0.3.0 after it.
+- **Event log forward compatibility.** A 0.4.x reader accepts an event kind it does not know only
+  when the event carries `details.projection: "none"` (a newer writer's promise that it never
+  changes memory state). Such events are kept byte-for-byte, skipped by replay, counted by
+  `log verify`, reported by `fsck` and refused by `rollback`; an unmarked unknown kind is still
+  refused as in 0.3.0.
+- **Rebuild two projections.** The edge projection moves to schema 2 and the corroboration
+  projection moves out of the vault. Run `memfw graph rebuild` and `memfw corroboration rebuild`
+  on every vault that uses them; an old vault-root `corroboration.sqlite3` is ignored, never
+  deleted, and still counts toward the vault's size until you delete it.
+- **Stricter evidence.** A new `att:` pointer that does not resolve is refused (0.3.0 stored it
+  as an opaque string).
+- **HTTP.** Without a `MemFW-Contract: memfw-http/3` header every `memfw-http/2` answer is
+  byte-identical.
+
 ## 🌐 Integration and federation
 
 memfw is an engine; orchestrators integrate with it at arm's length:
@@ -461,6 +616,13 @@ memfw is an engine; orchestrators integrate with it at arm's length:
   first, or every memory without a `privacy` field is withheld
   ([`docs/v1-integration.md`](docs/v1-integration.md),
   [`docs/READONLY-SERVICE-UPGRADE.md`](docs/READONLY-SERVICE-UPGRADE.md));
+- the same service serves **`memfw-http/3`** beside v2, chosen per request by the
+  `MemFW-Contract` header (`/health` lists both in `MemFW-Contracts`). v3 adds `recorded_at` to
+  `/search` hits, `why` and `provenance_type` to `/related`, `POST /context` (the
+  `memory_context` v2 `core` pack, built read-only; needs the `memfw` package and a configured
+  `MEMFW_READONLY_CLEARANCE`) and `POST /forget` (write token only: stages one deletion request
+  under `_candidates/forget/`, idempotent per tenant by `request_id`, at most 1000 waiting per
+  tenant);
 - the Conductor orchestrator calls `memfw handoff … --format json` for automatic quota handoffs
   and runs its workers with the MCP server ([`docs/handoff.md`](docs/handoff.md));
 - external memory readers that share a vault follow the reader-upgrade order above.
@@ -486,28 +648,72 @@ and imports the kernel.
   build on an upward import, an unlisted same-layer import, a cycle, a library reference to
   `scripts/` or an unclassified module. Violations that existed when the guard landed sit in a
   shrink-only allowlist: it went from 25 entries to 1.
-- **Ports with swap drills.** `memfw.ports.PORT_VERSIONS` lists eleven ports
-  (`PORTS_API_VERSION` 0.2.0). Ten (`RecallProvider`, `Projector`, `Ingestor`, `Deriver`,
-  `Clock`, `IdGen`, `ClaimVerifier`, `ClaimStager`, `ContextSlotProvider`, `UsageSink`) each
-  have at least two implementations that pass the same `memfw.ports.testing` check
-  (`tests/test_swap_drills.py`); the eleventh, `ModelBackend`, is checked against the extractive
-  and DeepSeek backends (`tests/test_adapter_deepseek.py`). Stdlib-only reference
-  implementations live in `memfw.ports.reference`; the Obsidian projection implements
-  `Projector`.
+- **Ports with swap drills.** `memfw.ports.PORT_VERSIONS` lists twelve ports
+  (`PORTS_API_VERSION` 0.3.0). Eleven (`RecallProvider`, `Projector`, `Ingestor`, `Deriver`,
+  `Clock`, `IdGen`, `ClaimVerifier`, `ClaimStager`, `ContextSlotProvider`, `UsageSink`,
+  `ProjectionStore`) each have at least two implementations that pass the same
+  `memfw.ports.testing` check (`tests/test_swap_drills.py`); the twelfth, `ModelBackend`, is
+  checked against the extractive and DeepSeek backends (`tests/test_adapter_deepseek.py`).
+  Stdlib-only reference implementations live in `memfw.ports.reference`; the Obsidian
+  projection implements `Projector`, and the edge projection implements `ProjectionStore`
+  (SQLite, with an in-memory reference). `memfw.ports.proxies` defines the attachment proxy
+  format and its locators, with `check_proxy_import` for adapters.
 - **Recall coordinator.** `memory_search mode=two_stage` (opt-in) routes a query to recall
   providers, resolves every hit against the vault, filters it through a policy (`compat_fts`,
   or `strict` with privacy, status, lifecycle and archive checks), fuses and labels the result,
   with per-provider and total deadlines. Providers never write the vault; only returned hits
-  are warmed and access-logged. The other modes are unchanged.
+  are warmed and access-logged. The other modes are unchanged. Under `strict`, documents that
+  carry a `fleet_path` tag are joined to the lifecycle meta-index
+  (`status/memory-meta-index.json`), so a retired, superseded or expired entry is dropped (a
+  failed join drops it too, reason `unjoined`). `kh:<path>#<heading>` refs from QMD notes or
+  PageIndex can resolve to sections of the built-in notes index through `NotesSegmentResolver`
+  (not registered by default), with the `notes_search` privacy rules.
+- **Recall adapters from configuration.** `vault.yaml` `runtime.recall.adapters` lists
+  `{factory: "module:factory", options, weight, timeout_seconds}` entries (at most 8) that
+  `two_stage` runs beside FTS. The module name comes only from this file, never from a request.
+  A bad entry fails `two_stage` closed with a fixed `RecallAdapterError` code; an adapter that
+  cannot serve is reported degraded while the others answer. Without the key nothing is
+  imported. See [`docs/ports-and-recall.md`](docs/ports-and-recall.md) §4.1b.
 - **Standalone wheels.** `packages/memfw-ports` and `packages/memfw-recall` build the wheels
   `memfw_ports` and `memfw_recall` from memfw's own sources, so an adapter author can run the
   contract kit without installing memfw. CI builds them and smoke-tests them in a clean venv.
   They are **not published to PyPI**; build them locally with
-  `uv build --wheel --package memfw-ports` (and `memfw-recall`). Both are version 0.2.0; the
-  DeepSeek adapter wheel is 0.1.0.
+  `uv build --wheel --package memfw-ports` (and `memfw-recall`). Both are version 0.3.0; the
+  adapter wheels are listed under [Optional adapters](#-optional-adapters).
 
 Details: [`docs/architecture.md`](docs/architecture.md) and
 [`docs/ports-and-recall.md`](docs/ports-and-recall.md).
+
+## 🧩 Optional adapters
+
+Adapters are separate packages under `packages/adapters/`, each built as its own wheel
+(`uv build --wheel --package NAME`) and **not published to PyPI**. memfw never imports them.
+Each depends on the `memfw-ports` wheel plus at most a few pinned libraries, and pins the
+upstream release its contract tests were recorded against; CI never needs the upstream
+service. **Every adapter is off by default:** a recall provider runs only when it is listed
+under `runtime.recall.adapters`; a deriver or a proxy producer runs only when an operator calls it, and its output reaches the vault
+only as staged candidates or an explicit `attach proxy import`.
+
+| Adapter (wheel version) | Port | What it does | Status |
+|---|---|---|---|
+| `memfw-adapter-deepseek` (0.1.1) | `ModelBackend` | `conv-v2` summary and tags for the conversations worker; needs `conversations.cloud: true` and `DEEPSEEK_API_KEY` | merged |
+| `memfw-adapter-bm25s` (0.1.1) | `RecallProvider` | in-process bm25s 0.3.16 ranking with jieba; indexes only its `clearance` (default `public,shared`), hashed tokens outside the vault; `memfw-adapter-bm25s build` | merged |
+| `memfw-adapter-qdrant` (0.1.2) | `RecallProvider` | semantic recall over a Qdrant v1.20.x service (REST, stdlib); loopback unless `allow_remote: true`; `memfw-adapter-qdrant sync` sends only `public` / `shared` memories and stores no text | merged |
+| `memfw-adapter-qmd` (0.1.0) | `RecallProvider` ×2 | `qmd` (memory projections → memory ids) and `qmd-notes` (notes → `kh:` refs) over a running QMD 2.5.3 MCP server; never returns `local-private` or `unknown` | merged |
+| `memfw-adapter-pageindex` (0.1.0) | `RecallProvider` | PageIndex-style tree search over long documents (`kh:` and `att:…#page=` refs); `mode: titles` needs no model; `memfw-pageindex build-md \| import-tree \| list` | merged |
+| `memfw-adapter-ocr` (0.1.0) | proxy producer (`ocr` deriver) | turns a PDF or image attachment into a `memfw.proxy` v1 import file through a local engine (an MCP stdio OCR server, `pdftotext`, or a `module:factory`); nothing uploaded; `memfw-ocr-proxy run \| check` | merged |
+| `memfw-adapter-langextract` (0.1.0) | `Deriver` (`entities`) | character-grounded entities and relations from `public` / `shared` memories with LangExtract 1.7.2; a memfw `ModelBackend` (a loopback Ollama backend ships with it) inside a per-run token budget | merged |
+| `memfw-adapter-lightrag` (0.1.0) | `Deriver` (`graph`, `answer`) | loopback HTTP client of an operator-run `lightrag-server` 1.5.7; sends only `public` / `shared` memories; every kept row's sources must be requested, shareable, current memories | merged |
+| `memfw-adapter-graphrag` (0.1.0) | `Deriver` (`graph`, `reports`) | GraphRAG 3.3.0 as an offline batch over a `memfw projection export` generation (`public` / `shared` only); `graphrag index` runs only when called, as a local subprocess against loopback model endpoints unless `cloud: true` | merged |
+
+Deriver outputs are capped at `epistemic: inference` and become memory only through review. A recall
+adapter that is down or slow is reported degraded and FTS still answers. Per-adapter details:
+[`docs/COMPONENTS.md`](docs/COMPONENTS.md), [`docs/adapter-bm25s.md`](docs/adapter-bm25s.md),
+[`docs/adapter-qdrant.md`](docs/adapter-qdrant.md),
+[`docs/adapter-langextract.md`](docs/adapter-langextract.md),
+[`docs/adapter-lightrag.md`](docs/adapter-lightrag.md),
+[`docs/adapter-graphrag.md`](docs/adapter-graphrag.md),
+[`docs/qmd-projection.md`](docs/qmd-projection.md) and each package's `README.md`.
 
 ## 📊 Evaluation summary
 
@@ -519,11 +725,15 @@ Details: [`docs/architecture.md`](docs/architecture.md) and
 | Overall adjusted contrasts | **0 / 40** significant (4 scopes × 10 pairwise, Holm adjusted) |
 | Retrieval ceiling (full-corpus BM25, 128-token) | **36.56%** evidence recall vs. **95.04%** query-conditioned oracle |
 | Local Mem0 baseline (n=18) | memfw 66.7% vs. Mem0 62.5% evidence recall @100%; no significant difference |
+| Multimodal causal gate (`eval causal --multimodal`, synthetic) | 59 cases: **0** spurious promotions, **0** fact upgrades, **37 / 37** bypass attempts blocked |
 
 These are **bounded negative results**, not quality claims: small samples, single-repeat runs, and
 a logical retention projection rather than a physical-vault capacity test. Dream curate is scored
 on synthetic duplicate, conflict and stale cases with `python -m eval.dreams`
-([`eval/dreams/`](eval/dreams)). Full evidence and limits: [`docs/evaluation.md`](docs/evaluation.md).
+([`eval/dreams/`](eval/dreams)). `memfw eval context SNAPSHOT` measures the context pack (coverage,
+waste, P50/P95 latency and token cost per slot, swept over slot and resident-prefix caps) on a
+private copy of a read-only vault snapshot; it reports counts, ratios and timings only and
+changes no default. Full evidence and limits: [`docs/evaluation.md`](docs/evaluation.md).
 
 ## 📚 Docs map
 
@@ -536,15 +746,18 @@ on synthetic duplicate, conflict and stale cases with `python -m eval.dreams`
 | [`docs/okf.md`](docs/okf.md) | OKF v0.2 export and validation |
 | [`docs/epistemic-and-experience.md`](docs/epistemic-and-experience.md) | epistemic type, causal grade, the write gate, and retrieval labels |
 | [`docs/experience-points.md`](docs/experience-points.md) | experience points: draft schema, `from-github`, invalidation |
-| [`docs/ontology.md`](docs/ontology.md) | concept taxonomy (`broader` / `narrower`) and the relation-type table |
+| [`docs/ontology.md`](docs/ontology.md) | concept taxonomy (`broader` / `narrower`), the relation-type table, the typed-edge projection and path patterns |
+| [`docs/attachments.md`](docs/attachments.md) | attachments: blob store, records, referenced originals, path safety, purge, scan, events and forward compatibility |
+| [`docs/attachment-proxies.md`](docs/attachment-proxies.md) | the `memfw.proxy` v1 import format, canonical locators, proxy storage and budget |
 | [`docs/cli-mcp-parity.md`](docs/cli-mcp-parity.md) | every capability × CLI / MCP / HTTP, with each gap marked by design or accidental |
 | [`docs/obsidian-projection.md`](docs/obsidian-projection.md) | the read-only Obsidian board: layout, clearance, rebuild rules |
-| [`docs/COMPONENTS.md`](docs/COMPONENTS.md) | notes index, code retrieval, read-only HTTP service, standalone wheels, DeepSeek adapter, corroboration, Obsidian projection, relatedness |
+| [`docs/COMPONENTS.md`](docs/COMPONENTS.md) | notes index, code retrieval, read-only HTTP service, standalone wheels, the adapters, corroboration, Obsidian projection, relatedness |
+| [`docs/adapter-bm25s.md`](docs/adapter-bm25s.md), [`docs/adapter-qdrant.md`](docs/adapter-qdrant.md), [`docs/adapter-langextract.md`](docs/adapter-langextract.md), [`docs/adapter-lightrag.md`](docs/adapter-lightrag.md), [`docs/adapter-graphrag.md`](docs/adapter-graphrag.md), [`docs/qmd-projection.md`](docs/qmd-projection.md) | adapter setup, privacy rules and contract tests (OCR and PageIndex: their package READMEs) |
 | [`docs/retrieval-architecture.md`](docs/retrieval-architecture.md) | retrieval design |
 | [`docs/architecture.md`](docs/architecture.md) | package layers, import guards, the shrinking allowlist, the composition root, the byte-identical harness |
-| [`docs/ports-and-recall.md`](docs/ports-and-recall.md) | port contracts, the recall coordinator, `two_stage`, context packs, slots and cache, standalone wheels, writing an adapter |
-| [`docs/v1-integration.md`](docs/v1-integration.md), [`docs/READONLY-SERVICE-UPGRADE.md`](docs/READONLY-SERVICE-UPGRADE.md) | federation surface and service upgrades |
-| [`docs/evaluation.md`](docs/evaluation.md), [`reports/`](reports), [`results/`](results) | evaluation evidence |
+| [`docs/ports-and-recall.md`](docs/ports-and-recall.md) | port contracts, the recall coordinator, `two_stage`, configured recall adapters, context packs, slots (including `current`) and cache, standalone wheels, writing an adapter |
+| [`docs/v1-integration.md`](docs/v1-integration.md), [`docs/READONLY-SERVICE-UPGRADE.md`](docs/READONLY-SERVICE-UPGRADE.md) | federation surface (`memfw-http/2` and `/3`, `/context`, `/forget`) and service upgrades |
+| [`docs/evaluation.md`](docs/evaluation.md), [`reports/`](reports), [`results/`](results) | evaluation evidence, the multimodal causal corpus and the C4 context pack evaluation |
 | [`docs/RELEASE-READINESS.md`](docs/RELEASE-READINESS.md) | measured checks and known limitations |
 | [`docs/legacy-design-notes.md`](docs/legacy-design-notes.md) | earlier design notes (historical) |
 
@@ -554,14 +767,26 @@ Release status: **v0.3.0** (2026-11-17). Apache-2.0; runs offline on one machine
 to PyPI. Implemented: the vault and hash-linked event log, retention and the `10MB` budget, the
 disposable FTS5 index and the read path (per-term matching, concept aliases, multi-hop),
 epistemic types, causal grades and reviewed experience points, the layered core with eleven
-ports and the `memfw.runtime` composition root, `two_stage` recall, context packs v2 with
+ports (the twelfth, `ProjectionStore`, is on `main`) and the `memfw.runtime` composition root, `two_stage` recall, context packs v2 with
 slots, resources and `if_version`, open questions, recall labels and corroboration, the concept
 taxonomy and relation-type table, privacy levels with opt-in clearance, the MCP servers, the
-notes index and code retrieval, the read-only transcript index, the conversation store with 15
-readers, settled ingest, sharing and the worker (with an optional, off-by-default DeepSeek
+notes index and code retrieval, the read-only transcript index, the conversation store with 14
+readers (Qwen Code, the 15th, is on `main`), settled ingest, sharing and the worker (with an optional, off-by-default DeepSeek
 tagging adapter), handoff packs, dream (verify, curate, distill, budget, skills, open-question
 candidates), OKF v0.2 export and import, the Obsidian projection and the read-only HTTP service
 (`memfw-http/2`). Changes are listed in [`CHANGELOG.md`](CHANGELOG.md).
+
+**On `main`, not yet released (planned for v0.4.0):** the opt-in `current` context slot,
+two-stage conversation search with tag filters, attachments (embedded and referenced originals,
+detach, relink, purge, scan, text proxies in the `memfw.proxy` v1 format, attachments as
+observation evidence in the write gate, proxy search with the opt-in MCP tools
+`attachment_search` / `attachment_get`), the typed-edge projection and bounded path patterns
+behind the `ProjectionStore` port, the C4 context pack evaluation, `memfw-http/3` with
+`/context`, `/forget` requests and `forget residue`, event log forward compatibility, vault
+identity for out-of-vault projections (corroboration moved out of the vault), the lifecycle
+meta-index and `kh:` note resolver in recall, `runtime.recall.adapters`, the Qwen Code reader
+and eight new adapters beside the DeepSeek one (bm25s, Qdrant, QMD, PageIndex, OCR, LangExtract,
+LightRAG, GraphRAG), all off by default.
 
 **Upgrade boundary.** `vault.yaml` stays at `schema_version: 1`, and a file without the new
 keys keeps its bytes through parse → render. New frontmatter (`epistemic`, `causal`,
@@ -572,13 +797,14 @@ is **not** migrated in place: the MCP server (`memfw-mcp`) and `memfw index sear
 stale index before they use it; the read-only HTTP service never writes, so deploy its three
 files together and run `memfw index rebuild` once before pointing it at an upgraded vault.
 
-**Boundaries.** Matching is lexical — a paraphrase with no shared word is missed; dream only
+**Boundaries.** Built-in matching is lexical (semantic recall needs an embedder or an adapter) — a paraphrase with no shared word is missed; dream only
 stages proposals (there is no `dream apply`: a person applies candidates through `update` /
 `supersede`, and an open-question candidate through `dream accept-question`);
 the notes, transcript and conversation indexes are derived and separate from the vault;
-`two_stage` and context v2 are MCP-only (not in the HTTP service or the CLI); the
-read-only HTTP service is authenticated by read/write tokens and refuses an unconfigured
-write path; scheduling ships as a printed launchd plist; the evaluation is small. See
+`two_stage` memory recall and context v2 are MCP-only, except the v2 `core` pack that
+`memfw-http/3` `POST /context` serves; attachments are reachable from the CLI and, with
+`mcp.attachments: true`, the MCP tools (the HTTP service never serves them); the typed-edge graph has no MCP tool; the read-only HTTP service is
+authenticated by read/write tokens and refuses an unconfigured write path; scheduling ships as a printed launchd plist; the evaluation is small. See
 [`docs/dream.md`](docs/dream.md#limitations) and
 [`docs/RELEASE-READINESS.md`](docs/RELEASE-READINESS.md).
 
@@ -599,12 +825,13 @@ drills (`tests/test_swap_drills.py`) and the static checks of the standalone whe
 and smoke-test them, which needs `uv`).
 
 Source layout under [`src/memfw`](src/memfw): `ports` (contracts), `core`, `storage`, `log`,
-`ontology` (vault state, events, concepts), `index`, `retrieval`, `notes`, `code_retrieval`
-(search), `projections` (the Obsidian board), `policies`, `budget`, `curation`, `capture`
+`ontology`, `attachments` (vault state, events, concepts, attachment records and blobs), `index`,
+`retrieval`, `notes`, `code_retrieval` (search), `projections` (the Obsidian board), `edges`
+(the typed-edge projection), `corroboration`, `policies`, `budget`, `curation`, `capture`
 (retention and review), `history` (transcript index, conversation store, readers), `recall`,
 `context`, `conversations`, `handoff`, `dream`, `okf` (capabilities), `runtime` (composition
-root), `mcp` and the CLI (interfaces). The standalone wheels and the DeepSeek adapter are built
-from `packages/`.
+root), `mcp` and the CLI (interfaces). The standalone wheels and the adapters are built from
+`packages/`.
 
 ## 🤝 Contributing
 
