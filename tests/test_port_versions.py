@@ -33,6 +33,7 @@ CONSUMES = {
     "memfw-adapter-pageindex": {"RecallProvider", "ModelBackend"},
     "memfw-adapter-langextract": {"Deriver", "ModelBackend"},
     "memfw-adapter-lightrag": {"Deriver"},
+    "memfw-adapter-graphrag": {"Deriver"},
 }
 
 

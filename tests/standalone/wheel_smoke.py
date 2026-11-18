@@ -3,7 +3,7 @@
 Run it with the interpreter of a venv that has the wheels and NOT memfw:
 
     python -I tests/standalone/wheel_smoke.py [--recall] [--deepseek] [--bm25s] [--qdrant]
-        [--qmd] [--ocr] [--pageindex] [--langextract] [--lightrag]
+        [--qmd] [--ocr] [--pageindex] [--langextract] [--lightrag] [--graphrag]
 
 It refuses to run when ``memfw`` is importable, imports the wheels, and runs
 the contract kit (``memfw_ports.testing``) against the reference
@@ -26,7 +26,9 @@ over a tree it builds (titles mode, no model); with ``--langextract`` the
 replayed LangExtract output (LangExtract itself is not installed, no model
 runs); with ``--lightrag`` the
 ``memfw-adapter-lightrag`` wheel's deriver passes ``check_deriver`` against an
-in-process fake server. Prints one
+in-process fake server; with ``--graphrag`` the
+``memfw-adapter-graphrag`` wheel's deriver passes ``check_deriver`` over a
+small CSV output (GraphRAG is not installed or run). Prints one
 ``ok`` line per check and exits non-zero on the first failure. Standard
 library only; not collected by pytest (``tests/test_standalone_ports_wheel.py``
 drives it).
@@ -570,6 +572,51 @@ def _lightrag(root: Path) -> None:
     _ok("check_deriver LightRagDeriver (fake server)")
 
 
+def _graphrag(root: Path) -> None:
+    """The deriver wheel over the memfw-ports wheel, reading a tiny CSV output (no GraphRAG)."""
+
+    from memfw_adapter_graphrag import GraphRagDeriver, Settings, candidates
+    from memfw_adapter_graphrag import _ports as seam
+    from memfw_adapter_graphrag.deriver import input_name
+    from memfw_ports.reference._vault import read_memory
+    from memfw_ports.testing import check_deriver
+    from memfw_ports.types import DeriveRequest
+
+    assert seam.DerivedView.__module__.startswith("memfw_ports"), seam.DerivedView
+    _ok("import memfw_adapter_graphrag (ports from memfw_ports)")
+    vault = root / "gr-vault"
+    (vault / "memories").mkdir(parents=True)
+    (vault / "vault.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+    for memory_id, privacy in (("m-pub", "public"), ("m-priv", "local-private")):
+        (vault / "memories" / f"{memory_id}.md").write_text(
+            f"---\nid: {memory_id}\nprivacy: {privacy}\nversion: 2\ntags: []\n---\nbody\n",
+            encoding="utf-8",
+        )
+    project = root / "gr-project"
+    output = project / "output"
+    output.mkdir(parents=True)
+    names = {}
+    for memory_id in ("m-pub", "m-priv"):
+        memory = read_memory(vault, memory_id)
+        assert memory is not None
+        names[memory_id] = input_name(memory)
+    tables = {
+        "documents": f"id,title,text_unit_ids\nd1,{names['m-pub']},['u1']\n"
+        f"d2,{names['m-priv']},['u2']\n",
+        "text_units": "id,document_id\nu1,d1\nu2,d2\n",
+        "entities": "id,title,type,description,text_unit_ids\n"
+        "e1,BACKUP,service,a job,['u1']\ne2,KEYS,concept,private,['u2']\n",
+    }
+    for name, text in tables.items():
+        (output / f"{name}.csv").write_text(text, encoding="utf-8")
+    deriver = GraphRagDeriver(Settings(root=str(project)), runner=lambda *a: 1)
+    request = DeriveRequest("graph", ("m-pub", "m-priv"))
+    view = check_deriver(deriver, vault=vault, request=request)
+    assert view.cited_ids() == ("m-pub",) and "KEYS" not in view.content, view
+    assert len(candidates(view)) == 1
+    _ok("check_deriver GraphRagDeriver (recorded-shape output)")
+
+
 def main(argv: list[str]) -> int:
     if importlib.util.find_spec("memfw") is not None:
         print("memfw is importable here; run this in a venv without memfw", file=sys.stderr)
@@ -595,6 +642,8 @@ def main(argv: list[str]) -> int:
             _langextract(root)
         if "--lightrag" in argv:
             _lightrag(root)
+        if "--graphrag" in argv:
+            _graphrag(root)
     print("standalone wheel smoke passed")
     return 0
 

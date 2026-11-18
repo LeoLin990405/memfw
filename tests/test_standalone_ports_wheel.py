@@ -93,6 +93,7 @@ MEMBERS = (
     "adapters/memfw-adapter-pageindex",
     "adapters/memfw-adapter-langextract",
     "adapters/memfw-adapter-lightrag",
+    "adapters/memfw-adapter-graphrag",
 )
 #: Third-party wheels an adapter needs, by exact pin (the versions uv.lock
 #: resolves and the adapter's pyproject pins), installed before the local
@@ -254,6 +255,7 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
         "memfw-adapter-pageindex",
         "memfw-adapter-langextract",
         "memfw-adapter-lightrag",
+        "memfw-adapter-graphrag",
     ):
         _run(uv, "build", "--wheel", "--package", package, "-o", dist)
     wheels = sorted(p.name for p in dist.glob("*.whl"))
@@ -262,6 +264,7 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
     assert wheels == [
         "memfw_adapter_bm25s-0.1.1-py3-none-any.whl",
         "memfw_adapter_deepseek-0.1.1-py3-none-any.whl",
+        "memfw_adapter_graphrag-0.1.0-py3-none-any.whl",
         "memfw_adapter_langextract-0.1.0-py3-none-any.whl",
         "memfw_adapter_lightrag-0.1.0-py3-none-any.whl",
         "memfw_adapter_ocr-0.1.0-py3-none-any.whl",
@@ -291,6 +294,7 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
         "--pageindex",
         "--langextract",
         "--lightrag",
+        "--graphrag",
         cwd=tmp_path,
     )
     assert "standalone wheel smoke passed" in out
@@ -305,6 +309,7 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
     assert "ok check_recall_provider QdrantProvider (fake server)" in out
     assert "ok check_deriver LangExtractDeriver (replayed output)" in out
     assert "ok check_deriver LightRagDeriver (fake server)" in out
+    assert "ok check_deriver GraphRagDeriver (recorded-shape output)" in out
 
 
 def test_adapter_dependency_pins_match_the_lockfile_and_pyproject() -> None:
@@ -333,11 +338,12 @@ def test_ci_wheel_job_builds_and_smokes_every_adapter_with_the_pins() -> None:
         "memfw-adapter-pageindex",
         "memfw-adapter-langextract",
         "memfw-adapter-lightrag",
+        "memfw-adapter-graphrag",
     ):
         assert f"uv build --wheel --package {package} " in ci, package
     assert "bm25s==0.3.16 jieba==0.42.1 PyYAML==6.0.3 numpy==2.4.6" in ci  # CI runs Python 3.11
     smoke = "wheel_smoke.py --recall --deepseek --bm25s --qdrant --qmd --ocr --pageindex"
-    smoke += " --langextract --lightrag"
+    smoke += " --langextract --lightrag --graphrag"
     assert smoke in ci
 
 

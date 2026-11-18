@@ -14,6 +14,27 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 
 ## [Unreleased]
 
+### Added — GraphRAG deriver adapter (wave 4, off by default)
+
+- New workspace package `packages/adapters/memfw-adapter-graphrag` (0.1.0,
+  `memfw_adapter_graphrag:SPEC`, entry point `memfw.adapters`): GraphRAG 3.3.0
+  (MIT) as an offline batch `Deriver` (kinds `graph` and `reports`).
+  `stage_input` copies only `public`/`shared` documents of a `memfw projection
+  export` generation (manifest class, file hash and the vault's current
+  privacy all checked) to `<root>/input/<id>.v<version>.<hash>.txt` (the vault
+  file's own bytes); `run_index` runs `graphrag index` as a subprocess only
+  when called, over a `settings.yaml` the adapter writes itself (explicit
+  literal-loopback model endpoints unless `cloud: true`, CSV tables, fixed
+  directories; refused if changed or if `.env` exists), with a minimal
+  environment and `DO_NOT_TRACK=1`, only for GraphRAG 3.3.0, killing the
+  process group on timeout; `derive` reads the CSV output tables back, keeping
+  only rows whose every source (community reports: through their entities,
+  relationships, covariates and child communities) is a requested, shareable,
+  current memory. Caps `inference` / causal `association`; `candidates(view)`
+  yields staging candidates (`causal: none`). Tests never run GraphRAG. Docs:
+  `docs/adapter-graphrag.md`. memfw never imports it; default output is
+  unchanged.
+
 ### Added — LightRAG deriver adapter (wave 4, off by default)
 
 - New workspace package `packages/adapters/memfw-adapter-lightrag` (0.1.0,
