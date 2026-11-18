@@ -86,6 +86,31 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   body is `embedding_bad_response`. The test fakes read the request body and
   ignore an early client close, which made the size test fail on Linux CI.
 
+### Added — attachment search: proxy_segments, ProxyProvider, MCP tools (MM2b)
+
+- Active proxies are searchable through their own index (`proxy_segments`,
+  same tokenizer and two-character fallback as memory search), stored
+  outside the vault (`~/.local/share/memfw/proxy_index/<key>.sqlite3`, 0600)
+  and rebuildable from a read-only vault, filtered by tenant and privacy
+  (strictest of proxy and attachment), without superseded proxies, inactive
+  attachments or attachments past their retention. Memory search, HTTP, OKF
+  and projections never read it. `drop_proxy_index` / `proxy_index_residue`
+  are the hooks `attach purge` uses.
+- Built-in recall provider `ProxyProvider` (`ref_kind="attachment_segment"`,
+  locator in `extra`, never text) with `ProxySegmentResolver` returning
+  `SegmentResolution(source="attachments")`, so segments land in
+  `RecallResult.segments`, never as memory hits; not part of memory recall.
+- `attach purge` now deletes the attachment's proxy files and drops the
+  proxy index (`still_containing` reports leftovers; `recover` finishes an
+  interrupted purge). Detached, missing and purged attachments leave
+  `attachment_search`, `attachment_get` and originals.
+- MCP `attachment_search` and `attachment_get`, listed only with
+  `mcp.attachments: true` in `vault.yaml` (default off: `tools/list`
+  unchanged). Results are re-checked against the proxy file, the attachment
+  record and the MCP clearance. Originals only with
+  `mcp.local_originals: true` (default off), after re-hashing the blob; the
+  HTTP service never serves attachments.
+
 ### Added — attachment proxies: import format, locators, storage (MM2a)
 
 - `memfw attach proxy import ATT-ID FILE` stores a text proxy (OCR,
@@ -564,8 +589,8 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   splits a copy off (new `vault_id`, blobs copied); `memfw attach reown --yes`
   re-owns after a move, and is refused while the vault path recorded in the
   marker still holds a vault with the same `vault_id` (`--force-take-over`
-  overrides). The purge plan lists the attachment's MM2a proxies, which a
-  purge does not remove until the MM2b wiring; `scan` counts hard-linked
+  overrides). The purge plan lists the attachment's MM2a proxies (MM2b
+  removes them with the attachment); `scan` counts hard-linked
   files; a blocked `purge --orphans --yes` reports `purged: false`, exit 1.
 - `fsck` only `lstat`s referenced originals (`fsck --hash-referenced`
   re-hashes); directory listings are cached per pass. An empty root or one

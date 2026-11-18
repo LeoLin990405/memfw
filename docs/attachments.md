@@ -430,9 +430,11 @@ printed and nothing is written:
   whose original is **never touched** (it is not memfw's copy).
 * `stores`: the SQLite stores in the vault, and `irrecoverable_copies`.
 * `proxies`: the attachment's proxy files (`attachments/proxies/prx-*.md`,
-  MM2a). **A purge does not remove them yet**; proxy deletion arrives with
-  the MM2b wiring. Until then the proxy text stays in the vault, and the
-  plan says so.
+  MM2a), superseded ones included. The purge deletes them and drops the
+  out-of-vault proxy search index (MM2b; it is rebuilt from the remaining
+  proxies on next use); the plan's notice says so, and the result's
+  `still_containing` names any proxy file or `proxy_index` that could not
+  be removed. `memfw recover` finishes this part of an interrupted purge.
 
 With `--yes` one `attach_purge` event commits the purge (only the id and what
 happened to the blob), then the blob is removed when no other record names
@@ -516,14 +518,14 @@ MM1a is the base the later steps build on:
 * **Knowledge-Hub registration** (design section 8, steps 2 and 3): a pilot
   in a snapshot vault, then batches in the live vault after each `attach
   scan` report is reviewed. No command does it on its own.
-* **MM2a/MM2b** (proxies): MM2a stores them in `attachments/proxies/`
-  with `proxy_add` / `proxy_supersede` events (see
-  [attachment-proxies.md](attachment-proxies.md)); the record checks only
-  read `attachments/*.md`, so a proxy is never taken for a record. Locator
-  bounds will also use `pages`, `width`, `height`, `duration` once the record
-  carries them. `attachment_search` / `attachment_get` go through
-  `memfw.runtime` and must filter by `AttachmentRecord.privacy_level` with the
-  exit's clearance.
+* **MM2a/MM2b** (proxies): stored in `attachments/proxies/` with
+  `proxy_add` / `proxy_supersede` events; the record checks only read
+  `attachments/*.md`, so a proxy is never taken for a record. MM2b adds the
+  `proxy_segments` index (outside the vault) and the MCP `attachment_search` /
+  `attachment_get` tools (off by default); `attach purge` removes a purged
+  attachment's proxy files and drops the proxy index. See
+  [attachment-proxies.md](attachment-proxies.md). Locator bounds will also use
+  `pages`, `width`, `height`, `duration` once the record carries them.
 * **MM3** (`observation` evidence class) is in: see "What counts as evidence"
   in `docs/epistemic-and-experience.md`. Locators resolve at attachment level;
   once MM2 has proxy segments, a segment index can be passed to

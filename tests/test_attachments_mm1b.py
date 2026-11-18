@@ -531,6 +531,28 @@ def test_purge_leaves_nothing_behind(tmp_path: Path, private_home: Path) -> None
     )
     repository.cold_archive("cold-1")
     assert _cli("index", "rebuild", "--root", vault).exit_code == 0
+    # Two proxies (one superseding the other) carry the marker, and the
+    # out-of-vault proxy index has indexed it (MM2b).
+    proxy_file = tmp_path / "proxy.json"
+    proxy_payload = {
+        "format": "memfw.proxy",
+        "version": 1,
+        "kind": "ocr",
+        "source_sha256": embedded.sha256,
+        "coverage": {"status": "full"},
+        "segments": [{"text": f"proxy text {MARKER} first reading"}],
+    }
+    proxy_file.write_text(json.dumps(proxy_payload), encoding="utf-8")
+    first_proxy = repository.import_proxy(embedded.id, proxy_file)
+    proxy_payload["segments"] = [{"text": f"proxy text {MARKER} second reading"}]
+    proxy_file.write_text(json.dumps(proxy_payload), encoding="utf-8")
+    repository.import_proxy(embedded.id, proxy_file, supersedes=first_proxy.id)
+    proxy_file.unlink()
+    from memfw.index.proxies import ensure_proxy_index, proxy_index_path
+
+    assert ensure_proxy_index(repository, now=datetime.now(UTC)) is not None
+    proxy_index_dir = proxy_index_path(repository).parent
+    assert _grep([proxy_index_dir], MARKER.encode())
     # An interrupted add of the same bytes left a stale stage of this vault.
     store = repository.attachment_blob_store()
     assert store is not None
@@ -542,12 +564,19 @@ def test_purge_leaves_nothing_behind(tmp_path: Path, private_home: Path) -> None
     os.utime(stale.temporary, (old, old))
     needle = MARKER.encode()
     assert _grep([repository.root, blob_root], needle)
+    plan = repository.attachment_purge_plan(embedded.id)
+    assert len(plan.proxies) == 2
+    assert any("are deleted with it" in notice for notice in plan.notices)
     for record in (embedded, referenced):
         result = _cli("attach", "purge", record.id, "--yes", "-r", vault)
         assert result.exit_code == 0, result.output
         payload = json.loads(result.output)
         assert payload["purged"] is True and payload["still_containing"] == []
-    assert _grep([repository.root, blob_root], needle) == []
+    assert _grep([repository.root, blob_root, proxy_index_dir], needle) == []
+    assert not (repository.root / ATTACHMENTS_DIR / "proxies").exists() or not list(
+        (repository.root / ATTACHMENTS_DIR / "proxies").iterdir()
+    )
+    assert not proxy_index_path(repository).exists()
     # The external original is not memfw's copy: untouched.
     assert (root / f"{MARKER}-dir" / "ref.pdf").read_bytes() == b"%PDF-1.7 referenced"
     # The log keeps only ids; the citing memory is unchanged; the vault is clean.
@@ -971,20 +1000,62 @@ def test_blocked_orphan_purge_reports_not_purged(tmp_path: Path) -> None:
     assert "belongs to another vault" in payload["blocked"]
 
 
-def test_purge_plan_lists_proxies_it_does_not_remove_yet(tmp_path: Path) -> None:
+def test_purge_removes_proxies_and_the_proxy_index(tmp_path: Path) -> None:
+    from memfw.index.proxies import ensure_proxy_index, proxy_index_path
+
+    fixtures = Path(__file__).parent / "fixtures" / "proxies"
+    repository, _ = _kh(tmp_path)
+    source = _outside_file(tmp_path, "scan.pdf", (fixtures / "source.pdf").read_bytes())
+    record = repository.add_attachment(source).record
+    other = repository.add_attachment(
+        _outside_file(tmp_path, "scan2.pdf", (fixtures / "source.pdf").read_bytes())
+    ).record
+    proxy = repository.import_proxy(record.id, fixtures / "ocr-pdf-v1.json")
+    kept = repository.import_proxy(other.id, fixtures / "ocr-pdf-v1.json")
+    assert ensure_proxy_index(repository, now=datetime.now(UTC)) is not None
+    plan = repository.attachment_purge_plan(record.id)
+    expected = f"attachments/proxies/{proxy.id}.md"
+    assert plan.proxies == (expected,)
+    assert any("are deleted with it" in notice and expected in notice for notice in plan.notices)
+    result = repository.purge_attachment(record.id, confirm=True)
+    assert expected in result.removed and "proxy_index" in result.removed
+    assert result.still_containing == []
+    assert not (repository.root / expected).exists()
+    assert not proxy_index_path(repository).exists()
+    # The other attachment's proxy stays, its index comes back, fsck is clean.
+    assert [row[0] for row in repository.proxy_records()] == [kept.id]
+    index = ensure_proxy_index(repository, now=datetime.now(UTC))
+    assert index is not None
+    assert {
+        hit.attachment_id for hit in index.search("Invoice", tenant="", clearance=None, limit=9)
+    } == {other.id}
+    assert repository.fsck() == []
+
+
+def test_recover_removes_proxies_of_an_interrupted_purge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from memfw.attachments import proxies as proxies_module
+
     fixtures = Path(__file__).parent / "fixtures" / "proxies"
     repository, _ = _kh(tmp_path)
     source = _outside_file(tmp_path, "scan.pdf", (fixtures / "source.pdf").read_bytes())
     record = repository.add_attachment(source).record
     proxy = repository.import_proxy(record.id, fixtures / "ocr-pdf-v1.json")
-    plan = repository.attachment_purge_plan(record.id)
-    expected = f"attachments/proxies/{proxy.id}.md"
-    assert plan.proxies == (expected,)
-    assert any("NOT removed" in notice and expected in notice for notice in plan.notices)
-    # Purging today does not crash; the proxy file stays until MM2b wires deletion.
-    result = repository.purge_attachment(record.id, confirm=True)
-    assert result.plan.proxies == (expected,)
-    assert (repository.root / expected).is_file()
+
+    def crash(*args: Any, **kwargs: Any) -> list[str]:
+        raise OSError("simulated crash before the proxies are removed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(lifecycle_module, "remove_attachment_proxies", crash)
+        with pytest.raises(OSError, match="simulated"):
+            repository.purge_attachment(record.id, confirm=True)
+    proxy_path = repository.root / ATTACHMENTS_DIR / "proxies" / f"{proxy.id}.md"
+    assert proxy_path.exists()
+    del proxies_module
+    repository.recover_pending()
+    assert not proxy_path.exists()
+    assert repository.fsck() == []
 
 
 def test_scan_counts_hard_linked_files(tmp_path: Path) -> None:

@@ -818,3 +818,37 @@ def test_invisible_marks_are_refused_in_text(char: str) -> None:
     payload["segments"][0]["text"] = f"a{char}b"
     with pytest.raises(ProxyFormatError, match="invisible"):
         parse_proxy_import(payload, media_type="application/pdf")
+
+
+def test_forged_bare_supersede_events_are_ignored_and_reported(tmp_path: Path) -> None:
+    repository = _repo(tmp_path)
+    attachment_id = _attach(repository, tmp_path)
+    first = repository.import_proxy(attachment_id, FIXTURES / "ocr-pdf-v1.json")
+    second = repository.import_proxy(
+        attachment_id, FIXTURES / "ocr-pdf-v1.json", supersedes=first.id
+    )
+    lone = repository.import_proxy(attachment_id, FIXTURES / "ocr-pdf-v1.json")
+    with repository._locked():
+        # B "superseded by" A, where A was already superseded by B.
+        repository._append_event(
+            EventKind.PROXY_SUPERSEDE,
+            second.id,
+            actor="human",
+            details={"attachment": attachment_id, "by": first.id},
+        )
+        # A proxy superseding itself.
+        repository._append_event(
+            EventKind.PROXY_SUPERSEDE,
+            lone.id,
+            actor="human",
+            details={"attachment": attachment_id, "by": lone.id},
+        )
+    state = repository.proxy_state()
+    assert state.active(second.id) and state.active(lone.id)
+    assert not state.active(first.id)
+    assert (second.id, first.id) in state.invalid
+    assert (lone.id, lone.id) in state.invalid
+    kinds = {(issue["kind"], issue["memory_id"]) for issue in repository.fsck()}
+    assert ("proxy_supersede_invalid", second.id) in kinds
+    assert ("proxy_supersede_invalid", lone.id) in kinds
+    assert [row[0] for row in repository.proxy_records(attachment_id)] == [second.id, lone.id]

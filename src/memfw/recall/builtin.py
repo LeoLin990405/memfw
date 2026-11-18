@@ -911,6 +911,128 @@ class MultihopProvider:
         return _candidates(self.name, result["results"], why="lexical")
 
 
+class ProxyProvider:
+    """Lexical recall over attachment proxies (``proxy_segments``, MM2b).
+
+    Returns ``attachment_segment`` candidates (``<prx-id>:<n>``) with the
+    segment's canonical locator and the proxy kind in ``extra``; never text.
+    The index filters by tenant and by ``clearance`` (MM0 levels; ``None``
+    admits every level). It is never part of the memory recall assembly: only
+    ``memfw.runtime.attachments`` builds a coordinator with it, so memory
+    search output does not change.
+    """
+
+    lexical = True
+
+    def __init__(
+        self,
+        root: Path | str,
+        *,
+        name: str = "proxy",
+        clearance: frozenset[str] | None = None,
+        index_path: Path | None = None,
+    ) -> None:
+        from memfw.index.proxies import proxy_index_path
+
+        self.name = name
+        self.root = Path(root).expanduser()
+        self.clearance = clearance
+        #: The out-of-vault index file (``memfw.index.proxies.proxy_index_path``).
+        self.index_path = index_path if index_path is not None else proxy_index_path(self.root)
+        self.projection_version = ""
+
+    def available(self) -> Availability:
+        if not _vault_ok(self.root):
+            return Availability.missing("no_vault")
+        if not self.index_path.is_file():
+            return Availability.missing("no_proxy_index")
+        return Availability.ok()
+
+    def search(
+        self,
+        query: str,
+        *,
+        limit: int,
+        budget: RecallBudget,
+        tenant: str,
+        as_of: datetime | None,
+    ) -> Sequence[Candidate]:
+        del budget, as_of  # one bounded SQLite read; proxies have no validity window
+        from memfw.index.proxies import ProxyIndex
+
+        hits = ProxyIndex(self.index_path).search(
+            query, tenant=tenant, clearance=self.clearance, limit=_page(limit)
+        )
+        out: list[Candidate] = []
+        for rank, hit in enumerate(hits, start=1):
+            extra: dict[str, Any] = {"kind": hit.kind, "why": "lexical"}
+            if hit.locator and len(hit.locator) <= 64:
+                extra["locator"] = hit.locator
+            out.append(
+                Candidate(
+                    ref=hit.ref,
+                    ref_kind="attachment_segment",
+                    score=float(hit.score),
+                    provider=self.name,
+                    rank=rank,
+                    extra=extra,
+                )
+            )
+        return out
+
+
+#: The ``SegmentResolution.source`` of an attachment proxy segment.
+ATTACHMENTS_SOURCE = "attachments"
+
+
+class ProxySegmentResolver:
+    """``attachment_segment`` refs → ``SegmentResolution``s, not memory hits.
+
+    Registered as ``resolvers["attachment_segment"]``. Each ref ``<prx-id>:<n>``
+    the proxy index holds resolves to ``SegmentResolution(source="attachments",
+    path=<att-id>, anchor=<prx-id>:<n>, title=<proxy kind>, snippet="",
+    privacy=<effective MM0 level>, tenant=<the index row's tenant>)``; the
+    coordinator fuses these into ``RecallResult.segments`` and filters them by
+    tenant and privacy class. ``tenant`` is the tenant the attachments are
+    bound to (the vault's default tenant ``""``). The snippet stays empty: the
+    caller reads the text from the proxy file after its own re-checks.
+    """
+
+    def __init__(self, index_path: Path) -> None:
+        self.index_path = Path(index_path)
+
+    def resolve(self, refs: Sequence[str]) -> Mapping[str, SegmentResolution]:
+        from memfw.ports.proxies import SEGMENT_REF_RE
+
+        wanted = [ref for ref in refs if isinstance(ref, str) and SEGMENT_REF_RE.fullmatch(ref)]
+        if not wanted or not self.index_path.is_file():
+            return {}
+        out: dict[str, SegmentResolution] = {}
+        try:
+            uri = f"file:{self.index_path}?mode=ro"
+            with closing(sqlite3.connect(uri, uri=True, timeout=5)) as connection:
+                for ref in wanted:
+                    row = connection.execute(
+                        "SELECT attachment_id, kind, privacy, tenant FROM segment_rows "
+                        "WHERE ref = ?",
+                        (ref,),
+                    ).fetchone()
+                    if row is None:
+                        continue
+                    out[ref] = SegmentResolution(
+                        source=ATTACHMENTS_SOURCE,
+                        path=str(row[0]),
+                        anchor=ref,
+                        title=str(row[1]),
+                        snippet="",
+                        privacy=str(row[2]),
+                        tenant=str(row[3]),
+                    )
+        except (OSError, sqlite3.Error):
+            return {}
+        return out
+
+
 __all__ = [
     "DEFAULT_LIFECYCLE_SOURCE",
     "NOTES_SOURCE",
@@ -922,6 +1044,9 @@ __all__ = [
     "NotesSegmentResolver",
     "Observe",
     "Prepare",
+    "ProxyProvider",
+    "ProxySegmentResolver",
+    "ATTACHMENTS_SOURCE",
     "VaultIdResolver",
     "default_resolvers",
     "join_lifecycle",
