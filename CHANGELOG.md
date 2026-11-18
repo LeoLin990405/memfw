@@ -23,7 +23,7 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
   characters are now replaced with a space (controls, bidi) or dropped
   (U+200B, U+200E, U+200F, U+061C, U+FEFF) per segment, the same set
   `memfw.ports.proxies.clean_text` refuses; clean text is unchanged. Found by
-  the T1–T7 real-data run (2 of 8 text-layer PDFs).
+  the T1–T7 real-data run (2 of 8 text-layer PDFs) (#107).
 
 ### Added — runtime recall wiring before v0.4.0 (wiring PR, part B)
 
