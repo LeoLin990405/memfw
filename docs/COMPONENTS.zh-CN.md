@@ -127,7 +127,7 @@ CI 的 `standalone-wheels` 任务会构建两者，装进一个没有 memfw 的�
 
 ## OCR 代理适配器
 
-`packages/adapters/memfw-adapter-ocr`（wheel 名 `memfw_adapter_ocr`，版本 0.1.0，只用标准库）把 PDF 或图片附件转成 `memfw.proxy` v1 导入文件：带规范化定位信息的文本片段、`coverage`、`source_sha256`、生成者，以及引擎给出时的逐段置信度。可用的引擎：以子进程方式通过 MCP stdio 调用的 OCR 服务（有截止时间和页数预算，结束时停掉整个进程组）、处理带文字层 PDF 的 `pdftotext`，或一个 `module:factory`（不在“只用本地”的保证范围内）。什么都不上传；只有隐私级别在 `clearance` 内（默认 `public,shared`）的附件才会交给引擎，处理前后都会核对原件的 sha256。`memfw-ocr-proxy run | check` 生成文件，`memfw attach proxy import` 把它存进来。**默认关闭**；memfw 本身从不导入它。见包内 README 和 [`attachment-proxies.md`](attachment-proxies.md)。
+`packages/adapters/memfw-adapter-ocr`（wheel 名 `memfw_adapter_ocr`，版本 0.1.1，只用标准库）把 PDF 或图片附件转成 `memfw.proxy` v1 导入文件：带规范化定位信息的文本片段、`coverage`、`source_sha256`、生成者，以及引擎给出时的逐段置信度。可用的引擎：以子进程方式通过 MCP stdio 调用的 OCR 服务（有截止时间和页数预算，结束时停掉整个进程组）、处理带文字层 PDF 的 `pdftotext`，或一个 `module:factory`（不在“只用本地”的保证范围内）。什么都不上传；只有隐私级别在 `clearance` 内（默认 `public,shared`）的附件才会交给引擎，处理前后都会核对原件的 sha256。`memfw-ocr-proxy run | check` 生成文件，`memfw attach proxy import` 把它存进来。**默认关闭**；memfw 本身从不导入它。见包内 README 和 [`attachment-proxies.md`](attachment-proxies.md)。
 
 
 ## 佐证投影

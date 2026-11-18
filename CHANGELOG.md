@@ -14,6 +14,17 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 
 ## [Unreleased]
 
+### Fixed — OCR proxy adapter keeps proxies with control characters (`memfw-adapter-ocr` 0.1.1)
+
+- `memfw-adapter-ocr`: segment text from an engine (a real `pdftotext` text
+  layer, say) that held a form feed, another C0/C1 control, a bidi override or
+  a zero-width mark made MM2a's parser refuse the whole proxy
+  (`OcrError("proxy_format")`), so the document got no proxy at all. Such
+  characters are now replaced with a space (controls, bidi) or dropped
+  (U+200B, U+200E, U+200F, U+061C, U+FEFF) per segment, the same set
+  `memfw.ports.proxies.clean_text` refuses; clean text is unchanged. Found by
+  the T1–T7 real-data run (2 of 8 text-layer PDFs) (#107).
+
 ### Added — runtime recall wiring before v0.4.0 (wiring PR, part B)
 
 - `vault.yaml` `runtime.recall.lifecycle_source` (default unset): the lifecycle

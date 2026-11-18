@@ -399,7 +399,7 @@ requires-dist = [{ name = "memfw-ports", editable = "packages/memfw-ports" }]
 
 [[package]]
 name = "memfw-adapter-ocr"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/adapters/memfw-adapter-ocr" }
 dependencies = [
     { name = "memfw-ports" },

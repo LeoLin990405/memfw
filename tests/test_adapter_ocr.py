@@ -753,3 +753,51 @@ def test_write_proxy_refuses_existing(tmp_path: Path) -> None:
     write_proxy(out, {"a": 1})
     with pytest.raises(OcrError, match="out_exists"):
         write_proxy(out, {"a": 2})
+
+
+def test_control_and_invisible_characters_do_not_sink_the_proxy() -> None:
+    """A real text layer can carry a form feed, a control byte or a zero-width mark.
+
+    MM2a refuses a whole proxy for any of them; the adapter cleans them per
+    segment instead (controls and bidi marks: a space; invisible marks: gone).
+    """
+
+    from memfw_adapter_ocr.proxy import check_format
+
+    lines = (
+        OcrLine("form\x0cfeed and\x02control", bbox=(72.0, 74.0, 300.0, 96.0)),
+        OcrLine("zero\u200bwidth \u202eoverride\u202c and \ufeffbom"),
+        OcrLine("\x0c\u200b"),  # nothing left: skipped
+        OcrLine("tab\tand\r\nnewline stay"),
+    )
+    page = OcrPage(1, lines, width=612.0, height=792.0, unit="pt", origin="top-left")
+    result = OcrResult("pdftotext", "26.10.0", "pdf", 1, (page,), kind="extract")
+    candidate = to_proxy_candidate(
+        result,
+        attachment_id=ATT,
+        source_sha256="ab" * 32,
+        media_type="application/pdf",
+        privacy="shared",
+        created_at=NOW,
+    )
+    check_format(candidate, "application/pdf")  # the kernel's parser accepts it
+    assert [segment["text"] for segment in candidate["segments"]] == [
+        "form feed and control",
+        "zerowidth  override  and bom",
+        "tab\tand\nnewline stay",
+    ]
+    assert candidate["coverage"]["status"] == "full"
+
+
+def test_cleaned_character_sets_match_the_kernel() -> None:
+    """The adapter mirrors MM2a's refused characters (every code point): no drift."""
+
+    from memfw_adapter_ocr import proxy as adapter
+
+    from memfw.ports import proxies as kernel
+
+    everything = [chr(code) for code in range(0x110000)]
+    kernel_controls = {c for c in everything if kernel._FORBIDDEN_CHAR.match(c)} - {"\n", "\t"}
+    kernel_invisible = {c for c in everything if kernel._INVISIBLE_CHAR.match(c)}
+    assert {c for c in everything if adapter._CONTROL_CHARS.match(c)} == kernel_controls
+    assert {c for c in everything if adapter._INVISIBLE_CHARS.match(c)} == kernel_invisible

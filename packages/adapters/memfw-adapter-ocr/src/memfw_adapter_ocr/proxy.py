@@ -107,10 +107,26 @@ def _to_memfw_frame(
     return box
 
 
-def _clean(text: str) -> tuple[str, bool]:
-    """Segment text MM2a accepts (no NUL, no segment-marker line, capped) and whether it was cut."""
+#: Characters MM2a's ``clean_text`` refuses in segment text (mirrored from
+#: ``memfw.ports.proxies``): C0/C1 controls other than ``\n``/``\t``, DEL and the
+#: bidi embeddings/overrides/isolates become a space; the invisible marks go.
+_CONTROL_CHARS = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]")
+_INVISIBLE_CHARS = re.compile("[\u200b\u200e\u200f\u061c\ufeff]")
 
-    lines = [line for line in text.replace("\r\n", "\n").replace("\x00", "").split("\n")]
+
+def _clean(text: str) -> tuple[str, bool]:
+    """Segment text MM2a accepts (no control, bidi or invisible character, no segment-marker
+    line, capped) and whether it was cut.
+
+    An engine's text layer can carry a form feed, a stray control byte or a
+    zero-width mark; MM2a refuses the whole proxy for one of them, so they are
+    replaced (controls, bidi: a space) or dropped (invisible marks) here.
+    """
+
+    text = text.replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n")
+    text = text.replace("\u2028", "\n").replace("\u2029", "\n")
+    text = _INVISIBLE_CHARS.sub("", _CONTROL_CHARS.sub(" ", text))
+    lines = text.split("\n")
     kept = [line for line in lines if not line.lstrip().startswith(_MARKER)]
     whole = "\n".join(kept).strip()
     cut = len(kept) != len(lines) or len(whole) > MAX_SEGMENT_CHARS

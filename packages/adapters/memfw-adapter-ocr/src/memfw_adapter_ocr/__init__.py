@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Any
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 from .backend import OcrBackend, OcrBudget, OcrError, OcrLine, OcrPage, OcrResult
 from .deriver import NAME, VIEW_KIND, OcrDeriver, Settings, build_backend, factory
