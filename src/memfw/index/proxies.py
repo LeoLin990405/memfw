@@ -30,8 +30,11 @@ vault (deleted and re-created at the same path) is never used.
 :meth:`ProxyIndex.is_current` compares both with the vault, and
 :func:`ensure_proxy_index` rebuilds when they differ. The fingerprint
 is taken *before* the vault is read, so a write that lands during a rebuild
-leaves the new file stale and the next call rebuilds again; no lock is
-needed. It is never built on a vault without proxies.
+leaves the new file stale and the next call rebuilds again; it is taken again
+*after* the file is in place, and a changed log deletes the new file (a purge
+that ran meanwhile may already have dropped the index, and the new file could
+hold its text). No lock is needed. It is never built on a vault without
+proxies.
 
 :func:`drop_proxy_index` deletes the file (``attach purge`` must call it, so
 purged text leaves no copy), and :func:`proxy_index_residue` counts what it
@@ -294,7 +297,11 @@ class ProxyIndex:
         The fingerprint is read before the proxies: a write that lands while
         this runs makes the stored fingerprint stale, so the next call
         rebuilds again. The file is created 0600 in a 0700 directory and
-        replaces the old one atomically; the vault is only read.
+        replaces the old one atomically; the vault is only read. Afterwards
+        the fingerprint is read again: when the log moved meanwhile (an
+        ``attach purge`` may already have dropped the index), the new file and
+        its SQLite side files are deleted and 0 is returned, so a rebuild can
+        never write back text a purge removed.
         """
 
         ensure_private_dir(self.path.parent)
@@ -368,12 +375,23 @@ class ProxyIndex:
             with temporary.open("rb") as stream:
                 os.fsync(stream.fileno())
             os.replace(temporary, self.path)
-            return count
         except BaseException:
             if connection is not None:
                 connection.close()
             temporary.unlink(missing_ok=True)
             raise
+        # A purge (or any attachment/proxy write) that landed while this ran
+        # may have dropped the index already; the file just written would
+        # then hold text the purge removed. Purge appends its event before it
+        # drops the index, so re-reading the log here catches every ordering.
+        after = _built_for(
+            proxy_fingerprint(repository.events(), vault_id=_vault_id(repository)), today
+        )
+        if after != fingerprint:
+            for suffix in ("", "-wal", "-shm", "-journal"):
+                Path(f"{self.path}{suffix}").unlink(missing_ok=True)
+            return 0
+        return count
 
     def search(
         self,

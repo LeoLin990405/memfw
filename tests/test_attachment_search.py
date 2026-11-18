@@ -265,6 +265,41 @@ def test_drop_and_residue_for_purge(tmp_path: Path) -> None:
     assert drop_proxy_index(repository) is False
 
 
+def test_rebuild_racing_a_purge_never_writes_back_purged_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, private_home: Path
+) -> None:
+    repository, ids = _corpus(tmp_path)
+    target = ids["local-private"]
+    original = proxy_index_module.active_proxies
+    purged: list[Any] = []
+
+    def racing(*args: Any, **kwargs: Any) -> Any:
+        rows = original(*args, **kwargs)  # the rebuild now holds the proxy text
+        other = Repository(repository.root, clock=lambda: NOW)  # another process
+        purged.append(other.purge_attachment(target, confirm=True))
+        return rows
+
+    monkeypatch.setattr(proxy_index_module, "active_proxies", racing)
+    index = proxy_index_module.ProxyIndex(proxy_index_path(repository))
+    assert index.rebuild(repository, today=NOW.date()) == 0
+    assert purged and purged[0].still_containing == []
+    path = proxy_index_path(repository)
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        assert not Path(f"{path}{suffix}").exists()
+    assert proxy_index_residue(repository, target) == 0
+    for root in (repository.root, private_home):
+        for item in root.rglob("*"):
+            if item.is_file() and not item.is_symlink():
+                assert MARKER.encode() not in item.read_bytes(), item
+    # The next search rebuilds from what is left, without the purged attachment.
+    monkeypatch.setattr(proxy_index_module, "active_proxies", original)
+    rebuilt = ensure_proxy_index(repository, now=NOW)
+    assert rebuilt is not None
+    hits = rebuilt.search("backup schedule", tenant="", clearance=None, limit=50)
+    assert {hit.attachment_id for hit in hits} == {ids["public"], ids["shared"]}
+    assert proxy_index_residue(repository, target) == 0
+
+
 def test_detached_missing_and_purged_attachments_leave_search_get_and_originals(
     tmp_path: Path,
 ) -> None:
