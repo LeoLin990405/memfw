@@ -41,8 +41,11 @@ def suggest_related(
     *,
     embedder: Any | None = None,
     limit: int = 5,
+    embedding_allow_remote: bool = False,
 ) -> list[CandidateSuggestion]:
-    retriever = MemoryHybridRetriever(repository, embedder=embedder)
+    retriever = MemoryHybridRetriever(
+        repository, embedder=embedder, embedding_allow_remote=embedding_allow_remote
+    )
     query = title.strip() or content[:200]
     if not query:
         return []

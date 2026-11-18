@@ -69,6 +69,27 @@ def is_loopback_url(url: str) -> bool:
         return False
 
 
+def embedder_sends_off_host(embedder: object) -> bool:
+    """Whether ``embedder`` sends document text to a service that may be off this machine.
+
+    ``False`` for a provider that says ``local is True``, for an in-process
+    provider (no ``endpoint`` attribute, such as ``HashEmbeddingProvider``)
+    and for an ``endpoint`` URL whose host is a loopback literal
+    (:func:`is_loopback_url`, the strict privacy rule, never DNS). ``True``
+    for any other ``endpoint`` (another host, an empty or unparseable URL,
+    a value that is not a string): the memory embedding gate then embeds
+    only ``public``/``shared`` memories unless the operator opts in
+    (``MEMFW_EMBEDDING_ALLOW_REMOTE`` / ``runtime.embedding.allow_remote``).
+    """
+
+    if getattr(embedder, "local", None) is True:
+        return False
+    if not hasattr(embedder, "endpoint"):
+        return False
+    endpoint = getattr(embedder, "endpoint", None)
+    return not (isinstance(endpoint, str) and endpoint and is_loopback_url(endpoint))
+
+
 def bypasses_proxy(host: str | None) -> bool:
     """Whether a request to ``host`` must go direct (see the module docstring)."""
 

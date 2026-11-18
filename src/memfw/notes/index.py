@@ -509,9 +509,20 @@ def _has_tags(tags: object, tags_json: object, wanted_json: str) -> int:
 class NotesIndex:
     """SQLite-backed section index. All writes are explicit; search is read-only."""
 
-    def __init__(self, db_path: Path | str, *, embedder: EmbeddingProvider | None = None) -> None:
+    def __init__(
+        self,
+        db_path: Path | str,
+        *,
+        embedder: EmbeddingProvider | None = None,
+        embed_filter: Callable[[str], bool] | None = None,
+    ) -> None:
         self.db_path = Path(db_path)
         self.embedder = embedder
+        #: Which notes (by path relative to the indexed root) may be sent to the
+        #: embedder; ``None`` embeds every note (the default). A note it refuses
+        #: is indexed for FTS only, gets no vector, and loses any stored one
+        #: (the memory embedding locality gate, ``memfw.memory_hybrid``).
+        self.embed_filter = embed_filter
         self.vec_enabled = False
         self.fts_tokenizer = ""
         self._segment: Callable[[str], str] | None = None
@@ -679,10 +690,17 @@ class NotesIndex:
         if not self._has_table(connection, table):
             return 0
         rows = connection.execute(
-            "SELECT s.id, s.heading, s.content, n.title FROM sections s "
+            "SELECT s.id, s.heading, s.content, n.title, n.path FROM sections s "
             f"JOIN notes n ON n.id=s.note_id WHERE s.id NOT IN (SELECT section_id FROM {table}) "
             "ORDER BY s.id"
         ).fetchall()
+        if self.embed_filter is not None:
+            allowed: dict[str, bool] = {}
+            for row in rows:
+                path = str(row["path"])
+                if path not in allowed:
+                    allowed[path] = self.embed_filter(path)
+            rows = [row for row in rows if allowed[str(row["path"])]]
         embedded = 0
         for start in range(0, len(rows), BACKFILL_BATCH):
             batch = rows[start : start + BACKFILL_BATCH]
@@ -942,7 +960,11 @@ class NotesIndex:
                     )
                     section_rows.append((section_id, section.heading, section.content))
                     counts["sections"] += 1
-                if self.embedder is not None and section_rows:
+                if (
+                    self.embedder is not None
+                    and section_rows
+                    and (self.embed_filter is None or self.embed_filter(note.path))
+                ):
                     texts = [
                         (note.title + "\n" + heading + "\n" + content)[:EMBED_MAX_CHARS]
                         for _, heading, content in section_rows
@@ -961,9 +983,49 @@ class NotesIndex:
                         self._delete_note(connection, int(row["id"]))
                         counts["deleted"] += 1
             connection.commit()
+            if self.embed_filter is not None and self.embedder is not None:
+                counts["embedding_withheld"] = self._withhold_vectors(connection)
             counts["embedded"] += self._backfill_vectors(connection)
             connection.commit()
         return counts
+
+    def _withhold_vectors(self, connection: sqlite3.Connection) -> int:
+        """Drop stored vectors of notes ``embed_filter`` refuses; how many notes it refuses.
+
+        A note that became private since it was embedded keeps no vector.
+        """
+
+        assert self.embed_filter is not None
+        table = "vec_sections" if self.vec_enabled else "section_vectors"
+        has_table = self._has_table(connection, table)
+        withheld = 0
+        for row in connection.execute("SELECT id, path FROM notes ORDER BY id").fetchall():
+            if self.embed_filter(str(row["path"])):
+                continue
+            withheld += 1
+            if has_table:
+                connection.execute(
+                    f"DELETE FROM {table} WHERE section_id IN "
+                    "(SELECT id FROM sections WHERE note_id = ?)",
+                    (int(row["id"]),),
+                )
+        connection.commit()
+        return withheld
+
+    def unembedded_sections(self) -> int:
+        """Sections with no stored vector (0 without an embedder or a vector table)."""
+
+        if self.embedder is None or not self.db_path.is_file():
+            return 0
+        with self._connect() as connection:
+            self._load_vec(connection)
+            table = "vec_sections" if self.vec_enabled else "section_vectors"
+            if not self._has_table(connection, table):
+                return 0
+            row = connection.execute(
+                f"SELECT COUNT(*) FROM sections WHERE id NOT IN (SELECT section_id FROM {table})"
+            ).fetchone()
+        return int(row[0] or 0)
 
     def _fts_terms(self, needle: str) -> list[str]:
         """Terms for ``needle`` against this index's tokenizer.

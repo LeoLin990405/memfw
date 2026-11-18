@@ -37,6 +37,8 @@ class RuntimeSettings:
     record_access: bool | None = None
     #: Privacy levels the interface may return; None filters nothing (MM0).
     clearance: frozenset[str] | None = None
+    #: ``MEMFW_EMBEDDING_ALLOW_REMOTE``, or None: ``runtime.embedding.allow_remote`` decides.
+    embedding_allow_remote: bool | None = None
 
 
 def embedder_from_env(environ: Mapping[str, str]) -> Any:
@@ -66,13 +68,16 @@ def resolve_settings(
     record_access: bool | None = None,
     environ: Mapping[str, str] | None = None,
     clearance: str | frozenset[str] | None = None,
+    embedding_allow_remote: bool | None = None,
 ) -> RuntimeSettings:
     """Explicit values, else ``MEMFW_APP``, ``MEMFW_TENANT``, ``MEMFW_ENTITY_ENABLED``,
     ``MEMFW_ALLOWED_SOURCES`` (comma separated), ``MEMFW_EMBEDDING_*``,
     ``MEMFW_USAGE_SIGNAL`` and ``MEMFW_RECORD_ACCESS`` (booleans; unset or empty
     leaves the choice to ``vault.yaml``, see ``memfw.runtime.usage``) and
     ``MEMFW_MCP_CLEARANCE`` (comma separated privacy levels; unset filters
-    nothing, a malformed value narrows to ``public``)."""
+    nothing, a malformed value narrows to ``public``) and
+    ``MEMFW_EMBEDDING_ALLOW_REMOTE`` (a boolean; unset leaves it to
+    ``vault.yaml`` ``runtime.embedding.allow_remote``, default off)."""
 
     env = os.environ if environ is None else environ
     resolved_app = (app if app is not None else env.get("MEMFW_APP", "")).strip()
@@ -94,6 +99,8 @@ def resolve_settings(
         usage_signal = env_switch(env, "MEMFW_USAGE_SIGNAL")
     if record_access is None:
         record_access = env_switch(env, "MEMFW_RECORD_ACCESS")
+    if embedding_allow_remote is None:
+        embedding_allow_remote = env_switch(env, "MEMFW_EMBEDDING_ALLOW_REMOTE")
     if clearance is None:
         resolved_clearance = parse_clearance(env.get(CLEARANCE_ENV))
     elif isinstance(clearance, frozenset):
@@ -109,6 +116,7 @@ def resolve_settings(
         usage_signal=usage_signal,
         record_access=record_access,
         clearance=resolved_clearance,
+        embedding_allow_remote=embedding_allow_remote,
     )
 
 

@@ -34,6 +34,15 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 - `memory_search` `hybrid`/`vector` (and their internal FTS fallback) apply the
   MCP clearance before `memory_access` and autowarm: a withheld hit is neither
   logged nor warmed (as `two_stage`). No clearance: unchanged.
+- Memory embeddings stay local unless allowed: when `MEMFW_EMBEDDING_URL` is not
+  a loopback address, only `public`/`shared` memories are embedded;
+  `local-private`/`unknown` ones are indexed for FTS only (stored vectors are
+  dropped on the next rebuild) and `hybrid`/`vector` searches report
+  `degraded` with `semantic_partial`. `memory_remember` no longer embeds a
+  private candidate as its suggestion query. Opt in with
+  `MEMFW_EMBEDDING_ALLOW_REMOTE=1` or `runtime.embedding.allow_remote: true`.
+  Loopback endpoints are unchanged. **Upgrade note:** with a remote embedding
+  endpoint you now get partial semantic results until you opt in.
 - Docs: `docs/attachments.md` states that a later version which knows a marked
   kind must still compact it in the foreign format (`details` + `event_line`).
 

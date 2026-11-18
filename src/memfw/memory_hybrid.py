@@ -19,7 +19,9 @@ from .core.models import EventKind, MemoryDocument, Tier
 from .core.repository import Repository
 from .entities import EntityIndex, load_dictionary
 from .index.readonly import shared_readonly as shared_readonly  # re-export for old callers
+from .index.readonly import vault_legacy_privacy
 from .notes import HttpEmbeddingProvider, NotesIndex, NotesRetriever, RetrievalConfig
+from .notes.http import embedder_sends_off_host
 from .notes.versioning import (
     IndexCompatibilityError,
     IndexManifest,
@@ -28,7 +30,17 @@ from .notes.versioning import (
     verify_manifest,
     write_manifest,
 )
+from .ports.privacy import effective_level
 from .retrieval import VaultRetriever
+
+#: ``errors`` code of a ``hybrid``/``vector`` search whose semantic side skips
+#: memories the locality gate kept from an off-host embedder.
+SEMANTIC_PARTIAL = "semantic_partial"
+#: Levels an off-host embedder may receive without the opt-in.
+_EMBEDDABLE_LEVELS = frozenset({"public", "shared"})
+#: Manifest label recording that the index was built under the gate.
+EMBEDDING_GATE_LABEL = "embedding_gate"
+EMBEDDING_GATE_VALUE = "public,shared"
 
 
 class MemoryHybridRetriever:
@@ -49,6 +61,17 @@ class MemoryHybridRetriever:
     after the hit passed the tenant, source and visibility checks: a memory
     the retriever does not return is never warmed. The ``two_stage`` provider
     passes false; the Runtime warms only the hits it returns.
+
+    **Embedding locality gate.** When the embedder sends text off this machine
+    (an ``endpoint`` that is not a loopback literal,
+    :func:`memfw.notes.http.embedder_sends_off_host`) and
+    ``embedding_allow_remote`` is false (the default), only ``public`` and
+    ``shared`` memories are embedded: a ``local-private`` or ``unknown`` one
+    is indexed for FTS only, gets no vector (a stored one is dropped on the
+    next rebuild), and a ``hybrid``/``vector`` search over an index with such
+    memories reports ``degraded`` with ``semantic_partial`` in ``errors``. A
+    loopback or in-process embedder, or the opt-in, embeds every memory, as
+    before.
 
     ``admit`` (default none) is asked about each hit's document after those
     checks: a hit it rejects is still returned, for the caller to drop (the
@@ -71,15 +94,23 @@ class MemoryHybridRetriever:
         record_access: bool = True,
         autowarm: bool = True,
         admit: Callable[[MemoryDocument], bool] | None = None,
+        embedding_allow_remote: bool = False,
     ) -> None:
         self.repository = repository
         self.embedder = embedder
         self.record_access = record_access
         self.autowarm = autowarm
         self.admit = admit
+        #: The locality gate is on (see the class docstring).
+        self.embedding_gated = (
+            embedder is not None
+            and not embedding_allow_remote
+            and embedder_sends_off_host(embedder)
+        )
         self.notes_index = NotesIndex(
             index_path or (repository.root / ".memory-hybrid.sqlite"),
             embedder=embedder,
+            embed_filter=self._embeddable if self.embedding_gated else None,
         )
         self.manifest_path = Path(
             manifest_path or (repository.root / ".memory-hybrid.manifest.json")
@@ -94,13 +125,46 @@ class MemoryHybridRetriever:
             dictionary=load_dictionary(entity_dictionary),
         )
         self.last_metrics: dict[str, Any] = {}
+        self._legacy: str | None = None
+
+    def _embeddable(self, path: str) -> bool:
+        """Under the gate: whether the memory at ``path`` (``<id>.md``) may be embedded.
+
+        Only a readable memory whose effective MM0 level is ``public`` or
+        ``shared``; anything else (``local-private``, ``unknown``, unreadable)
+        stays on this machine.
+        """
+
+        try:
+            document = self.repository.get(Path(path).stem)
+        except Exception:  # noqa: BLE001 - unreadable: never sent
+            return False
+        level = effective_level(
+            document.privacy,
+            document.tags,
+            legacy=self._legacy_privacy(),
+            sensitivity=document.top_level_sensitivity,
+        )
+        return level in _EMBEDDABLE_LEVELS
+
+    def _legacy_privacy(self) -> str:
+        if self._legacy is None:
+            self._legacy = vault_legacy_privacy(self.repository.root)
+        return self._legacy
+
+    def _manifest_labels(self) -> dict[str, str]:
+        labels = {"kind": "memory-vault"}
+        if self.embedding_gated:
+            labels[EMBEDDING_GATE_LABEL] = EMBEDDING_GATE_VALUE
+        return labels
 
     def rebuild(self) -> dict[str, Any]:
         self.repository.init()
+        self._legacy = None
         counts = self.notes_index.index(self.repository.memories_dir)
         if self.entity_enabled:
             counts["entities"] = self.entity_index.rebuild(self.repository)
-        manifest = build_manifest(self.notes_index, labels={"kind": "memory-vault"})
+        manifest = build_manifest(self.notes_index, labels=self._manifest_labels())
         write_manifest(self.manifest_path, manifest)
         return {**counts, "manifest": manifest.as_dict()}
 
@@ -117,6 +181,12 @@ class MemoryHybridRetriever:
                 getattr(self.embedder, "fingerprint", "") if self.embedder else ""
             )
             if manifest.embedding_fingerprint != current_fingerprint:
+                self.rebuild()
+            elif manifest.labels.get(EMBEDDING_GATE_LABEL) != self._manifest_labels().get(
+                EMBEDDING_GATE_LABEL
+            ):
+                # The gate turned on (drop vectors of private memories) or off
+                # (the opt-in: embed what was withheld).
                 self.rebuild()
         except IndexCompatibilityError:
             self.rebuild()
@@ -390,6 +460,11 @@ class MemoryHybridRetriever:
                 mode_used = notes_result.mode_used
                 degraded = notes_result.degraded
                 errors.extend(notes_result.errors)
+                if self.embedding_gated and self.notes_index.unembedded_sections():
+                    # Private memories were not sent to the off-host embedder:
+                    # the semantic side covers only public and shared ones.
+                    degraded = True
+                    errors.append(SEMANTIC_PARTIAL)
             except Exception as exc:  # noqa: BLE001 - optional index/model boundary
                 errors.append(f"hybrid unavailable: {exc}")
                 results = []

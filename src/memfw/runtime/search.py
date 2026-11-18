@@ -424,6 +424,7 @@ def _retriever(runtime: Runtime, repository: Repository) -> MemoryHybridRetrieve
         # is neither warmed nor access-logged, as in ``two_stage``. No
         # clearance: none, exactly as before.
         admit=None if runtime.clearance is None else runtime.privacy_admits,
+        embedding_allow_remote=runtime.embedding_allow_remote(repository),
     )
 
 

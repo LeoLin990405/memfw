@@ -619,7 +619,7 @@ hits. It is opt-in; nothing else changes. The wiring (providers, resolvers, poli
 index and builds the rows.
 
 - **Providers.** `FtsProvider` always; `HybridProvider` (`mode=hybrid`) only when the server
-  has an embedder (`MEMFW_EMBEDDING_URL`). Both get the server's `allowed_sources`, the
+  has an embedder (`MEMFW_EMBEDDING_URL`; see the locality gate below). Both get the server's `allowed_sources`, the
   call's `source`, `include_history` and (FTS only) `scope`. Each provider may take 3 s;
   all providers and resolvers together get **4 s** (the total deadline). The index staleness
   check (`Runtime.ensure_index`) runs before the deadline starts. Resolvers are `default_resolvers(root)`.
@@ -739,6 +739,30 @@ runtime:
 - **Adapters.** [`memfw-adapter-bm25s`](adapter-bm25s.md) (in-process BM25 over memories);
   `memfw-adapter-qmd` (`memfw_adapter_qmd:memory_factory`, QMD over a memory projection;
   see [`qmd-projection.md`](qmd-projection.md#qmd-recall-adapter)).
+
+### 4.1d Memory embedding locality gate
+
+The memory vector index (`.memory-hybrid.sqlite`, built by `MemoryHybridRetriever` for
+`memory_search` `hybrid`/`vector`, the `two_stage` hybrid provider and `memory_remember`'s
+related suggestions) sends each memory's text to the embedder. When the embedder sends text
+off this machine (`memfw.notes.http.embedder_sends_off_host`: an `endpoint` whose host is not
+a loopback literal, the strict rule `is_loopback_url`, never DNS), only memories whose
+effective MM0 level is `public` or `shared` are embedded:
+
+- a `local-private` or `unknown` memory is indexed for FTS only and gets no vector; a vector
+  stored earlier is dropped when the index is next rebuilt (the manifest records the gate as
+  the label `embedding_gate: public,shared`, so turning the gate on or off rebuilds);
+- a `hybrid`/`vector` search over such an index reports `degraded: true` and
+  `semantic_partial` in `errors` (FTS still finds those memories);
+- `memory_remember` embeds a candidate's text as the suggestion query only when the candidate
+  is `public`/`shared`; otherwise its suggestions are lexical.
+
+Opt in to embed every level with `MEMFW_EMBEDDING_ALLOW_REMOTE=1` (wins) or `vault.yaml`
+`runtime: {embedding: {allow_remote: true}}`. A loopback endpoint or an in-process embedder
+is unchanged (every memory embedded, no setting read). Query texts are still sent to the
+embedder as typed. Not covered: the opt-in `memfw related` semantic edges
+(`RelatedIndex.build_semantic`) and adapters that embed on their own (each has its own
+clearance setting).
 
 ### 4.2 MCP `memory_context` `v=2` (ContextPack)
 

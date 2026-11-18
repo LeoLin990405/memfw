@@ -756,6 +756,7 @@ class HybridProvider:
         allowed_sources: tuple[str, ...] = (),
         entity_enabled: bool = False,
         observe: Observe | None = None,
+        embedding_allow_remote: bool = False,
     ) -> None:
         if mode not in {"hybrid", "vector"}:
             raise ValueError("mode must be hybrid or vector")
@@ -768,6 +769,8 @@ class HybridProvider:
         self.allowed_sources = tuple(allowed_sources)
         self.entity_enabled = entity_enabled
         self.observe = observe
+        #: The memory embedding locality opt-in (``MemoryHybridRetriever``).
+        self.embedding_allow_remote = embedding_allow_remote
         self.projection_version = ""
 
     def available(self) -> Availability:
@@ -805,6 +808,7 @@ class HybridProvider:
             # Nor does it warm cold or stub hits: the Runtime warms the ones
             # it returns, after the filter.
             autowarm=False,
+            embedding_allow_remote=self.embedding_allow_remote,
         )
         result = retriever.search(
             query,
