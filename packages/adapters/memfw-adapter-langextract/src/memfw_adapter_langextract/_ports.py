@@ -1,0 +1,51 @@
+"""The one place this adapter takes names from the memfw ports.
+
+Inside a memfw install the names come from ``memfw.ports``; without memfw
+(the standalone wheels) from the ``memfw-ports`` wheel's ``memfw_ports``.
+Either way only L0 port modules are imported, nothing else of memfw.
+"""
+
+from __future__ import annotations
+
+try:
+    from memfw.ports.models import BackendBudgetExhausted, BackendUnavailable, ModelReply
+    from memfw.ports.privacy import metadata_level
+    from memfw.ports.reference._vault import MemoryFile, is_vault, read_memory
+    from memfw.ports.registry import AdapterSpec
+    from memfw.ports.types import Availability, Citation, DerivedView, DeriveRequest, IngestItem
+except ModuleNotFoundError:  # the standalone memfw-ports wheel
+    from memfw_ports.models import (  # type: ignore[no-redef,assignment,unused-ignore]
+        BackendBudgetExhausted,
+        BackendUnavailable,
+        ModelReply,
+    )
+    from memfw_ports.privacy import metadata_level  # type: ignore[no-redef,assignment,unused-ignore]
+    from memfw_ports.reference._vault import (  # type: ignore[no-redef,assignment,unused-ignore]
+        MemoryFile,
+        is_vault,
+        read_memory,
+    )
+    from memfw_ports.registry import AdapterSpec  # type: ignore[no-redef,assignment,unused-ignore]
+    from memfw_ports.types import (  # type: ignore[no-redef,assignment,unused-ignore]
+        Availability,
+        Citation,
+        DerivedView,
+        DeriveRequest,
+        IngestItem,
+    )
+
+__all__ = [
+    "AdapterSpec",
+    "Availability",
+    "BackendBudgetExhausted",
+    "BackendUnavailable",
+    "Citation",
+    "DeriveRequest",
+    "DerivedView",
+    "IngestItem",
+    "MemoryFile",
+    "ModelReply",
+    "is_vault",
+    "metadata_level",
+    "read_memory",
+]

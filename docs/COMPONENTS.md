@@ -161,6 +161,14 @@ cannot map to a visible document (`local-private` and `unknown` are never return
 coordinator marks the provider degraded and FTS answers. memfw never imports the adapter. See
 [`qmd-projection.md`](qmd-projection.md#qmd-recall-adapter) and the package README.
 
+## LangExtract deriver adapter
+
+`packages/adapters/memfw-adapter-langextract` (wheel `memfw_adapter_langextract`, version 0.1.0)
+implements the `Deriver` port: character-grounded entities and relations from `public`/`shared`
+memories via LangExtract 1.7.2 (installed by the operator), with a memfw `ModelBackend` as the
+model (a loopback-only Ollama backend ships with it) and a per-run token budget. **Off by
+default**; its rows become memory only as staged candidates. See
+[`adapter-langextract.md`](adapter-langextract.md).
 
 ## Corroboration projection
 

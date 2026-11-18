@@ -14,6 +14,20 @@ The vault format did not change in `0.3.0` either: `vault.yaml` stays at
 
 ## [Unreleased]
 
+### Added — LangExtract deriver adapter (wave 4, off by default)
+
+- New workspace package `packages/adapters/memfw-adapter-langextract` (0.1.0,
+  `memfw_adapter_langextract:SPEC`, entry point `memfw.adapters`): a `Deriver`
+  (kind `entities`) over LangExtract 1.7.2 (Apache-2.0, operator-installed,
+  checked at runtime). Only `public`/`shared` memories are sent; the view is
+  canonical JSON of character-grounded entities and relations, capped at
+  `inference` / causal `none`; `candidates(view)` turns rows into staging
+  candidates. The model is a memfw `ModelBackend` (bundled loopback-only
+  Ollama backend; a non-local one needs `cloud: true`) inside a per-run token
+  budget. Contract tests replay output recorded under the pinned release; see
+  `docs/adapter-langextract.md`. memfw never imports it; default output is
+  unchanged.
+
 ### Fixed — Qdrant adapter maps a broken HTTP answer to unreachable (memfw-adapter-qdrant 0.1.2)
 
 - `http.client.HTTPException` (for example `IncompleteRead` on a malformed or

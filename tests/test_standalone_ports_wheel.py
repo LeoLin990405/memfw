@@ -91,6 +91,7 @@ MEMBERS = (
     "adapters/memfw-adapter-qmd",
     "adapters/memfw-adapter-ocr",
     "adapters/memfw-adapter-pageindex",
+    "adapters/memfw-adapter-langextract",
 )
 #: Third-party wheels an adapter needs, by exact pin (the versions uv.lock
 #: resolves and the adapter's pyproject pins), installed before the local
@@ -250,6 +251,7 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
         "memfw-adapter-qmd",
         "memfw-adapter-ocr",
         "memfw-adapter-pageindex",
+        "memfw-adapter-langextract",
     ):
         _run(uv, "build", "--wheel", "--package", package, "-o", dist)
     wheels = sorted(p.name for p in dist.glob("*.whl"))
@@ -258,6 +260,7 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
     assert wheels == [
         "memfw_adapter_bm25s-0.1.1-py3-none-any.whl",
         "memfw_adapter_deepseek-0.1.1-py3-none-any.whl",
+        "memfw_adapter_langextract-0.1.0-py3-none-any.whl",
         "memfw_adapter_ocr-0.1.0-py3-none-any.whl",
         "memfw_adapter_pageindex-0.1.0-py3-none-any.whl",
         "memfw_adapter_qdrant-0.1.2-py3-none-any.whl",
@@ -283,6 +286,7 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
         "--qmd",
         "--ocr",
         "--pageindex",
+        "--langextract",
         cwd=tmp_path,
     )
     assert "standalone wheel smoke passed" in out
@@ -295,6 +299,7 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
     assert "ok Coordinator.search" in out
     assert "ok check_recall_provider Bm25sProvider" in out
     assert "ok check_recall_provider QdrantProvider (fake server)" in out
+    assert "ok check_deriver LangExtractDeriver (replayed output)" in out
 
 
 def test_adapter_dependency_pins_match_the_lockfile_and_pyproject() -> None:
@@ -321,10 +326,13 @@ def test_ci_wheel_job_builds_and_smokes_every_adapter_with_the_pins() -> None:
         "memfw-adapter-qmd",
         "memfw-adapter-ocr",
         "memfw-adapter-pageindex",
+        "memfw-adapter-langextract",
     ):
         assert f"uv build --wheel --package {package} " in ci, package
     assert "bm25s==0.3.16 jieba==0.42.1 PyYAML==6.0.3 numpy==2.4.6" in ci  # CI runs Python 3.11
-    assert "wheel_smoke.py --recall --deepseek --bm25s --qdrant --qmd --ocr --pageindex" in ci
+    smoke = "wheel_smoke.py --recall --deepseek --bm25s --qdrant --qmd --ocr --pageindex"
+    smoke += " --langextract"
+    assert smoke in ci
 
 
 def test_qmd_adapter_dependencies_are_pinned_and_installed_first() -> None:
