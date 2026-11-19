@@ -51,6 +51,7 @@ from memfw_pipeline import (  # noqa: E402
     run_stage,
     stage_status,
 )
+from memfw_pipeline.contract import extra_value_ok, revision_ok  # noqa: E402
 from memfw_pipeline.example import CopyStage  # noqa: E402
 from memfw_pipeline.runner import (  # noqa: E402
     ARTIFACT_RECORD,
@@ -962,3 +963,79 @@ def test_lock_probe_is_unknown_when_the_lock_is_unreadable(
     monkeypatch.setattr(fsops.os, "open", denied)
     assert fsops.lock_is_held(env.spec.lock_path) is None
     assert stage_status(env.spec, probe=False)["locked"] is None
+
+
+# --- review round 2 ------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("value", "ok"),
+    [
+        ("bge-m3", True),
+        ("org/model:0.6b", True),
+        ("qwen3-embedding:0.6b", True),
+        ("nomic-embed-text-v1.5", True),
+        ("users/someone/private-notes.md", False),  # more than one "/"
+        ("files.example.lan", False),  # a dotted host name
+        ("notes.md", False),  # a file name
+        ("Upper/Case", False),
+    ],
+)
+def test_model_format_refuses_paths_and_host_names(value: str, ok: bool) -> None:
+    assert extra_value_ok("model", value) is ok
+
+
+def test_status_rechecks_extra_against_the_recorded_format() -> None:
+    uuid = "6c1f0a52-3d4e-5b7a-9c80-f1ee7a0d2b19"
+    cleaned = clean_status(
+        {"extra": {"a": uuid, "b": uuid, "c": "x"}, "extra_formats": {"a": "code", "b": "uuid"}}
+    )
+    # "a" is a valid uuid but was declared a code; "c" has no recorded format
+    assert cleaned["extra"] == {"a": "redacted", "b": uuid}
+    assert cleaned["extra_formats"] == {"a": "code", "b": "uuid"}
+    assert "extra" not in clean_status({"extra": {"a": "x"}})  # no formats: nothing kept
+
+
+def test_extra_value_must_match_the_declared_format(env: Env) -> None:
+    class Mislabelled(CopyStage):
+        status_formats = {"note": "code"}
+
+        def build(self, ctx: StageContext, workdir: Path) -> BuildResult:
+            result = super().build(ctx, workdir)
+            # a uuid passes SOME format, but not the one declared for this key
+            extra = {"note": "6c1f0a52-3d4e-5b7a-9c80-f1ee7a0d2b19"}
+            return BuildResult(result.counts, result.artifacts, extra=extra)
+
+    env.items(1)
+    code, status = run(env, stage=Mislabelled({"source": str(env.source)}))
+    assert code == EXIT_OK and "extra" not in status
+    assert "extra_rejected" in status["warnings"]
+
+
+def test_a_post_publish_step_named_extra_is_an_ordinary_entry(env: Env) -> None:
+    class Named(CopyStage):
+        def post_publish(self, ctx: StageContext) -> Sequence[PostPublishStep]:
+            def step(c: StageContext) -> StepResult:
+                raise RuntimeError("down")
+
+            return (PostPublishStep("extra", step),)
+
+    env.items(1)
+    code, status = run(env, stage=Named({"source": str(env.source)}))
+    assert code == EXIT_POST_PUBLISH
+    entry = status["post_publish"]["extra"]
+    assert entry["error"] == "failed" and entry["exception"] == "RuntimeError"
+    assert "extra_formats" not in status
+
+
+@pytest.mark.parametrize(
+    ("value", "ok"),
+    [
+        ("v1.2.3.4", True),
+        ("1.2.3.4", False),  # a bare dotted quad reads as an address
+        ("files.example", False),  # two-label host name
+        ("v1.2.3", True),
+        ("release-2026.11", True),
+        ("0123abcd", True),
+    ],
+)
+def test_revision_rule(value: str, ok: bool) -> None:
+    assert revision_ok(value) is ok

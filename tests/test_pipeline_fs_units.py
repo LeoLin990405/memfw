@@ -393,6 +393,7 @@ def test_systemd_snapshot() -> None:
         "-/run/systemd/private",
         "AmbientCapabilities=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE",
         "SystemCallFilter=@system-service",
+        "SystemCallErrorNumber=EPERM",
         "RestrictNamespaces=true",
         "ExecStart=/opt/memfw/venv/bin/python -I -m memfw_pipeline run admitted-view "
         "--config /srv/memfw/pipeline.toml",

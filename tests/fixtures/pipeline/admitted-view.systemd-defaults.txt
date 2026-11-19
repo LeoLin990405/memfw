@@ -49,6 +49,7 @@ RestrictRealtime=true
 RestrictNamespaces=true
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
 
 # --- memfw-pipeline-admitted-view.timer ---
 [Unit]

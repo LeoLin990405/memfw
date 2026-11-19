@@ -238,6 +238,8 @@ def systemd_units(
         "RestrictNamespaces=true",
         "SystemCallArchitectures=native",
         "SystemCallFilter=@system-service",
+        # a filtered call fails with EPERM instead of killing the run with SIGSYS
+        "SystemCallErrorNumber=EPERM",
         "",
         f"# --- {name}.timer ---",
         "[Unit]",

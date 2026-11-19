@@ -70,10 +70,13 @@ exit 1); `digest_of(*parts)` gives a sha256 over length-prefixed parts (unambigu
 concatenation).
 
 **Revisions.** `revision_ok(value)`: the value matches `^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$`
-(`REVISION_RE`) **and** contains nothing shaped like an IPv4 address (four dot-separated groups
-of one to three digits) or a dotted host name (three or more dot-separated labels starting
-with a letter, such as `a.example.org`). `Freshness` refuses such a revision with
-`ValueError`, and `clean_status` turns it into `redacted`.
+(`REVISION_RE`) **and** contains nothing that could be an address: a bare dotted quad (four
+dot-separated groups of one to three digits not preceded by a letter or digit, such as
+`1.2.3.4` or `host:1.2.3.4`) or a dotted host name (a dot between two labels that start with a
+letter, such as `files.example`). Revisions are git-like ids: a commit hash, a tag, a generation
+number, `sha256:<hex>`. `v1.2.3`, `v1.2.3.4` (write a four-part version with a leading `v`),
+`release-2026.11` and `0123abcd` pass. `Freshness` refuses anything else with `ValueError`, and
+`clean_status` turns it into `redacted`.
 
 **Extra status fields.** A build may report a few non-count facts (an embedding model name, a
 vault id) in `BuildResult.extra`. The runner keeps a key only when it is a code, the stage
@@ -84,12 +87,15 @@ declares it in `status_formats`, and the value matches the declared format:
 | `code` | `^[a-z][a-z0-9_]{0,63}$` |
 | `sha256` | 64 lowercase hex characters |
 | `uuid` | a lowercase hyphenated UUID |
-| `model` | `^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$` |
+| `model` | `name`, `org/name`, either with `:tag`: `^[a-z0-9][a-z0-9._-]{0,63}(/[a-z0-9][a-z0-9._-]{0,63})?(:[a-z0-9._-]{1,32})?$`, and no dot between two labels that start with a letter (so no host name such as `files.example.lan`, no file name such as `notes.md`, no path with more than one `/`) |
 | `int` | a non-negative int, or a digit string (`0`, or up to 18 digits without a leading zero) |
 
 Any other key or value is dropped and the run gets the warning `extra_rejected` (the build
-still publishes). Free text is never a format. Kept fields go into the status (`extra`) and the
-artifact record, so an `unchanged` run reports them too.
+still publishes). Free text is never a format. Kept fields go into the status and the artifact
+record as `extra` plus `extra_formats` (key to format name), so an `unchanged` run reports them
+too, and every later re-check of the status (`clean_status`, `memfw-pipeline status`) tests
+each value against the format recorded for its own key, not against any format. Only the
+top-level `extra` key gets this rule: a post-publish step named `extra` is an ordinary entry.
 
 **Post-publish step budget.** The runner cannot stop in-process code, so `timeout_seconds` is
 the step's own deadline: the step enforces it (`subprocess.run(timeout=...)`, an HTTP client
@@ -263,6 +269,11 @@ swap (with `publishing_digest`) tells an operator that such a run was killed mid
 An artifact published before the record existed (or by another tool) has no record, so the
 first run under this runner rebuilds it once.
 
+**The record is visible inside the artifact.** Readers of the published directory see
+`.memfw-pipeline.json` at its top level. A stage that walks the artifact (`**/*`, `os.walk`) in
+`live_count`, `verify` or a post-publish step, and any downstream reader that indexes every
+file, must skip it. `DirectoryStage` already leaves it out of `count_glob` counts.
+
 ## 5. Shrink guard
 
 Without `--allow-shrink`:
@@ -322,7 +333,7 @@ be a code. Strings must have the shape their key allows:
 | `errors`, `warnings` entries | `code` or `prefix:code` |
 | `exception` | a type name (`^[A-Z][A-Za-z0-9_]{0,63}$`) |
 | `runner_version` | digits |
-| anything under `extra` | one of the `EXTRA_FORMATS` |
+| top-level `extra` values | the format recorded for that key in `extra_formats` |
 | anything else | a code (`CODE_RE`) |
 
 A string of the wrong shape, and any value that is not a string, number, boolean, null, list or
@@ -488,7 +499,9 @@ directory, the target's parent (lock and work directories) and `read_write_paths
 `ReadOnlyPaths=`, `ProtectHome=read-only`, `PrivateTmp`, `PrivateDevices`,
 `ProtectKernelTunables`, `ProtectKernelModules`, `ProtectControlGroups`, `ProtectKernelLogs`,
 `ProtectClock`, `ProtectHostname`, `LockPersonality`, `RestrictSUIDSGID`, `RestrictRealtime`,
-`RestrictNamespaces`, `SystemCallArchitectures=native`, `SystemCallFilter=@system-service`;
+`RestrictNamespaces`, `SystemCallArchitectures=native`, `SystemCallFilter=@system-service`
+with `SystemCallErrorNumber=EPERM` (a filtered call fails with `EPERM` and the stage reports an
+error code, instead of the kernel killing the run with `SIGSYS`);
 `RequiresMountsFor=` the state directory, the target's parent and the read-only paths. The timer has `OnCalendar`, `RandomizedDelaySec`, `Persistent=true`. Exits 1 to
 5 are failures, so `systemctl --failed` shows them; `status.json` says which. Create the stage's
 state directory and the target's parent before enabling the timer: systemd does not start a unit

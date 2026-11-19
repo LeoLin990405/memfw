@@ -29,10 +29,12 @@ The vault format did not change in `0.4.0` either: `vault.yaml` stays at
   is needed, so a run killed after the swap cannot make a later run skip one, crash-leftover
   cleanup (refuses an ambiguous `.old-*` restore), shrink guard (empty or under half of the
   baseline, the artifact record first: exit 5 unless `--allow-shrink`), freshness (source
-  revision, lag, `stale`) and a status file with counts and fixed reason codes only. `memfw-pipeline
+  revision, lag, `stale`; revisions that look like an address or host name are refused) and a
+  status file with counts, fixed reason codes and stage-declared extra fields (each re-checked
+  against its own recorded format) only. `memfw-pipeline
   run|plan|status|unit`; `unit` prints hardened systemd (service + timer) or launchd
   templates for review (with a non-root `user`, `AmbientCapabilities=`; extra sandboxing such
-  as `SystemCallFilter=@system-service`, `RestrictNamespaces`, `ProtectClock`, containerd and
+  as `SystemCallFilter=@system-service` with `SystemCallErrorNumber=EPERM`, `RestrictNamespaces`, `ProtectClock`, containerd and
   podman sockets inaccessible; a root unit needs `trust_paths = true`). Path-trust check, on by
   default when run as root. Standard library only at run time plus `memfw-ports` 0.3.0;
   memfw never imports it. Only an example stage

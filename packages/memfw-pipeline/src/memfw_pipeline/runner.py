@@ -63,6 +63,7 @@ from .contract import (
     StepResult,
     VerifyFailed,
     code,
+    extra_value_ok,
     revision_ok,
 )
 
@@ -127,11 +128,7 @@ _CODE_RULE = _matches(CODE_RE)
 _TIME_RULE = _matches(_TIME_RE)
 
 
-def _extra_rule(value: str) -> bool:
-    return any(pattern.fullmatch(value) for pattern in EXTRA_FORMATS.values())
-
-
-def _clean_value(value: Any, key: str, extra: bool = False) -> Any:
+def _clean_value(value: Any, key: str) -> Any:
     if value is None or isinstance(value, bool):
         return value
     if isinstance(value, int):
@@ -140,23 +137,34 @@ def _clean_value(value: Any, key: str, extra: bool = False) -> Any:
         return round(value, 3)
     if isinstance(value, str):
         rule: Callable[[str], bool]
-        if extra:
-            rule = _extra_rule
-        elif key.endswith("_at") or key == "source_as_of":
+        if key.endswith("_at") or key == "source_as_of":
             rule = _TIME_RULE
         else:
             rule = _KEY_RULES.get(key, _CODE_RULE)
         return value if rule(value) else "redacted"
     if isinstance(value, Mapping):
         return {
-            code(k, "redacted") if isinstance(k, str) else "redacted": _clean_value(
-                v, str(k), extra or key == "extra"
-            )
+            code(k, "redacted") if isinstance(k, str) else "redacted": _clean_value(v, str(k))
             for k, v in value.items()
         }
     if isinstance(value, list | tuple):
-        return [_clean_value(v, key, extra) for v in value]
+        return [_clean_value(v, key) for v in value]
     return "redacted"
+
+
+def _clean_extra(extra: object, formats: object) -> tuple[dict[str, Any], dict[str, str]]:
+    """Top-level ``extra``: each value checked against the format recorded for its key."""
+    if not isinstance(extra, Mapping) or not isinstance(formats, Mapping):
+        return {}, {}
+    values: dict[str, Any] = {}
+    kept: dict[str, str] = {}
+    for key, value in list(extra.items())[:MAX_EXTRA_KEYS]:
+        fmt = formats.get(key)
+        if isinstance(key, str) and CODE_RE.fullmatch(key) and isinstance(fmt, str):
+            if fmt in EXTRA_FORMATS:
+                values[key] = value if extra_value_ok(fmt, value) else "redacted"
+                kept[key] = fmt
+    return values, kept
 
 
 def clean_status(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -164,7 +172,8 @@ def clean_status(payload: Mapping[str, Any]) -> dict[str, Any]:
 
     Timestamps (``*_at``), digests, revisions (no IPv4 or dotted host names),
     the stage and kind names, error codes (``prefix:code``), an exception's type
-    name and the declared formats of ``extra`` have their own shapes; every
+    name and the top-level ``extra`` (each value against the format recorded for
+    its key in ``extra_formats``) have their own shapes; every
     other string must be a reason code. The runner only puts such values there
     itself; this is the second fence, so a stage bug cannot write a file name,
     a path or text into the status file: it becomes ``redacted``.
@@ -173,8 +182,15 @@ def clean_status(payload: Mapping[str, Any]) -> dict[str, Any]:
     that builds a code from its data would get it through. The first fence is
     the contract: codes and count keys are a fixed vocabulary of the stage.
     """
-    cleaned = _clean_value(payload, "")
+    body = {k: v for k, v in payload.items() if k not in ("extra", "extra_formats")}
+    cleaned = _clean_value(body, "")
     assert isinstance(cleaned, dict)
+    if "extra" in payload:
+        # only the top-level key: a post-publish step named "extra" is an ordinary entry
+        values, formats = _clean_extra(payload.get("extra"), payload.get("extra_formats"))
+        if values:
+            cleaned["extra"] = values
+            cleaned["extra_formats"] = formats
     return cleaned
 
 
@@ -196,6 +212,7 @@ class ArtifactRecord:
     digest: str
     counts: Mapping[str, int]
     extra: Mapping[str, str | int]
+    extra_formats: Mapping[str, str]
 
     @property
     def items(self) -> int:
@@ -221,11 +238,18 @@ def read_record(target: Path) -> ArtifactRecord | None:
         return None
     if not isinstance(extra, dict):
         return None
-    return ArtifactRecord(digest, dict(counts), dict(extra))
+    values, formats = _clean_extra(extra, data.get("extra_formats", {}))
+    values = {k: v for k, v in values.items() if v != "redacted"}
+    return ArtifactRecord(digest, dict(counts), values, {k: formats[k] for k in values})
 
 
 def _write_record(
-    workdir: Path, digest: str, result: BuildResult, extra: Mapping[str, Any], now: datetime
+    workdir: Path,
+    digest: str,
+    result: BuildResult,
+    extra: Mapping[str, Any],
+    formats: Mapping[str, str],
+    now: datetime,
 ) -> None:
     path = workdir / ARTIFACT_RECORD
     if path.exists() or path.is_symlink():
@@ -235,33 +259,29 @@ def _write_record(
         "inputs_digest": digest,
         "counts": dict(result.counts),
         "extra": dict(extra),
+        "extra_formats": dict(formats),
         "built_at": _iso(now),
     }
     fsops.write_json_atomic(path, clean_status(payload), mode=0o600)
 
 
-def _accepted_extra(stage: Stage, result: BuildResult) -> tuple[dict[str, Any], int]:
-    """``result.extra`` filtered by the stage's ``status_formats``; (kept, rejected)."""
-    formats = getattr(stage, "status_formats", None) or {}
-    kept: dict[str, Any] = {}
+def _accepted_extra(
+    stage: Stage, result: BuildResult
+) -> tuple[dict[str, Any], dict[str, str], int]:
+    """``result.extra`` filtered by the stage's ``status_formats``: (values, formats, rejected)."""
+    declared = getattr(stage, "status_formats", None) or {}
+    values: dict[str, Any] = {}
+    formats: dict[str, str] = {}
     rejected = 0
     for key, value in list(result.extra.items())[:MAX_EXTRA_KEYS]:
-        fmt = formats.get(key) if isinstance(formats, Mapping) else None
-        pattern = EXTRA_FORMATS.get(fmt) if isinstance(fmt, str) else None
-        ok = (
-            isinstance(key, str)
-            and CODE_RE.fullmatch(key) is not None
-            and pattern is not None
-            and (
-                (isinstance(value, str) and pattern.fullmatch(value) is not None)
-                or (fmt == "int" and _int(value) is not None)
-            )
-        )
-        if ok:
-            kept[key] = value
+        fmt = declared.get(key) if isinstance(declared, Mapping) else None
+        if isinstance(key, str) and CODE_RE.fullmatch(key) and extra_value_ok(fmt, value):
+            assert isinstance(fmt, str)
+            values[key] = value
+            formats[key] = fmt
         else:
             rejected += 1
-    return kept, rejected
+    return values, formats, rejected
 
 
 # --- freshness -----------------------------------------------------------------------------
@@ -545,6 +565,7 @@ def _run_locked(
         )
         if record.extra:
             status["extra"] = dict(record.extra)
+            status["extra_formats"] = dict(record.extra_formats)
         if current is not None:
             status["published_revision"] = current.revision
         return _post_publish(stage, ctx, status, finish, result="unchanged", now=clock.now())
@@ -578,11 +599,12 @@ def _run_locked(
     except Exception as exc:  # noqa: BLE001
         _remove(workdir)
         return finish(EXIT_BUILD, "verify_failed", **_error_fields(exc, "verify"))
-    extra, rejected = _accepted_extra(stage, result)
+    extra, extra_formats, rejected = _accepted_extra(stage, result)
     if rejected:
         status.setdefault("warnings", []).append("extra_rejected")
     if extra:
         status["extra"] = extra
+        status["extra_formats"] = extra_formats
 
     items = result.items
     shrink: dict[str, Any] = {
@@ -604,7 +626,7 @@ def _run_locked(
     status["shrink"] = shrink
 
     try:
-        _write_record(workdir, digest, result, extra, clock.now())
+        _write_record(workdir, digest, result, extra, extra_formats, clock.now())
         fsops.fsync_tree(workdir)
     except VerifyFailed as exc:  # the stage wrote the reserved record name
         _remove(workdir)

@@ -37,11 +37,15 @@ from ._ports import Clock, check_name
 #: Count keys, reason codes and step names: a fixed, lowercase vocabulary.
 CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 #: A source revision: a commit id, a generation number, a digest prefix. Never a name.
-#: Strings shaped like an IPv4 address or a dotted host name are refused on top of it
-#: (:func:`revision_ok`).
+#: Revisions are git-like: a hash, a tag, a generation number, ``sha256:<hex>``.
+#: On top of the shape, :func:`revision_ok` refuses anything that could be an address:
+#: a bare dotted quad (``1.2.3.4``; write a four-part version as ``v1.2.3.4``) and a
+#: dotted host name of two or more labels (``files.example``: a dot between two
+#: labels that start with a letter). ``v1.2.3``, ``release-2026.11`` and
+#: ``sha256:0f1e`` pass.
 REVISION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$")
-_IPV4_RE = re.compile(r"(?<![0-9])\d{1,3}(?:\.\d{1,3}){3}(?![0-9])")
-_HOSTNAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9-]*\.[A-Za-z][A-Za-z0-9-]*\.[A-Za-z]")
+_IPV4_RE = re.compile(r"(?<![0-9A-Za-z])\d{1,3}(?:\.\d{1,3}){3}(?![0-9])")
+_HOSTNAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9-]*\.[A-Za-z]")
 #: An inputs digest: lowercase hex.
 DIGEST_RE = re.compile(r"^[0-9a-f]{16,128}$")
 #: A stage reports at most this many count keys (per build or post-publish step).
@@ -69,11 +73,30 @@ EXTRA_FORMATS: Mapping[str, re.Pattern[str]] = MappingProxyType(
         "code": re.compile(r"^[a-z][a-z0-9_]{0,63}$"),
         "sha256": re.compile(r"^[0-9a-f]{64}$"),
         "uuid": re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"),
-        "model": re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"),
+        # ``name``, ``org/name``, either with ``:tag``; lowercase, at most one ``/``.
+        "model": re.compile(
+            r"^[a-z0-9][a-z0-9._-]{0,63}(/[a-z0-9][a-z0-9._-]{0,63})?(:[a-z0-9._-]{1,32})?$"
+        ),
         "int": re.compile(r"^(0|[1-9][0-9]{0,17})$"),
     }
 )
 MAX_EXTRA_KEYS = 16
+
+
+def extra_value_ok(fmt: object, value: object) -> bool:
+    """``value`` matches the declared format ``fmt`` (a name in ``EXTRA_FORMATS``).
+
+    ``model`` also refuses a dotted host name or file name (``files.example``,
+    ``notes.md``): a dot between two labels that start with a letter.
+    """
+    pattern = EXTRA_FORMATS.get(fmt) if isinstance(fmt, str) else None
+    if pattern is None:
+        return False
+    if fmt == "int" and isinstance(value, int) and not isinstance(value, bool):
+        return 0 <= value < 10**18
+    if not isinstance(value, str) or pattern.fullmatch(value) is None:
+        return False
+    return not (fmt == "model" and _HOSTNAME_RE.search(value))
 
 
 def code(value: object, default: str = "other") -> str:
@@ -374,5 +397,6 @@ __all__ = [
     "VerifyFailed",
     "code",
     "digest_of",
+    "extra_value_ok",
     "revision_ok",
 ]
