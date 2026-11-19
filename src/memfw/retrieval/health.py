@@ -17,28 +17,32 @@ one new top-level key. Everything here is a pure function over plain
 mappings (no vault, no I/O, no memfw imports), so a client that only has the
 JSON (fleet-memory, say) derives the same codes with the same functions.
 
-Rules, first match wins:
+Every reason code has an ``affects_mode`` class in ``REASON_CODES``
+(``yes``, ``no``, ``fallback``, ``empty``). The cause code carries the
+degradation: no embedder is ``semantic_unavailable`` (``yes``), while
+``keyword_only`` only describes the answer (``no``). Rules, first match wins:
 
 1. no results: ``empty`` / ``low``; the reasons say why (``no_match``,
    ``all_sources_failed`` or ``withheld_only``) plus any other signal;
-2. the primary path failed and a fallback answered: ``fallback`` / ``low``;
-3. any degrading reason: ``degraded``; ``low`` when only literal matching
-   was left (``keyword_only``), else ``medium``;
-4. otherwise ``full`` / ``high``.
+2. a ``fallback`` reason (the primary path failed, another answered):
+   ``fallback`` / ``low``;
+3. a ``yes`` reason: ``degraded`` / ``medium``;
+4. otherwise (only ``no`` reasons, or none): ``full`` / ``high``.
 
-Informational reasons (``withheld:<category>:<n>``, ``access_not_recorded``)
-are listed but never degrade an answer. Every reason is one of
-``REASON_CODES`` (``docs/retrieval-health.md`` has the same table; a test
-checks they agree); an unknown code raises ``ValueError``.
+Informational (``no``) reasons never lower mode or confidence. Every reason
+is one of ``REASON_CODES`` (both docs tables list the same codes and classes;
+a test checks they agree); an unknown code raises ``ValueError``.
 """
 
 from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Final
 
 __all__ = [
+    "AFFECTS_MODE",
     "BUILTIN_PROVIDERS",
     "CONFIDENCES",
     "HEALTH_KEY",
@@ -48,6 +52,8 @@ __all__ = [
     "SCHEMA",
     "SCORE_KINDS",
     "WITHHELD_CATEGORIES",
+    "Reason",
+    "affects_mode",
     "check_reason",
     "derive",
     "from_context_pack",
@@ -69,37 +75,72 @@ WITHHELD_CATEGORIES: Final = ("privacy", "tenant", "retired", "other")
 #: The coordinator's own providers; any other provider name is an adapter.
 BUILTIN_PROVIDERS: Final = frozenset({"fts", "hybrid"})
 
-#: Every reason code (``<name>``/``<n>``/``<category>`` are parameters) and
-#: what it means. Extend it, and the docs table, together.
-REASON_CODES: Final[Mapping[str, str]] = {
-    "semantic_unavailable": "no embedder is configured: the semantic side did not run",
-    "semantic_off": "a locality setting kept the query or summaries from the embedder",
-    "semantic_partial": "some memories have no vector (kept from an off-host embedder)",
-    "summaries_unavailable": "session summaries/tags could not be read",
-    "fts_fallback": "the semantic side gave nothing; the answer is FTS only",
-    "keyword_only": "only literal (keyword) matching produced the answer",
-    "expansion_empty": "multihop expansion added no hit; first-hop results only",
-    "route_fallback": "the routed providers failed; the remaining ones answered",
-    "qmd_live_read_errors:<n>": "a QMD live index had <n> read errors",
-    "source_timeout:<name>": "source <name> timed out",
-    "source_busy:<name>": "source <name> was busy (in-flight cap) and was skipped",
-    "source_error:<name>": "source <name> failed or returned invalid output",
-    "source_unavailable:<name>": "source <name> reported itself unavailable",
-    "resolver_error:<name>": "the <name> resolver failed; its candidates were dropped",
-    "adapters_shadow": "recall adapters run in shadow mode (not in the answer)",
-    "adapters_timeout": "at least one recall adapter timed out",
-    "adapters_busy": "at least one recall adapter was busy",
-    "withheld:<category>:<n>": "<n> matches withheld by policy (privacy|tenant|retired|other)",
-    "access_not_recorded": "a returned hit's access event or warm-up failed (hits unaffected)",
-    "no_match": "nothing matched",
-    "all_sources_failed": "every source failed: an empty answer proves nothing",
-    "withheld_only": "every match was withheld by policy",
+#: ``affects_mode`` values: ``yes`` (the answer is ``degraded``), ``no``
+#: (informational: listed, never lowers mode or confidence), ``fallback`` (the
+#: primary path failed and another answered), ``empty`` (explains an empty answer).
+AFFECTS_MODE: Final = ("yes", "no", "fallback", "empty")
+
+
+@dataclass(frozen=True, slots=True)
+class Reason:
+    """One ``REASON_CODES`` entry: how it moves ``mode``, and what it means."""
+
+    affects_mode: str
+    meaning: str
+
+
+#: Every reason code (``<name>``/``<n>``/``<category>`` are parameters), how it
+#: moves ``mode`` and what it means. Extend it, and both docs tables, together.
+REASON_CODES: Final[Mapping[str, Reason]] = {
+    "semantic_unavailable": Reason(
+        "yes", "no embedder is configured: the semantic side did not run"
+    ),
+    "semantic_off": Reason(
+        "yes", "a locality setting kept the query or summaries from the embedder"
+    ),
+    "semantic_partial": Reason(
+        "yes", "some memories have no vector (kept from an off-host embedder)"
+    ),
+    "semantic_empty": Reason("yes", "the semantic side ran but recalled nothing"),
+    "summaries_unavailable": Reason("yes", "session summaries/tags could not be read"),
+    "expansion_empty": Reason("yes", "multihop expansion added no hit; first-hop results only"),
+    "qmd_live_read_errors:<n>": Reason("yes", "a QMD live index had <n> read errors"),
+    "source_timeout:<name>": Reason("yes", "source <name> timed out"),
+    "source_busy:<name>": Reason("yes", "source <name> was busy (in-flight cap) and was skipped"),
+    "source_error:<name>": Reason("yes", "source <name> failed or returned invalid output"),
+    "source_unavailable:<name>": Reason("yes", "source <name> reported itself unavailable"),
+    "resolver_error:<name>": Reason(
+        "yes", "the <name> resolver failed; its candidates were dropped"
+    ),
+    "adapters_timeout": Reason("yes", "at least one recall adapter timed out"),
+    "adapters_busy": Reason("yes", "at least one recall adapter was busy"),
+    "fts_fallback": Reason("fallback", "the semantic path failed; FTS answered instead"),
+    "route_fallback": Reason(
+        "fallback", "the routed providers failed; the remaining ones answered"
+    ),
+    "keyword_only": Reason("no", "only literal (keyword) matching produced the answer"),
+    "adapters_shadow": Reason("no", "recall adapters run in shadow mode (not in the answer)"),
+    "withheld:<category>:<n>": Reason(
+        "no", "<n> matches withheld by policy (privacy|tenant|retired|other)"
+    ),
+    "access_not_recorded": Reason(
+        "no", "a returned hit's access event or warm-up failed (hits unaffected)"
+    ),
+    "no_match": Reason("empty", "nothing matched"),
+    "all_sources_failed": Reason("empty", "every source failed: an empty answer proves nothing"),
+    "withheld_only": Reason("empty", "every match was withheld by policy"),
 }
 
-#: Reasons that are reported but never degrade an answer.
-INFORMATIONAL: Final = frozenset({"withheld", "access_not_recorded"})
+#: Reason heads (the part before the first ``:``) whose ``affects_mode`` is ``no``.
+INFORMATIONAL: Final = frozenset(
+    template.split(":", 1)[0]
+    for template, reason in REASON_CODES.items()
+    if reason.affects_mode == "no"
+)
 #: Reasons that only explain an empty answer.
-_EMPTY_ONLY: Final = frozenset({"no_match", "all_sources_failed", "withheld_only"})
+_EMPTY_ONLY: Final = frozenset(
+    template for template, reason in REASON_CODES.items() if reason.affects_mode == "empty"
+)
 
 _NAME = r"[A-Za-z0-9_.-]{1,64}"
 _PATTERNS: Final[tuple[re.Pattern[str], ...]] = tuple(
@@ -113,11 +154,14 @@ _PATTERNS: Final[tuple[re.Pattern[str], ...]] = tuple(
     )
     for template in REASON_CODES
 )
+#: ``(pattern, affects_mode)`` in ``REASON_CODES`` order.
+_CLASSES: Final[tuple[tuple[re.Pattern[str], str], ...]] = tuple(
+    zip(_PATTERNS, (reason.affects_mode for reason in REASON_CODES.values()), strict=True)
+)
 
 _NOTES: Final[Mapping[str, str]] = {
     "full": "检索路径完整，未发现降级信号。",
     "degraded": "部分检索路径降级，结果可能不完整，见 reasons。",
-    "degraded_low": "只剩字面匹配，语义召回不可用，换种说法的内容可能漏掉。",
     "fallback": "主检索路径失败，已回退到备用路径，结果可信度低。",
     "no_match": "没有匹配结果。",
     "all_sources_failed": "所有检索源都失败了，空结果不代表没有相关内容。",
@@ -131,6 +175,15 @@ def check_reason(code: str) -> str:
     if not isinstance(code, str) or not any(p.fullmatch(code) for p in _PATTERNS):
         raise ValueError(f"unknown retrieval_health reason: {code!r}")
     return code
+
+
+def affects_mode(code: str) -> str:
+    """``yes``/``no``/``fallback``/``empty`` for one concrete reason code."""
+
+    for pattern, kind in _CLASSES:
+        if isinstance(code, str) and pattern.fullmatch(code):
+            return kind
+    raise ValueError(f"unknown retrieval_health reason: {code!r}")
 
 
 def _head(code: str) -> str:
@@ -165,12 +218,10 @@ def derive(
         why = sorted(found & _EMPTY_ONLY)[0]
         return _health("empty", "low", found, score_kind, _NOTES[why])
     found -= _EMPTY_ONLY
-    degrading = {code for code in found if _head(code) not in INFORMATIONAL}
-    if fallback or failed:
+    kinds = {affects_mode(code) for code in found}
+    if fallback or failed or "fallback" in kinds:
         return _health("fallback", "low", found, score_kind, _NOTES["fallback"])
-    if degrading:
-        if "keyword_only" in degrading:
-            return _health("degraded", "low", found, score_kind, _NOTES["degraded_low"])
+    if "yes" in kinds:
         return _health("degraded", "medium", found, score_kind, _NOTES["degraded"])
     return _health("full", "high", found, score_kind, _NOTES["full"])
 
@@ -359,13 +410,13 @@ def from_memory_search(
         elif not semantic_configured:
             reasons.add("semantic_unavailable")
         else:
-            reasons.add("fts_fallback")  # the semantic side returned nothing
+            reasons.add("semantic_empty")  # the semantic side returned nothing
         reasons.add("keyword_only")
     elif used == "multihop" and payload.get("degraded"):
         reasons.add("expansion_empty")
     elif payload.get("degraded") and not reasons and used in ("hybrid", "vector"):
         # The semantic side recalled nothing: the hits are the FTS side's.
-        reasons.update(("fts_fallback", "keyword_only"))
+        reasons.update(("semantic_empty", "keyword_only"))
     score_kind = {"fts": "bm25", "multihop": "bm25", "vector": "cosine"}.get(used, "rank")
     if requested_mode in ("hybrid", "vector") and used == "fts":
         score_kind = "bm25"

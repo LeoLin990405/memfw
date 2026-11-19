@@ -47,6 +47,7 @@ from tests.conversation_fixtures import (
     turn,
     write_store,
 )
+from tests.real_home_guard import inspecting_real_home
 
 NOW = datetime(2026, 1, 6, 12, 0, tzinfo=UTC)
 REAL_DATA = Path(os.path.expanduser("~")) / ".local" / "share" / "memfw"
@@ -60,10 +61,12 @@ def real_home_untouched(isolated_home: Path) -> Any:  # noqa: F811
         except OSError:
             return None
 
-    before = state()
+    with inspecting_real_home():
+        before = state()
     yield
     assert Path.home() == isolated_home
-    assert state() == before
+    with inspecting_real_home():
+        assert state() == before
 
 
 class FakeBackend:

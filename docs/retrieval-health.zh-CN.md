@@ -31,43 +31,53 @@
 | `score_kind` | `rank` / `bm25` / `cosine` / `mixed` / `none` | 命中上的分数是什么含义 |
 | `note` | 一句中文 | 给人看的摘要 |
 
+每个原因码都有一个 `affects_mode` 类别（见下文原因码表，代码里是 `REASON_CODES[code].affects_mode`，公开函数 `affects_mode(code)` 对具体的码返回它，取值集合是常量 `AFFECTS_MODE`）：
+
+- `yes`：这次回答是 `degraded`；
+- `no`：informational，只列出来，**从不**降低 mode 或 confidence；
+- `fallback`：主路径失败，由备用路径回答；
+- `empty`：只用来解释空结果。
+
+降级由**原因码**承担，而不是由“结果长什么样”承担：例如没有 embedder 时给 `semantic_unavailable`（`yes`），而 `keyword_only` 只是描述结果来自字面匹配（`no`）。这套语义与 fleet-memory 对齐，客户端和 memfw 对同一份 JSON 得出相同的 mode 与 confidence。
+
 判定规则，先命中先定：
 
 1. **没有结果**：`empty` / `low`。`reasons` 里会说明原因：`no_match`、`all_sources_failed` 或 `withheld_only`，另外列出其他信号；
-2. **主路径失败、备用路径回答了**：`fallback` / `low`；
-3. **有任何降级原因**：`degraded`；如果只剩字面匹配（有 `keyword_only`）为 `low`，否则 `medium`；
-4. 其余：`full` / `high`。
+2. **有 `fallback` 类原因**（主路径失败、备用路径回答了）：`fallback` / `low`；
+3. **有 `yes` 类原因**：`degraded` / `medium`（`degraded` 一律是 `medium`）；
+4. 其余（只有 `no` 类原因，或没有原因）：`full` / `high`。
 
-informational 原因（`withheld:*`、`access_not_recorded`）会列出来，但**从不**导致降级。
+旧规则“只剩字面匹配 → `low`”已删除：`keyword_only` 和 `adapters_shadow` 与 `withheld:*`、`access_not_recorded` 一样是 informational，从不降低 mode 或 confidence。
 
 ## 原因码
 
 `<name>`、`<n>`、`<category>` 是参数。`<name>` 只允许 `[A-Za-z0-9_.-]`，最长 64 字符，不合规的来源名记为 `unknown`。
 
-| 原因码 | 含义 | 哪些出口会给 |
-| --- | --- | --- |
-| `semantic_unavailable` | 没有配置 embedder，语义侧没跑 | memory_search、two_stage recall、conversations_search（two_stage） |
-| `semantic_off` | 本地性设置不让查询或摘要发给 embedder | memory_search、conversations_search（two_stage） |
-| `semantic_partial` | 部分记忆没有向量（来自不在本机的 embedder，被保留下来） | memory_search（含 two_stage） |
-| `summaries_unavailable` | 会话摘要/标签读不到 | conversations_search（two_stage） |
-| `fts_fallback` | 语义侧什么都没给，结果只来自 FTS | memory_search |
-| `keyword_only` | 只有字面（关键词）匹配产出了结果 | memory_search、two_stage recall、conversations_search（two_stage） |
-| `expansion_empty` | multihop 扩展没有新增命中，只有第一跳结果 | memory_search（multihop） |
-| `route_fallback` | 路由选中的提供方失败，由其余提供方回答 | two_stage recall |
-| `qmd_live_read_errors:<n>` | QMD 实时索引有 `<n>` 次读取错误 | 仅客户端（见下文） |
-| `source_timeout:<name>` | 来源 `<name>` 超时 | two_stage recall、memory_context |
-| `source_busy:<name>` | 来源 `<name>` 忙（达到并发上限），被跳过 | two_stage recall、memory_context |
-| `source_error:<name>` | 来源 `<name>` 失败或返回了无效输出 | memory_search、two_stage recall、memory_context、conversations_search（two_stage） |
-| `source_unavailable:<name>` | 来源 `<name>` 报告自己不可用 | two_stage recall、memory_context |
-| `resolver_error:<name>` | `<name>` 解析器失败，它的候选被丢弃 | two_stage recall |
-| `adapters_shadow` | 召回适配器以 shadow 模式运行（不进入结果） | 仅客户端（见下文） |
-| `adapters_timeout` | 至少一个召回适配器超时 | two_stage recall |
-| `adapters_busy` | 至少一个召回适配器忙 | two_stage recall |
-| `withheld:<category>:<n>` | 有 `<n>` 条匹配被策略隐藏（informational） | two_stage recall |
-| `access_not_recorded` | 某条返回命中的访问事件或升温失败，命中本身不受影响（informational） | memory_search |
-| `no_match` | 没有任何匹配 | 全部出口 |
-| `all_sources_failed` | 所有来源都失败，空结果不能说明没有相关内容 | two_stage recall、memory_context |
-| `withheld_only` | 所有匹配都被策略隐藏 | two_stage recall |
+| 原因码 | affects_mode | 含义 | 哪些出口会给 |
+| --- | --- | --- | --- |
+| `semantic_unavailable` | `yes` | 没有配置 embedder，语义侧没跑 | memory_search、two_stage recall、conversations_search（two_stage） |
+| `semantic_off` | `yes` | 本地性设置不让查询或摘要发给 embedder | memory_search、conversations_search（two_stage） |
+| `semantic_partial` | `yes` | 部分记忆没有向量（来自不在本机的 embedder，被保留下来） | memory_search（含 two_stage） |
+| `semantic_empty` | `yes` | 语义侧跑了，但什么都没召回 | memory_search |
+| `summaries_unavailable` | `yes` | 会话摘要/标签读不到 | conversations_search（two_stage） |
+| `expansion_empty` | `yes` | multihop 扩展没有新增命中，只有第一跳结果 | memory_search（multihop） |
+| `qmd_live_read_errors:<n>` | `yes` | QMD 实时索引有 `<n>` 次读取错误 | 仅客户端（见下文） |
+| `source_timeout:<name>` | `yes` | 来源 `<name>` 超时 | two_stage recall、memory_context |
+| `source_busy:<name>` | `yes` | 来源 `<name>` 忙（达到并发上限），被跳过 | two_stage recall、memory_context |
+| `source_error:<name>` | `yes` | 来源 `<name>` 失败或返回了无效输出 | memory_search、two_stage recall、memory_context、conversations_search（two_stage） |
+| `source_unavailable:<name>` | `yes` | 来源 `<name>` 报告自己不可用 | two_stage recall、memory_context |
+| `resolver_error:<name>` | `yes` | `<name>` 解析器失败，它的候选被丢弃 | two_stage recall |
+| `adapters_timeout` | `yes` | 至少一个召回适配器超时 | two_stage recall |
+| `adapters_busy` | `yes` | 至少一个召回适配器忙 | two_stage recall |
+| `fts_fallback` | `fallback` | 语义路径失败（异常），改由 FTS 回答 | memory_search |
+| `route_fallback` | `fallback` | 路由选中的提供方失败，由其余提供方回答 | two_stage recall |
+| `keyword_only` | `no` | 只有字面（关键词）匹配产出了结果（提示，不降级） | memory_search、two_stage recall、conversations_search（two_stage） |
+| `adapters_shadow` | `no` | 召回适配器以 shadow 模式运行（不进入结果） | 仅客户端（见下文） |
+| `withheld:<category>:<n>` | `no` | 有 `<n>` 条匹配被策略隐藏 | two_stage recall |
+| `access_not_recorded` | `no` | 某条返回命中的访问事件或升温失败，命中本身不受影响 | memory_search |
+| `no_match` | `empty` | 没有任何匹配 | 全部出口 |
+| `all_sources_failed` | `empty` | 所有来源都失败，空结果不能说明没有相关内容 | two_stage recall、memory_context |
+| `withheld_only` | `empty` | 所有匹配都被策略隐藏 | two_stage recall |
 
 ### withheld 类别
 
@@ -96,7 +106,7 @@ informational 原因（`withheld:*`、`access_not_recorded`）会列出来，但
 
 | 出口 | 已有信号 | 原因码 |
 | --- | --- | --- |
-| conversations_search two_stage | `degraded: no_embedder` | `semantic_unavailable` |
+| conversations_search two_stage | `degraded: no_embedder` | `semantic_unavailable`（没有 tags 候选时另加 `keyword_only`）→ `degraded` / `medium` |
 | | `degraded: semantic_off` | `semantic_off` |
 | | `degraded: embedder_error` | `source_error:embedder` |
 | | `degraded: no_summaries` | `summaries_unavailable` |
@@ -104,11 +114,14 @@ informational 原因（`withheld:*`、`access_not_recorded`）会列出来，但
 | memory_search `errors` | `semantic_partial` | `semantic_partial` |
 | | `semantic_query_withheld`、`rerank_withheld`、`rewrite_withheld` | `semantic_off` |
 | | `access_not_recorded` | `access_not_recorded` |
-| | `hybrid unavailable: ...` | `source_error:hybrid`，hybrid/vector 回退到 FTS 时 mode 为 `fallback`，另加 `fts_fallback` |
+| | `hybrid unavailable: ...` | `source_error:hybrid` |
 | | `fts index unavailable...` | `source_error:fts` |
 | | `rerank:...`、`rewrite:...`、`trace:...` | `source_error:rerank` / `source_error:rewrite` / `source_error:trace` |
-| memory_search hybrid/vector 实际由 `fts` 回答 | 没有 embedding 模型 | `semantic_unavailable` + `keyword_only` |
-| | 有模型但语义侧为空 | `fts_fallback` + `keyword_only` |
+| memory_search hybrid/vector 实际由 `fts` 回答 | 语义路径异常（`errors` 里有 `hybrid unavailable: ...`） | `source_error:hybrid` + `fts_fallback` + `keyword_only` → `fallback` / `low` |
+| | 本地性设置挡住了语义侧（`semantic_off`） | `semantic_off` + `keyword_only` → `degraded` / `medium` |
+| | 没有 embedder（没有 embedding 模型） | `semantic_unavailable` + `keyword_only` → `degraded` / `medium` |
+| | 有 embedder，但语义侧没召回 | `semantic_empty` + `keyword_only` → `degraded` / `medium` |
+| memory_search hybrid/vector 自己回答 | `degraded: true` 且没有其他错误 | `semantic_empty` + `keyword_only` → `degraded` / `medium` |
 | memory_search multihop | `degraded: true` | `expansion_empty` |
 | 协调器 `recall.degraded` | `timeout` | `source_timeout:<name>` |
 | | `busy` | `source_busy:<name>` |
@@ -139,7 +152,7 @@ health = derive(
 
 ## 已知局限
 
-- two_stage 的 `keyword_only` 只把 `fts` 视为字面匹配提供方；bm25s 这类同样是字面匹配的适配器不算，所以只有它们回答时不会标 `keyword_only`。
+- two_stage 的 `keyword_only`：只有回答的 provider 全是 `fts`（且语义侧缺失）时才加；bm25s 这类同样是字面匹配的适配器参与回答时不会标。反正 `keyword_only` 只是提示（affects_mode `no`），不影响 mode 和 confidence；降级由 `semantic_unavailable`、`source_error:hybrid` 等原因码表达。
 - `errors` 里不认识前缀的自由文本错误统一归为 `source_error:unknown`；conversations two_stage 里不认识的 `degraded` 码也一样。
 - `note` 只是给人看的一句话，程序应读 `mode`、`confidence` 和 `reasons`。
 - `conversations_search` 的 `two_stage` 保持整个回复的 `max_bytes` 上限：打包会话前先预留这个键两种可能形态（有会话 / 无会话）中较大的那份字节。接近上限时可能比以前少放一个会话或一个 turn 窗口，此时照常由 `truncated` 和 `next_offset` 说明。

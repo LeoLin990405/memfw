@@ -24,10 +24,17 @@ The vault format did not change in `0.4.0` either: `vault.yaml` stays at
   `recall_metrics.dropped`, slot `degraded` codes). Results, order and scores are unchanged;
   with no degradation the new key is the only difference. Fixed reason codes are listed in
   [`docs/retrieval-health.md`](docs/retrieval-health.md) (zh-CN alongside); the pure
-  functions are reusable by clients. No port contract changed (`PORT_VERSIONS` unchanged).
+  functions are reusable by clients. Each code has an `affects_mode` class (`yes`, `no`,
+  `fallback`, `empty`); informational codes (`keyword_only`, `adapters_shadow`, `withheld:*`)
+  never lower mode or confidence, and the cause code carries the degradation (no embedder:
+  `semantic_unavailable`, degraded/medium), as in fleet-memory. No port contract changed
+  (`PORT_VERSIONS` unchanged).
   MCP tool descriptions now say `conversations_get` `start`/`end` are turn indexes (not the
   search `ref`/`offset` position key), when `conversations_search` `query` may be empty, and
   that hybrid/two_stage `score` is a fused rank, not relevance.
+- Test-suite guard (`tests/conftest.py`): an audit hook fails any test that opens, connects
+  to, lists or removes a path under the real `~/.local/share/memfw` or
+  `~/.local/share/fleet-memory`; isolate `HOME` or pass a tmp path instead.
 - `memfw-wiki-gate` 0.1.0 (`packages/memfw-wiki-gate`, wheel `memfw_wiki_gate`), LLM Wiki
   W1-2: deterministic checks of a generated `memfw-wiki-page/1` page against its
   `memfw-wiki-job/1` job and, at intake, an admitted-view reader (`SourceResolver`). Per

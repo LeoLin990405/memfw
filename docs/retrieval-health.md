@@ -40,19 +40,36 @@ Where it appears:
 | `score_kind` | `rank`, `bm25`, `cosine`, `mixed`, `none` | what a hit's `score` means (see below) |
 | `note` | one short sentence (Chinese) | human summary of `mode` |
 
+Every reason code has an `affects_mode` class (`REASON_CODES` maps each
+code to `Reason(affects_mode, meaning)`; `affects_mode(code)` returns the
+class of one concrete code, `AFFECTS_MODE` lists the four values):
+
+- `yes`: the answer is `degraded` / `medium`;
+- `no`: informational, listed but never lowers mode or confidence;
+- `fallback`: the primary path failed and another answered (`fallback` / `low`);
+- `empty`: only explains an empty answer.
+
+The degradation is carried by the **cause** code, not by a description of
+the answer: with no embedder the cause is `semantic_unavailable` (`yes`),
+while `keyword_only` only says that literal matching produced the answer
+(`no`). This semantics is aligned with fleet-memory, which derives its
+object with the same functions.
+
 Rules, first match wins:
 
 1. **No results** → `empty` / `low`. The reasons add exactly one of
    `no_match`, `all_sources_failed` (every source failed) or `withheld_only`
    (every match withheld), plus any other signal.
-2. **The primary path failed and a fallback answered** → `fallback` / `low`.
-3. **Any degrading reason** → `degraded`; `low` if `keyword_only` is among
-   them (only literal matching was left), otherwise `medium`.
-4. Otherwise → `full` / `high`.
+2. **A `fallback` reason** (the primary path failed and another answered)
+   → `fallback` / `low`.
+3. **A `yes` reason** → `degraded` / `medium`. `degraded` is always
+   `medium`.
+4. Otherwise (only `no` reasons, or none) → `full` / `high`.
 
-Informational reasons (`withheld:<category>:<n>`, `access_not_recorded`) are
-listed but never degrade an answer. Every code is checked against
-`REASON_CODES`; an unknown code raises `ValueError`.
+Informational (`no`) reasons such as `keyword_only`, `adapters_shadow`,
+`withheld:<category>:<n>` and `access_not_recorded` are listed but never
+lower mode or confidence. Every code is checked against `REASON_CODES`; an
+unknown code raises `ValueError`.
 
 ## Reason codes
 
@@ -63,30 +80,31 @@ Columns: **MS** `memory_search` (non-recall modes), **R** `two_stage` recall
 (`memory_search mode=two_stage`), **MC** `memory_context` v=2,
 **CS** `conversations_search`.
 
-| Code | Meaning | MS | R | MC | CS |
-|---|---|:-:|:-:|:-:|:-:|
-| `semantic_unavailable` | no embedder is configured: the semantic side did not run | x | x | | x |
-| `semantic_off` | a locality setting kept the query or summaries from the embedder | x | x | | x |
-| `semantic_partial` | some memories have no vector (kept from an off-host embedder) | x | x | | |
-| `summaries_unavailable` | session summaries/tags could not be read | | | | x |
-| `fts_fallback` | the semantic side gave nothing; the answer is FTS only | x | | | |
-| `keyword_only` | only literal (keyword) matching produced the answer | x | x | | x |
-| `expansion_empty` | multihop expansion added no hit; first-hop results only | x | | | |
-| `route_fallback` | the routed providers failed; the remaining ones answered | | x | | |
-| `qmd_live_read_errors:<n>` | a QMD live index had `<n>` read errors | reserved | | | |
-| `source_timeout:<name>` | source `<name>` timed out | | x | x | |
-| `source_busy:<name>` | source `<name>` was busy (in-flight cap) and was skipped | | x | x | |
-| `source_error:<name>` | source `<name>` failed or returned invalid output | x | x | x | x |
-| `source_unavailable:<name>` | source `<name>` reported itself unavailable | | x | x | |
-| `resolver_error:<name>` | the `<name>` resolver failed; its candidates were dropped | | x | | |
-| `adapters_shadow` | recall adapters run in shadow mode (not in the answer) | reserved | | | |
-| `adapters_timeout` | at least one recall adapter timed out | | x | | |
-| `adapters_busy` | at least one recall adapter was busy | | x | | |
-| `withheld:<category>:<n>` | `<n>` matches withheld by policy (informational) | | x | | |
-| `access_not_recorded` | a returned hit's access event or warm-up failed; hits unaffected (informational) | x | x | | |
-| `no_match` | nothing matched | x | x | x | x |
-| `all_sources_failed` | every source failed: an empty answer proves nothing | | x | x | |
-| `withheld_only` | every match was withheld by policy | | x | | |
+| Code | `affects_mode` | Meaning | MS | R | MC | CS |
+|---|:-:|---|:-:|:-:|:-:|:-:|
+| `semantic_unavailable` | `yes` | no embedder is configured: the semantic side did not run | x | x | | x |
+| `semantic_off` | `yes` | a locality setting kept the query or summaries from the embedder | x | x | | x |
+| `semantic_partial` | `yes` | some memories have no vector (kept from an off-host embedder) | x | x | | |
+| `summaries_unavailable` | `yes` | session summaries/tags could not be read | | | | x |
+| `semantic_empty` | `yes` | the semantic side ran but recalled nothing | x | | | |
+| `fts_fallback` | `fallback` | the semantic path failed; FTS answered instead | x | | | |
+| `keyword_only` | `no` | only literal (keyword) matching produced the answer | x | x | | x |
+| `expansion_empty` | `yes` | multihop expansion added no hit; first-hop results only | x | | | |
+| `route_fallback` | `fallback` | the routed providers failed; the remaining ones answered | | x | | |
+| `qmd_live_read_errors:<n>` | `yes` | a QMD live index had `<n>` read errors | reserved | | | |
+| `source_timeout:<name>` | `yes` | source `<name>` timed out | | x | x | |
+| `source_busy:<name>` | `yes` | source `<name>` was busy (in-flight cap) and was skipped | | x | x | |
+| `source_error:<name>` | `yes` | source `<name>` failed or returned invalid output | x | x | x | x |
+| `source_unavailable:<name>` | `yes` | source `<name>` reported itself unavailable | | x | x | |
+| `resolver_error:<name>` | `yes` | the `<name>` resolver failed; its candidates were dropped | | x | | |
+| `adapters_shadow` | `no` | recall adapters run in shadow mode (not in the answer) | reserved | | | |
+| `adapters_timeout` | `yes` | at least one recall adapter timed out | | x | | |
+| `adapters_busy` | `yes` | at least one recall adapter was busy | | x | | |
+| `withheld:<category>:<n>` | `no` | `<n>` matches withheld by policy (privacy, tenant, retired, other) | | x | | |
+| `access_not_recorded` | `no` | a returned hit's access event or warm-up failed; hits unaffected | x | x | | |
+| `no_match` | `empty` | nothing matched | x | x | x | x |
+| `all_sources_failed` | `empty` | every source failed: an empty answer proves nothing | | x | x | |
+| `withheld_only` | `empty` | every match was withheld by policy | | x | | |
 
 ### Withheld matches
 
@@ -116,14 +134,17 @@ a count would reveal that hidden material matched.
 
 | Signal | Codes |
 |---|---|
-| `semantic_partial` | `semantic_partial` |
+| `semantic_partial` | `yes` | `semantic_partial` |
 | `semantic_query_withheld`, `rerank_withheld`, `rewrite_withheld` | `semantic_off` |
-| `access_not_recorded` | `access_not_recorded` |
-| `hybrid unavailable: ...` | `source_error:hybrid`; if fts answered: `fts_fallback` + `keyword_only`, mode `fallback` |
+| `access_not_recorded` | `no` | `access_not_recorded` |
+| `hybrid unavailable: ...` | `source_error:hybrid` |
 | `fts index unavailable...`, `rerank:...`, `rewrite:...`, `trace:...` | `source_error:fts` / `:rerank` / `:rewrite` / `:trace` |
 | any other error text | `source_error:unknown` |
-| hybrid/vector asked, fts answered, no embedder | `semantic_unavailable` + `keyword_only` |
-| hybrid/vector asked, fts answered, semantic side empty | `fts_fallback` + `keyword_only` |
+| hybrid/vector asked, fts answered, the semantic path raised (`source_error:hybrid`) | `source_error:hybrid` + `fts_fallback` + `keyword_only` → `fallback` / `low` |
+| hybrid/vector asked, fts answered, a locality setting withheld the query (`semantic_off`) | `semantic_off` + `keyword_only` → `degraded` / `medium` |
+| hybrid/vector asked, fts answered, no embedder | `semantic_unavailable` + `keyword_only` → `degraded` / `medium` |
+| hybrid/vector asked, fts answered, embedder present but the semantic side recalled nothing | `semantic_empty` + `keyword_only` → `degraded` / `medium` |
+| hybrid/vector answered with `degraded` and no error (the hits are the FTS side's) | `semantic_empty` + `keyword_only` → `degraded` / `medium` |
 | multihop with `degraded` | `expansion_empty` |
 
 Recall coordinator (`from_recall`, used for `two_stage`), from
@@ -138,7 +159,8 @@ Recall coordinator (`from_recall`, used for `two_stage`), from
 | `resolvers_degraded` entry | `resolver_error:<name>` |
 | `fallback_reason: routed_providers_failed` | `route_fallback`, mode `fallback` |
 | `fallback_reason: all_providers_failed` or `fail_closed` | `all_sources_failed` (when empty), else mode `fallback` |
-| only lexical providers answered and the semantic side was missing | `keyword_only` |
+| no embedder configured | `semantic_unavailable` → `degraded` / `medium` |
+| every answering provider is `fts` and the semantic side was missing (no embedder, or a `:hybrid` source code) | + `keyword_only` (informational) |
 | `recall_metrics.dropped` | `withheld:<category>:<n>` |
 
 Builtin providers are `fts` and `hybrid`; any other provider name is an
@@ -149,11 +171,11 @@ adapter. The `errors` table above also applies to `two_stage` payloads.
 
 | Signal | Codes |
 |---|---|
-| `no_embedder` | `semantic_unavailable` |
-| `semantic_off` | `semantic_off` |
+| `no_embedder` | `semantic_unavailable` → `degraded` / `medium` |
+| `semantic_off` | `yes` | `semantic_off` |
 | `embedder_error` | `source_error:embedder` |
 | `no_summaries` | `summaries_unavailable` |
-| any of the first three and no tag candidates | + `keyword_only` |
+| any of the first three and no tag candidates | + `keyword_only` (informational) |
 
 `memory_context` v=2 (`from_context_pack`): each slot's `degraded` code maps
 like a recall provider status (`not_found` counts as `unavailable`), named by
@@ -177,9 +199,11 @@ imports), so a client holding only the JSON gets the same codes.
 
 ## Known limits
 
-- For `two_stage`, `keyword_only` treats only `fts` as lexical. A lexical
-  adapter such as bm25s is not counted, so an answer from fts plus bm25s
-  with the semantic side down is reported `degraded` / `medium`, not `low`.
+- For `two_stage`, `keyword_only` is only added when every answering
+  provider is `fts`; a lexical adapter such as bm25s is not counted as
+  lexical. `keyword_only` is informational either way, so this changes only
+  the listed reasons, never mode or confidence (the cause code, such as
+  `semantic_unavailable` or `source_error:hybrid`, sets those).
 - Free-text errors that match no known code or prefix become
   `source_error:unknown`: the answer is still marked degraded, but the
   source is not named.

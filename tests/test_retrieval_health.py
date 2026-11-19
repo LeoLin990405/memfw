@@ -91,11 +91,15 @@ def test_derive_degraded_medium() -> None:
     assert (out["mode"], out["confidence"]) == ("degraded", "medium")
 
 
-def test_derive_degraded_low_keyword_only() -> None:
+def test_derive_cause_code_degrades_keyword_only_does_not() -> None:
+    # Aligned with fleet-memory: the cause code carries the degradation.
     out = derive(result_count=3, reasons=["semantic_unavailable", "keyword_only"])
     _assert_shape(out)
-    assert (out["mode"], out["confidence"]) == ("degraded", "low")
-    assert out["note"] != derive(result_count=3, reasons=["semantic_off"])["note"]
+    assert (out["mode"], out["confidence"]) == ("degraded", "medium")
+    for informational in ("keyword_only", "adapters_shadow"):
+        alone = derive(result_count=3, reasons=[informational])
+        assert (alone["mode"], alone["confidence"]) == ("full", "high")
+        assert alone["reasons"] == [informational]
 
 
 def test_derive_full_high() -> None:
@@ -194,7 +198,7 @@ def test_recall_hybrid_timeout_keyword_only() -> None:
     out = from_recall(labels, {"dropped": {}}, result_count=4)
     _assert_shape(out)
     assert out["reasons"] == ["keyword_only", "source_timeout:hybrid"]
-    assert (out["mode"], out["confidence"]) == ("degraded", "low")
+    assert (out["mode"], out["confidence"]) == ("degraded", "medium")
 
 
 def test_recall_adapter_busy() -> None:
@@ -278,7 +282,7 @@ def test_recall_semantic_not_configured() -> None:
     labels = _labels(providers=["fts"])
     out = from_recall(labels, None, result_count=3, semantic_configured=False)
     assert {"semantic_unavailable", "keyword_only"} <= set(out["reasons"])
-    assert (out["mode"], out["confidence"]) == ("degraded", "low")
+    assert (out["mode"], out["confidence"]) == ("degraded", "medium")
 
 
 def test_recall_unsafe_provider_name() -> None:
@@ -310,14 +314,14 @@ def test_memory_fts_full() -> None:
 def test_memory_hybrid_no_embedder() -> None:
     out = from_memory_search(_search(degraded=True), requested_mode="hybrid")
     assert out["reasons"] == ["keyword_only", "semantic_unavailable"]
-    assert (out["mode"], out["confidence"], out["score_kind"]) == ("degraded", "low", "bm25")
+    assert (out["mode"], out["confidence"], out["score_kind"]) == ("degraded", "medium", "bm25")
 
 
-def test_memory_hybrid_semantic_empty_fts_fallback() -> None:
+def test_memory_hybrid_semantic_empty() -> None:
     payload = _search(degraded=True, model_versions={"embedding": "m"})
     out = from_memory_search(payload, requested_mode="hybrid")
-    assert out["reasons"] == ["fts_fallback", "keyword_only"]
-    assert out["mode"] == "degraded"
+    assert out["reasons"] == ["keyword_only", "semantic_empty"]
+    assert (out["mode"], out["confidence"]) == ("degraded", "medium")
 
 
 def test_memory_hybrid_raised_fallback() -> None:
@@ -349,8 +353,8 @@ def test_memory_hybrid_fts_semantic_off_no_semantic_unavailable() -> None:
 def test_memory_hybrid_degraded_no_errors() -> None:
     payload = _search(mode="hybrid", degraded=True, model_versions={"embedding": "m"})
     out = from_memory_search(payload, requested_mode="hybrid")
-    assert out["reasons"] == ["fts_fallback", "keyword_only"]
-    assert (out["mode"], out["confidence"], out["score_kind"]) == ("degraded", "low", "rank")
+    assert out["reasons"] == ["keyword_only", "semantic_empty"]
+    assert (out["mode"], out["confidence"], out["score_kind"]) == ("degraded", "medium", "rank")
 
 
 def test_memory_multihop_expansion_empty() -> None:
@@ -434,7 +438,7 @@ def test_conversation_two_stage_no_embedder() -> None:
     out = from_conversation_search(_two_stage(["no_embedder"]))
     _assert_shape(out)
     assert out["reasons"] == ["keyword_only", "semantic_unavailable"]
-    assert (out["mode"], out["confidence"], out["score_kind"]) == ("degraded", "low", "rank")
+    assert (out["mode"], out["confidence"], out["score_kind"]) == ("degraded", "medium", "rank")
 
 
 def test_conversation_two_stage_tags_rescue() -> None:
@@ -554,3 +558,71 @@ def test_docs_list_every_reason_code(doc: str) -> None:
     text = path.read_text(encoding="utf-8")
     missing = [code for code in REASON_CODES if not re.search(re.escape(f"`{code}`"), text)]
     assert not missing, f"{doc} lacks: {missing}"
+
+
+# -- affects_mode ---------------------------------------------------------------------
+
+_SAMPLES = {"<name>": "qdrant", "<n>": "3", "<category>": "privacy"}
+
+
+def _sample(template: str) -> str:
+    for key, value in _SAMPLES.items():
+        template = template.replace(key, value)
+    return template
+
+
+def test_every_code_has_an_affects_mode_class() -> None:
+    assert health.AFFECTS_MODE == ("yes", "no", "fallback", "empty")
+    for template, reason in REASON_CODES.items():
+        assert reason.affects_mode in health.AFFECTS_MODE, template
+        assert reason.meaning
+        assert health.affects_mode(_sample(template)) == reason.affects_mode
+
+
+def test_owner_classification_of_key_codes() -> None:
+    expected = {
+        "keyword_only": "no",
+        "adapters_shadow": "no",
+        "access_not_recorded": "no",
+        "withheld:<category>:<n>": "no",
+        "semantic_unavailable": "yes",
+        "semantic_empty": "yes",
+        "source_timeout:<name>": "yes",
+        "fts_fallback": "fallback",
+        "route_fallback": "fallback",
+        "no_match": "empty",
+        "all_sources_failed": "empty",
+        "withheld_only": "empty",
+    }
+    for template, kind in expected.items():
+        assert REASON_CODES[template].affects_mode == kind, template
+
+
+@pytest.mark.parametrize("template", list(REASON_CODES))
+def test_affects_mode_drives_mode(template: str) -> None:
+    code = _sample(template)
+    kind = REASON_CODES[template].affects_mode
+    out = derive(result_count=2, reasons=[code])
+    want = {"yes": "degraded", "no": "full", "fallback": "fallback", "empty": "full"}[kind]
+    assert out["mode"] == want
+    want_confidence = {"degraded": "medium", "full": "high", "fallback": "low"}[want]
+    assert out["confidence"] == want_confidence
+    if kind == "empty":
+        assert code not in out["reasons"]  # only explains an empty answer
+    assert derive(result_count=0, reasons=[code])["mode"] == "empty"
+
+
+def test_affects_mode_rejects_unknown() -> None:
+    with pytest.raises(ValueError):
+        health.affects_mode("nope")
+
+
+@pytest.mark.parametrize("doc", ["docs/retrieval-health.md", "docs/retrieval-health.zh-CN.md"])
+def test_docs_table_lists_affects_mode(doc: str) -> None:
+    text = (Path(__file__).resolve().parents[1] / doc).read_text(encoding="utf-8")
+    rows = [line for line in text.splitlines() if line.lstrip().startswith("|")]
+    for template, reason in REASON_CODES.items():
+        mine = [row for row in rows if f"| `{template}`" in row or f"|`{template}`" in row]
+        assert mine, f"{doc}: no table row for {template}"
+        cells = [cell.strip() for cell in mine[0].strip().strip("|").split("|")]
+        assert f"`{reason.affects_mode}`" in cells, f"{doc}: {template} {cells}"

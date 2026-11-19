@@ -111,12 +111,12 @@ def test_memory_search_fts_is_full(tmp_path: Path) -> None:
     assert found["score_kind"] == "bm25"
 
 
-def test_memory_search_hybrid_without_embedder_is_keyword_only(tmp_path: Path) -> None:
+def test_memory_search_hybrid_without_embedder_is_degraded_medium(tmp_path: Path) -> None:
     gateway = _gateway(_vault(tmp_path).root)
     got = gateway.search("backup", 10, mode="hybrid")
     assert got["degraded"] is True and got["mode"] == "fts"  # today's signal
     found = got[KEY]
-    assert found["mode"] == "degraded" and found["confidence"] == "low"
+    assert found["mode"] == "degraded" and found["confidence"] == "medium"
     assert found["reasons"] == ["keyword_only", "semantic_unavailable"]
 
 
@@ -139,7 +139,7 @@ def test_memory_search_two_stage_without_embedder_names_it(tmp_path: Path) -> No
     gateway = _gateway(_vault(tmp_path).root)
     found = gateway.search("backup", 10, mode="two_stage")[KEY]
     assert "semantic_unavailable" in found["reasons"] and "keyword_only" in found["reasons"]
-    assert found["confidence"] == "low"
+    assert (found["mode"], found["confidence"]) == ("degraded", "medium")
 
 
 def test_memory_search_no_match_is_empty(tmp_path: Path) -> None:
@@ -207,7 +207,7 @@ def test_conversation_two_stage_no_embedder(tmp_path: Path) -> None:
     got = _share(tmp_path).search("uploader", mode="two_stage")
     assert got["degraded"] == ["no_embedder"]  # today's signal, unchanged
     found = got[KEY]
-    assert found["mode"] == "degraded" and found["confidence"] == "low"
+    assert found["mode"] == "degraded" and found["confidence"] == "medium"
     assert found["reasons"] == ["keyword_only", "semantic_unavailable"]
     assert found["score_kind"] == "rank"
 
