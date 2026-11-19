@@ -19,13 +19,13 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from .contract import (
-    REVISION_RE,
     BuildResult,
     DirectoryStage,
     Freshness,
@@ -35,6 +35,7 @@ from .contract import (
     StageContext,
     StepResult,
     digest_of,
+    revision_ok,
 )
 
 
@@ -90,7 +91,7 @@ class CopyStage(DirectoryStage):
                 made = datetime.fromtimestamp(self.revision_file.stat().st_mtime, UTC)
             except (OSError, UnicodeDecodeError):
                 raise InputUnavailable("revision_unreadable") from None
-            if not REVISION_RE.fullmatch(revision):
+            if not revision_ok(revision):
                 raise InputUnavailable("revision_invalid")
             return Freshness(revision, made)
         files, _ = self._entries()
@@ -121,8 +122,10 @@ class CopyStage(DirectoryStage):
 
         def write_marker(c: StageContext) -> StepResult:
             count = self.live_count(c) or 0
-            tmp = marker.with_name(f".{marker.name}.tmp")
-            tmp.write_text(json.dumps({"items": count}) + "\n", encoding="utf-8")
+            tmp = marker.with_name(f".{marker.name}.{os.getpid()}-{time.monotonic_ns()}.tmp")
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+            with os.fdopen(os.open(tmp, flags, 0o600), "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({"items": count}) + "\n")
             os.replace(tmp, marker)
             return StepResult({"items": count})
 

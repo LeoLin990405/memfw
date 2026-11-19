@@ -64,7 +64,14 @@ _UNIT_KEYS = frozenset(
 PROXY_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
 #: uid 0 with AF_UNIX could still connect() to these (a read-only mount does not stop
 #: connect): the docker socket or the system bus would start a full-root unit.
-INACCESSIBLE = ("-/run/docker.sock", "-/var/run/docker.sock", "-/run/dbus", "-/run/systemd/private")
+INACCESSIBLE = (
+    "-/run/docker.sock",
+    "-/var/run/docker.sock",
+    "-/run/containerd/containerd.sock",
+    "-/run/podman/podman.sock",
+    "-/run/dbus",
+    "-/run/systemd/private",
+)
 
 
 def _safe(value: object, reason: str) -> str:
@@ -134,10 +141,23 @@ CAPABILITY_NOTE = """\
 # first run (`journalctl -u`): an empty build is refused by the shrink guard."""
 
 
-def systemd_units(spec: StageSpec, *, python: str | None = None) -> str:
-    """A ``.service`` and a ``.timer`` for ``spec``, as one text with file headers."""
+def _require_trust(spec: StageSpec, *, as_root: bool, allow_untrusted: bool) -> None:
+    """A unit that runs as root needs ``trust_paths = true`` set explicitly."""
+    if as_root and spec.trust_paths is not True and not allow_untrusted:
+        raise SetupError("unit_requires_trust_paths")
+
+
+def systemd_units(
+    spec: StageSpec, *, python: str | None = None, allow_untrusted: bool = False
+) -> str:
+    """A ``.service`` and a ``.timer`` for ``spec``, as one text with file headers.
+
+    Without ``user`` the unit runs as root, so the stage must set
+    ``trust_paths = true`` (or the caller passes ``allow_untrusted``).
+    """
     s = _settings(spec, python)
     unit = s["unit"]
+    _require_trust(spec, as_root=unit.get("user") is None, allow_untrusted=allow_untrusted)
     caps = unit.get("capabilities", [])
     if not isinstance(caps, list) or not all(
         isinstance(c, str) and _CAP_RE.fullmatch(c) for c in caps
@@ -192,6 +212,11 @@ def systemd_units(spec: StageSpec, *, python: str | None = None) -> str:
         "NoNewPrivileges=true",
         CAPABILITY_NOTE,
         f"CapabilityBoundingSet={' '.join(caps)}",
+    ]
+    if user is not None and caps:
+        # A non-root process gets no capability from the bounding set alone.
+        lines.append(f"AmbientCapabilities={' '.join(caps)}")
+    lines += [
         "ProtectSystem=strict",
         f"ReadWritePaths={' '.join(dict.fromkeys(rw))}",
     ]
@@ -204,8 +229,15 @@ def systemd_units(spec: StageSpec, *, python: str | None = None) -> str:
         "ProtectKernelTunables=true",
         "ProtectKernelModules=true",
         "ProtectControlGroups=true",
+        "ProtectKernelLogs=true",
+        "ProtectClock=true",
+        "ProtectHostname=true",
         "LockPersonality=true",
         "RestrictSUIDSGID=true",
+        "RestrictRealtime=true",
+        "RestrictNamespaces=true",
+        "SystemCallArchitectures=native",
+        "SystemCallFilter=@system-service",
         "",
         f"# --- {name}.timer ---",
         "[Unit]",
@@ -223,10 +255,18 @@ def systemd_units(spec: StageSpec, *, python: str | None = None) -> str:
     return "\n".join(lines)
 
 
-def launchd_plist(spec: StageSpec, *, python: str | None = None) -> str:
-    """A launchd property list for ``spec`` (StartCalendarInterval or StartInterval)."""
+def launchd_plist(
+    spec: StageSpec, *, python: str | None = None, allow_untrusted: bool = False
+) -> str:
+    """A launchd property list for ``spec`` (StartCalendarInterval or StartInterval).
+
+    launchd has no per-run timeout and this template sets no ``UserName``: as a
+    LaunchDaemon it runs as root (so ``trust_paths = true`` is required), as a
+    LaunchAgent as the logged-in user. A hung stage runs until killed by hand.
+    """
     s = _settings(spec, python)
     unit = s["unit"]
+    _require_trust(spec, as_root=True, allow_untrusted=allow_untrusted)
     label = unit.get("launchd_label", f"org.memfw.pipeline.{spec.name}")
     if not isinstance(label, str) or not _LABEL_RE.fullmatch(label):
         raise SetupError("unit_invalid")
@@ -259,11 +299,13 @@ def launchd_plist(spec: StageSpec, *, python: str | None = None) -> str:
     return plistlib.dumps(plist, sort_keys=True).decode("utf-8")
 
 
-def render(spec: StageSpec, kind: str, *, python: str | None = None) -> str:
+def render(
+    spec: StageSpec, kind: str, *, python: str | None = None, allow_untrusted: bool = False
+) -> str:
     if kind == "systemd":
-        return systemd_units(spec, python=python)
+        return systemd_units(spec, python=python, allow_untrusted=allow_untrusted)
     if kind == "launchd":
-        return launchd_plist(spec, python=python)
+        return launchd_plist(spec, python=python, allow_untrusted=allow_untrusted)
     raise SetupError("unit_kind_invalid")
 
 

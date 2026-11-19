@@ -130,12 +130,15 @@ See [`ports-and-recall.md`](ports-and-recall.md#11-packaging-boundaries).
 `packages/memfw-pipeline` (wheel `memfw_pipeline`, version 0.1.0) is the Stage contract and
 runner for derived artifacts (admitted view, metadata index, FTS / bm25s / Qdrant indexes,
 projections). A stage implements `freshness`, `inputs_digest`, `build`, `verify`, `publish` and
-optional idempotent `post_publish` steps; the runner adds a single-writer lock (`O_NOFOLLOW`, a
-held lock exits 75), a `running` status, a build into a directory beside the target, an atomic
-directory exchange (two renames with rollback as fallback), a shrink guard (an empty build or one
-under half of the baseline exits 5 unless `--allow-shrink`), freshness, and a status file of
-counts and fixed reason codes only. Unchanged inputs skip the build but still run post-publish
-steps. `memfw-pipeline unit` prints a hardened systemd or launchd template to review; nothing is
+optional idempotent `post_publish` steps; the runner adds a single-writer lock beside the target
+(`.<target>.lock`, `O_NOFOLLOW`, retried for a few seconds, then exit 75), a `running` status, a
+build into a directory beside the target, a record inside every published artifact
+(`.memfw-pipeline.json`: inputs digest, counts), an atomic directory exchange (two renames with
+rollback as fallback), a shrink guard (an empty build or one under half of the baseline, which
+is the live artifact's record first, exits 5 unless `--allow-shrink`), freshness, and a status
+file of counts and fixed reason codes only. Inputs whose digest matches the live artifact's
+record skip the build but still run post-publish steps. The path-trust check is on by default
+when the runner runs as root. `memfw-pipeline unit` prints a hardened systemd or launchd template to review; nothing is
 installed. Standard library only at run time plus `memfw-ports` 0.3.0; memfw never imports it.
 Build with `uv build --wheel --package memfw-pipeline` (not published to PyPI). This release has
 only an example stage; the real stages are ported later. See [`pipeline.md`](pipeline.md).

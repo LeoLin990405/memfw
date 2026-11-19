@@ -37,13 +37,43 @@ from ._ports import Clock, check_name
 #: Count keys, reason codes and step names: a fixed, lowercase vocabulary.
 CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 #: A source revision: a commit id, a generation number, a digest prefix. Never a name.
+#: Strings shaped like an IPv4 address or a dotted host name are refused on top of it
+#: (:func:`revision_ok`).
 REVISION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$")
+_IPV4_RE = re.compile(r"(?<![0-9])\d{1,3}(?:\.\d{1,3}){3}(?![0-9])")
+_HOSTNAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9-]*\.[A-Za-z][A-Za-z0-9-]*\.[A-Za-z]")
 #: An inputs digest: lowercase hex.
 DIGEST_RE = re.compile(r"^[0-9a-f]{16,128}$")
 #: A stage reports at most this many count keys (per build or post-publish step).
 MAX_COUNT_KEYS = 32
 #: The count the shrink guard compares: every BuildResult carries it.
 ITEMS = "items"
+#: The record the runner writes into every artifact it publishes (reserved name).
+ARTIFACT_RECORD = ".memfw-pipeline.json"
+
+
+def revision_ok(value: object) -> bool:
+    """``value`` is revision-shaped and holds no IPv4 address or dotted host name."""
+    return (
+        isinstance(value, str)
+        and REVISION_RE.fullmatch(value) is not None
+        and _IPV4_RE.search(value) is None
+        and _HOSTNAME_RE.search(value) is None
+    )
+
+
+#: Formats a stage may declare for its extra status fields (``Stage.status_formats``).
+#: Free text is never one of them.
+EXTRA_FORMATS: Mapping[str, re.Pattern[str]] = MappingProxyType(
+    {
+        "code": re.compile(r"^[a-z][a-z0-9_]{0,63}$"),
+        "sha256": re.compile(r"^[0-9a-f]{64}$"),
+        "uuid": re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"),
+        "model": re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"),
+        "int": re.compile(r"^(0|[1-9][0-9]{0,17})$"),
+    }
+)
+MAX_EXTRA_KEYS = 16
 
 
 def code(value: object, default: str = "other") -> str:
@@ -56,9 +86,9 @@ class StageError(Exception):
 
     Only ``code`` reaches the status file (an invalid code becomes ``other``); the
     exception message is never written or printed, so it may name things. The
-    exit code follows the call that raised it (``inputs_digest`` 1, ``build`` /
-    ``verify`` / ``publish`` 3), except that a ``SetupError`` from the factory or
-    ``inputs_digest`` exits 2.
+    exit code follows the call that raised it (``inputs_digest`` / ``prepare`` 1,
+    ``build`` / ``verify`` / ``publish`` 3), except that a ``SetupError`` from the
+    factory, ``inputs_digest`` or ``prepare`` exits 2.
     """
 
     def __init__(self, reason: str, message: str = "") -> None:
@@ -99,7 +129,8 @@ class StageContext:
 
     ``stage`` is the configured name (the config key), ``target`` the live
     artifact directory, ``state_dir`` the runner's own directory for this stage
-    (lock and status; a stage does not write there), ``options`` the stage's
+    (its status; a stage does not write there; the lock is ``.<target>.lock``
+    beside the target), ``options`` the stage's
     options from the config file, read-only.
     """
 
@@ -108,6 +139,9 @@ class StageContext:
     state_dir: Path
     options: Mapping[str, Any]
     clock: Clock
+    #: What ``Stage.prepare`` returned this run (``None`` without ``prepare``): the
+    #: channel from the digest step to ``build``, so inputs are read once.
+    prepared: Any = None
 
     def __post_init__(self) -> None:
         check_name(self.stage, what="stage name")
@@ -126,8 +160,14 @@ class BuildResult:
 
     counts: Mapping[str, int]
     artifacts: tuple[str, ...] = ()
+    #: Extra status fields (a model name, a vault id): only keys the stage declares
+    #: in ``status_formats``, each value matching its declared format, are kept.
+    extra: Mapping[str, str | int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if not isinstance(self.extra, Mapping) or len(self.extra) > MAX_EXTRA_KEYS:
+            raise ValueError(f"BuildResult.extra must be a mapping of <= {MAX_EXTRA_KEYS} keys")
+        object.__setattr__(self, "extra", MappingProxyType(dict(self.extra)))
         counts = _counts(self.counts, what="BuildResult.counts")
         if ITEMS not in counts:
             raise ValueError("BuildResult.counts must carry 'items'")
@@ -166,12 +206,18 @@ class PostPublishStep:
     name: str
     run: Callable[[StageContext], StepResult]
     attempts: int = 1
+    #: The step's own deadline. The runner cannot stop in-process code, so a step
+    #: enforces it (``subprocess.run(timeout=...)``, an HTTP timeout); the runner
+    #: records ``duration_ms`` and flags ``over_budget`` when it was exceeded.
+    timeout_seconds: float | None = None
 
     def __post_init__(self) -> None:
         if not CODE_RE.fullmatch(self.name or ""):
             raise ValueError(f"PostPublishStep.name must match {CODE_RE.pattern}")
         if not isinstance(self.attempts, int) or not 1 <= self.attempts <= 5:
             raise ValueError("PostPublishStep.attempts must be 1..5")
+        if self.timeout_seconds is not None and not 0 < self.timeout_seconds <= 86400:
+            raise ValueError("PostPublishStep.timeout_seconds must be in (0, 86400]")
 
 
 @dataclass(frozen=True)
@@ -186,8 +232,8 @@ class Freshness:
     as_of: datetime | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.revision, str) or not REVISION_RE.fullmatch(self.revision):
-            raise ValueError(f"Freshness.revision must match {REVISION_RE.pattern}")
+        if not revision_ok(self.revision):
+            raise ValueError("Freshness.revision must be an id (REVISION_RE, no host or IP)")
         if self.as_of is not None and (
             not isinstance(self.as_of, datetime) or self.as_of.utcoffset() is None
         ):
@@ -203,8 +249,14 @@ class Stage(Protocol):
     Optional (the runner looks them up): ``post_publish(ctx) -> Sequence[
     PostPublishStep]`` and ``live_count(ctx) -> int | None`` (items in the live
     artifact, ``None`` when there is none; the shrink guard's fallback when the
-    status file is missing or corrupt, and a check that the live artifact still
-    holds what the status says). :class:`DirectoryStage` supplies both.
+    artifact has no record and the status is missing, and a check that the live
+    artifact still holds what its record says). :class:`DirectoryStage` supplies
+    both.
+
+    Also optional: ``prepare(ctx) -> Prepared`` replaces ``inputs_digest`` and
+    hands its ``data`` to ``build`` as ``ctx.prepared`` (inputs read once), and
+    ``status_formats: Mapping[str, str]`` declares extra status keys with a format
+    name from ``EXTRA_FORMATS`` (``BuildResult.extra``).
     """
 
     name: str
@@ -218,6 +270,19 @@ class Stage(Protocol):
     def publish(self, ctx: StageContext, workdir: Path) -> str: ...
 
     def freshness(self, ctx: StageContext) -> Freshness: ...
+
+
+@dataclass(frozen=True)
+class Prepared:
+    """The result of ``Stage.prepare``: the inputs digest and whatever the stage
+    read to compute it (handed to ``build`` as ``ctx.prepared``; never recorded)."""
+
+    digest: str
+    data: Any = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.digest, str) or not DIGEST_RE.fullmatch(self.digest):
+            raise ValueError("Prepared.digest must be lowercase hex (DIGEST_RE)")
 
 
 def digest_of(*parts: bytes | str) -> str:
@@ -278,22 +343,29 @@ class DirectoryStage:
     def _count(self, root: Path) -> int:
         assert self.count_glob is not None
         try:
-            return sum(1 for p in root.glob(self.count_glob) if p.is_file() and not p.is_symlink())
+            return sum(
+                1
+                for p in root.glob(self.count_glob)
+                if p.is_file() and not p.is_symlink() and p.name != ARTIFACT_RECORD
+            )
         except OSError:
             return 0
 
 
 __all__ = [
+    "ARTIFACT_RECORD",
     "CODE_RE",
     "DIGEST_RE",
     "ITEMS",
     "MAX_COUNT_KEYS",
     "REVISION_RE",
+    "EXTRA_FORMATS",
     "BuildResult",
     "DirectoryStage",
     "Freshness",
     "InputUnavailable",
     "PostPublishStep",
+    "Prepared",
     "SetupError",
     "Stage",
     "StageContext",
@@ -302,4 +374,5 @@ __all__ = [
     "VerifyFailed",
     "code",
     "digest_of",
+    "revision_ok",
 ]

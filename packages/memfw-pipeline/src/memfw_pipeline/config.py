@@ -3,20 +3,26 @@
 ::
 
     [pipeline]
-    state_dir = "/srv/memfw/pipeline-state"   # lock + status, one directory per stage
+    state_dir = "/srv/memfw/pipeline-state"   # status, one directory per stage
+    state_mode = "0700"                        # or "0750"/"0755" for a non-root monitor
 
     [stages.example]
     factory = "memfw_pipeline.example:factory" # module:callable(options) -> Stage
     target = "/srv/memfw/derived/example"      # the live artifact directory
     max_lag_seconds = 86400                    # freshness threshold (default one day)
-    trust_paths = false                        # root-run deployments: true
+    trust_paths = true                         # default: on when run as root
+    empty_build = "refuse"                     # or "refuse_if_shrinking"
     options = { source = "/srv/memfw/source" }
 
     [stages.example.unit]                      # only `memfw-pipeline unit` reads this
     schedule = "*-*-* 03:30:00"
 
 Every path must be absolute. Unknown keys are rejected so a typo fails at
-startup instead of silently changing behaviour.
+startup instead of silently changing behaviour. The lock lives beside the
+target (``.<target>.lock``), so two configs naming one target still exclude each
+other on one host. Overlap checks compare the paths as written and as resolved
+(``realpath``); a case-insensitive filesystem can still alias two spellings, so
+spell each path one way.
 """
 
 from __future__ import annotations
@@ -24,6 +30,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import json
+import os
 import re
 import tomllib
 from collections.abc import Mapping
@@ -38,8 +45,13 @@ from .contract import SetupError, Stage
 _IDENT = r"[A-Za-z_][A-Za-z0-9_]*"
 FACTORY_RE = re.compile(rf"^{_IDENT}(?:\.{_IDENT})*:{_IDENT}$")
 DEFAULT_MAX_LAG_SECONDS = 86400
-_PIPELINE_KEYS = frozenset({"state_dir"})
-_STAGE_KEYS = frozenset({"factory", "target", "options", "max_lag_seconds", "trust_paths", "unit"})
+_PIPELINE_KEYS = frozenset({"state_dir", "state_mode"})
+_STAGE_KEYS = frozenset(
+    {"factory", "target", "options", "max_lag_seconds", "trust_paths", "unit", "empty_build"}
+)
+#: Directory mode -> status file mode.
+STATE_MODES = {"0700": (0o700, 0o600), "0750": (0o750, 0o640), "0755": (0o755, 0o644)}
+EMPTY_BUILD = frozenset({"refuse", "refuse_if_shrinking"})
 
 
 @dataclass(frozen=True)
@@ -51,12 +63,23 @@ class StageSpec:
     config_path: Path
     options: Mapping[str, Any] = field(default_factory=dict)
     max_lag_seconds: int = DEFAULT_MAX_LAG_SECONDS
-    trust_paths: bool = False
+    #: ``None``: not set, so on exactly when the runner runs as root.
+    trust_paths: bool | None = None
     unit: Mapping[str, Any] = field(default_factory=dict)
+    #: ``refuse``: an empty build is always refused; ``refuse_if_shrinking``: only
+    #: when the baseline is above zero (a source that may legitimately be empty).
+    empty_build: str = "refuse"
+    state_mode: int = 0o700
+    status_mode: int = 0o600
+
+    @property
+    def trust_enabled(self) -> bool:
+        return self.trust_paths if self.trust_paths is not None else os.geteuid() == 0
 
     @property
     def lock_path(self) -> Path:
-        return self.state_dir / "lock"
+        """Beside the target, so every config naming this target shares one lock."""
+        return self.target.with_name(f".{self.target.name}.lock")
 
     @property
     def status_path(self) -> Path:
@@ -86,8 +109,13 @@ def _absolute(value: object, reason: str) -> Path:
 
 
 def _overlaps(a: Path, b: Path) -> bool:
-    """``a`` and ``b`` are the same path or one lies inside the other."""
-    return a == b or a in b.parents or b in a.parents
+    """``a`` and ``b`` are the same path or one lies inside the other, as written or
+    resolved."""
+
+    def lexical(x: Path, y: Path) -> bool:
+        return x == y or x in y.parents or y in x.parents
+
+    return lexical(a, b) or lexical(Path(os.path.realpath(a)), Path(os.path.realpath(b)))
 
 
 def load_config(path: Path) -> PipelineConfig:
@@ -112,6 +140,10 @@ def load_config(path: Path) -> PipelineConfig:
     if not isinstance(pipeline, dict) or set(pipeline) - _PIPELINE_KEYS:
         raise SetupError("config_invalid")
     state_dir = _absolute(pipeline.get("state_dir"), "state_dir_invalid")
+    mode_name = pipeline.get("state_mode", "0700")
+    if mode_name not in STATE_MODES:
+        raise SetupError("state_mode_invalid")
+    state_mode, status_mode = STATE_MODES[mode_name]
     stages_raw = data.get("stages") or {}
     if not isinstance(stages_raw, dict):
         raise SetupError("config_invalid")
@@ -135,12 +167,15 @@ def load_config(path: Path) -> PipelineConfig:
         options = raw.get("options", {})
         unit = raw.get("unit", {})
         lag = raw.get("max_lag_seconds", DEFAULT_MAX_LAG_SECONDS)
-        trust = raw.get("trust_paths", False)
+        trust = raw.get("trust_paths")
+        empty = raw.get("empty_build", "refuse")
+        if empty not in EMPTY_BUILD:
+            raise SetupError("empty_build_invalid")
         if not isinstance(options, dict) or not isinstance(unit, dict):
             raise SetupError("stage_config_invalid")
         if not isinstance(lag, int) or isinstance(lag, bool) or not 60 <= lag <= 365 * 86400:
             raise SetupError("max_lag_invalid")
-        if not isinstance(trust, bool):
+        if trust is not None and not isinstance(trust, bool):
             raise SetupError("stage_config_invalid")
         stages[name] = StageSpec(
             name=name,
@@ -152,27 +187,50 @@ def load_config(path: Path) -> PipelineConfig:
             max_lag_seconds=lag,
             trust_paths=trust,
             unit=unit,
+            empty_build=empty,
+            state_mode=state_mode,
+            status_mode=status_mode,
         )
     return PipelineConfig(path=path, state_dir=state_dir, stages=stages)
 
 
-def _module_paths(module: str) -> list[Path]:
-    """Where the top-level package of ``module`` lives, found without importing it."""
-    top = module.split(".", 1)[0]
+def _spec_paths(name: str) -> list[Path] | None:
+    """Where ``name`` lives (its file and package directories); ``None`` if unknown.
+
+    ``find_spec`` of a dotted name imports its parents; :func:`trust_failures`
+    checks the top-level package first, so only trusted code runs.
+    """
     try:
-        spec = importlib.util.find_spec(top)
+        spec = importlib.util.find_spec(name)
     except (ImportError, ValueError):
-        return []
+        return None
     if spec is None:
-        return []
+        return None
     paths = [Path(p) for p in (spec.submodule_search_locations or [])]
     if spec.origin and spec.origin not in ("built-in", "frozen"):
         paths.append(Path(spec.origin))
     return paths
 
 
+def _module_trusted(module: str) -> bool:
+    parts = module.split(".")
+    for depth in range(1, len(parts) + 1):  # top-level package first, then each level
+        paths = _spec_paths(".".join(parts[:depth]))
+        if not paths or not all(fsops.path_is_trusted(p) for p in paths):
+            return False
+    return True
+
+
 def trust_failures(spec: StageSpec) -> list[str]:
-    """Fixed codes for every untrusted path a root-run stage depends on."""
+    """Fixed codes for every untrusted path a root-run stage depends on.
+
+    Checked: the config file, the state directory, the target (and so its
+    parent, where the lock and work directories live), every level of the
+    factory's module, and this package and the ports it imports. Files inside
+    a trusted package directory are not checked one by one. The paths are taken
+    as written: a symlinked component (``/var`` -> ``/private/var`` on macOS)
+    is untrusted, so configure real paths.
+    """
     failures: list[str] = []
     checks = (
         ("config_untrusted", spec.config_path),
@@ -182,10 +240,11 @@ def trust_failures(spec: StageSpec) -> list[str]:
     for reason, path in checks:
         if not fsops.path_is_trusted(path):
             failures.append(reason)
-    module = spec.factory.split(":", 1)[0]
-    paths = _module_paths(module)
-    if not paths or not all(fsops.path_is_trusted(p) for p in paths):
+    if not _module_trusted(spec.factory.split(":", 1)[0]):
         failures.append("factory_untrusted")
+    runtime = ["memfw_pipeline"] + [m for m in ("memfw_ports", "memfw") if _spec_paths(m)]
+    if not all(_module_trusted(m) for m in runtime):
+        failures.append("runtime_untrusted")
     return failures
 
 

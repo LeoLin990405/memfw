@@ -33,8 +33,8 @@ RENAME_SWAP = 0x2
 _NO_EXCHANGE = frozenset({errno.ENOSYS, errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EXDEV})
 
 
-def private_mkdir(path: Path) -> None:
-    """``path`` as a real 0700 directory; every missing parent is created 0700 too.
+def private_mkdir(path: Path, mode: int = 0o700) -> None:
+    """``path`` as a real directory with ``mode``; every missing parent gets ``mode`` too.
 
     Existing parents are left as they are (the trust check judges them).
     """
@@ -45,31 +45,40 @@ def private_mkdir(path: Path) -> None:
         current = current.parent
     for directory in reversed(missing):
         with contextlib.suppress(FileExistsError):
-            os.mkdir(directory, 0o700)
+            os.mkdir(directory, mode)
+            os.chmod(directory, mode)  # not narrowed by the umask
     if path.is_symlink() or not path.is_dir():
         raise NotADirectoryError(errno.ENOTDIR, "not a real directory")
-    os.chmod(path, 0o700)
+    os.chmod(path, mode)
 
 
 # --- lock ----------------------------------------------------------------------------------
 @contextlib.contextmanager
-def single_writer(lock_path: Path) -> Iterator[bool]:
+def single_writer(lock_path: Path, *, wait_seconds: float = 0.0) -> Iterator[bool]:
     """Hold an exclusive, non-blocking ``flock`` on ``lock_path``.
 
-    Yields ``True`` when held, ``False`` when another process holds it. The file
-    is opened with ``O_NOFOLLOW``: a symlink planted there raises ``OSError``.
-    The lock is released when the process dies, so a killed run never wedges
-    the next one.
+    Yields ``True`` when held, ``False`` when another process still holds it
+    after ``wait_seconds`` (retried every 0.1 s, so a ``status`` / ``plan``
+    probe that holds the lock for an instant never makes a scheduled run give
+    up). The file is opened with ``O_NOFOLLOW``: a symlink planted there raises
+    ``OSError``. The lock is released when the process dies, so a killed run
+    never wedges the next one. ``flock`` is local to one host: on NFS it may be
+    a no-op (``nolock``) or not exclude another host; keep one writer host.
     """
     fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
     try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as exc:
-            if exc.errno in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES):
-                yield False
-                return
-            raise
+        deadline = time.monotonic() + max(0.0, wait_seconds)
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as exc:
+                if exc.errno not in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES):
+                    raise
+                if time.monotonic() >= deadline:
+                    yield False
+                    return
+                time.sleep(0.1)
         try:
             yield True
         finally:
@@ -79,13 +88,17 @@ def single_writer(lock_path: Path) -> Iterator[bool]:
 
 
 def lock_is_held(lock_path: Path) -> bool | None:
-    """Probe the lock without creating anything: ``None`` when there is no lock file."""
+    """Probe the lock without creating anything.
+
+    ``None`` when unknown: no lock file, or one this user cannot open (a non-root
+    monitor of a root-run stage). A planted symlink counts as held.
+    """
     try:
         fd = os.open(lock_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-    except FileNotFoundError:
+    except (FileNotFoundError, PermissionError):
         return None
     except OSError:
-        return True  # a symlink or unreadable lock: treat as not ours to take
+        return True  # a symlink (ELOOP): treat as not ours to take
     try:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -189,6 +202,7 @@ def swap_in(workdir: Path, target: Path, *, use_exchange: bool = True) -> str:
     if target.is_symlink() or not target.is_dir():
         raise OSError(errno.ENOTDIR, "target is not a real directory")
     if use_exchange and exchange(workdir, target):
+        fsync_dir(target.parent)  # the exchange is durable before the old copy goes
         shutil.rmtree(workdir, ignore_errors=True)  # workdir now holds the old artifact
         return "exchange"
     old = new_name(target, "old")
@@ -198,29 +212,38 @@ def swap_in(workdir: Path, target: Path, *, use_exchange: bool = True) -> str:
     except OSError:
         os.rename(old, target)
         raise
+    fsync_dir(target.parent)  # both renames are durable before the old copy goes
     shutil.rmtree(old, ignore_errors=True)
     return "rename_pair"
 
 
-def restore_orphaned_old(target: Path) -> bool:
+def restore_orphaned_old(target: Path) -> str:
     """Put back the previous artifact a crash (or a failed rollback) left as ``.old-*``.
 
     Only when ``target`` itself is missing: between the two renames of the
-    fallback swap the live artifact exists only under that name. The newest one
-    wins; the others are removed by :func:`cleanup_leftovers`.
+    fallback swap the live artifact exists only under that name. Returns
+    ``none`` (nothing to do), ``restored``, ``ambiguous`` (more than one
+    candidate: a half-removed copy can look newest, and names do not order
+    across reboots, so an operator decides) or ``failed`` (the rename failed).
+    After ``ambiguous`` or ``failed`` the caller must NOT remove ``.old-*``: one
+    of them is the only good copy.
     """
     if target.exists() or target.is_symlink():
-        return False
+        return "none"
     prefix = glob.escape(f".{target.name}.")
     olds = [e for e in target.parent.glob(f"{prefix}old-*") if e.is_dir() and not e.is_symlink()]
     if not olds:
-        return False
-    newest = max(olds, key=lambda e: e.lstat().st_mtime_ns)
+        return "none"
+    if len(olds) > 1:
+        return "ambiguous"
     try:
-        os.rename(newest, target)
+        os.rename(olds[0], target)
+        fsync_dir(target.parent)
     except OSError:
-        return False
-    return True
+        return "failed"
+    if target.is_symlink() or not target.is_dir():
+        return "failed"
+    return "restored"
 
 
 def cleanup_leftovers(target: Path) -> int:
@@ -259,12 +282,13 @@ def read_json(path: Path) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
-def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
-    """Write ``payload`` to ``path`` (0600) via an ``O_EXCL`` temp file and a rename."""
+def write_json_atomic(path: Path, payload: dict[str, Any], *, mode: int = 0o600) -> None:
+    """Write ``payload`` to ``path`` (``mode``) via an ``O_EXCL`` temp file and a rename."""
     tmp = path.with_name(f".{path.name}.{os.getpid()}-{time.monotonic_ns()}.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, mode)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            os.fchmod(handle.fileno(), mode)  # not narrowed by the umask
             handle.write(json.dumps(payload, sort_keys=True, ensure_ascii=True) + "\n")
             handle.flush()
             os.fsync(handle.fileno())

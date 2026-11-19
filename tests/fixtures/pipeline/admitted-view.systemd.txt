@@ -24,7 +24,7 @@ IPAddressDeny=any
 IPAddressAllow=localhost
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 # uid 0 + AF_UNIX could still connect() to these sockets and escape the sandbox.
-InaccessiblePaths=-/run/docker.sock -/var/run/docker.sock -/run/dbus -/run/systemd/private
+InaccessiblePaths=-/run/docker.sock -/var/run/docker.sock -/run/containerd/containerd.sock -/run/podman/podman.sock -/run/dbus -/run/systemd/private
 NoNewPrivileges=true
 # Capabilities. The default is none: a stage that runs as root still cannot read
 # files it does not own unless it is given CAP_DAC_READ_SEARCH (read and list).
@@ -34,6 +34,7 @@ NoNewPrivileges=true
 # impossible either way (ProtectSystem=strict makes the rest read-only). Check the
 # first run (`journalctl -u`): an empty build is refused by the shrink guard.
 CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE
+AmbientCapabilities=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE
 ProtectSystem=strict
 ReadWritePaths=/srv/memfw/pipeline-state/admitted-view /srv/memfw/derived
 ReadOnlyPaths=/srv/memfw/authority
@@ -43,8 +44,15 @@ PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectClock=true
+ProtectHostname=true
 LockPersonality=true
 RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
 
 # --- memfw-pipeline-admitted-view.timer ---
 [Unit]

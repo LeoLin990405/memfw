@@ -38,6 +38,7 @@ from memfw_pipeline import (  # noqa: E402
     BuildResult,
     Freshness,
     PostPublishStep,
+    Prepared,
     RunOptions,
     StageContext,
     StageError,
@@ -51,7 +52,12 @@ from memfw_pipeline import (  # noqa: E402
     stage_status,
 )
 from memfw_pipeline.example import CopyStage  # noqa: E402
-from memfw_pipeline.runner import clean_status, freshness_fields  # noqa: E402
+from memfw_pipeline.runner import (  # noqa: E402
+    ARTIFACT_RECORD,
+    clean_status,
+    freshness_fields,
+    read_record,
+)
 
 from memfw.ports.clock import FixedClock  # noqa: E402
 
@@ -103,7 +109,8 @@ class Env:
         return CopyStage({"source": str(self.source), "marker": str(self.marker)})
 
     def leftovers(self) -> list[str]:
-        return sorted(p.name for p in self.out.glob(".artifact.*"))
+        names = (p.name for p in self.out.glob(".artifact.*"))
+        return sorted(n for n in names if n != ".artifact.lock")
 
 
 @pytest.fixture
@@ -195,10 +202,10 @@ def test_lock_held_exits_75_and_touches_nothing(env: Env) -> None:
 def test_lock_held_by_another_process_exits_75_from_the_cli(env: Env) -> None:
     env.items(1)
     spec = env.spec
-    fsops.private_mkdir(spec.state_dir)
+    fsops.private_mkdir(spec.target.parent)
     with fsops.single_writer(spec.lock_path) as held:
         assert held
-        proc = _cli(["run", "example", "--config", str(env.config)])
+        proc = _cli(["run", "example", "--config", str(env.config), "--lock-wait-seconds", "0"])
     assert proc.returncode == 75
     assert json.loads(proc.stdout.splitlines()[-1])["result"] == "busy"
     assert not spec.status_path.exists() and not env.target.exists()
@@ -206,7 +213,7 @@ def test_lock_held_by_another_process_exits_75_from_the_cli(env: Env) -> None:
 
 def test_planted_lock_symlink_is_refused(env: Env) -> None:
     spec = env.spec
-    fsops.private_mkdir(spec.state_dir)
+    fsops.private_mkdir(spec.target.parent)
     elsewhere = env.root / "elsewhere"
     spec.lock_path.symlink_to(elsewhere)
     code, status = run(env)
@@ -281,7 +288,7 @@ def test_killed_run_leaves_running_with_the_last_good_counts(env: Env) -> None:
     code, status = run(env)
     assert code == EXIT_OK and status["result"] == "built"
     assert status["leftovers_removed"] == 1 and env.leftovers() == []
-    assert status["shrink"]["baseline"] == 3 and status["shrink"]["baseline_source"] == "status"
+    assert status["shrink"]["baseline"] == 3 and status["shrink"]["baseline_source"] == "artifact"
 
 
 def test_orphaned_old_artifact_is_restored_before_cleanup(env: Env) -> None:
@@ -366,7 +373,9 @@ def test_post_publish_failure_exits_4_after_retries(env: Env) -> None:
     code, status = run(env, stage=Flaky({"source": str(env.source)}))
     assert code == EXIT_POST_PUBLISH and status["result"] == "post_publish_failed"
     assert len(calls) == 2
-    assert status["post_publish"]["sync"] == {"ok": False, "attempts": 2, "error": "unreachable"}
+    entry = dict(status["post_publish"]["sync"])
+    assert entry.pop("duration_ms") >= 0
+    assert entry == {"ok": False, "attempts": 2, "error": "unreachable"}
     assert status["errors"] == ["sync:unreachable"]
     assert len(env.live()) == 2  # published anyway; only the step failed
 
@@ -456,9 +465,12 @@ def test_an_empty_build_is_refused_even_after_a_small_one(env: Env) -> None:
 
 
 @pytest.mark.parametrize("damage", ["missing", "corrupt", "wrong_schema"])
-def test_shrink_baseline_falls_back_to_the_live_count(env: Env, damage: str) -> None:
+@pytest.mark.parametrize("record", [True, False])
+def test_shrink_baseline_falls_back_to_the_artifact(env: Env, damage: str, record: bool) -> None:
     env.items(4)
     run(env)
+    if not record:
+        (env.target / ARTIFACT_RECORD).unlink()
     path = env.state / "example" / "status.json"
     if damage == "missing":
         path.unlink()
@@ -469,7 +481,8 @@ def test_shrink_baseline_falls_back_to_the_live_count(env: Env, damage: str) -> 
     env.items(1)
     code, status = run(env)
     assert code == EXIT_SHRINK
-    assert status["shrink"] == {"baseline": 4, "baseline_source": "live", "would_publish": 1}
+    source = "artifact" if record else "live"
+    assert status["shrink"] == {"baseline": 4, "baseline_source": source, "would_publish": 1}
     if damage != "missing":
         assert "status_unreadable" in status["warnings"]
     assert len(env.live()) == 4
@@ -681,3 +694,271 @@ def test_cli_run_prints_one_status_line(env: Env) -> None:
     assert status["result"] == "built" and status["last_items"] == 2
     proc = _cli(["run", "missing", "--config", str(env.config)])
     assert proc.returncode == 2 and "unknown_stage" in proc.stdout
+
+
+# --- review round 1 ------------------------------------------------------------------------
+CRASH_AFTER_SWAP = textwrap.dedent(
+    """
+    import os, signal
+    from memfw_pipeline.example import CopyStage
+    from memfw_pipeline.contract import PostPublishStep
+
+    class CrashAfterSwap(CopyStage):
+        name = "crash-copy"
+
+        def post_publish(self, ctx):
+            def die(c):
+                os.kill(os.getpid(), signal.SIGKILL)  # after the swap, before the status
+
+            return (PostPublishStep("die", die),)
+
+    def factory(options):
+        return CrashAfterSwap(options)
+    """
+)
+
+
+def test_crash_after_swap_then_reverted_inputs_rebuilds(env: Env) -> None:
+    """The reviewer's scenario: X published; Y swapped in, killed before its final
+    status; inputs back to X. The status still says "X published", the artifact holds
+    Y: the run must rebuild, not report ``unchanged``."""
+    (env.source / "a.md").write_text("X content\n", "utf-8")
+    assert run(env)[0] == EXIT_OK
+    modules = env.root / "modules"
+    modules.mkdir()
+    (modules / "crashswap.py").write_text(CRASH_AFTER_SWAP, "utf-8")
+    good = env.config.read_text("utf-8")
+    env.config.write_text(good.replace("memfw_pipeline.example:factory", "crashswap:factory"))
+    (env.source / "a.md").write_text("Y content\n", "utf-8")
+    proc = _cli(["run", "example", "--config", str(env.config)], extra_path=modules)
+    assert proc.returncode == -signal.SIGKILL
+    assert (env.target / "items" / "a.md").read_text("utf-8") == "Y content\n"
+    crashed = env.status()
+    assert crashed["result"] == "publishing" and crashed["ok"] is False
+    assert crashed["publishing_digest"] != crashed["published_digest"]
+    env.config.write_text(good, "utf-8")
+    (env.source / "a.md").write_text("X content\n", "utf-8")
+    code, status = run(env)
+    assert code == EXIT_OK and status["result"] == "built"
+    assert (env.target / "items" / "a.md").read_text("utf-8") == "X content\n"
+    record = read_record(env.target)
+    assert record is not None and record.digest == status["published_digest"]
+
+
+def test_unchanged_keeps_counts_and_extra_from_the_artifact(env: Env) -> None:
+    class WithExtra(CopyStage):
+        status_formats = {"model": "model", "vault_id": "uuid", "note": "code"}
+
+        def build(self, ctx: StageContext, workdir: Path) -> BuildResult:
+            result = super().build(ctx, workdir)
+            return BuildResult(
+                result.counts,
+                result.artifacts,
+                extra={
+                    "model": "bge-m3",
+                    "vault_id": "6c1f0a52-3d4e-5b7a-9c80-f1ee7a0d2b19",
+                    "note": "Not A Code",  # declared, but fails its format
+                    "undeclared": "x",
+                },
+            )
+
+    env.items(3)
+    stage = WithExtra({"source": str(env.source)})
+    code, status = run(env, stage=stage)
+    assert code == EXIT_OK
+    assert status["extra"] == {
+        "model": "bge-m3",
+        "vault_id": "6c1f0a52-3d4e-5b7a-9c80-f1ee7a0d2b19",
+    }
+    assert "extra_rejected" in status["warnings"]
+    code, status = run(env, stage=stage)
+    assert status["result"] == "unchanged"
+    assert status["counts"] == {"items": 3, "skipped": 0}
+    assert status["extra"]["model"] == "bge-m3"
+
+
+def test_prepare_hands_its_data_to_build(env: Env) -> None:
+    seen: list[Any] = []
+
+    class Prepping(CopyStage):
+        def prepare(self, ctx: StageContext) -> Prepared:
+            return Prepared(self.inputs_digest(ctx), data={"read_once": True})
+
+        def build(self, ctx: StageContext, workdir: Path) -> BuildResult:
+            seen.append(ctx.prepared)
+            return super().build(ctx, workdir)
+
+    env.items(1)
+    assert run(env, stage=Prepping({"source": str(env.source)}))[0] == EXIT_OK
+    assert seen == [{"read_once": True}]
+
+
+def test_a_stage_may_not_write_the_artifact_record(env: Env) -> None:
+    class Squatter(CopyStage):
+        def build(self, ctx: StageContext, workdir: Path) -> BuildResult:
+            result = super().build(ctx, workdir)
+            (workdir / ARTIFACT_RECORD).write_text("{}", "utf-8")
+            return result
+
+    env.items(1)
+    code, status = run(env, stage=Squatter({"source": str(env.source)}))
+    assert code == EXIT_BUILD and status["errors"] == ["verify:reserved_name"]
+    assert not env.target.exists()
+
+
+@pytest.mark.parametrize("problem", ["ambiguous", "failed"])
+def test_unresolved_old_copies_are_kept(
+    env: Env, problem: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env.items(2)
+    run(env)
+    os.rename(env.target, fsops.new_name(env.target, "old"))
+    if problem == "ambiguous":
+        (env.out / ".artifact.old-1-1").mkdir()
+    else:
+        real = os.rename
+
+        def rename(src: Any, dst: Any) -> None:
+            if ".artifact.old-" in str(src):
+                raise OSError(errno.ENOSPC, "no space")
+            real(src, dst)
+
+        monkeypatch.setattr(fsops.os, "rename", rename)
+    code, status = run(env)
+    assert code == EXIT_SETUP and status["errors"] == [f"restore_{problem}"]
+    assert len(list(env.out.glob(".artifact.old-*"))) == (2 if problem == "ambiguous" else 1)
+    assert not env.target.exists()
+
+
+def test_empty_build_may_be_allowed_on_a_first_run(env: Env) -> None:
+    env.write_config(empty_build="refuse_if_shrinking")
+    code, status = run(env)
+    assert code == EXIT_OK and env.live() == []
+    env.items(2)
+    assert run(env)[0] == EXIT_OK
+    env.items(0)
+    code, status = run(env)
+    assert code == EXIT_SHRINK and status["errors"] == ["empty_build"]
+
+
+def test_run_waits_briefly_for_a_probe_to_release_the_lock(env: Env) -> None:
+    import threading
+
+    env.items(1)
+    spec = env.spec
+    fsops.private_mkdir(spec.target.parent)
+    ready, release = threading.Event(), threading.Event()
+
+    def hold() -> None:
+        with fsops.single_writer(spec.lock_path) as held:
+            assert held
+            ready.set()
+            release.wait(5)
+
+    thread = threading.Thread(target=hold)
+    thread.start()
+    ready.wait(5)
+    assert run_stage(spec, RunOptions(lock_wait_seconds=0))[0] == EXIT_BUSY
+    threading.Timer(0.3, release.set).start()
+    code, _ = run_stage(spec, RunOptions(lock_wait_seconds=5))
+    thread.join()
+    assert code == EXIT_OK
+
+
+def test_two_configs_on_one_target_share_the_lock(env: Env) -> None:
+    other = env.root / "other.toml"
+    other.write_text(
+        env.config.read_text("utf-8").replace(str(env.state), str(env.root / "state2")), "utf-8"
+    )
+    env.items(1)
+    spec = env.spec
+    fsops.private_mkdir(spec.target.parent)
+    with fsops.single_writer(spec.lock_path) as held:
+        assert held
+        twin = load_config(other).stage("example")
+        assert twin.lock_path == spec.lock_path
+        assert run_stage(twin, RunOptions(lock_wait_seconds=0))[0] == EXIT_BUSY
+
+
+def test_slug_shaped_names_never_reach_the_status(env: Env) -> None:
+    for name in ("alice_smith", "home_nas_backup", "leo_secret"):
+        (env.source / f"{name}.md").write_text(f"{name} body\n", "utf-8")
+    run(env)
+    env.marker.unlink()
+    run(env)
+    text = (env.state / "example" / "status.json").read_text("utf-8")
+    for name in ("alice_smith", "home_nas_backup", "leo_secret"):
+        assert name not in text
+
+
+def test_clean_status_limits_are_what_the_docs_say() -> None:
+    # a slug is a valid code: the fence cannot tell it from a reason code (documented)
+    assert clean_status({"result": "alice_smith"}) == {"result": "alice_smith"}
+    # host names and IPv4 addresses never pass as revisions
+    for value in ("files.example.test", "host:203.0.113.7", "198.51.100.1", "a.b.example"):
+        cleaned = clean_status({"freshness": {"source_revision": value}})
+        assert cleaned["freshness"]["source_revision"] == "redacted", value
+        with pytest.raises(ValueError):
+            Freshness(value)
+    for value in ("abc123", "v1.2.3", "sha256:0f1e", "release-2026.11"):
+        assert Freshness(value).revision == value
+
+
+def test_post_publish_step_over_budget_is_flagged(env: Env) -> None:
+    import time as _time
+
+    class Slow(CopyStage):
+        def post_publish(self, ctx: StageContext) -> Sequence[PostPublishStep]:
+            def sync(c: StageContext) -> StepResult:
+                _time.sleep(0.05)
+                return StepResult({"synced": 1})
+
+            return (PostPublishStep("sync", sync, timeout_seconds=0.01),)
+
+    env.items(1)
+    code, status = run(env, stage=Slow({"source": str(env.source)}))
+    assert code == EXIT_OK and status["post_publish"]["sync"]["over_budget"] is True
+
+
+def test_example_marker_never_follows_a_symlink(env: Env) -> None:
+    victim = env.root / "victim.txt"
+    victim.write_text("keep", "utf-8")
+    env.marker.symlink_to(victim)
+    env.items(1)
+    assert run(env)[0] == EXIT_OK
+    assert victim.read_text("utf-8") == "keep" and not env.marker.is_symlink()
+
+
+def test_record_write_failure_is_a_publish_failure(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import memfw_pipeline.runner as runner_module
+
+    env.items(2)
+    run(env)
+    env.items(3)
+
+    def broken(*args: Any, **kwargs: Any) -> None:
+        raise OSError(errno.ENOSPC, "no space")
+
+    monkeypatch.setattr(runner_module, "_write_record", broken)
+    code, status = run(env)
+    assert code == EXIT_BUILD and status["result"] == "publish_failed"
+    assert status["errors"] == ["record"] and len(env.live()) == 2
+
+
+def test_lock_probe_is_unknown_when_the_lock_is_unreadable(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env.items(1)
+    run(env)
+    real_open = os.open
+
+    def denied(path: Any, flags: int, *args: Any) -> int:
+        if str(path).endswith(".artifact.lock"):
+            raise PermissionError(errno.EACCES, "denied")
+        return real_open(path, flags, *args)
+
+    monkeypatch.setattr(fsops.os, "open", denied)
+    assert fsops.lock_is_held(env.spec.lock_path) is None
+    assert stage_status(env.spec, probe=False)["locked"] is None

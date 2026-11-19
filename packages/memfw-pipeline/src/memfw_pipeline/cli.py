@@ -40,6 +40,12 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="publish an empty build or one under half of the live count",
     )
+    run.add_argument(
+        "--lock-wait-seconds",
+        type=float,
+        default=5.0,
+        help="retry a held lock this long before exiting 75 (default 5)",
+    )
     plan = sub.add_parser("plan", help="what run would do (reads only)")
     plan.add_argument("stage")
     plan.add_argument("--config", required=True, type=Path)
@@ -56,6 +62,11 @@ def _parser() -> argparse.ArgumentParser:
     kind.add_argument("--systemd", action="store_const", const="systemd", dest="kind")
     kind.add_argument("--launchd", action="store_const", const="launchd", dest="kind")
     unit.add_argument("--python", help="absolute interpreter path for ExecStart")
+    unit.add_argument(
+        "--allow-untrusted",
+        action="store_true",
+        help="print a root-run unit for a stage without trust_paths = true",
+    )
     return parser
 
 
@@ -74,7 +85,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     spec = specs[0] if specs else None
     if args.command == "run":
         assert spec is not None
-        code, status = run_stage(spec, RunOptions(force=args.force, allow_shrink=args.allow_shrink))
+        code, status = run_stage(
+            spec,
+            RunOptions(
+                force=args.force,
+                allow_shrink=args.allow_shrink,
+                lock_wait_seconds=max(0.0, min(args.lock_wait_seconds, 600.0)),
+            ),
+        )
         _print(status)
         return code
     if args.command == "plan":
@@ -91,7 +109,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if healthy else 1
     assert spec is not None
     try:
-        sys.stdout.write(render(spec, args.kind, python=args.python))
+        sys.stdout.write(
+            render(spec, args.kind, python=args.python, allow_untrusted=args.allow_untrusted)
+        )
     except SetupError as exc:
         _print({"ok": False, "result": "setup_error", "errors": [exc.code]})
         return EXIT_SETUP

@@ -347,13 +347,14 @@ def test_config_rejects_nested_targets(tmp_path: Path) -> None:
 
 
 # --- unit templates ------------------------------------------------------------------------
-def _spec(**unit: Any) -> StageSpec:
+def _spec(trust: bool | None = True, **unit: Any) -> StageSpec:
     return StageSpec(
         name="admitted-view",
         factory="memfw_pipeline.example:factory",
         target=Path("/srv/memfw/derived/view"),
         state_dir=Path("/srv/memfw/pipeline-state/admitted-view"),
         config_path=Path("/srv/memfw/pipeline.toml"),
+        trust_paths=trust,
         unit=unit,
     )
 
@@ -387,8 +388,12 @@ def test_systemd_snapshot() -> None:
         "NoNewPrivileges=true",
         "CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE",
         "SuccessExitStatus=75",
-        "InaccessiblePaths=-/run/docker.sock -/var/run/docker.sock -/run/dbus "
+        "InaccessiblePaths=-/run/docker.sock -/var/run/docker.sock "
+        "-/run/containerd/containerd.sock -/run/podman/podman.sock -/run/dbus "
         "-/run/systemd/private",
+        "AmbientCapabilities=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE",
+        "SystemCallFilter=@system-service",
+        "RestrictNamespaces=true",
         "ExecStart=/opt/memfw/venv/bin/python -I -m memfw_pipeline run admitted-view "
         "--config /srv/memfw/pipeline.toml",
     ):
@@ -401,6 +406,40 @@ def test_systemd_defaults_snapshot() -> None:
     _snapshot("admitted-view.systemd-defaults.txt", text)
     assert "CapabilityBoundingSet=" in text.splitlines()  # none by default
     assert "OnCalendar=daily" in text and "User=" not in text
+    assert "AmbientCapabilities" not in text  # root: the bounding set is enough
+
+
+def test_user_with_capabilities_gets_ambient_capabilities() -> None:
+    text = systemd_units(
+        _spec(user="memfw", capabilities=["CAP_DAC_READ_SEARCH"]),
+        python="/opt/memfw/venv/bin/python",
+    )
+    assert "AmbientCapabilities=CAP_DAC_READ_SEARCH" in text.splitlines()
+    plain = systemd_units(_spec(user="memfw"), python="/opt/memfw/venv/bin/python")
+    assert "AmbientCapabilities" not in plain
+
+
+@pytest.mark.parametrize("trust", [None, False])
+def test_root_unit_requires_trust_paths(trust: bool | None) -> None:
+    with pytest.raises(SetupError) as info:
+        systemd_units(_spec(trust=trust), python="/opt/memfw/venv/bin/python")
+    assert info.value.code == "unit_requires_trust_paths"
+    with pytest.raises(SetupError):
+        launchd_plist(_spec(trust=trust), python="/opt/memfw/venv/bin/python")
+    # explicit override, or a non-root unit, is fine
+    systemd_units(_spec(trust=trust), python="/opt/memfw/venv/bin/python", allow_untrusted=True)
+    systemd_units(_spec(trust=trust, user="memfw"), python="/opt/memfw/venv/bin/python")
+
+
+def test_trust_paths_defaults_on_for_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    import memfw_pipeline.config as config
+
+    spec = _spec(trust=None)
+    monkeypatch.setattr(config.os, "geteuid", lambda: 0)
+    assert spec.trust_enabled is True
+    monkeypatch.setattr(config.os, "geteuid", lambda: 1000)
+    assert spec.trust_enabled is False
+    assert _spec(trust=False).trust_enabled is False
 
 
 def test_launchd_snapshot() -> None:
@@ -475,3 +514,78 @@ def test_only_the_seam_names_the_ports_and_the_pin_matches() -> None:
     data = tomllib.loads((package / "memfw-pipeline" / "pyproject.toml").read_text("utf-8"))
     ports = tomllib.loads((package / "memfw-ports" / "pyproject.toml").read_text("utf-8"))
     assert data["project"]["dependencies"] == [f"memfw-ports=={ports['project']['version']}"]
+
+
+# --- crash-leftover restore ----------------------------------------------------------------
+def test_restore_refuses_more_than_one_candidate(tmp_path: Path) -> None:
+    base = tmp_path.resolve()
+    target = base / "t"
+    for name in (".t.old-1-2", ".t.old-3-4"):
+        (base / name).mkdir()
+    assert fsops.restore_orphaned_old(target) == "ambiguous"
+    assert not target.exists() and len(list(base.glob(".t.old-*"))) == 2
+
+
+def test_restore_reports_a_failed_rename(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    base = tmp_path.resolve()
+    (base / ".t.old-1-2").mkdir()
+
+    def rename(src: Any, dst: Any) -> None:
+        raise OSError(errno.ENOSPC, "no space")
+
+    monkeypatch.setattr(fsops.os, "rename", rename)
+    assert fsops.restore_orphaned_old(base / "t") == "failed"
+    assert (base / ".t.old-1-2").is_dir()
+
+
+def test_state_mode_is_configurable(tmp_path: Path) -> None:
+    base = tmp_path.resolve()
+    (base / "src").mkdir()
+    (base / "src" / "a.md").write_text("a", "utf-8")
+    path = base / "p.json"
+    path.write_text(
+        json.dumps(
+            {
+                "pipeline": {"state_dir": f"{base}/state", "state_mode": "0750"},
+                "stages": {
+                    "example": {
+                        "factory": "memfw_pipeline.example:factory",
+                        "target": f"{base}/out/t",
+                        "trust_paths": False,
+                        "options": {"source": f"{base}/src"},
+                    }
+                },
+            }
+        ),
+        "utf-8",
+    )
+    spec = load_config(path).stage("example")
+    assert run_stage(spec)[0] == 0
+    assert stat.S_IMODE(spec.state_dir.stat().st_mode) == 0o750
+    assert stat.S_IMODE(spec.status_path.stat().st_mode) == 0o640
+    path.write_text(path.read_text("utf-8").replace('"0750"', '"0777"'), "utf-8")
+    with pytest.raises(SetupError) as info:
+        load_config(path)
+    assert info.value.code == "state_mode_invalid"
+
+
+def test_overlap_check_resolves_symlinks(tmp_path: Path) -> None:
+    base = tmp_path.resolve()
+    (base / "real").mkdir()
+    (base / "alias").symlink_to(base / "real")
+    config = {
+        "pipeline": {"state_dir": f"{base}/state"},
+        "stages": {
+            "a": {"factory": "m:f", "target": f"{base}/real/t"},
+            "b": {"factory": "m:f", "target": f"{base}/alias/t"},
+        },
+    }
+    path = base / "p.json"
+    path.write_text(json.dumps(config), "utf-8")
+    with pytest.raises(SetupError) as info:
+        load_config(path)
+    assert info.value.code == "target_invalid"
+
+
+def test_lock_lives_beside_the_target() -> None:
+    assert _spec().lock_path == Path("/srv/memfw/derived/.view.lock")
