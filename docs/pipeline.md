@@ -9,7 +9,7 @@ memfw never imports it.
 | | |
 |---|---|
 | Distribution | `memfw-pipeline` 0.1.0, Apache-2.0, wheel only, not published to PyPI |
-| Runtime dependencies | the standard library and `memfw-ports` **0.3.0** (the `Clock` port and the name rule) |
+| Runtime dependencies | the standard library and `memfw-ports` **0.4.0** (the `Clock` port and the name rule) |
 | Python | 3.11 or newer (`tomllib`) |
 | Entry points | `memfw-pipeline` (console script), `python -m memfw_pipeline` |
 | Coupling | none to memfw: a stage is loaded from the config file by `module:callable` |
@@ -599,7 +599,7 @@ uv build --wheel --package memfw-pipeline
 ```
 
 At run time it imports only the standard library and the memfw ports (`Clock`, `check_name`):
-from `memfw.ports` inside a memfw install, else from the `memfw-ports` 0.3.0 wheel's
+from `memfw.ports` inside a memfw install, else from the `memfw-ports` 0.4.0 wheel's
 `memfw_ports`. memfw never imports `memfw_pipeline`. Stages live in their own packages and are
 named in the config by `module:callable`.
 

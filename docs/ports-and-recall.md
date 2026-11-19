@@ -72,7 +72,7 @@ do not contain `memfw/__init__.py`, so this does not affect them.
 - **memfw does not depend on the wheels.** It still ships `src/memfw/ports` and
   `src/memfw/recall` itself; `import memfw.ports` and every memfw output are unchanged. Making
   memfw depend on `memfw-ports` (and re-export it) is a later step (architecture section 6).
-- **Versions.** Both wheels carry `memfw.ports.PORTS_API_VERSION` (semver, `0.3.0` since K3 added `ProjectionStore`; MM2a adds `memfw.ports.proxies`), and
+- **Versions.** Both wheels carry `memfw.ports.PORTS_API_VERSION` (semver, `0.4.0` since W1-1 added `EntailmentChecker`, the wiki formats and `Citation.ref`; `0.3.0` was K3's `ProjectionStore` and MM2a's `memfw.ports.proxies`), and
   `memfw-recall` pins `memfw-ports` to it; a test keeps the three equal. Bump it with every
   change to the ports API (major for a breaking one). The members pin their build backend
   (`hatchling==1.33.0`) and ship memfw's `LICENSE` and `NOTICE` (symlinks in each package
@@ -86,19 +86,20 @@ do not contain `memfw/__init__.py`, so this does not affect them.
 <!-- port-versions:start -->
 | Package | Version | Port | PORT_VERSION |
 |---|---|---|---|
-| `memfw-ports` | 0.3.0 | `RecallProvider` | 1 |
-| `memfw-ports` | 0.3.0 | `Projector` | 1 |
-| `memfw-ports` | 0.3.0 | `Ingestor` | 1 |
-| `memfw-ports` | 0.3.0 | `Deriver` | 1 |
-| `memfw-ports` | 0.3.0 | `Clock` | 1 |
-| `memfw-ports` | 0.3.0 | `IdGen` | 1 |
-| `memfw-ports` | 0.3.0 | `ClaimVerifier` | 1 |
-| `memfw-ports` | 0.3.0 | `ClaimStager` | 1 |
-| `memfw-ports` | 0.3.0 | `ContextSlotProvider` | 1 |
-| `memfw-ports` | 0.3.0 | `UsageSink` | 1 |
-| `memfw-ports` | 0.3.0 | `ModelBackend` | 1 |
-| `memfw-ports` | 0.3.0 | `ProjectionStore` | 1 |
-| `memfw-recall` | 0.3.0 | `RecallProvider` | 1 |
+| `memfw-ports` | 0.4.0 | `RecallProvider` | 1 |
+| `memfw-ports` | 0.4.0 | `Projector` | 1 |
+| `memfw-ports` | 0.4.0 | `Ingestor` | 1 |
+| `memfw-ports` | 0.4.0 | `Deriver` | 1 |
+| `memfw-ports` | 0.4.0 | `Clock` | 1 |
+| `memfw-ports` | 0.4.0 | `IdGen` | 1 |
+| `memfw-ports` | 0.4.0 | `ClaimVerifier` | 1 |
+| `memfw-ports` | 0.4.0 | `ClaimStager` | 1 |
+| `memfw-ports` | 0.4.0 | `ContextSlotProvider` | 1 |
+| `memfw-ports` | 0.4.0 | `UsageSink` | 1 |
+| `memfw-ports` | 0.4.0 | `ModelBackend` | 1 |
+| `memfw-ports` | 0.4.0 | `ProjectionStore` | 1 |
+| `memfw-ports` | 0.4.0 | `EntailmentChecker` | 1 |
+| `memfw-recall` | 0.4.0 | `RecallProvider` | 1 |
 | `memfw-pipeline` | 0.1.0 | `Clock` | 1 |
 | `memfw-adapter-deepseek` | 0.1.1 | `ModelBackend` | 1 |
 | `memfw-adapter-bm25s` | 0.1.1 | `RecallProvider` | 1 |
@@ -342,6 +343,65 @@ deletion on rebuild; refusals).
 over any `ProjectionStore` with Cypher-like rules and hard caps (`MAX_DEPTH` 4 hops,
 `MAX_FANOUT`, `MAX_LIMIT`, `MAX_EXPANSIONS`), so every store gives the same paths for the same
 edges. See `docs/ontology.md` (K3, K4).
+
+### 2.9 Citation refs, wiki pages and EntailmentChecker (W1-1, ports 0.4.0)
+
+Additive contracts for the LLM Wiki (design W0 v3). Nothing in memfw reads or writes them
+yet; the kernel, gate, generator and index PRs build on them.
+
+- **`Citation.ref` / `ref_kind`** (`memfw.ports.refs`). A citation may carry one ref:
+  `mem:<id>[@v<n>]` (`memory`), `kh:<path>[#<heading>]` (`note_segment`, the
+  `parse_kh_ref` grammar), `att:<prx-id>:<n>` (`attachment_segment`) or
+  `wiki:<page_key>[#<section>]` (`wiki_page`; generated, never evidence). `ref_kind` is
+  inferred and a given one must match. A `mem:` ref fills `memory_id` and `version`; any
+  other ref needs `memory_id=""`, so `DerivedView.cited_ids` yields `""` for it and
+  `check_view_citations` refuses any view with such a citation before it asks `exists`
+  (fail closed). `Citation.from_ref(ref)` builds one. A ref must be canonical
+  (`canonical_ref(ref) == ref`: `kh:` parts percent-encoded like the notes providers,
+  `note_ref(path, heading)`; no `#` without a heading), so one source has one spelling. Memory
+  ids starting with `wiki-` are reserved for wiki page records and are never `mem:` refs
+  (`wiki_as_memory`); a citation built the old way with such an id is unaffected.
+  With `ref` unset, construction, validation, equality and `repr` are as in 0.3.0;
+  `Citation.to_json()` has the old three keys only. `dataclasses.asdict` / `fields()` do
+  list the two new fields (value `None`). Conversation pointers (`conv:` and the like) are
+  not citation refs.
+- **`memfw-wiki-page/1`** (`memfw.ports.wiki`: `WikiPage`, `WikiClaim`, `WikiSource`,
+  `WikiBuild`, `parse_wiki_page`). Fixed sections in order `summary` (required), `facts`,
+  `timeline`, `relations`, `open`. Every claim cites 1–8 listed sources (`mem:` with a
+  version, `kh:`, `att:`; never `wiki:`), has `epistemic: inference`, `causal` at most
+  `hypothesis` and at most the strongest of its own sources (two association sources stay
+  association), and `causal` other than `none` only in `relations`. A source that is not
+  `current` may be cited only in `timeline` (`disputed` also in `open`); `superseded` claims
+  belong in `timeline`, `conflict` / `missing_evidence` only in `open`, and a `timeline`
+  claim citing a non-current source must be `superseded`. A `superseded` source must name
+  its `superseded_by` ref (design G6); a `retired` one may; no other status may. The page `privacy`
+  equals the strictest source level and must be `public` or `shared`; `page_key` is
+  `wiki_page_key(tenant, concept)` and `built_from_digest` is `wiki_sources_digest(sources)`.
+  At most 16 KiB as canonical JSON. Claim text and concept labels refuse control, format
+  (Unicode `Cf`, e.g. bidi overrides; ZWNJ U+200C and ZWJ U+200D are allowed) and
+  line/paragraph separator characters. JSON input
+  refuses duplicate keys and nesting deeper than `MAX_JSON_DEPTH` (32, `too_deep`). Each
+  refusal is a `WikiFormatError` with a fixed `code` (`WIKI_ERROR_CODES`), never page text.
+- **Intake rule (W1-2/W1-3, not the format).** `checks.nli` is optional in the page format,
+  but before a candidate may be published every claim needs an NLI score from an
+  allowlisted checker version; intake drops claims without one.
+- **`memfw-wiki-job/1`** (`WikiJob`, `parse_wiki_job`, `wiki_job_digest`). The work package
+  a generator reads: concept (oid, labels, definition), released (`public`/`shared`) source
+  texts with the page-source fields, existing open questions, the previous approved page and
+  the generator and checker versions. No vault path. `job_digest` covers the concept (oid,
+  labels, definition), every source field (ref, kind, hash, privacy, causal, status,
+  `superseded_by`, truncation), the open questions, the previous page, the generator and the
+  checker version (not the view version), so a resubmitted job is the same candidate and any
+  change that could change the page is a new one. The job builder cuts a source text over
+  8000 code points with `truncate_source_text` (first 8000, back to the last newline when it
+  lies past half the limit, hard cut when that would leave only blank text) and
+  records `truncated: true` and `full_sha256`; the parser never truncates.
+- **JSON Schema.** `WIKI_PAGE_SCHEMA` / `WIKI_JOB_SCHEMA` (draft 2020-12) carry the
+  structural rules for other languages. The cross-field rules above are enforced only by the
+  parsers, which are the reference (no `jsonschema` dependency).
+- **`EntailmentChecker`** (`memfw.ports.entailment`, port version 1): `name`, `version`,
+  `available()`, `score(premise, hypothesis) -> float` in `[0, 1]`, deterministic, `ValueError`
+  for empty input. A checker that cannot run makes the claims it could not score fail.
 
 ## 3. The coordinator pipeline
 
@@ -1320,6 +1380,8 @@ def test_search_matches_recorded_contract(monkeypatch):
 | `check_id_gen(id_gen, *, samples=1000)` | `IdGen` protocol; every `new_id()` is a `str` valid as a memory id; no id repeated |
 | `check_context_pack(pack, *, slots=None, max_tokens=None, forbidden=())` | exactly a `ContextPack`; `pack_version` recomputes; overflow matches `truncated_ids`; one partial entry at most, carried last and listed in `truncated_ids`; no content (memory text/title, item label/text) in the version payload; `as_dict()` serialisable (§4.2) |
 | `check_context_slot_provider(provider, *, request, max_tokens=None, forbidden=(), vault=None, vault_exclude=(), allow_degraded=False)` | `ContextSlotProvider`; `build` returns exactly a `ContextSlot` with the provider's name that passes `check_context_pack`; not degraded unless allowed; two builds give the same version key; vault unchanged when given (§4.3) |
+| `check_wiki_page(page, *, job=None)` | the page parses as `memfw-wiki-page/1` (§2.9) and its canonical JSON reads back identically; with `job`, the page answers that job: same concept, tenant and `page_key`, the build's `job_digest`, view, checker and generator fields are the job's, every source is a job source with identical fields, every open question is the job's, only `open`/`timeline` claims cite a side of a job conflict and no claim cites both sides |
+| `check_entailment_checker(checker, *, pairs=ENTAILMENT_SAMPLES, labelled=(), threshold=None)` | `EntailmentChecker` protocol, name and non-empty `version`; available; every score a finite `float` in `[0, 1]`, the same twice; empty input raises `ValueError`; with `labelled` and `threshold`, supported pairs reach it and the others stay below |
 
 `tree_digest(root, *, exclude=())` is the helper they use to compare file trees.
 

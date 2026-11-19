@@ -81,7 +81,7 @@ memfw code map --db /tmp/memfw-code.sqlite
 | `memfw-ports`（`packages/memfw-ports`） | `memfw_ports` | 端口协议、值类型、契约测试套件 `memfw_ports.testing`、只依赖标准库的参考实现 |
 | `memfw-recall`（`packages/memfw-recall`） | `memfw_recall` | 召回协调器，不含 memfw 内置的 vault 提供方 |
 
-写适配器的人装上它们就能跑契约检查，不必安装 memfw。两者的版本都跟随 `memfw.ports.PORTS_API_VERSION`（目前是 `0.3.0`）。只提供 wheel（没有 sdist，也不支持 editable 安装），并且**没有发布到 PyPI**：
+写适配器的人装上它们就能跑契约检查，不必安装 memfw。两者的版本都跟随 `memfw.ports.PORTS_API_VERSION`（目前是 `0.4.0`）。只提供 wheel（没有 sdist，也不支持 editable 安装），并且**没有发布到 PyPI**：
 
 ```bash
 uv build --wheel --package memfw-ports

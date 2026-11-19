@@ -198,6 +198,83 @@ def _ports(root: Path) -> None:
 
     check_projection_store(MemoryProjectionStore(), vault=vault)
     _ok("check_projection_store MemoryProjectionStore")
+    _wiki()
+
+
+def _wiki() -> None:
+    """Ports 0.4.0: a synthetic wiki page and an entailment checker through the kit."""
+
+    import hashlib
+
+    from memfw_ports import Availability, Citation
+    from memfw_ports.testing import check_entailment_checker, check_wiki_page
+    from memfw_ports.wiki import WikiSource, wiki_page_key, wiki_sources_digest
+
+    assert repr(Citation("m-backup")) == "Citation(memory_id='m-backup', version=None, note='')"
+    assert Citation.from_ref("mem:m-backup@v2").version == 2
+    concept = "concept:example:backup-plan"
+    source = {
+        "ref": "mem:m-backup@v2",
+        "kind": "memory",
+        "sha256": hashlib.sha256(b"nightly homelab backup").hexdigest(),
+        "privacy": "shared",
+        "causal": "none",
+        "status": "current",
+    }
+    page = {
+        "format": "memfw-wiki-page/1",
+        "page_key": wiki_page_key("", concept),
+        "concept": concept,
+        "tenant": "",
+        "privacy": "shared",
+        "build": {
+            "generator": "smoke",
+            "generator_version": "0.0.0",
+            "model": "none",
+            "model_digest": "sha256:" + "0" * 64,
+            "prompt_version": "wiki-v1",
+            "checker_version": "smoke-0",
+            "nli_model": "none",
+            "view_version": "smoke",
+            "job_digest": "sha256:" + "1" * 64,
+        },
+        "sources": [source],
+        "sections": [
+            {
+                "id": "summary",
+                "claims": [
+                    {
+                        "cid": "c1",
+                        "text": "The homelab backup runs nightly.",
+                        "cites": ["mem:m-backup@v2"],
+                        "causal": "none",
+                        "kind": "statement",
+                        "epistemic": "inference",
+                        "checks": {"tokens": "pass"},
+                    }
+                ],
+            }
+        ],
+        "open_questions": [],
+        "built_from_digest": wiki_sources_digest([WikiSource(**source)]),  # type: ignore[arg-type]
+    }
+    assert check_wiki_page(page).privacy == "shared"
+    _ok("check_wiki_page memfw-wiki-page/1")
+
+    class Exact:
+        name = "exact"
+        version = "exact-1"
+
+        def available(self) -> Availability:
+            return Availability.ok()
+
+        def score(self, premise: str, hypothesis: str) -> float:
+            if not premise.strip() or not hypothesis.strip():
+                raise ValueError("empty")
+            return 1.0 if hypothesis.strip(". ").lower() in premise.lower() else 0.0
+
+    check_entailment_checker(Exact())
+    _ok("check_entailment_checker (synthetic)")
 
 
 def _recall(root: Path) -> None:

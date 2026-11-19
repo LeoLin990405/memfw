@@ -22,7 +22,7 @@ requires-python = ">=3.11"
 license = "Apache-2.0"
 # Symlinks to memfw's own LICENSE and NOTICE (one copy of the text).
 license-files = ["LICENSE", "NOTICE"]
-dependencies = ["memfw-ports==0.3.0", "PyYAML==6.0.3"]
+dependencies = ["memfw-ports==0.4.0", "PyYAML==6.0.3"]
 
 [project.entry-points."memfw.adapters"]
 qmd = "memfw_adapter_qmd:MEMORY_SPEC"

@@ -168,7 +168,7 @@ def test_memfw_never_imports_the_adapter_and_pins_the_entry_point() -> None:
     for path in (ROOT / "src").rglob("*.py"):
         assert "memfw_adapter_pageindex" not in path.read_text(encoding="utf-8"), path
     project = tomllib.loads((ADAPTER / "pyproject.toml").read_text(encoding="utf-8"))
-    assert project["project"]["dependencies"] == ["memfw-ports==0.3.0", "PyYAML==6.0.3"]
+    assert project["project"]["dependencies"] == ["memfw-ports==0.4.0", "PyYAML==6.0.3"]
     points = project["project"]["entry-points"]["memfw.adapters"]
     assert points == {"pageindex": "memfw_adapter_pageindex:adapter_spec"}
     readme = (ADAPTER / "README.md").read_text(encoding="utf-8")

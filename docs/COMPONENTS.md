@@ -111,7 +111,7 @@ Two uv workspace members build wheels from memfw's own `src/memfw/ports` and
 | `memfw-recall` (`packages/memfw-recall`) | `memfw_recall` | the recall coordinator, without memfw's built-in vault providers |
 
 An adapter author can install them and run the contract checks without installing memfw. Both
-carry `memfw.ports.PORTS_API_VERSION` (currently `0.3.0`). They are wheels only (no sdist, no
+carry `memfw.ports.PORTS_API_VERSION` (currently `0.4.0`). They are wheels only (no sdist, no
 editable install) and are **not published to PyPI**:
 
 ```bash

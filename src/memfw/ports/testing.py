@@ -15,6 +15,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import os
 import re
 import threading
@@ -33,6 +34,7 @@ from .context import (
     compute_pack_version,
     pack_version_payload,
 )
+from .entailment import EntailmentChecker
 from .models import TAG_PROMPT_VERSION, TAG_TASKS, ModelReply, parse_tagged
 from .projection_store import (
     MAX_QUERY_LIMIT,
@@ -60,6 +62,7 @@ from .types import (
     validate_candidate,
 )
 from .usage import UsageSignal, UsageSink
+from .wiki import WikiFormatError, WikiJob, WikiPage, parse_wiki_job, parse_wiki_page
 
 
 class ContractError(AssertionError):
@@ -1001,3 +1004,145 @@ def check_projection_store(
     if vault is not None:
         _require(tree_digest(vault, exclude=vault_exclude) == before, "store changed the vault")
     return final
+
+
+# --- Wiki pages and EntailmentChecker (W1-1) ---------------------------------------
+
+#: Sample (premise, hypothesis) pairs for ``check_entailment_checker``. Synthetic.
+ENTAILMENT_SAMPLES: tuple[tuple[str, str], ...] = (
+    ("The backup job runs every night at 02:00.", "The backup job runs nightly."),
+    ("The backup job runs every night at 02:00.", "The backup job never runs."),
+    ("备份任务每晚 02:00 运行。", "备份任务每晚运行。"),
+    ("Version 1.4 replaced version 1.3 in March.", "Version 1.3 is still current."),
+)
+
+
+def check_wiki_page(
+    page: object,
+    *,
+    job: object | None = None,
+) -> WikiPage:
+    """A generator's output is a valid ``memfw-wiki-page/1`` page; returns the parsed page.
+
+    ``page`` is a :class:`~memfw.ports.wiki.WikiPage`, its JSON document (a
+    mapping) or JSON text. The page must parse (every format rule in
+    ``memfw.ports.wiki``: each claim cited, citations resolve to listed
+    sources, privacy = strictest source and releasable, causal grade at most
+    the cited sources' and never above ``hypothesis``, epistemic
+    ``inference``, non-current sources only in ``timeline``, ``page_key`` and
+    ``built_from_digest`` recompute), and its canonical JSON must read back as
+    the same page.
+
+    With ``job`` (a ``WikiJob``, its document or JSON text) the page must also
+    be the answer to that job: same concept, tenant and ``page_key``; the
+    build's ``job_digest``, view version and generator fields are the job's;
+    every page source is a job source with the same ref, kind, hash, privacy,
+    causal grade, status and successor; every listed open question is one of
+    the job's; and no claim takes a side in one of the job's conflicts
+    (design 2.3: only ``open`` and ``timeline`` claims may cite a memory an
+    open question lists as conflicting, and no claim cites two of them).
+    """
+
+    try:
+        parsed = page if type(page) is WikiPage else parse_wiki_page(page)  # type: ignore[arg-type]
+    except WikiFormatError as exc:
+        raise ContractError(f"page breaks memfw-wiki-page/1 ({exc.code})") from exc
+    assert isinstance(parsed, WikiPage)
+    document = parsed.to_json()
+    _require(json.loads(json.dumps(document)) == document, "page JSON is not plain JSON")
+    try:
+        again = parse_wiki_page(parsed.canonical_bytes())
+    except WikiFormatError as exc:
+        raise ContractError(f"the canonical form does not read back ({exc.code})") from exc
+    _require(again == parsed, "the canonical form does not read back identically")
+    if job is None:
+        return parsed
+    try:
+        work = job if type(job) is WikiJob else parse_wiki_job(job)  # type: ignore[arg-type]
+    except WikiFormatError as exc:
+        raise ContractError(f"job breaks memfw-wiki-job/1 ({exc.code})") from exc
+    assert isinstance(work, WikiJob)
+    _require(parsed.concept == work.concept.oid, "page is about another concept than the job")
+    _require(parsed.tenant == work.tenant, "page is in another tenant than the job")
+    _require(parsed.page_key == work.page_key, "page_key differs from the job's")
+    build = parsed.build
+    _require(build.job_digest == work.job_digest, "build.job_digest is not the job's")
+    _require(build.view_version == work.view_version, "build.view_version is not the job's")
+    _require(
+        build.checker_version == work.checker_version, "build.checker_version is not the job's"
+    )
+    for name, value in work.generator.items():
+        _require(getattr(build, name) == value, f"build.{name} is not the job's")
+    offered = {item.source.ref: item.source for item in work.sources}
+    for source in parsed.sources:
+        _require(source.ref in offered, "page lists a source the job did not offer")
+        _require(source == offered[source.ref], "page source fields differ from the job's")
+    asked = {question.id for question in work.open_questions}
+    _require(set(parsed.open_questions) <= asked, "page lists an open question not in the job")
+    # Design 2.3: never take a side in a conflict the job names.
+    for question in work.open_questions:
+        sides = set(question.conflicts)
+        for claim in parsed.claims:
+            cited = {c.memory_id for c in claim.citations if c.ref_kind == "memory"} & sides
+            _require(
+                not cited or claim.section in ("open", "timeline"),
+                "a claim outside open/timeline cites one side of a conflict",
+            )
+            _require(len(cited) < 2, "a claim cites both sides of a conflict")
+    return parsed
+
+
+def check_entailment_checker(
+    checker: object,
+    *,
+    pairs: Sequence[tuple[str, str]] = ENTAILMENT_SAMPLES,
+    labelled: Sequence[tuple[str, str, bool]] = (),
+    threshold: float | None = None,
+) -> list[float]:
+    """An ``EntailmentChecker`` scores deterministically in ``[0, 1]``; returns the scores.
+
+    Checks the protocol, ``name`` (``check_name``) and a non-empty
+    ``version`` string; that it is available; that every ``pairs`` score is
+    a finite ``float`` (not a ``bool``) in ``[0, 1]`` and the same when asked
+    twice; and that an empty premise or hypothesis raises ``ValueError``.
+    With ``labelled`` (premise, hypothesis, supported) pairs and a
+    ``threshold``, every supported pair scores at least ``threshold`` and
+    every other pair below it: a model's own fixtures pin its calibration.
+    """
+
+    availability = _check_common(checker, EntailmentChecker, "entailment checker")
+    _require(availability.available, f"entailment checker unavailable: {availability.reason}")
+    version = getattr(checker, "version", None)
+    _require(isinstance(version, str) and bool(version.strip()), "checker.version must be a string")
+    assert isinstance(checker, EntailmentChecker)
+    scores: list[float] = []
+    for premise, hypothesis in pairs:
+        first = checker.score(premise, hypothesis)
+        _require(
+            type(first) is float and math.isfinite(first) and 0.0 <= first <= 1.0,
+            "score() must return a float in [0, 1]",
+        )
+        _require(checker.score(premise, hypothesis) == first, "score() is not deterministic")
+        scores.append(first)
+    for premise, hypothesis in (("", "x"), ("x", ""), ("  ", "x")):
+        try:
+            checker.score(premise, hypothesis)
+        except ValueError:
+            continue
+        raise ContractError("score() accepted an empty premise or hypothesis")
+    if labelled:
+        _require(
+            threshold is not None and 0.0 <= threshold <= 1.0,
+            "labelled pairs need a threshold in [0, 1]",
+        )
+        assert threshold is not None
+        for premise, hypothesis, supported in labelled:
+            value = checker.score(premise, hypothesis)
+            if supported:
+                _require(value >= threshold, "a supported pair scored below the threshold")
+            else:
+                _require(value < threshold, "an unsupported pair reached the threshold")
+    return scores
+
+
+__all__ += ["ENTAILMENT_SAMPLES", "check_entailment_checker", "check_wiki_page"]

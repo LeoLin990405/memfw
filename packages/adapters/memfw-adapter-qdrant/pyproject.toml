@@ -22,7 +22,7 @@ license = "Apache-2.0"
 # Symlinks to memfw's own LICENSE and NOTICE (one copy of the text).
 license-files = ["LICENSE", "NOTICE"]
 dependencies = [
-    "memfw-ports==0.3.0",
+    "memfw-ports==0.4.0",
     # vault.yaml is read with yaml.safe_load, exactly as memfw reads it (MIT).
     "PyYAML==6.0.3",
 ]

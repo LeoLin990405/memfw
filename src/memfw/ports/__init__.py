@@ -21,6 +21,11 @@ over it (``memfw.ports.patterns``).
 session-start context that ``memory_context`` v2 returns, and
 ``ProxyImport`` (``memfw.ports.proxies``) the file format an OCR or
 transcription adapter writes for ``memfw attach proxy import``.
+
+Ports 0.4.0 (W1-1, LLM Wiki) adds ``Citation.ref`` / ``ref_kind``
+(``memfw.ports.refs``), the ``memfw-wiki-page/1`` and ``memfw-wiki-job/1``
+formats (``memfw.ports.wiki``) and the ``EntailmentChecker`` port
+(``memfw.ports.entailment``).
 """
 
 from __future__ import annotations
@@ -47,6 +52,7 @@ from .context import (
     item_content_hash,
     pack_version_payload,
 )
+from .entailment import ENTAILMENT_PORT_VERSION, EntailmentChecker
 from .models import (
     MODELS_PORT_VERSION,
     TAG_PROMPT_VERSION,
@@ -79,6 +85,7 @@ from .proxies import (
     load_proxy_import,
     parse_proxy_import,
 )
+from .refs import CITATION_REF_KINDS, CitationRefKind
 from .registry import (
     ADAPTER_KINDS,
     ENTRY_POINT_GROUP,
@@ -127,16 +134,30 @@ from .usage import (
     UsageSink,
 )
 from .versions import PORT_VERSIONS
+from .wiki import (
+    WIKI_JOB_FORMAT,
+    WIKI_PAGE_FORMAT,
+    WikiBuild,
+    WikiClaim,
+    WikiFormatError,
+    WikiJob,
+    WikiPage,
+    WikiSource,
+    parse_wiki_job,
+    parse_wiki_page,
+)
 
 #: Version of the ``memfw.ports`` API as a whole (semver). The standalone
 #: ``memfw-ports`` wheel carries exactly this version, and
 #: ``tests/test_standalone_ports_wheel.py`` keeps the two equal: bump it (and
 #: the wheel) with every change to the ports API, major for a breaking one.
-PORTS_API_VERSION: Final = "0.3.0"
+PORTS_API_VERSION: Final = "0.4.0"
 
 __all__ = [
     "ADAPTER_KINDS",
+    "CITATION_REF_KINDS",
     "CLAIMS_PORT_VERSION",
+    "ENTAILMENT_PORT_VERSION",
     "MAX_USAGE_IDS",
     "MODELS_PORT_VERSION",
     "TAG_PROMPT_VERSION",
@@ -147,6 +168,8 @@ __all__ = [
     "PROXY_FORMAT",
     "PROXY_FORMAT_VERSION",
     "PROXY_KINDS",
+    "WIKI_JOB_FORMAT",
+    "WIKI_PAGE_FORMAT",
     "ClaimEvidence",
     "ClaimStager",
     "ClaimVerifier",
@@ -168,6 +191,7 @@ __all__ = [
     "Availability",
     "Candidate",
     "Citation",
+    "CitationRefKind",
     "Clock",
     "ContextEntry",
     "ContextItem",
@@ -180,6 +204,7 @@ __all__ = [
     "DerivedView",
     "Deriver",
     "Edge",
+    "EntailmentChecker",
     "EdgeScope",
     "ExtraValue",
     "FixedClock",
@@ -210,6 +235,12 @@ __all__ = [
     "UsageSignal",
     "UsageSink",
     "UuidIdGen",
+    "WikiBuild",
+    "WikiClaim",
+    "WikiFormatError",
+    "WikiJob",
+    "WikiPage",
+    "WikiSource",
     "candidate_directory",
     "candidate_id",
     "check_name",
@@ -223,6 +254,8 @@ __all__ = [
     "missing_modules",
     "pack_version_payload",
     "parse_proxy_import",
+    "parse_wiki_job",
+    "parse_wiki_page",
     "register",
     "stage_candidates",
     "validate_candidate",
