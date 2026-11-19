@@ -216,6 +216,23 @@ model (a loopback-only Ollama backend ships with it) and a per-run token budget.
 default**; its rows become memory only as staged candidates. See
 [`adapter-langextract.md`](adapter-langextract.md).
 
+## Tailnet host inventory adapter
+
+`packages/adapters/memfw-adapter-tailnet` (wheel `memfw_adapter_tailnet`, version 0.1.0,
+standard library only) implements the `Ingestor` port for a Tailscale tailnet's machine list.
+`memfw-adapter-tailnet scan` reads `tailscale status --json` (an exported file, or one run of
+the CLI with a fixed argv, no shell, a deadline, an output cap and no proxy variables), keeps
+name, first MagicDNS label (the tailnet suffix only hashed), tailnet IPs, OS, online, last
+seen and tags per machine under a hashed host id (user and login data, keys and endpoints
+are never read; shared-in nodes are left out unless opted in, provider exit nodes always),
+and stages one identity-only `host-fact` candidate per new, returned, gone, renamed or
+otherwise changed machine under `_candidates/tailnet/`; unchanged machines produce nothing
+and a retry stages duplicates only. Candidates are `local-private` unless the operator says
+otherwise. A names-free `report.json` counts allowlisted machines offline too long, entries
+that match no machine or several, and machines no entry vouches for (never by self-reported
+host name); discovery never edits that allowlist or decides where data is sent.
+**Off by default**; memfw never imports it. See [`adapter-tailnet.md`](adapter-tailnet.md).
+
 ## PageIndex recall adapter
 
 `packages/adapters/memfw-adapter-pageindex` (wheel `memfw_adapter_pageindex`, version 0.1.1) is
