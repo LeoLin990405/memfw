@@ -99,6 +99,7 @@ do not contain `memfw/__init__.py`, so this does not affect them.
 | `memfw-ports` | 0.3.0 | `ModelBackend` | 1 |
 | `memfw-ports` | 0.3.0 | `ProjectionStore` | 1 |
 | `memfw-recall` | 0.3.0 | `RecallProvider` | 1 |
+| `memfw-pipeline` | 0.1.0 | `Clock` | 1 |
 | `memfw-adapter-deepseek` | 0.1.1 | `ModelBackend` | 1 |
 | `memfw-adapter-bm25s` | 0.1.1 | `RecallProvider` | 1 |
 | `memfw-adapter-qdrant` | 0.1.2 | `RecallProvider` | 1 |

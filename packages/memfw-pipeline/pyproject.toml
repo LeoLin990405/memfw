@@ -1,0 +1,33 @@
+# memfw-pipeline: the Stage contract every derived-artifact step of a memfw
+# deployment runs under (inputs digest, build into a temporary directory,
+# verify, atomic publish, idempotent post-publish steps, freshness), and the
+# runner that enforces it: single-writer lock, `running` status, shrink guard,
+# crash-leftover cleanup, status with counts and fixed reason codes only, and
+# hardened systemd / launchd unit templates. Standard library only at run
+# time; it depends on memfw-ports for the Clock port and name rules. memfw
+# itself never imports it. See docs/pipeline.md.
+#
+# Build a wheel:  uv build --wheel --package memfw-pipeline
+[build-system]
+requires = ["hatchling==1.33.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "memfw-pipeline"
+version = "0.1.0"
+description = "Stage contract and runner for memfw derived-artifact pipelines (standard library only)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+# Symlinks to memfw's own LICENSE and NOTICE (one copy of the text).
+license-files = ["LICENSE", "NOTICE"]
+dependencies = ["memfw-ports==0.3.0"]
+
+[project.scripts]
+memfw-pipeline = "memfw_pipeline.cli:main"
+
+[tool.uv.sources]
+memfw-ports = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/memfw_pipeline"]

@@ -15,6 +15,23 @@ The vault format did not change in `0.4.0` either: `vault.yaml` stays at
 
 ## [Unreleased]
 
+### Added
+
+- `memfw-pipeline` 0.1.0 (`packages/memfw-pipeline`, wheel `memfw_pipeline`), the v0.5.0 P1
+  Stage contract and runner. A stage implements `freshness`, `inputs_digest`, `build`,
+  `verify`, `publish` and optional idempotent `post_publish` steps; the runner gives every
+  stage the same single-writer lock (`O_NOFOLLOW`, exit 75 when held), `running` status that
+  carries the last good counts, build into a directory beside the target, fsync, atomic
+  exchange of real directories (`renameat2(RENAME_EXCHANGE)` / `renamex_np(RENAME_SWAP)`, else
+  two renames with rollback), crash-leftover cleanup, shrink guard (empty or under half of the
+  last published count: exit 5 unless `--allow-shrink`), freshness (source revision, lag,
+  `stale`) and a status file with counts and fixed reason codes only. `memfw-pipeline
+  run|plan|status|unit`; `unit` prints hardened systemd (service + timer) or launchd
+  templates for review. Optional path-trust check for root-run deployments. Standard library
+  only at run time plus `memfw-ports` 0.3.0; memfw never imports it. Only an example stage
+  ships; the real stages are ported in later phases. CI also lints and type-checks the
+  package and builds its wheel in the standalone-wheels job. See `docs/pipeline.md`.
+
 ### Fixed
 
 - Qdrant adapter: the embedding timeout and batch size were fixed at 30 s and 16, so on a slow

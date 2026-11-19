@@ -25,6 +25,7 @@ ROW = re.compile(r"^\| `([a-z0-9-]+)` \| ([0-9.]+) \| `([A-Za-z]+)` \| (\d+) \|$
 #: Ports each non-ports package builds on.
 CONSUMES = {
     "memfw-recall": {"RecallProvider"},
+    "memfw-pipeline": {"Clock"},
     "memfw-adapter-deepseek": {"ModelBackend"},
     "memfw-adapter-bm25s": {"RecallProvider"},
     "memfw-adapter-qdrant": {"RecallProvider"},

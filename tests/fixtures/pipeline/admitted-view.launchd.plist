@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>NO_PROXY</key>
+		<string>127.0.0.1,localhost,::1</string>
+	</dict>
+	<key>Label</key>
+	<string>org.memfw.pipeline.admitted-view</string>
+	<key>LowPriorityIO</key>
+	<true/>
+	<key>Nice</key>
+	<integer>10</integer>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/opt/memfw/venv/bin/python</string>
+		<string>-I</string>
+		<string>-m</string>
+		<string>memfw_pipeline</string>
+		<string>run</string>
+		<string>admitted-view</string>
+		<string>--config</string>
+		<string>/srv/memfw/pipeline.toml</string>
+	</array>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>StandardErrorPath</key>
+	<string>/srv/memfw/logs/memfw-pipeline-admitted-view.err</string>
+	<key>StandardOutPath</key>
+	<string>/srv/memfw/logs/memfw-pipeline-admitted-view.log</string>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>4</integer>
+		<key>Minute</key>
+		<integer>15</integer>
+	</dict>
+	<key>Umask</key>
+	<integer>63</integer>
+</dict>
+</plist>

@@ -4,6 +4,7 @@ Run it with the interpreter of a venv that has the wheels and NOT memfw:
 
     python -I tests/standalone/wheel_smoke.py [--recall] [--deepseek] [--bm25s] [--qdrant]
         [--qmd] [--ocr] [--pageindex] [--langextract] [--lightrag] [--graphrag]
+        [--pipeline]
 
 It refuses to run when ``memfw`` is importable, imports the wheels, and runs
 the contract kit (``memfw_ports.testing``) against the reference
@@ -28,7 +29,9 @@ runs); with ``--lightrag`` the
 ``memfw-adapter-lightrag`` wheel's deriver passes ``check_deriver`` against an
 in-process fake server; with ``--graphrag`` the
 ``memfw-adapter-graphrag`` wheel's deriver passes ``check_deriver`` over a
-small CSV output (GraphRAG is not installed or run). Prints one
+small CSV output (GraphRAG is not installed or run); with ``--pipeline`` the
+``memfw-pipeline`` wheel runs its example stage twice (built, then unchanged)
+in a throwaway tree, taking its ``Clock`` from ``memfw_ports``. Prints one
 ``ok`` line per check and exits non-zero on the first failure. Standard
 library only; not collected by pytest (``tests/test_standalone_ports_wheel.py``
 drives it).
@@ -617,6 +620,45 @@ def _graphrag(root: Path) -> None:
     _ok("check_deriver GraphRagDeriver (recorded-shape output)")
 
 
+def _pipeline(root: Path) -> None:
+    """The Stage runner wheel over the memfw-ports wheel: build, then unchanged."""
+
+    import json
+
+    from memfw_pipeline import _ports as seam
+    from memfw_pipeline import load_config, run_stage
+
+    assert seam.SystemClock.__module__.startswith("memfw_ports"), seam.SystemClock
+    _ok("import memfw_pipeline (Clock from memfw_ports)")
+    base = root.resolve() / "pipeline"
+    source = base / "source"
+    source.mkdir(parents=True)
+    for index in range(3):
+        (source / f"n{index}.md").write_text(f"note {index}\n", encoding="utf-8")
+    config = base / "pipeline.json"
+    config.write_text(
+        json.dumps(
+            {
+                "pipeline": {"state_dir": str(base / "state")},
+                "stages": {
+                    "example": {
+                        "factory": "memfw_pipeline.example:factory",
+                        "target": str(base / "out" / "example"),
+                        "options": {"source": str(source)},
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    spec = load_config(config).stage("example")
+    code, status = run_stage(spec)
+    assert code == 0 and status["result"] == "built" and status["last_items"] == 3, status
+    code, status = run_stage(spec)
+    assert code == 0 and status["result"] == "unchanged", status
+    _ok("run_stage example (built, then unchanged)")
+
+
 def main(argv: list[str]) -> int:
     if importlib.util.find_spec("memfw") is not None:
         print("memfw is importable here; run this in a venv without memfw", file=sys.stderr)
@@ -644,6 +686,8 @@ def main(argv: list[str]) -> int:
             _lightrag(root)
         if "--graphrag" in argv:
             _graphrag(root)
+        if "--pipeline" in argv:
+            _pipeline(root)
     print("standalone wheel smoke passed")
     return 0
 

@@ -19,6 +19,7 @@ members = [
     "memfw-adapter-pageindex",
     "memfw-adapter-qdrant",
     "memfw-adapter-qmd",
+    "memfw-pipeline",
     "memfw-ports",
     "memfw-recall",
 ]
@@ -452,6 +453,17 @@ requires-dist = [
     { name = "memfw-ports", editable = "packages/memfw-ports" },
     { name = "pyyaml", specifier = "==6.0.3" },
 ]
+
+[[package]]
+name = "memfw-pipeline"
+version = "0.1.0"
+source = { editable = "packages/memfw-pipeline" }
+dependencies = [
+    { name = "memfw-ports" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "memfw-ports", editable = "packages/memfw-ports" }]
 
 [[package]]
 name = "memfw-ports"
