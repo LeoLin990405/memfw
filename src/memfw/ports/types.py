@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Literal, get_args
 
 from .proxies import SEGMENT_REF_RE
+from .refs import CitationRefKind, citation_ref_kind, parse_memory_ref
 
 #: Mirrors ``memfw.core.epistemic``; ``memfw.ports`` imports nothing else from
 #: memfw so it can ship as a standalone distribution. A test keeps them equal.
@@ -253,15 +254,84 @@ class StageResult:
 
 @dataclass(frozen=True, slots=True)
 class Citation:
-    """A derived view's pointer back to the memory it used."""
+    """A derived view's pointer back to the memory it used.
+
+    Ports 0.4.0 adds an optional ``ref`` (``memfw.ports.refs``): ``mem:<id>
+    [@v<n>]``, ``kh:<path>#<heading>``, ``att:<prx-id>:<n>`` or ``wiki:<page_key>
+    [#<section>]``, and its ``ref_kind`` (inferred when left out; a given one
+    must match). With ``ref`` unset the class behaves exactly as before:
+    construction, validation, equality and ``repr`` are unchanged, and
+    :meth:`to_json` has only the three old keys.
+
+    A ``mem:`` ref fills ``memory_id`` and ``version`` (given values must
+    agree). Any other ref needs ``memory_id=""`` and no ``version``: it names
+    no memory, so ``DerivedView.cited_ids`` yields ``""`` for it and
+    ``check_view_citations`` refuses the view (fail closed). Use
+    :meth:`from_ref` to build one.
+    """
 
     memory_id: str
     version: int | None = None
     note: str = ""
+    ref: str | None = None
+    ref_kind: CitationRefKind | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.memory_id, str) or not self.memory_id.strip():
-            raise ValueError("citation memory_id required")
+        if self.ref is None:
+            if self.ref_kind is not None:
+                raise ValueError("citation ref_kind needs a ref")
+            if not isinstance(self.memory_id, str) or not self.memory_id.strip():
+                raise ValueError("citation memory_id required")
+            return
+        # Raises CitationRefError (a ValueError) with a code.
+        kind = citation_ref_kind(self.ref)
+        if self.ref_kind is not None and self.ref_kind != kind:
+            raise ValueError("citation ref_kind does not match its ref")
+        object.__setattr__(self, "ref_kind", kind)
+        if not isinstance(self.memory_id, str):
+            raise ValueError("citation memory_id must be a string")
+        if kind == "memory":
+            parsed = parse_memory_ref(self.ref)
+            assert parsed is not None  # citation_ref_kind accepted it
+            memory_id, version = parsed
+            if self.memory_id not in ("", memory_id):
+                raise ValueError("citation memory_id differs from its mem: ref")
+            if self.version not in (None, version):
+                raise ValueError("citation version differs from its mem: ref")
+            object.__setattr__(self, "memory_id", memory_id)
+            if version is not None:
+                object.__setattr__(self, "version", version)
+        elif self.memory_id or self.version is not None:
+            raise ValueError("a non-memory citation names no memory_id or version")
+
+    @classmethod
+    def from_ref(cls, ref: str, *, note: str = "") -> Citation:
+        """A citation of ``ref`` alone (``memory_id``/``version`` come from a ``mem:`` ref)."""
+
+        return cls("", note=note, ref=ref)
+
+    def to_json(self) -> dict[str, object]:
+        """Plain JSON form; ``ref``/``ref_kind`` appear only when set."""
+
+        out: dict[str, object] = {
+            "memory_id": self.memory_id,
+            "version": self.version,
+            "note": self.note,
+        }
+        if self.ref is not None:
+            out["ref"] = self.ref
+            out["ref_kind"] = self.ref_kind
+        return out
+
+    def __repr__(self) -> str:
+        # The dataclass repr, with the 0.4.0 fields only when set, so a
+        # citation built the old way prints exactly as before.
+        text = (
+            f"Citation(memory_id={self.memory_id!r}, version={self.version!r}, note={self.note!r}"
+        )
+        if self.ref is not None:
+            text += f", ref={self.ref!r}, ref_kind={self.ref_kind!r}"
+        return text + ")"
 
 
 @dataclass(frozen=True, slots=True)

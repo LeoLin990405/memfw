@@ -21,7 +21,7 @@ requires-python = ">=3.11"
 license = "Apache-2.0"
 # Symlinks to memfw's own LICENSE and NOTICE (one copy of the text).
 license-files = ["LICENSE", "NOTICE"]
-dependencies = ["memfw-ports==0.3.0"]
+dependencies = ["memfw-ports==0.4.0"]
 
 [project.entry-points."memfw.adapters"]
 langextract = "memfw_adapter_langextract:SPEC"

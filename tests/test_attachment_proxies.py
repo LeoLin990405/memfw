@@ -358,7 +358,8 @@ def test_duplicate_keys_and_bad_json_are_refused() -> None:
 
 
 def test_ports_carry_the_format_and_the_segment_ref_kind() -> None:
-    assert PORTS_API_VERSION == "0.3.0"
+    # MM2a shipped in ports 0.3.0; later additive releases keep it.
+    assert tuple(int(part) for part in PORTS_API_VERSION.split(".")) >= (0, 3, 0)
     assert "attachment_segment" in REF_KINDS
     ref = "prx-01a1e931-1818-772b-8713-76e6bea4a716:12"
     candidate = Candidate(

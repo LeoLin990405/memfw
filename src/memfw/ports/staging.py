@@ -184,8 +184,16 @@ def _existing_digest(path: Path) -> str:
 
 
 def check_view_citations(view: DerivedView, exists: Callable[[str], bool]) -> DerivedView:
-    """Reject a view that cites a memory the vault does not have."""
+    """Reject a view that cites a memory the vault does not have.
 
+    A citation that names no memory (empty ``memory_id``) or whose ``ref`` is
+    not a ``mem:`` ref is refused before ``exists`` is asked (ports 0.4.0), so
+    a path-based ``exists`` can never accept a ``kh:``/``att:``/``wiki:`` ref.
+    """
+
+    for citation in view.citations:
+        if not citation.memory_id or citation.ref_kind not in (None, "memory"):
+            raise ValueError("view cites something that is not a memory")
     missing = [memory_id for memory_id in view.cited_ids() if not exists(memory_id)]
     if missing:
         raise ValueError(f"view cites {len(missing)} unknown memory id(s)")

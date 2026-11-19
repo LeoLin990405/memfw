@@ -36,7 +36,7 @@ The vault format did not change in `0.4.0` either: `vault.yaml` stays at
   templates for review (with a non-root `user`, `AmbientCapabilities=`; extra sandboxing such
   as `SystemCallFilter=@system-service` with `SystemCallErrorNumber=EPERM`, `RestrictNamespaces`, `ProtectClock`, containerd and
   podman sockets inaccessible; a root unit needs `trust_paths = true`). Path-trust check, on by
-  default when run as root. Standard library only at run time plus `memfw-ports` 0.3.0;
+  default when run as root. Standard library only at run time plus `memfw-ports` 0.4.0;
   memfw never imports it. Only an example stage
   ships; the real stages are ported in later phases. CI also lints and type-checks the
   package and builds its wheel in the standalone-wheels job. See `docs/pipeline.md`.
@@ -54,6 +54,31 @@ The vault format did not change in `0.4.0` either: `vault.yaml` stays at
   allowlist the scan only reads and never matches on the self-reported host name. Off by
   default; memfw never imports it. Built and smoke-tested in the standalone-wheel CI job.
   See `docs/adapter-tailnet.md`.
+
+- **Ports 0.4.0: LLM Wiki contracts (W1-1).** Additive only; nothing in memfw uses them
+  yet, and every existing output is unchanged.
+  - `Citation` gains optional `ref` / `ref_kind` (`memfw.ports.refs`): `mem:<id>[@v<n>]`,
+    `kh:<path>[#<heading>]`, `att:<prx-id>:<n>` or `wiki:<page_key>[#<section>]`, plus
+    `Citation.from_ref` and `Citation.to_json`. A citation built the old way constructs,
+    validates, compares and prints exactly as before; `dataclasses.asdict` now lists the two
+    new fields as `None`. A `DerivedView` citing a non-memory ref fails
+    `check_view_citations` (fail closed).
+  - `memfw.ports.wiki`: the `memfw-wiki-page/1` format (`WikiPage`, `WikiClaim`,
+    `WikiSource`, `WikiBuild`, `parse_wiki_page`) and the `memfw-wiki-job/1` work package
+    (`WikiJob`, `parse_wiki_job`, `wiki_job_digest`), with standard-library validation and
+    JSON Schemas (`WIKI_PAGE_SCHEMA`, `WIKI_JOB_SCHEMA`; structural rules only, the parsers
+    are the reference). Every claim is cited, `inference` only, causal grade at most its
+    own sources' and never above `hypothesis`; page privacy is the strictest source level
+    and only `public`/`shared`. Refs are canonical (one spelling per source), `mem:wiki-…`
+    is reserved for wiki page records, JSON input refuses duplicate keys and deep
+    nesting, and the job digest covers every source field and the concept's labels.
+  - `check_view_citations` refuses a citation that names no memory or carries a non-`mem:`
+    ref before asking `exists`.
+  - `EntailmentChecker` port (`memfw.ports.entailment`, port version 1).
+  - Contract kit: `check_wiki_page` and `check_entailment_checker` in
+    `memfw.ports.testing`; the standalone wheel smoke runs both.
+  - `PORTS_API_VERSION`, `memfw-ports` and `memfw-recall` move to `0.4.0`; `memfw-recall`
+    and every adapter pin `memfw-ports==0.4.0` (their own versions and code are unchanged).
 
 ### Fixed
 

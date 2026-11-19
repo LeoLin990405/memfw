@@ -185,7 +185,7 @@ def test_memfw_never_imports_it_and_nothing_private_is_baked_in() -> None:
     for path in (ROOT / "src").rglob("*.py"):
         assert "memfw_adapter_tailnet" not in path.read_text(encoding="utf-8"), path
     project = tomllib.loads((ADAPTER / "pyproject.toml").read_text(encoding="utf-8"))
-    assert project["project"]["dependencies"] == ["memfw-ports==0.3.0"]
+    assert project["project"]["dependencies"] == ["memfw-ports==0.4.0"]
     assert project["project"]["entry-points"]["memfw.adapters"] == {
         "tailnet": "memfw_adapter_tailnet:adapter_spec"
     }

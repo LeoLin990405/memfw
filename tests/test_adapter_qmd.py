@@ -966,7 +966,7 @@ def test_package_metadata_entry_points_and_isolation() -> None:
     data = tomllib.loads((ADAPTER / "pyproject.toml").read_text(encoding="utf-8"))
     project = data["project"]
     assert project["version"] == memfw_adapter_qmd.__version__ == "0.1.1"
-    assert project["dependencies"] == ["memfw-ports==0.3.0", "PyYAML==6.0.3"]
+    assert project["dependencies"] == ["memfw-ports==0.4.0", "PyYAML==6.0.3"]
     points = project["entry-points"]["memfw.adapters"]
     assert points == {
         "qmd": "memfw_adapter_qmd:MEMORY_SPEC",

@@ -19,7 +19,7 @@ license = "Apache-2.0"
 # Symlinks to memfw's own LICENSE and NOTICE (one copy of the text).
 license-files = ["LICENSE", "NOTICE"]
 dependencies = [
-    "memfw-ports==0.3.0",
+    "memfw-ports==0.4.0",
     # The ranker (MIT). Pinned: the on-disk index format is bm25s's own.
     "bm25s==0.3.16",
     # bm25s's only runtime dependency; pinned to the versions uv.lock resolves.

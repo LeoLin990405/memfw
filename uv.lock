@@ -479,12 +479,12 @@ requires-dist = [{ name = "memfw-ports", editable = "packages/memfw-ports" }]
 
 [[package]]
 name = "memfw-ports"
-version = "0.3.0"
+version = "0.4.0"
 source = { editable = "packages/memfw-ports" }
 
 [[package]]
 name = "memfw-recall"
-version = "0.3.0"
+version = "0.4.0"
 source = { editable = "packages/memfw-recall" }
 dependencies = [
     { name = "memfw-ports" },
