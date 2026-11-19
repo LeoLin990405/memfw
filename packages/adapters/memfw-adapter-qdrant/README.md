@@ -48,9 +48,10 @@ PyYAML 6.0.3 (MIT, to read `vault.yaml` exactly as memfw does).
 
 - **Incremental `sync`.** Shortest memories first; each embedding batch is
   upserted as soon as it is embedded. A failed batch is retried one memory at
-  a time; a memory the endpoint refuses (HTTP 4xx) is skipped, and only
-  timeouts, connection errors and 5xx (three in a row) stop the run. What is
-  left is reported (`failed_batches`, `remaining`, `rejected`, exit 1) and the
+  a time; a memory the endpoint refuses (HTTP 400, 413, 422) is skipped;
+  timeouts, connection errors, 5xx and the other 4xx (wrong path, auth, rate
+  limit: `embedding_refused`), three in a row, stop the run. What is
+  left is reported (`failed_requests`, `remaining`, `rejected`, exit 1) and the
   next run continues with it. `--max-seconds` stops cleanly between requests.
   One `sync` per vault and collection at a time (a second exits 3); on a
   schedule keep the interval at least `--max-seconds` plus one timeout.
@@ -76,7 +77,7 @@ vectors are interchangeable because the fingerprint is
 `model|dimension|instructions`, so the slow host then only embeds new or
 changed memories. Neither setting changes the fingerprint. They apply to the
 adapter's own embedder; a search embeds its query with it but never longer
-than the coordinator's budget. An embedder the memfw runtime injects keeps
+than before (`min(timeout, max(budget, 30 s))`). An embedder the memfw runtime injects keeps
 its own settings.
 
 `memfw_adapter_qdrant.fake.FakeQdrant` is a loopback-only fake of the REST

@@ -20,13 +20,14 @@ reads the vault and writes only to Qdrant. Steps:
 Step 3 goes batch by batch (``embedding_batch_size``, default 16 memories),
 shortest text first (then id): each batch is embedded and upserted before
 the next one starts, so progress is kept. Every failed embedding request
-(``EmbedderError``) is counted in ``failed_batches`` / ``failures``. A
+(``EmbedderError``) is counted in ``failed_requests`` / ``failures``. A
 failed batch of several memories is retried once, one memory at a time, so
-one bad memory cannot sink the others. ``embedding_rejected`` (HTTP 4xx: the
-endpoint refuses that input) skips that memory (``rejected``); timeouts,
-connection errors, 5xx and bad answers count as the endpoint failing, and
-three such failures in a row stop the run (``stopped: failures``). A
-rejection does not count toward that stop. With ``max_seconds`` the run also
+one bad memory cannot sink the others. ``embedding_rejected`` (HTTP 400, 413 or 422:
+the endpoint refuses that input) skips that memory (``rejected``) and does
+not count toward the stop below. Everything else counts as the endpoint
+failing: timeouts, connection errors, 5xx, bad answers and the other 4xx
+(``embedding_refused``: wrong path, auth, rate limit); three such failures
+in a row stop the run (``stopped: failures``). With ``max_seconds`` the run also
 stops, between requests, once that budget is spent. What was not written is
 ``remaining``; the next run embeds exactly that, because what was written is
 ``unchanged`` by its hash. A Qdrant error still ends the run at once
@@ -67,7 +68,7 @@ SCROLL_PAGE = 256
 MAX_CONSECUTIVE_FAILURES = 3
 #: Upper bound of ``max_seconds`` (one day).
 MAX_RUN_SECONDS = 86400.0
-#: The endpoint refused one input (HTTP 4xx); never counts as "endpoint down".
+#: The endpoint refused one input (HTTP 400/413/422); never counts as "endpoint down".
 REJECTED = "embedding_rejected"
 
 
@@ -86,8 +87,8 @@ class SyncReport:
     skipped: dict[str, int] = field(default_factory=dict)
     #: Memories embedded in this run (upserted unless the upsert failed).
     embedded: int = 0
-    #: Embedding batches that failed, and their codes.
-    failed_batches: int = 0
+    #: Failed embedding requests (whole batches and per-memory retries), and their codes.
+    failed_requests: int = 0
     failures: dict[str, int] = field(default_factory=dict)
     #: Memories still to embed: failed or not attempted; the next run does them.
     remaining: int = 0
@@ -110,7 +111,7 @@ class SyncReport:
             "created_collection": self.created_collection,
             "skipped": dict(self.skipped),
             "embedded": self.embedded,
-            "failed_batches": self.failed_batches,
+            "failed_requests": self.failed_requests,
             "failures": dict(self.failures),
             "remaining": self.remaining,
             "rejected": self.rejected,
@@ -286,7 +287,7 @@ def sync(
         try:
             _upsert(provider, batch, fingerprint, report)
         except EmbedderError as exc:
-            report.failed_batches += 1
+            report.failed_requests += 1
             report.failures[exc.code] = report.failures.get(exc.code, 0) + 1
             if exc.code != REJECTED:
                 in_a_row += 1  # a rejection is about one input, not the endpoint

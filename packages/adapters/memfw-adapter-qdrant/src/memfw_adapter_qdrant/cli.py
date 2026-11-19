@@ -17,7 +17,7 @@ sendable.
 ``MEMFW_EMBEDDING_TIMEOUT`` / ``MEMFW_EMBEDDING_BATCH_SIZE`` (default 30 s and
 16; a slow CPU-only host wants ``--embedding-batch-size 1 --embedding-timeout
 120`` or more). ``sync`` writes each batch as soon as it is embedded; a batch
-that fails is counted (``failed_batches``, ``remaining``) and the exit status
+that fails is counted (``failed_requests``, ``remaining``) and the exit status
 is 1, and the next run continues with what is missing. ``--max-seconds``
 stops cleanly between batches once that much time is spent (also exit 1
 when anything remains). Rule of thumb: batch size x seconds per memory must
@@ -31,6 +31,7 @@ On a schedule, keep the interval at least ``--max-seconds`` plus one
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -91,8 +92,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     try:
         lock = acquire_lock(provider)
-    except OSError:
-        print("memfw-adapter-qdrant: cannot create the sync lock file", file=sys.stderr)
+    except OSError as exc:  # e.g. ENOLCK on NFS, or an unwritable state directory
+        reason = errno.errorcode.get(exc.errno or 0, type(exc).__name__)
+        print(f"memfw-adapter-qdrant: cannot take the sync lock ({reason})", file=sys.stderr)
         return 1
     if lock is None:
         print("memfw-adapter-qdrant: another sync of this vault is running", file=sys.stderr)
@@ -114,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
 def _incomplete(report: Any, batch: int) -> str:
     line = (
         f"memfw-adapter-qdrant: sync incomplete: {report.remaining} remaining "
-        f"({report.rejected} rejected by the endpoint), {report.failed_batches} failed requests"
+        f"({report.rejected} rejected by the endpoint), {report.failed_requests} failed requests"
         + (f", stopped: {report.stopped}" if report.stopped else "")
     )
     if report.failures.get("embedding_unreachable") and batch > 1:
@@ -133,7 +135,9 @@ def _incomplete(report: Any, batch: int) -> str:
 def lock_path(provider: Any) -> Path:
     """One lock per Qdrant URL, collection and vault key, outside the vault."""
 
-    base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    configured = os.environ.get("XDG_STATE_HOME") or ""
+    # The XDG spec: a relative path is invalid and is ignored.
+    base = configured if os.path.isabs(configured) else str(Path.home() / ".local" / "state")
     key = f"{provider.settings.url}|{provider.settings.collection}|{provider.vault_key}"
     digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
     return Path(base) / "memfw-adapter-qdrant" / f"sync-{digest}.lock"
@@ -158,6 +162,9 @@ def acquire_lock(provider: Any) -> IO[str] | _NoLock | None:
     except BlockingIOError:
         handle.close()
         return None
+    except OSError:
+        handle.close()
+        raise
     return handle
 
 

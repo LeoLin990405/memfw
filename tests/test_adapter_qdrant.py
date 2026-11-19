@@ -131,9 +131,9 @@ def _env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         "MEMFW_EMBEDDING_DIMENSION",
         "MEMFW_EMBEDDING_TIMEOUT",
         "MEMFW_EMBEDDING_BATCH_SIZE",
-        "XDG_STATE_HOME",
     ):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))  # the sync lock
 
 
 @pytest.fixture
@@ -1202,7 +1202,7 @@ def test_defaults_are_unchanged_30s_and_16_per_request(
     assert sizes == [16, 16, 8]  # exactly what one 64-memory embed call used to send
     assert set(timeouts) == {30.0}
     assert report.upserted == 40 and report.complete
-    assert report.as_dict()["failed_batches"] == 0 and report.as_dict()["remaining"] == 0
+    assert report.as_dict()["failed_requests"] == 0 and report.as_dict()["remaining"] == 0
     upserts = [r for r in fake.requests if r["path"] == "/collections/memfw/points"]
     assert [len(r["body"]["points"]) for r in upserts] == [16, 16, 8]
 
@@ -1228,14 +1228,14 @@ def test_a_slow_embedder_needs_batch_1_and_a_long_timeout(
         failed = json.loads(captured.out)
         # The batch of 5 times out, then two of its memories alone: three in a row.
         assert sizes == [5, 1, 1]
-        assert failed["failed_batches"] == 3 and failed["remaining"] == 5
+        assert failed["failed_requests"] == 3 and failed["remaining"] == 5
         assert failed["failures"] == {"embedding_unreachable": 3} and failed["upserted"] == 0
         assert failed["stopped"] == "failures" and failed["rejected"] == 0
         assert "lower --embedding-batch-size" in captured.err
         sizes.clear()
         assert cli_main([*args, "--embedding-batch-size", "1", "--embedding-timeout", "5"]) == 0
         done = json.loads(capsys.readouterr().out)
-        assert done["upserted"] == 5 and done["remaining"] == 0 and done["failed_batches"] == 0
+        assert done["upserted"] == 5 and done["remaining"] == 0 and done["failed_requests"] == 0
         assert sizes == [1, 1, 1, 1, 1]
     finally:
         server.shutdown()
@@ -1265,7 +1265,7 @@ def test_a_timed_out_batch_keeps_earlier_upserts_and_the_next_run_resumes(
     repository = _vault(tmp_path)
     flaky = FlakyEmbedder({3})
     report = sync(_provider(repository, fake, flaky, embedding_batch_size=1))
-    assert (report.embedded, report.upserted, report.failed_batches, report.remaining) == (
+    assert (report.embedded, report.upserted, report.failed_requests, report.remaining) == (
         4,
         4,
         1,
@@ -1281,12 +1281,12 @@ def test_a_timed_out_batch_keeps_earlier_upserts_and_the_next_run_resumes(
     assert len(_stored_ids(fake)) == 5
 
 
-def test_three_failed_batches_in_a_row_stop_the_run(tmp_path: Path, fake: FakeQdrant) -> None:
+def test_three_failed_requests_in_a_row_stop_the_run(tmp_path: Path, fake: FakeQdrant) -> None:
     repository = _vault(tmp_path)
     down = FlakyEmbedder(always=True)
     report = sync(_provider(repository, fake, down, embedding_batch_size=1))
     assert down.calls == 3 and report.stopped == "failures"
-    assert (report.failed_batches, report.remaining, report.upserted) == (3, 5, 0)
+    assert (report.failed_requests, report.remaining, report.upserted) == (3, 5, 0)
 
 
 def test_max_seconds_stops_cleanly_between_batches(tmp_path: Path, fake: FakeQdrant) -> None:
@@ -1296,7 +1296,7 @@ def test_max_seconds_stops_cleanly_between_batches(tmp_path: Path, fake: FakeQdr
     report = sync(provider, max_seconds=2.5, clock=lambda: float(next(ticks)))
     # start = 0; batches checked at 1 and 2 run; the check at 3 stops the run.
     assert (report.upserted, report.remaining, report.stopped) == (2, 3, "max_seconds")
-    assert report.failed_batches == 0 and not report.complete
+    assert report.failed_requests == 0 and not report.complete
     finished = sync(_provider(repository, fake, embedding_batch_size=1), max_seconds=600)
     assert (finished.upserted, finished.unchanged) == (3, 2) and finished.complete
     for bad in (0, -1, 86401, float("nan"), True, "5"):
@@ -1362,7 +1362,7 @@ def test_embedding_settings_do_not_change_the_fingerprint() -> None:
 def test_the_query_embedding_uses_the_same_configured_timeout(
     tmp_path: Path, fake: FakeQdrant, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A search embeds its query with ``min(configured timeout, budget)``."""
+    """A search embeds its query with ``min(configured timeout, max(budget, 30 s))``."""
 
     repository = _vault(tmp_path)
     sizes: list[int] = []
@@ -1391,8 +1391,8 @@ def test_the_query_embedding_uses_the_same_configured_timeout(
     finally:
         server.shutdown()
         server.server_close()
-    # Never longer than the coordinator waits, never longer than the configured timeout.
-    assert timeouts == [1.5, 90.0] and sizes == [1, 1]
+    # min(configured, max(budget, 30)): 30 s as before for the default budget, 90 s at most.
+    assert timeouts == [30.0, 90.0] and sizes == [1, 1]
 
 
 class PoisonEmbedder(WordsEmbedder):
@@ -1446,6 +1446,12 @@ def test_a_5xx_is_unreachable_and_a_4xx_is_rejected(tmp_path: Path) -> None:
     for status, code in (
         (400, "embedding_rejected"),
         (413, "embedding_rejected"),
+        (422, "embedding_rejected"),
+        (401, "embedding_refused"),
+        (403, "embedding_refused"),
+        (404, "embedding_refused"),
+        (405, "embedding_refused"),
+        (429, "embedding_refused"),
         (503, "embedding_unreachable"),
         (500, "embedding_unreachable"),
     ):
@@ -1474,7 +1480,7 @@ def test_the_failure_stop_is_reported_even_with_nothing_after(
     down = FlakyEmbedder(always=True)
     report = sync(_provider(repository, fake, down, embedding_batch_size=1))
     assert down.calls == 3 and report.unchanged == 2
-    assert (report.failed_batches, report.remaining, report.stopped) == (3, 3, "failures")
+    assert (report.failed_requests, report.remaining, report.stopped) == (3, 3, "failures")
 
 
 def test_shortest_memories_are_embedded_first(tmp_path: Path, fake: FakeQdrant) -> None:
@@ -1508,6 +1514,70 @@ def test_a_second_sync_of_the_same_vault_exits_3(
         held.close()
         assert cli_main(args) == 0  # released; and the lock is released after a run too
         assert cli_main(args) == 0
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize(
+    ("status", "sizes", "stopped", "rejected"),
+    [
+        (404, [5, 1, 1], "failures", 0),  # a wrong URL path: stop, do not split the vault
+        (429, [5, 1, 1], "failures", 0),  # rate limited: stop
+        (413, [5, 1, 1, 1, 1, 1], "", 5),  # each input refused: skipped, never a stop
+    ],
+)
+def test_only_400_413_422_are_per_memory_rejections(
+    tmp_path: Path,
+    fake: FakeQdrant,
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    sizes: list[int],
+    stopped: str,
+    rejected: int,
+) -> None:
+    repository = _vault(tmp_path)
+    seen: list[int] = []
+    server = _counting_embedding_server(seen, reject="\n", status=status)  # every text
+    try:
+        _use_server(monkeypatch, server)
+        report = sync(factory({"vault": str(repository.root), "url": fake.url}))
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert seen == sizes
+    assert (report.stopped, report.rejected, report.remaining) == (stopped, rejected, 5)
+    assert report.failed_requests == len(sizes) and report.upserted == 0
+
+
+def test_the_lock_ignores_a_relative_state_home_and_reports_enolck(
+    tmp_path: Path,
+    fake: FakeQdrant,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import errno
+    import fcntl
+
+    from memfw_adapter_qdrant.cli import lock_path
+
+    repository = _vault(tmp_path)
+    provider = factory(
+        {"vault": str(repository.root), "url": fake.url, "embedder": WordsEmbedder()}
+    )
+    monkeypatch.setenv("XDG_STATE_HOME", "relative/state")
+    assert lock_path(provider).is_relative_to(Path.home() / ".local" / "state")
+    server = _counting_embedding_server([])
+
+    def no_locks(fd: int, operation: int) -> None:
+        raise OSError(errno.ENOLCK, "No locks available")
+
+    try:
+        _use_server(monkeypatch, server)
+        monkeypatch.setattr(fcntl, "flock", no_locks)
+        capsys.readouterr()
+        assert cli_main(["sync", "--vault", str(repository.root), "--url", fake.url]) == 1
+        assert "cannot take the sync lock (ENOLCK)" in capsys.readouterr().err
     finally:
         server.shutdown()
         server.server_close()

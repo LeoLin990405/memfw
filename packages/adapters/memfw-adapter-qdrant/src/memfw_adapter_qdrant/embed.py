@@ -43,6 +43,8 @@ DEFAULT_BATCH_SIZE = 16
 MAX_TIMEOUT = 600.0
 MAX_BATCH_SIZE = 256
 TIMEOUT_ENV = "MEMFW_EMBEDDING_TIMEOUT"
+#: HTTP statuses that refuse this one input (bad, too large, unprocessable).
+REJECTING_STATUS = frozenset({400, 413, 422})
 BATCH_SIZE_ENV = "MEMFW_EMBEDDING_BATCH_SIZE"
 
 
@@ -129,9 +131,11 @@ class EnvEmbedder:
     ) -> list[list[float]]:
         """Vectors of ``texts``; ``timeout`` (per request) may only shorten ``self.timeout``.
 
-        Errors: ``embedding_rejected`` (the endpoint answered 4xx: it refuses
-        this input, e.g. too long; retrying the same text will not help),
-        ``embedding_unreachable`` (timeout, connection error, 5xx),
+        Errors: ``embedding_rejected`` (HTTP 400, 413 or 422: the endpoint
+        refuses this input, e.g. too long; retrying the same text will not help),
+        ``embedding_refused`` (any other 4xx: wrong path, auth, rate limit; the
+        endpoint or its configuration), ``embedding_unreachable`` (timeout,
+        connection error, 5xx),
         ``embedding_response_too_large``, ``embedding_bad_response``.
         """
 
@@ -155,9 +159,15 @@ class EnvEmbedder:
                 with open_url(request, limit) as response:
                     raw = read_capped(response)
             except urllib.error.HTTPError as exc:
-                # Checked before URLError (its base class): a 4xx is an answer about
-                # this input, not a sign that the endpoint is down.
-                code = "embedding_rejected" if 400 <= exc.code < 500 else "embedding_unreachable"
+                # Checked before URLError (its base class). Only 400/413/422 are an
+                # answer about this input; any other 4xx (401, 403, 404, 405, 429, ...)
+                # is the endpoint or its configuration, and 5xx is the endpoint failing.
+                if exc.code in REJECTING_STATUS:
+                    code = "embedding_rejected"
+                elif 400 <= exc.code < 500:
+                    code = "embedding_refused"
+                else:
+                    code = "embedding_unreachable"
                 raise EmbedderError(code) from None
             except ResponseTooLarge:
                 # Checked before any OSError mapping: a cap breach is never "unreachable".
@@ -241,6 +251,7 @@ __all__ = [
     "DEFAULT_TIMEOUT",
     "MAX_BATCH_SIZE",
     "MAX_TIMEOUT",
+    "REJECTING_STATUS",
     "TIMEOUT_ENV",
     "Embedder",
     "EmbedderError",

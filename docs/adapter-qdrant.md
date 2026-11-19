@@ -61,19 +61,22 @@ at the tail instead of blocking the rest. Failures:
 
 - a failed batch of several memories is **retried once, one memory at a time**, so one bad memory
   cannot sink the other fifteen;
-- HTTP 4xx (`embedding_rejected`: the endpoint refuses that input, e.g. longer than the model's
-  context) skips that memory (`rejected`) and does **not** count as the endpoint being down;
-- timeouts, connection errors, 5xx and malformed answers do count: **three in a row** stop the
-  run (`stopped: failures`); the endpoint is most likely down;
+- HTTP **400, 413 or 422** (`embedding_rejected`: the endpoint refuses that input, e.g. longer
+  than the model's context) skips that memory (`rejected`) and does **not** count as the
+  endpoint being down;
+- any other 4xx (`embedding_refused`: 401/403 auth, 404/405 wrong URL path, 429 rate limit) is
+  the endpoint or its configuration, so it counts like timeouts, connection errors, 5xx and
+  malformed answers: **three in a row** stop the run (`stopped: failures`) instead of splitting
+  every batch of the vault into single requests;
 - a Qdrant error stops the run at once (earlier batches stay).
 
 `--max-seconds S` stops cleanly before the next request once `S` seconds are spent. The printed
-report adds `embedded`, `failed_batches` (failed embedding requests, retries included),
+report adds `embedded`, `failed_requests` (failed embedding requests, retries included),
 `failures` (code → count), `remaining` (still to embed), `rejected` (of those, refused by the
 endpoint) and `stopped` (`max_seconds`, `failures` or empty); when anything remains the exit
 status is **1**. Re-run `sync`: written points are `unchanged` by their hash, so the next run
 embeds exactly what is still missing (a rejected memory is tried again each run, which costs
-one quick 4xx).
+one quick 400/413/422).
 
 Only one `sync` per Qdrant URL, collection and vault runs at a time: the CLI holds a
 non-blocking `flock` on a file under `$XDG_STATE_HOME/memfw-adapter-qdrant/` (default
@@ -102,10 +105,10 @@ timeout. When `sync` reports `embedding_unreachable` with a batch above 1 it say
 
 They configure the adapter's own embedder (the standard-library client built from
 `MEMFW_EMBEDDING_*`: the `sync` command, and the runtime when it has no embedder of its own).
-A search embeds its one query with the same client but never waits longer than the
-coordinator's budget for the provider: the query request's timeout is `min(timeout,
-budget.timeout_seconds)` (1.5 s by default), so a long sync timeout cannot keep the provider's
-worker busy. One query is one request, so the batch size does not matter at search time. An embedder the
+A search embeds its one query with the same client, with the request timeout `min(timeout,
+max(budget.timeout_seconds, 30))`: never longer than before (30 s by default, so a cold model on a
+slow host still has time to load), and a long sync timeout (up to 600 s) cannot keep the
+provider's worker busy. One query is one request, so the batch size does not matter at search time. An embedder the
 runtime injects (memfw's `HttpEmbeddingProvider`: 120 s timeout, 3 retries) is used as given and
 never modified; with it the timeout option has no effect, and `embedding_batch_size` only sets
 how many memories `sync` embeds and upserts at a time.
@@ -238,7 +241,7 @@ service is down it reports `unreachable` (`no_collection`, `unauthorized`,
   request, validation, options over environment, fingerprint unchanged, the query timeout), a
   slow embedder that needs batch 1 and a long timeout, a failed batch that keeps earlier upserts
   and resumes, one rejected memory in a batch of 16 (the other 15 land), rejected memories at
-  the head (the rest land), 4xx vs 5xx, the stop after three failures (also with nothing
+  the head (the rest land), 400/413/422 vs other 4xx (404 and 429 stop after three) vs 5xx, the stop after three failures (also with nothing
   after), shortest first, `max_seconds`, the query timeout capped by the budget and the sync
   lock (exit 3).
 - `tests/standalone/wheel_smoke.py --qdrant` runs it from its wheel without memfw against the

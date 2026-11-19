@@ -35,9 +35,9 @@ adds ``vault`` and ``embedder``):
     Timeout of one embedding request, in (0, 600] (default
     ``MEMFW_EMBEDDING_TIMEOUT``, else 30). Used by the adapter's own embedder
     (built from ``MEMFW_EMBEDDING_*``) for ``sync``; a search embeds its query
-    with the same object but never longer than the coordinator's budget
-    (``min(timeout, budget.timeout_seconds)``). An embedder the runtime
-    injects keeps its own timeout.
+    with the same object but never longer than before (``min(timeout,
+    max(budget.timeout_seconds, 30))``). An embedder the runtime injects
+    keeps its own timeout.
 ``embedding_batch_size``
     Texts per embedding request and memories per ``sync`` upsert, in [1, 256]
     (default ``MEMFW_EMBEDDING_BATCH_SIZE``, else 16). Neither setting changes
@@ -77,6 +77,7 @@ from ._ports import (
     is_vault,
 )
 from .embed import (
+    DEFAULT_TIMEOUT,
     EmbedderError,
     EnvEmbedder,
     check_batch_size,
@@ -308,12 +309,15 @@ class QdrantProvider:
             raise ProviderUnavailable("no_embedder")
         try:
             if isinstance(self.embedder, EnvEmbedder):
-                # Never wait for the query embedding longer than the coordinator waits
-                # for this provider: a long sync timeout must not pin the worker.
+                # A long sync timeout must not pin the worker: never wait for the query
+                # embedding longer than the default 30 s (or a larger budget). Not the
+                # budget itself: a cold model on a slow host needs time to load.
                 (vector,) = self.embedder.embed(
                     [query],
                     role="query",
-                    timeout=min(self.embedder.timeout, budget.timeout_seconds),
+                    timeout=min(
+                        self.embedder.timeout, max(budget.timeout_seconds, DEFAULT_TIMEOUT)
+                    ),
                 )
             else:  # an injected embedder: its own timeout, called exactly as before
                 (vector,) = self.embedder.embed([query], role="query")
