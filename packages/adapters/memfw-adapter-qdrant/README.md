@@ -46,10 +46,14 @@ PyYAML 6.0.3 (MIT, to read `vault.yaml` exactly as memfw does).
           options: {url: "http://127.0.0.1:6333", collection: memfw}
   ```
 
-- **Incremental `sync`.** Each embedding batch is upserted as soon as it is
-  embedded; a failed batch is reported (`failed_batches`, `remaining`, exit 1)
-  and the next run continues with what is missing. `--max-seconds` stops
-  cleanly between batches.
+- **Incremental `sync`.** Shortest memories first; each embedding batch is
+  upserted as soon as it is embedded. A failed batch is retried one memory at
+  a time; a memory the endpoint refuses (HTTP 4xx) is skipped, and only
+  timeouts, connection errors and 5xx (three in a row) stop the run. What is
+  left is reported (`failed_batches`, `remaining`, `rejected`, exit 1) and the
+  next run continues with it. `--max-seconds` stops cleanly between requests.
+  One `sync` per vault and collection at a time (a second exits 3); on a
+  schedule keep the interval at least `--max-seconds` plus one timeout.
 
 ## Slow CPU host
 
@@ -64,13 +68,16 @@ CPU-only host without AVX, where one long memory takes tens of seconds:
 memfw-adapter-qdrant sync --vault PATH --embedding-batch-size 1 --embedding-timeout 300
 ```
 
-(a timeout of at least 120 s). Do the first, bulk sync against a faster
+(a timeout of at least 120 s; rule: batch size x seconds per memory below the
+timeout). Prefer the flags to the environment variables when the environment
+is shared with the memfw server. Do the first, bulk sync against a faster
 embedding host serving the same model file into the same collection: the
 vectors are interchangeable because the fingerprint is
 `model|dimension|instructions`, so the slow host then only embeds new or
 changed memories. Neither setting changes the fingerprint. They apply to the
-adapter's own embedder (also used for the search query); an embedder the
-memfw runtime injects keeps its own settings.
+adapter's own embedder; a search embeds its query with it but never longer
+than the coordinator's budget. An embedder the memfw runtime injects keeps
+its own settings.
 
 `memfw_adapter_qdrant.fake.FakeQdrant` is a loopback-only fake of the REST
 calls the adapter makes, for tests. See `docs/adapter-qdrant.md` in the memfw

@@ -20,19 +20,30 @@ sendable.
 that fails is counted (``failed_batches``, ``remaining``) and the exit status
 is 1, and the next run continues with what is missing. ``--max-seconds``
 stops cleanly between batches once that much time is spent (also exit 1
-when anything remains).
+when anything remains). Rule of thumb: batch size x seconds per memory must
+stay below the timeout. Only one ``sync`` per Qdrant URL, collection and
+vault runs at a time (a ``flock`` under ``$XDG_STATE_HOME`` or
+``~/.local/state/memfw-adapter-qdrant``); a second one exits with status 3.
+On a schedule, keep the interval at least ``--max-seconds`` plus one
+``--embedding-timeout``.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import sys
-from typing import Any
+from pathlib import Path
+from typing import IO, Any
 
 from .embed import EmbedderError
 from .http import QdrantError
 from .provider import DEFAULT_CLEARANCE, DEFAULT_COLLECTION, DEFAULT_URL, factory
+
+#: Exit status when another ``sync`` of the same vault and collection is running.
+LOCKED = 3
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -62,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
         settings["embedding_timeout_seconds"] = args.embedding_timeout
     if args.embedding_batch_size is not None:
         settings["embedding_batch_size"] = args.embedding_batch_size
-    from .sync import check_max_seconds, sync
+    from .sync import batch_size_of, check_max_seconds, sync
 
     try:
         if args.max_seconds is not None:
@@ -79,21 +90,80 @@ def main(argv: list[str] | None = None) -> int:
         print("memfw-adapter-qdrant: no embedder (set MEMFW_EMBEDDING_URL)", file=sys.stderr)
         return 1
     try:
+        lock = acquire_lock(provider)
+    except OSError:
+        print("memfw-adapter-qdrant: cannot create the sync lock file", file=sys.stderr)
+        return 1
+    if lock is None:
+        print("memfw-adapter-qdrant: another sync of this vault is running", file=sys.stderr)
+        return LOCKED
+    try:
         report = sync(provider, max_seconds=args.max_seconds)
     except (QdrantError, EmbedderError) as exc:
         print(f"memfw-adapter-qdrant: sync failed: {exc.code}", file=sys.stderr)
         return 1
+    finally:
+        lock.close()
     print(json.dumps(report.as_dict(), sort_keys=True))
     if not report.complete:
-        print(
-            "memfw-adapter-qdrant: sync incomplete: "
-            f"{report.remaining} remaining, {report.failed_batches} failed batches"
-            + (f", stopped: {report.stopped}" if report.stopped else "")
-            + "; run it again to continue",
-            file=sys.stderr,
-        )
+        print(_incomplete(report, batch_size_of(provider)), file=sys.stderr)
         return 1
     return 0
+
+
+def _incomplete(report: Any, batch: int) -> str:
+    line = (
+        f"memfw-adapter-qdrant: sync incomplete: {report.remaining} remaining "
+        f"({report.rejected} rejected by the endpoint), {report.failed_batches} failed requests"
+        + (f", stopped: {report.stopped}" if report.stopped else "")
+    )
+    if report.failures.get("embedding_unreachable") and batch > 1:
+        return (
+            line + "; timeouts: lower --embedding-batch-size (batch x seconds per memory "
+            "must stay below --embedding-timeout), then run it again"
+        )
+    if report.failures.get("embedding_unreachable"):
+        return (
+            line + "; timeouts: raise --embedding-timeout above the slowest memory or check "
+            "the endpoint, then run it again"
+        )
+    return line + "; run it again to continue"
+
+
+def lock_path(provider: Any) -> Path:
+    """One lock per Qdrant URL, collection and vault key, outside the vault."""
+
+    base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    key = f"{provider.settings.url}|{provider.settings.collection}|{provider.vault_key}"
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+    return Path(base) / "memfw-adapter-qdrant" / f"sync-{digest}.lock"
+
+
+def acquire_lock(provider: Any) -> IO[str] | _NoLock | None:
+    """A held non-blocking ``flock``, or None when another ``sync`` holds it.
+
+    The kernel drops the lock when the process ends, so a crashed run never
+    leaves it held. Without ``fcntl`` (Windows) there is no lock.
+    """
+
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - not POSIX
+        return _NoLock()
+    path = lock_path(provider)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    handle = path.open("a", encoding="utf-8")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        return None
+    return handle
+
+
+class _NoLock:
+    def close(self) -> None:
+        return None
 
 
 if __name__ == "__main__":  # pragma: no cover

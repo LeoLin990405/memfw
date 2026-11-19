@@ -17,16 +17,21 @@ reads the vault and writes only to Qdrant. Steps:
    anything is embedded or upserted (step 3 runs last), so a failing
    embedder or upsert cannot keep a withdrawn memory in Qdrant.
 
-Step 3 goes batch by batch (``embedding_batch_size``, default 16 memories):
-each batch is embedded and upserted before the next one starts, so progress
-is kept. A batch whose embedding fails (``EmbedderError``: timeout,
-unreachable, bad answer) is counted in ``failed_batches`` / ``failures`` and
-skipped; after three failed batches in a row the run stops (the endpoint is
-most likely down). With ``max_seconds`` the run also stops, between batches,
-once that budget is spent. What was not written is ``remaining``; the next
-run embeds exactly that, because what was written is ``unchanged`` by its
-hash. A Qdrant error still ends the run at once (earlier batches stay).
-Any other exception from an injected embedder propagates as before.
+Step 3 goes batch by batch (``embedding_batch_size``, default 16 memories),
+shortest text first (then id): each batch is embedded and upserted before
+the next one starts, so progress is kept. Every failed embedding request
+(``EmbedderError``) is counted in ``failed_batches`` / ``failures``. A
+failed batch of several memories is retried once, one memory at a time, so
+one bad memory cannot sink the others. ``embedding_rejected`` (HTTP 4xx: the
+endpoint refuses that input) skips that memory (``rejected``); timeouts,
+connection errors, 5xx and bad answers count as the endpoint failing, and
+three such failures in a row stop the run (``stopped: failures``). A
+rejection does not count toward that stop. With ``max_seconds`` the run also
+stops, between requests, once that budget is spent. What was not written is
+``remaining``; the next run embeds exactly that, because what was written is
+``unchanged`` by its hash. A Qdrant error still ends the run at once
+(earlier batches stay). Any other exception from an injected embedder
+propagates as before.
 
 Point ids are UUIDv5 of the vault key and the memory id, so a re-run is
 idempotent. The returned counts carry no id or text.
@@ -37,6 +42,7 @@ from __future__ import annotations
 import math
 import time
 import uuid
+from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -61,6 +67,8 @@ SCROLL_PAGE = 256
 MAX_CONSECUTIVE_FAILURES = 3
 #: Upper bound of ``max_seconds`` (one day).
 MAX_RUN_SECONDS = 86400.0
+#: The endpoint refused one input (HTTP 4xx); never counts as "endpoint down".
+REJECTED = "embedding_rejected"
 
 
 def point_id(vault: str, memory_id: str) -> str:
@@ -83,12 +91,16 @@ class SyncReport:
     failures: dict[str, int] = field(default_factory=dict)
     #: Memories still to embed: failed or not attempted; the next run does them.
     remaining: int = 0
+    #: Of ``remaining``: memories the endpoint refused (HTTP 4xx, e.g. too long).
+    rejected: int = 0
     #: Why the run stopped before the end: ``max_seconds``, ``failures`` or "".
     stopped: str = ""
 
     @property
     def complete(self) -> bool:
-        return self.remaining == 0 and self.failed_batches == 0
+        """Everything sendable is in Qdrant (a retried batch may have failed first)."""
+
+        return self.remaining == 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -101,6 +113,7 @@ class SyncReport:
             "failed_batches": self.failed_batches,
             "failures": dict(self.failures),
             "remaining": self.remaining,
+            "rejected": self.rejected,
             "stopped": self.stopped,
         }
 
@@ -256,32 +269,47 @@ def sync(
             report.unchanged += 1
             continue
         pending.append(item)
+    # Shortest first (then id): on a slow CPU host the time to embed grows with
+    # the text, so short memories land before a budget runs out and a long one
+    # that keeps timing out sits at the tail instead of blocking the rest.
+    pending.sort(key=lambda item: (len(item.text), item.memory_id))
     size = batch_size_of(provider)
+    queue: deque[list[Outgoing]] = deque(
+        pending[start : start + size] for start in range(0, len(pending), size)
+    )
     in_a_row = 0
-    for start in range(0, len(pending), size):
+    while queue:
         if budget is not None and clock() - started >= budget:
             report.stopped = "max_seconds"
-        elif in_a_row >= MAX_CONSECUTIVE_FAILURES:
-            report.stopped = "failures"
-        if report.stopped:
-            report.remaining += len(pending) - start
             break
-        batch = pending[start : start + size]
+        batch = queue.popleft()
         try:
             _upsert(provider, batch, fingerprint, report)
         except EmbedderError as exc:
             report.failed_batches += 1
             report.failures[exc.code] = report.failures.get(exc.code, 0) + 1
-            report.remaining += len(batch)
-            in_a_row += 1
+            if exc.code != REJECTED:
+                in_a_row += 1  # a rejection is about one input, not the endpoint
+            if len(batch) > 1:
+                # Once more, one by one: one bad memory must not sink the others.
+                queue.extendleft([item] for item in reversed(batch))
+            else:
+                report.remaining += 1
+                if exc.code == REJECTED:
+                    report.rejected += 1
+            if in_a_row >= MAX_CONSECUTIVE_FAILURES:
+                report.stopped = "failures"
+                break
             continue
         in_a_row = 0
+    report.remaining += sum(len(batch) for batch in queue)
     return report
 
 
 __all__ = [
     "INDEXED_FIELDS",
     "MAX_CONSECUTIVE_FAILURES",
+    "REJECTED",
     "SyncReport",
     "batch_size_of",
     "check_max_seconds",

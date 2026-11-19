@@ -34,8 +34,9 @@ adds ``vault`` and ``embedder``):
 ``embedding_timeout_seconds``
     Timeout of one embedding request, in (0, 600] (default
     ``MEMFW_EMBEDDING_TIMEOUT``, else 30). Used by the adapter's own embedder
-    (built from ``MEMFW_EMBEDDING_*``), for ``sync`` and, being the same
-    object, for the query embedding of a search; an embedder the runtime
+    (built from ``MEMFW_EMBEDDING_*``) for ``sync``; a search embeds its query
+    with the same object but never longer than the coordinator's budget
+    (``min(timeout, budget.timeout_seconds)``). An embedder the runtime
     injects keeps its own timeout.
 ``embedding_batch_size``
     Texts per embedding request and memories per ``sync`` upsert, in [1, 256]
@@ -77,6 +78,7 @@ from ._ports import (
 )
 from .embed import (
     EmbedderError,
+    EnvEmbedder,
     check_batch_size,
     check_timeout,
     dimension_of,
@@ -305,7 +307,16 @@ class QdrantProvider:
         if self.embedder is None:
             raise ProviderUnavailable("no_embedder")
         try:
-            (vector,) = self.embedder.embed([query], role="query")
+            if isinstance(self.embedder, EnvEmbedder):
+                # Never wait for the query embedding longer than the coordinator waits
+                # for this provider: a long sync timeout must not pin the worker.
+                (vector,) = self.embedder.embed(
+                    [query],
+                    role="query",
+                    timeout=min(self.embedder.timeout, budget.timeout_seconds),
+                )
+            else:  # an injected embedder: its own timeout, called exactly as before
+                (vector,) = self.embedder.embed([query], role="query")
             if len(vector) != dimension_of(self.embedder):
                 raise ProviderUnavailable("embedding_bad_response")
         except EmbedderError as exc:

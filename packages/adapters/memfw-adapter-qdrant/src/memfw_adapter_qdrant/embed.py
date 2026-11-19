@@ -124,8 +124,26 @@ class EnvEmbedder:
         marker = f"{self.model}|{self.dimension}||"
         return hashlib.sha256(marker.encode("utf-8")).hexdigest()[:16]
 
-    def embed(self, texts: Sequence[str], *, role: str = "document") -> list[list[float]]:
+    def embed(
+        self, texts: Sequence[str], *, role: str = "document", timeout: float | None = None
+    ) -> list[list[float]]:
+        """Vectors of ``texts``; ``timeout`` (per request) may only shorten ``self.timeout``.
+
+        Errors: ``embedding_rejected`` (the endpoint answered 4xx: it refuses
+        this input, e.g. too long; retrying the same text will not help),
+        ``embedding_unreachable`` (timeout, connection error, 5xx),
+        ``embedding_response_too_large``, ``embedding_bad_response``.
+        """
+
         del role  # no instructions, like the provider memfw builds from the environment
+        if timeout is not None and (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout)
+            or timeout <= 0
+        ):
+            raise ValueError("timeout must be a positive number")
+        limit = self.timeout if timeout is None else min(self.timeout, float(timeout))
         vectors: list[list[float]] = []
         for start in range(0, len(texts), self.batch_size):
             batch = list(texts[start : start + self.batch_size])
@@ -134,8 +152,13 @@ class EnvEmbedder:
                 self.endpoint, data=body, headers={"Content-Type": "application/json"}
             )
             try:
-                with open_url(request, self.timeout) as response:
+                with open_url(request, limit) as response:
                     raw = read_capped(response)
+            except urllib.error.HTTPError as exc:
+                # Checked before URLError (its base class): a 4xx is an answer about
+                # this input, not a sign that the endpoint is down.
+                code = "embedding_rejected" if 400 <= exc.code < 500 else "embedding_unreachable"
+                raise EmbedderError(code) from None
             except ResponseTooLarge:
                 # Checked before any OSError mapping: a cap breach is never "unreachable".
                 raise EmbedderError("embedding_response_too_large") from None
