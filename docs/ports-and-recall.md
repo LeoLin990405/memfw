@@ -113,6 +113,8 @@ do not contain `memfw/__init__.py`, so this does not affect them.
 | `memfw-adapter-lightrag` | 0.1.0 | `Deriver` | 1 |
 | `memfw-adapter-graphrag` | 0.1.0 | `Deriver` | 1 |
 | `memfw-adapter-tailnet` | 0.1.0 | `Ingestor` | 1 |
+| `memfw-adapter-wikigen` | 0.1.0 | `Deriver` | 1 |
+| `memfw-adapter-wikigen` | 0.1.0 | `ModelBackend` | 1 |
 <!-- port-versions:end -->
 
 - **Wheels only.** `uv build --wheel --package memfw-ports` (and `memfw-recall`). An sdist is

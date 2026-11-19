@@ -80,6 +80,24 @@ The vault format did not change in `0.4.0` either: `vault.yaml` stays at
   - `PORTS_API_VERSION`, `memfw-ports` and `memfw-recall` move to `0.4.0`; `memfw-recall`
     and every adapter pin `memfw-ports==0.4.0` (their own versions and code are unchanged).
 
+- `memfw-adapter-wikigen` 0.1.0 (`packages/adapters/memfw-adapter-wikigen`, W1-4): a
+  `Deriver` (kind `wiki_page`) that turns one `memfw-wiki-job/1` package into one
+  `memfw-wiki-page/1` page candidate. The fixed `wiki-v1` prompt forces the page sections
+  and per-sentence citations to the job's own refs; a sentence with a ref that is not
+  exactly a job ref, or that breaks a section, causal, lifecycle or conflict rule, is
+  dropped and counted, never repaired; a reply that is not one JSON object of the page
+  shape is retried once with the same seed, then refused. The `open` conflict claims, the
+  source list, privacy and digests are written by the program, and the page must pass
+  `parse_wiki_page` and `check_wiki_page(page, job=job)` or nothing is returned. The job's
+  generator block must match the worker (model tag and digest, generator version,
+  `prompt_version` = `wiki-v1;t=<temperature>;s=<seed>;ctx=<num_ctx>`); token budget,
+  context-window pre-check, per-call timeout and job deadline. Ships an Ollama backend
+  (literal loopback only, proxies ignored, redirects refused, digest from `/api/tags`) and a
+  model-free stub; a non-local backend needs `cloud: true` and an all-`public` job.
+  Unavailable when Ollama is unreachable or the model is missing. Optional `precheck` hook
+  (used only when importable). Off by default; standard library only; memfw never imports
+  it. Built and smoke-tested in the standalone-wheel CI job. See `docs/adapter-wikigen.md`.
+
 ### Fixed
 
 - Qdrant adapter: the embedding timeout and batch size were fixed at 30 s and 16, so on a slow

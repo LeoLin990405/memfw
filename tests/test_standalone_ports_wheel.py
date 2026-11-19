@@ -97,6 +97,7 @@ MEMBERS = (
     "adapters/memfw-adapter-lightrag",
     "adapters/memfw-adapter-graphrag",
     "adapters/memfw-adapter-tailnet",
+    "adapters/memfw-adapter-wikigen",
 )
 #: Third-party wheels an adapter needs, by exact pin (the versions uv.lock
 #: resolves and the adapter's pyproject pins), installed before the local
@@ -261,6 +262,7 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
         "memfw-adapter-lightrag",
         "memfw-adapter-graphrag",
         "memfw-adapter-tailnet",
+        "memfw-adapter-wikigen",
     ):
         _run(uv, "build", "--wheel", "--package", package, "-o", dist)
     wheels = sorted(p.name for p in dist.glob("*.whl"))
@@ -277,6 +279,7 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
         "memfw_adapter_qdrant-0.1.2-py3-none-any.whl",
         "memfw_adapter_qmd-0.1.1-py3-none-any.whl",
         "memfw_adapter_tailnet-0.1.0-py3-none-any.whl",
+        "memfw_adapter_wikigen-0.1.0-py3-none-any.whl",
         "memfw_pipeline-0.1.0-py3-none-any.whl",
         f"memfw_ports-{v}-py3-none-any.whl",
         f"memfw_recall-{v}-py3-none-any.whl",
@@ -304,6 +307,7 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
         "--graphrag",
         "--pipeline",
         "--tailnet",
+        "--wikigen",
         cwd=tmp_path,
     )
     assert "standalone wheel smoke passed" in out
@@ -321,6 +325,7 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
     assert "ok check_deriver GraphRagDeriver (recorded-shape output)" in out
     assert "ok run_stage example (built, then unchanged)" in out
     assert "ok check_ingestor TailnetIngestor (synthetic status)" in out
+    assert "ok check_deriver WikigenDeriver (stub backend)" in out
 
 
 def test_adapter_dependency_pins_match_the_lockfile_and_pyproject() -> None:
@@ -352,11 +357,12 @@ def test_ci_wheel_job_builds_and_smokes_every_adapter_with_the_pins() -> None:
         "memfw-adapter-lightrag",
         "memfw-adapter-graphrag",
         "memfw-adapter-tailnet",
+        "memfw-adapter-wikigen",
     ):
         assert f"uv build --wheel --package {package} " in ci, package
     assert "bm25s==0.3.16 jieba==0.42.1 PyYAML==6.0.3 numpy==2.4.6" in ci  # CI runs Python 3.11
     smoke = "wheel_smoke.py --recall --deepseek --bm25s --qdrant --qmd --ocr --pageindex"
-    smoke += " --langextract --lightrag --graphrag --pipeline --tailnet"
+    smoke += " --langextract --lightrag --graphrag --pipeline --tailnet --wikigen"
     assert smoke in ci
 
 

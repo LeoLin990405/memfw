@@ -52,6 +52,7 @@ members = [
     "packages/adapters/memfw-adapter-lightrag",
     "packages/adapters/memfw-adapter-graphrag",
     "packages/adapters/memfw-adapter-tailnet",
+    "packages/adapters/memfw-adapter-wikigen",
 ]
 
 [tool.pytest.ini_options]
