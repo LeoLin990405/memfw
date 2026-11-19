@@ -37,7 +37,12 @@ TOOLS: list[dict[str, Any]] = [
             "not known; a hit whose recall_labels include open_question:<id> has an unresolved "
             "open question about its concepts, and conflicted means an open question lists it "
             "as contradicted. Either way the answer is unknown: say so (and why), never guess. "
-            "mode=two_stage always carries recall_labels; other modes add them with labels=true."
+            "mode=two_stage always carries recall_labels; other modes add them with labels=true. "
+            "score orders hits within one reply: in hybrid and two_stage it is rank-based (a "
+            "fused reciprocal-rank score, not a relevance measure); fts and multihop scores are "
+            "normalised BM25 and vector scores are cosine similarity. Every reply carries "
+            "retrieval_health {mode, confidence, reasons, score_kind, note}: how far to trust "
+            "the answer (degraded or fallback paths, empty results)."
         ),
         "inputSchema": {
             "type": "object",
@@ -128,7 +133,9 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "Return a token-budgeted context: anchors and procedural memories first. "
             "v=2 returns a ContextPack: slots (core) with overflow and truncated_ids, "
-            "a pack_version cache key (ids, versions and hashes only) and the filter policy."
+            "a pack_version cache key (ids, versions and hashes only) and the filter policy. "
+            "v=2 replies also carry retrieval_health {mode, confidence, reasons, score_kind, "
+            "note}; v=1 replies are unchanged."
         ),
         "inputSchema": {
             "type": "object",
@@ -233,14 +240,24 @@ TOOLS: list[dict[str, Any]] = [
             "and intent_like match the worker's session tags (a session without tags never "
             "matches a tag filter). mode=two_stage returns ranked sessions instead (keyword, "
             "semantic and tag matches fused) with summary, tags, archived flag and redacted "
-            "turn windows around hits; its summaries and tags are unverified model output."
+            "turn windows around hits; its summaries and tags are unverified model output. "
+            "A two_stage score is a fused reciprocal-rank score: it orders sessions and is not "
+            "a relevance measure. Every reply carries retrieval_health {mode, confidence, "
+            "reasons, ...}; read its note before trusting the results. A result's ref "
+            "(app:session_id@offset) and offset name a turn by its position key in the source "
+            "record, not by turn index: they are not conversations_get start/end values."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "terms; may be empty with mode=two_stage and a tag filter",
+                    "description": (
+                        "Required. Search terms; must be non-empty in the default mode. With "
+                        'mode=two_stage it may be "" only when a tag filter (task_type, '
+                        'outcome, project, component, intent_like) is given; pass "" '
+                        "explicitly."
+                    ),
                 },
                 "app": {"type": "string", "description": "only this app, e.g. codex"},
                 "agent": {"type": "string", "description": "alias of app"},
@@ -321,16 +338,33 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "conversations_get",
         "description": (
-            "Read a redacted, size-capped range of one shared session's turns "
-            "(range = [start, end) turn positions); follow next_start to page."
+            "Read a redacted, size-capped range of one shared session's turns: [start, end) "
+            "are turn indexes (0-based position of a turn within the session, end exclusive; "
+            "each returned turn's index field), not offsets. The ref and offset that "
+            "conversations_search returns are the turn's position key in the source record (a "
+            "byte offset for JSONL transcripts, a gapped ordinal for other stores) and are not "
+            "valid start/end values. Follow next_start to page."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "session_id": {"type": "string"},
                 "app": {"type": "string", "description": "needed when the id is ambiguous"},
-                "start": {"type": "integer", "default": 0},
-                "end": {"type": "integer"},
+                "start": {
+                    "type": "integer",
+                    "default": 0,
+                    "description": (
+                        "Turn index of the first turn (0-based position within the session), "
+                        "not a byte offset or a search ref/offset."
+                    ),
+                },
+                "end": {
+                    "type": "integer",
+                    "description": (
+                        "Turn index to stop before (exclusive); omitted: up to the range cap. "
+                        "Not a byte offset or a search ref/offset."
+                    ),
+                },
                 "max_bytes": {"type": "integer", "default": 16384, "maximum": 65536},
             },
             "required": ["session_id"],

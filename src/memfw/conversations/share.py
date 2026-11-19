@@ -23,6 +23,7 @@ from collections.abc import Callable, Sequence
 from typing import Any, TypeVar
 
 from memfw.history.redact import redact_path
+from memfw.retrieval.health import HEALTH_KEY, from_conversation_search
 
 from .policy import SharePolicy
 from .store import (
@@ -374,7 +375,14 @@ class ConversationShare:
             )
             if with_archive_state:
                 results[-1]["archived"] = states.get((hit.app, hit.session_id), False)
-        return {"notice": DATA_NOTICE, "results": results, "next_offset": next_offset}
+        payload: dict[str, Any] = {
+            "notice": DATA_NOTICE,
+            "results": results,
+            "next_offset": next_offset,
+        }
+        # Newest-first keyword turns: no score; only an empty page changes it.
+        payload[HEALTH_KEY] = from_conversation_search(payload)
+        return payload
 
     def get(
         self,

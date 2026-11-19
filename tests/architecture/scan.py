@@ -138,12 +138,28 @@ def _call_name(func: ast.expr) -> str:
     return ""
 
 
+def _reexport_nodes(tree: ast.Module) -> list[ast.ImportFrom]:
+    """Module-level ``from`` imports, and those directly under ``if TYPE_CHECKING:``."""
+
+    out: list[ast.ImportFrom] = []
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom):
+            out.append(node)
+        elif isinstance(node, ast.If) and ast.unparse(node.test) in (
+            "TYPE_CHECKING",
+            "typing.TYPE_CHECKING",
+        ):
+            out.extend(child for child in node.body if isinstance(child, ast.ImportFrom))
+    return out
+
+
 def reexports(modules: Mapping[str, Path], package: str = PACKAGE) -> dict[str, dict[str, str]]:
     """Package -> {name it re-exports from a submodule -> defining module}.
 
     Only module-level ``from ... import`` statements in a package ``__init__``
-    count. Chains (a package re-exporting another package's re-export) are
-    followed by ``scan_file``.
+    count, including those under a module-level ``if TYPE_CHECKING:`` (the
+    names a lazy ``__getattr__`` re-exports). Chains (a package re-exporting
+    another package's re-export) are followed by ``scan_file``.
     """
 
     known = set(modules)
@@ -153,9 +169,7 @@ def reexports(modules: Mapping[str, Path], package: str = PACKAGE) -> dict[str, 
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         names: dict[str, str] = {}
-        for node in tree.body:
-            if not isinstance(node, ast.ImportFrom):
-                continue
+        for node in _reexport_nodes(tree):
             base = _resolve_from(node, module)
             if not base or base.split(".")[0] != package:
                 continue
@@ -274,7 +288,16 @@ def scan_file(
     found: list[Import] = []
     docstrings = _docstring_nodes(tree)
     constants = _module_constants(tree)
+    # A package ``__init__``'s ``if TYPE_CHECKING:`` re-exports declare what its
+    # lazy ``__getattr__`` returns; the runtime edge is that function's import.
+    typing_only = (
+        {id(node) for node in _reexport_nodes(tree)} - {id(node) for node in tree.body}
+        if path.name == "__init__.py"
+        else set()
+    )
     for node in ast.walk(tree):
+        if id(node) in typing_only:
+            continue
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name == PACKAGE and module != PACKAGE:

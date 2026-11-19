@@ -740,9 +740,15 @@ def _search_two_stage(
     errors: list[str] = []
     ambiguities: list[Any] = []
     payload_degraded = False
+    # Providers that answered with a degraded page (their own fallback), by
+    # name: the fixed signal ``retrieval_health`` reads (``source_fallback``).
+    degraded_sources: list[str] = []
     for name in result.labels.providers:
         for raw in seen.get(name, ({}, []))[1]:
-            payload_degraded = payload_degraded or bool(raw.get("degraded"))
+            if raw.get("degraded"):
+                payload_degraded = True
+                if name not in degraded_sources:
+                    degraded_sources.append(name)
             for message in raw.get("errors") or []:
                 text = client_message(str(message), repository.root)
                 if text not in errors:
@@ -773,6 +779,9 @@ def _search_two_stage(
     }
     if ambiguities:
         payload["ambiguity"] = ambiguities
+    if degraded_sources:
+        # Only when a provider's page was degraded: otherwise the shape is unchanged.
+        payload["degraded_sources"] = sorted(degraded_sources)
     notes = note_rows(result.segments, clearance=runtime.clearance)
     if notes:
         # Only when a notes resolver answered: memory-only output is unchanged.

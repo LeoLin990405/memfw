@@ -41,6 +41,7 @@ from memfw.ports.models import (
     TASK_TYPES,
     normalize_tags,
 )
+from memfw.retrieval.health import HEALTH_KEY, from_conversation_search
 
 from .store import DATA_NOTICE, ConversationError, SessionInfo, Turn, safe_text, ts_key
 
@@ -724,8 +725,12 @@ def two_stage_search(
         "truncated": False,
         "next_offset": offset + limit if offset + limit < len(fused) else None,
     }
+    # retrieval_health is reserved inside the cap in its "with sessions" form.
+    # A reply that ends with no session is small (nothing was appended), so
+    # its "empty" form always fits.
+    health_room = _size({HEALTH_KEY: from_conversation_search({**response, "sessions": [{}]})})
     # Sized with the widest cursor and flag, so setting them later never overflows.
-    used = _size({**response, "truncated": True, "next_offset": 10**9})
+    used = _size({**response, "truncated": True, "next_offset": 10**9}) + health_room
     for position, (key, score) in enumerate(page):
         info = search._info(key)
         if info is None:  # admitted above, so only a store change in between
@@ -768,6 +773,7 @@ def two_stage_search(
                 continue
             item["windows"].append(window)
             used += size
+    response[HEALTH_KEY] = from_conversation_search(response)
     return response
 
 

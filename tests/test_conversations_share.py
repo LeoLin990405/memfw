@@ -28,6 +28,7 @@ from tests.conversation_fixtures import (
     turn,
     write_store,
 )
+from tests.real_home_guard import inspecting_real_home
 
 REAL_HOME = Path(os.path.expanduser("~"))
 REAL_DATA = REAL_HOME / ".local" / "share" / "memfw"
@@ -46,10 +47,12 @@ def _snapshot() -> tuple[Any, ...]:
 
 @pytest.fixture(autouse=True)
 def real_home_untouched(isolated_home: Path) -> Any:  # noqa: F811
-    before = _snapshot()
+    with inspecting_real_home():
+        before = _snapshot()
     yield
     assert Path.home() == isolated_home
-    assert _snapshot() == before
+    with inspecting_real_home():
+        assert _snapshot() == before
 
 
 SHARE_ON = {"conversation_share": {"enabled": True}}

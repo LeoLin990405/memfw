@@ -77,6 +77,8 @@ class ContextTools(GatewayBase):
         payload = {"v": 2, "limit_tokens": limit_tokens, **pack.as_dict()}
         if expected is not None:
             payload["unchanged"] = False
+        # From the slots' own degraded codes; the pack is unchanged.
+        payload["retrieval_health"] = self.runtime.context_health(payload)
         return payload
 
     def context_current_enabled(self) -> bool:

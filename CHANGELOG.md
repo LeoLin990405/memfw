@@ -17,6 +17,40 @@ The vault format did not change in `0.4.0` either: `vault.yaml` stays at
 
 ### Added
 
+- `retrieval_health` (`retrieval-health/1`, `memfw.retrieval.health`): one top-level
+  summary `{schema, mode, confidence, reasons, score_kind, note}` on `memory_search` (every
+  mode), `memory_context` v=2 and `conversations_search` (default and `two_stage`), derived
+  only from signals the output already carries (`degraded`, `errors`, `recall`,
+  `recall_metrics.dropped`, slot `degraded` codes). Results, order and scores are unchanged;
+  with no degradation the new key is the only difference. Fixed reason codes are listed in
+  [`docs/retrieval-health.md`](docs/retrieval-health.md) (zh-CN alongside); the pure
+  functions are reusable by clients. Each code has an `affects_mode` class (`yes`, `no`,
+  `fallback`, `empty`); informational codes (`keyword_only`, `adapters_shadow`, `withheld:*`)
+  never lower mode or confidence, and the cause code carries the degradation (no embedder:
+  `semantic_unavailable`, degraded/medium), as in fleet-memory. An empty answer carries
+  exactly one of `all_sources_failed`, `page_empty`, `empty_degraded` (a degraded or
+  fallback path: no result is not proof of absence), `withheld_only`, `no_match`. memfw's
+  table is the canonical one (fleet-memory's client codes included): `export_codes()` and the
+  committed `docs/retrieval-health-codes.json` carry it as data. No port contract changed
+  (`PORT_VERSIONS` unchanged).
+- `memory_search` `two_stage`: `degraded_sources` (sorted provider names, only when
+  non-empty) says which providers answered with a degraded page; `retrieval_health` reads it
+  as `source_fallback:<name>`. A reply degraded only by a failed access event stays
+  `full`/`high` with `access_not_recorded`.
+- `conversations_search` `two_stage`: `retrieval_health` counts toward `max_bytes` (its
+  "with sessions" form is reserved before sessions are packed), so near the cap one fewer
+  session or turn window may fit than in 0.4.0; `truncated`/`next_offset` say so as usual.
+- The `memfw` root and `memfw.retrieval` re-export lazily (`__getattr__`): importing
+  `memfw.retrieval.health` loads no other memfw module; `from memfw import RelatedIndex` and
+  `from memfw.retrieval import VaultRetriever` work as before (the latter now lives in
+  `memfw.retrieval.vault`).
+  MCP tool descriptions now say `conversations_get` `start`/`end` are turn indexes (not the
+  search `ref`/`offset` position key), when `conversations_search` `query` may be empty, and
+  that hybrid/two_stage `score` is a fused rank, not relevance.
+- Test-suite guard (`tests/conftest.py`): an audit hook fails any test that opens, connects
+  to, lists, links, touches or removes a path under the real `~/.local/share/memfw` or
+  `~/.local/share/fleet-memory` (absolute and symlink-resolved forms); isolate `HOME` or
+  pass a tmp path instead.
 - `memfw-wiki-gate` 0.1.0 (`packages/memfw-wiki-gate`, wheel `memfw_wiki_gate`), LLM Wiki
   W1-2: deterministic checks of a generated `memfw-wiki-page/1` page against its
   `memfw-wiki-job/1` job and, at intake, an admitted-view reader (`SourceResolver`). Per

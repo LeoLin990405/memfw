@@ -45,8 +45,8 @@ Sites = dict[str, int]
 ALLOWLIST: Final[dict[tuple[str, str], tuple[str, Sites]]] = {
     # --- package root ----------------------------------------------------------
     ("memfw", "memfw.related"): (
-        "A5: root __init__ re-exports RelatedIndex, so every `import memfw.x` loads"
-        " the vault (lazy __getattr__ re-export)",
+        "A5: root __init__ re-exports RelatedIndex (lazily, through __getattr__:"
+        " `import memfw.x` no longer loads it); the re-export itself remains",
         {"memfw": 1},
     ),
 }
