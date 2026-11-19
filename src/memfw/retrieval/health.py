@@ -22,21 +22,29 @@ Every reason code has an ``affects_mode`` class in ``REASON_CODES``
 degradation: no embedder is ``semantic_unavailable`` (``yes``), while
 ``keyword_only`` only describes the answer (``no``). Rules, first match wins:
 
-1. no results: ``empty`` / ``low``; the reasons say why (``no_match``,
-   ``all_sources_failed`` or ``withheld_only``) plus any other signal;
+1. no results: ``empty`` / ``low``; exactly one ``empty`` code says why, the
+   first that applies: ``all_sources_failed``, ``page_empty``,
+   ``empty_degraded`` (a ``yes``/``fallback`` reason: no result is then not
+   proof of absence), ``withheld_only``, ``no_match``;
 2. a ``fallback`` reason (the primary path failed, another answered):
    ``fallback`` / ``low``;
 3. a ``yes`` reason: ``degraded`` / ``medium``;
 4. otherwise (only ``no`` reasons, or none): ``full`` / ``high``.
 
-Informational (``no``) reasons never lower mode or confidence. Every reason
+Informational (``no``) reasons never lower mode or confidence. ``fts_fallback``
+and ``grep_fallback`` describe single-source answers; in a multi-source
+answer (recall, context) one source's fallback is ``source_fallback:<name>``
+(``yes``). This is the one canonical table: ``export_codes()`` returns it as
+data and ``docs/retrieval-health-codes.json`` is that data. Every reason
 is one of ``REASON_CODES`` (both docs tables list the same codes and classes;
 a test checks they agree); an unknown code raises ``ValueError``.
 """
 
 from __future__ import annotations
 
+import json
 import re
+import sys
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
@@ -49,6 +57,8 @@ __all__ = [
     "INFORMATIONAL",
     "MODES",
     "REASON_CODES",
+    "CODES_SCHEMA",
+    "NAME_PATTERN",
     "SCHEMA",
     "SCORE_KINDS",
     "WITHHELD_CATEGORIES",
@@ -56,6 +66,8 @@ __all__ = [
     "affects_mode",
     "check_reason",
     "derive",
+    "export_codes",
+    "export_codes_json",
     "from_context_pack",
     "from_conversation_search",
     "from_memory_search",
@@ -70,7 +82,8 @@ MODES: Final = ("full", "degraded", "fallback", "empty")
 CONFIDENCES: Final = ("high", "medium", "low")
 #: ``rank``: a fused reciprocal-rank score (weight/(60+rank), normalised): it
 #: orders hits and says nothing about relevance. ``none``: hits carry no score.
-SCORE_KINDS: Final = ("rank", "bm25", "cosine", "mixed", "none")
+#: ``keyword``: a literal-match order (grep, newest first) with no ranking score.
+SCORE_KINDS: Final = ("rank", "bm25", "cosine", "mixed", "keyword", "none")
 WITHHELD_CATEGORIES: Final = ("privacy", "tenant", "retired", "other")
 #: The coordinator's own providers; any other provider name is an adapter.
 BUILTIN_PROVIDERS: Final = frozenset({"fts", "hybrid"})
@@ -90,34 +103,49 @@ class Reason:
 
 
 #: Every reason code (``<name>``/``<n>``/``<category>`` are parameters), how it
-#: moves ``mode`` and what it means. Extend it, and both docs tables, together.
+#: moves ``mode`` and what it means. This is the one canonical table (memfw and
+#: its clients); ``export_codes()`` and ``docs/retrieval-health-codes.json``
+#: carry it as data. Extend it, the JSON and both docs tables together.
 REASON_CODES: Final[Mapping[str, Reason]] = {
+    # -- yes: the answer is degraded ------------------------------------------------
     "semantic_unavailable": Reason(
         "yes", "no embedder is configured: the semantic side did not run"
     ),
     "semantic_off": Reason(
         "yes", "a locality setting kept the query or summaries from the embedder"
     ),
-    "semantic_partial": Reason(
+    "semantic_partial": Reason("yes", "some providers returned partial semantic results"),
+    "vectors_partial": Reason(
         "yes", "some memories have no vector (kept from an off-host embedder)"
     ),
     "semantic_empty": Reason("yes", "the semantic side ran but recalled nothing"),
     "summaries_unavailable": Reason("yes", "session summaries/tags could not be read"),
     "expansion_empty": Reason("yes", "multihop expansion added no hit; first-hop results only"),
+    "meta_index_stale": Reason("yes", "a metadata index the answer relies on is stale"),
     "qmd_live_read_errors:<n>": Reason("yes", "a QMD live index had <n> read errors"),
     "source_timeout:<name>": Reason("yes", "source <name> timed out"),
     "source_busy:<name>": Reason("yes", "source <name> was busy (in-flight cap) and was skipped"),
     "source_error:<name>": Reason("yes", "source <name> failed or returned invalid output"),
     "source_unavailable:<name>": Reason("yes", "source <name> reported itself unavailable"),
+    "source_fallback:<name>": Reason(
+        "yes", "in a multi-source answer, source <name> answered from its own fallback"
+    ),
     "resolver_error:<name>": Reason(
         "yes", "the <name> resolver failed; its candidates were dropped"
     ),
     "adapters_timeout": Reason("yes", "at least one recall adapter timed out"),
     "adapters_busy": Reason("yes", "at least one recall adapter was busy"),
-    "fts_fallback": Reason("fallback", "the semantic path failed; FTS answered instead"),
+    # -- fallback: the primary path failed and another answered ---------------------
+    "fts_fallback": Reason(
+        "fallback", "a single-source answer came from the FTS fallback (primary path failed)"
+    ),
+    "grep_fallback": Reason(
+        "fallback", "a single-source answer came from a plain-text grep fallback"
+    ),
     "route_fallback": Reason(
         "fallback", "the routed providers failed; the remaining ones answered"
     ),
+    # -- no: informational, never lowers mode or confidence -------------------------
     "keyword_only": Reason("no", "only literal (keyword) matching produced the answer"),
     "adapters_shadow": Reason("no", "recall adapters run in shadow mode (not in the answer)"),
     "withheld:<category>:<n>": Reason(
@@ -126,9 +154,16 @@ REASON_CODES: Final[Mapping[str, Reason]] = {
     "access_not_recorded": Reason(
         "no", "a returned hit's access event or warm-up failed (hits unaffected)"
     ),
-    "no_match": Reason("empty", "nothing matched"),
+    # -- empty: explains an empty answer (exactly one is added) ---------------------
     "all_sources_failed": Reason("empty", "every source failed: an empty answer proves nothing"),
+    "page_empty": Reason(
+        "empty", "this page is empty but the search has candidates (offset past them, or cap)"
+    ),
+    "empty_degraded": Reason(
+        "empty", "nothing came back while a path was degraded or fell back: not proof of absence"
+    ),
     "withheld_only": Reason("empty", "every match was withheld by policy"),
+    "no_match": Reason("empty", "nothing matched, with every path healthy"),
 }
 
 #: Reason heads (the part before the first ``:``) whose ``affects_mode`` is ``no``.
@@ -137,12 +172,22 @@ INFORMATIONAL: Final = frozenset(
     for template, reason in REASON_CODES.items()
     if reason.affects_mode == "no"
 )
+#: The ``empty`` codes, in the order ``derive`` picks the one it adds.
+_EMPTY_ORDER: Final = (
+    "all_sources_failed",
+    "page_empty",
+    "empty_degraded",
+    "withheld_only",
+    "no_match",
+)
 #: Reasons that only explain an empty answer.
 _EMPTY_ONLY: Final = frozenset(
     template for template, reason in REASON_CODES.items() if reason.affects_mode == "empty"
 )
 
-_NAME = r"[A-Za-z0-9_.-]{1,64}"
+#: Every ``<name>`` parameter (provider, source, slot, resolver): lowercase.
+NAME_PATTERN: Final = r"[a-z][a-z0-9_.-]{0,63}"
+_NAME = NAME_PATTERN
 _PATTERNS: Final[tuple[re.Pattern[str], ...]] = tuple(
     re.compile(
         "^"
@@ -164,6 +209,8 @@ _NOTES: Final[Mapping[str, str]] = {
     "degraded": "部分检索路径降级，结果可能不完整，见 reasons。",
     "fallback": "主检索路径失败，已回退到备用路径，结果可信度低。",
     "no_match": "没有匹配结果。",
+    "empty_degraded": "没有结果不代表不存在：检索路径有降级或回退。",
+    "page_empty": "这一页没有结果，但检索有候选：偏移超出了范围或这一页放不下。",
     "all_sources_failed": "所有检索源都失败了，空结果不代表没有相关内容。",
     "withheld_only": "有匹配项，但都被策略隐藏。",
 }
@@ -197,28 +244,34 @@ def derive(
     score_kind: str = "rank",
     fallback: bool = False,
     failed: bool = False,
+    page_empty: bool = False,
 ) -> dict[str, Any]:
     """The ``retrieval-health/1`` object for one answer (module docstring rules).
 
     ``fallback``: the primary path failed and another answered. ``failed``:
-    every source failed (an empty answer then says ``all_sources_failed``).
+    every source failed. ``page_empty``: this page is empty although the
+    search has candidates. With no results exactly one ``empty`` code is
+    added, the first that applies: ``all_sources_failed`` (``failed``),
+    ``page_empty``, ``empty_degraded`` (any ``yes``/``fallback`` reason, or
+    ``fallback``), ``withheld_only`` (a ``withheld`` reason), ``no_match``.
     """
 
     if score_kind not in SCORE_KINDS:
         raise ValueError(f"unknown score_kind: {score_kind!r}")
-    found = {check_reason(code) for code in reasons}
-    if result_count <= 0:
-        found -= _EMPTY_ONLY
-        if failed:
-            found.add("all_sources_failed")
-        elif any(_head(code) == "withheld" for code in found):
-            found.add("withheld_only")
-        else:
-            found.add("no_match")
-        why = sorted(found & _EMPTY_ONLY)[0]
-        return _health("empty", "low", found, score_kind, _NOTES[why])
-    found -= _EMPTY_ONLY
+    found = {check_reason(code) for code in reasons} - _EMPTY_ONLY
     kinds = {affects_mode(code) for code in found}
+    if result_count <= 0:
+        if failed:
+            why = "all_sources_failed"
+        elif page_empty:
+            why = "page_empty"
+        elif fallback or kinds & {"yes", "fallback"}:
+            why = "empty_degraded"
+        elif any(_head(code) == "withheld" for code in found):
+            why = "withheld_only"
+        else:
+            why = "no_match"
+        return _health("empty", "low", found | {why}, score_kind, _NOTES[why])
     if fallback or failed or "fallback" in kinds:
         return _health("fallback", "low", found, score_kind, _NOTES["fallback"])
     if "yes" in kinds:
@@ -253,7 +306,9 @@ def withheld_category(reason: str) -> str:
 
 
 def _safe_name(value: object) -> str:
-    text = str(value)
+    """``value`` as a ``<name>`` parameter: lowercased, else ``unknown``."""
+
+    text = str(value).lower()
     return text if re.fullmatch(_NAME, text) else "unknown"
 
 
@@ -335,11 +390,14 @@ def from_recall(
 
 #: ``errors`` entries of the vault search paths, by exact code or text prefix.
 _ERROR_CODES: Final[Mapping[str, str]] = {
-    "semantic_partial": "semantic_partial",
+    # memory_hybrid's code: some memories got no vector (the locality gate).
+    "semantic_partial": "vectors_partial",
     "semantic_query_withheld": "semantic_off",
     "rerank_withheld": "semantic_off",
     "rewrite_withheld": "semantic_off",
     "access_not_recorded": "access_not_recorded",
+    # The shared FTS reader: its index needs a rebuild, so it returned nothing.
+    "index_stale": "source_unavailable:fts",
 }
 _ERROR_PREFIXES: Final[tuple[tuple[str, str], ...]] = (
     ("hybrid unavailable", "source_error:hybrid"),
@@ -347,6 +405,8 @@ _ERROR_PREFIXES: Final[tuple[tuple[str, str], ...]] = (
     ("rerank:", "source_error:rerank"),
     ("rewrite:", "source_error:rewrite"),
     ("trace:", "source_error:trace"),
+    ("unicode61 query terms unavailable", "source_error:query_terms"),
+    ("alias expansion unavailable", "source_error:aliases"),
 )
 
 
@@ -391,12 +451,20 @@ def from_memory_search(
         else:
             semantic_configured = bool((payload.get("model_versions") or {}).get("embedding"))
     if requested_mode == "two_stage" and isinstance(recall, Mapping):
+        extra = _error_reasons(errors)
+        unexplained = not (
+            recall.get("degraded") or recall.get("resolvers_degraded") or recall.get("fail_closed")
+        ) and all(affects_mode(code) == "no" for code in extra)
+        if payload.get("degraded") and unexplained:
+            # A provider reported a degraded page (it answered from its own
+            # fallback); the payload does not say which one.
+            extra.add("source_fallback:unknown")
         return from_recall(
-            payload["recall"],
+            recall,
             payload.get("recall_metrics"),
             result_count=len(results),
             semantic_configured=semantic_configured,
-            extra_reasons=_error_reasons(errors),
+            extra_reasons=extra,
         )
     reasons = _error_reasons(errors)
     used = str(payload.get("mode") or requested_mode)
@@ -417,11 +485,21 @@ def from_memory_search(
     elif payload.get("degraded") and not reasons and used in ("hybrid", "vector"):
         # The semantic side recalled nothing: the hits are the FTS side's.
         reasons.update(("semantic_empty", "keyword_only"))
+    # Single-source outputs: every source this mode reads failed, and nothing came back.
+    sources = ("hybrid", "fts") if requested_mode in ("hybrid", "vector") else ("fts",)
+    failed = not results and all(
+        f"source_error:{name}" in reasons or f"source_unavailable:{name}" in reasons
+        for name in sources
+    )
     score_kind = {"fts": "bm25", "multihop": "bm25", "vector": "cosine"}.get(used, "rank")
     if requested_mode in ("hybrid", "vector") and used == "fts":
         score_kind = "bm25"
     return derive(
-        result_count=len(results), reasons=reasons, score_kind=score_kind, fallback=fallback
+        result_count=len(results),
+        reasons=reasons,
+        score_kind=score_kind,
+        fallback=fallback,
+        failed=failed,
     )
 
 
@@ -446,8 +524,11 @@ def from_conversation_search(payload: Mapping[str, Any]) -> dict[str, Any]:
     candidates = payload.get("candidates") or {}
     if _SEMANTIC_MISSING & set(degraded) and not candidates.get("tags"):
         reasons.add("keyword_only")
+    sessions = payload.get("sessions") or []
+    total = candidates.get("total")
+    page_empty = not sessions and isinstance(total, int) and total > 0
     return derive(
-        result_count=len(payload.get("sessions") or []), reasons=reasons, score_kind="rank"
+        result_count=len(sessions), reasons=reasons, score_kind="rank", page_empty=page_empty
     )
 
 
@@ -468,3 +549,43 @@ def from_context_pack(payload: Mapping[str, Any]) -> dict[str, Any]:
     count = sum(len(slot.get("entries") or []) for slot in slots)
     failed = bool(slots) and len(status) == len(slots)
     return derive(result_count=count, reasons=reasons, score_kind="none", failed=failed)
+
+
+#: ``export_codes()`` schema.
+CODES_SCHEMA: Final = "retrieval-health-codes/1"
+
+
+def export_codes() -> dict[str, Any]:
+    """The canonical code table as JSON-serialisable data.
+
+    ``docs/retrieval-health-codes.json`` is this, written by
+    ``python -m memfw.retrieval.health`` (a test checks they match); clients
+    compare their copy against it.
+    """
+
+    return {
+        "schema": CODES_SCHEMA,
+        "health_schema": SCHEMA,
+        "key": HEALTH_KEY,
+        "modes": list(MODES),
+        "confidences": list(CONFIDENCES),
+        "score_kinds": list(SCORE_KINDS),
+        "affects_mode": list(AFFECTS_MODE),
+        "withheld_categories": list(WITHHELD_CATEGORIES),
+        "name_pattern": NAME_PATTERN,
+        "empty_order": list(_EMPTY_ORDER),
+        "codes": {
+            template: {"affects_mode": reason.affects_mode, "meaning": reason.meaning}
+            for template, reason in REASON_CODES.items()
+        },
+    }
+
+
+def export_codes_json() -> str:
+    """``export_codes()`` as the committed JSON text (sorted keys, 2-space indent)."""
+
+    return json.dumps(export_codes(), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+
+
+if __name__ == "__main__":  # pragma: no cover - ``python -m memfw.retrieval.health``
+    sys.stdout.write(export_codes_json())

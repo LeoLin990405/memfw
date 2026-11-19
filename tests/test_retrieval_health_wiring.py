@@ -16,13 +16,17 @@ from typing import Any
 
 import pytest
 
-from memfw.conversations import two_stage
+from memfw.conversations import open_share, two_stage
 from memfw.mcp.server import Gateway
 from memfw.notes import HashEmbeddingProvider
 from memfw.retrieval import health
 from memfw.runtime import search as runtime_search
-from tests.conversation_fixtures import isolated_home  # noqa: F401  (fixture)
-from tests.test_conversations_two_stage import BrokenEmbedder, WordEmbedder, _share
+from tests.conversation_fixtures import (
+    isolated_home,  # noqa: F401  (fixture)
+    turn,
+    write_store,
+)
+from tests.test_conversations_two_stage import DAY, BrokenEmbedder, WordEmbedder, _setup, _share
 from tests.test_mcp_two_stage import _gateway, _vault
 
 KEY = health.HEALTH_KEY
@@ -226,6 +230,35 @@ def test_conversation_two_stage_healthy_is_full(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("cap", [4096, 8192, 16384])
 def test_conversation_two_stage_cap_holds_with_health(tmp_path: Path, cap: int) -> None:
-    share = _share(tmp_path / str(cap), embedder=WordEmbedder())
-    got = share.search("uploader", mode="two_stage", limit=50, max_bytes=cap)
+    """A page that really truncates still fits the cap with retrieval_health in it."""
+
+    vault, store = _setup(tmp_path / str(cap))
+    many = [
+        turn("codex", f"s-many-{index}", position, "user", "uploader " + "x" * 3000, DAY + "5:00Z")
+        for index in range(30)
+        for position in range(4)
+    ]
+    write_store(store, many)
+    share = open_share(vault, "claude", store=store, embedder=WordEmbedder())
+    got = share.search(
+        "uploader", mode="two_stage", limit=50, windows=5, window_turns=3, max_bytes=cap
+    )
+    assert got["truncated"] is True and got["sessions"]
     assert len(json.dumps(got, ensure_ascii=False).encode()) <= cap
+    assert got[KEY]["mode"] != "empty"
+
+
+def test_conversation_two_stage_page_beyond_range(tmp_path: Path) -> None:
+    share = _share(tmp_path, embedder=WordEmbedder())
+    first = share.search("uploader", mode="two_stage")
+    assert first["sessions"] and first["candidates"]["total"] > 0
+    far = share.search("uploader", mode="two_stage", offset=first["candidates"]["total"] + 5)
+    assert far["sessions"] == []
+    assert far[KEY]["mode"] == "empty" and "page_empty" in far[KEY]["reasons"]
+    assert "no_match" not in far[KEY]["reasons"]
+
+
+def test_conversation_two_stage_empty_while_degraded(tmp_path: Path) -> None:
+    got = _share(tmp_path).search("zzzqqqnothing", mode="two_stage")
+    assert got["sessions"] == [] and got["degraded"] == ["no_embedder"]
+    assert "empty_degraded" in got[KEY]["reasons"] and "no_match" not in got[KEY]["reasons"]

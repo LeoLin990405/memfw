@@ -725,13 +725,10 @@ def two_stage_search(
         "truncated": False,
         "next_offset": offset + limit if offset + limit < len(fused) else None,
     }
-    # retrieval_health depends on the signals above and on whether any session
-    # is returned: the larger of its two forms is reserved inside the cap.
-    shapes: tuple[list[dict[str, Any]], ...] = ([], [{}])
-    health_room = max(
-        _size({HEALTH_KEY: from_conversation_search({**response, "sessions": shape})})
-        for shape in shapes
-    )
+    # retrieval_health is reserved inside the cap in its "with sessions" form.
+    # A reply that ends with no session is small (nothing was appended), so
+    # its "empty" form always fits.
+    health_room = _size({HEALTH_KEY: from_conversation_search({**response, "sessions": [{}]})})
     # Sized with the widest cursor and flag, so setting them later never overflows.
     used = _size({**response, "truncated": True, "next_offset": 10**9}) + health_room
     for position, (key, score) in enumerate(page):

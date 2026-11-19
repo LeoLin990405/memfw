@@ -10,17 +10,29 @@ import os
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any
 
 #: The real HOME's live data (memfw's conversation store and worker state, the
 #: fleet-memory deployment). Read once at import, before any test changes HOME.
-_REAL_HOME = Path(os.path.expanduser("~")).resolve()
+_HOME = os.path.abspath(os.path.expanduser("~"))
+_DIR_NAMES = ("memfw", "fleet-memory")
+
+
+def _forms(path: str) -> tuple[str, ...]:
+    """``path`` as written (absolute) and with symlinks resolved, normalised."""
+
+    plain = os.path.normcase(os.path.abspath(path))
+    real = os.path.normcase(os.path.realpath(path))
+    return (plain,) if real == plain else (plain, real)
+
+
+#: Each protected dir, in its absolute and its resolved form.
 PROTECTED_DIRS: tuple[str, ...] = tuple(
-    os.path.normcase(os.fspath(_REAL_HOME / ".local" / "share" / name))
-    for name in ("memfw", "fleet-memory")
+    dict.fromkeys(
+        form for name in _DIR_NAMES for form in _forms(os.path.join(_HOME, ".local", "share", name))
+    )
 )
-#: Audit events whose first argument is a path a test is about to use.
+#: Audit events whose path arguments (the first two) a test is about to use.
 _PATH_EVENTS = frozenset(
     {
         "open",
@@ -33,15 +45,25 @@ _PATH_EVENTS = frozenset(
         "os.rmdir",
         "os.truncate",
         "os.chmod",
+        "os.utime",
+        "os.symlink",
+        "os.link",
         "shutil.copyfile",
+        "shutil.copytree",
+        "shutil.move",
         "shutil.rmtree",
     }
 )
 _guard_active = False
+_checking = False
 
 
 def protected_path(value: Any) -> str | None:
-    """The protected dir ``value`` falls under, else ``None`` (fds and odd values: ``None``)."""
+    """The protected dir ``value`` falls under, else ``None`` (fds and odd values: ``None``).
+
+    Both forms of ``value`` are compared with both forms of each dir, so a
+    symlink into a protected dir (or a symlinked HOME) is caught too.
+    """
 
     if isinstance(value, int) or value is None:
         return None
@@ -53,17 +75,22 @@ def protected_path(value: Any) -> str | None:
         return None
     if raw.startswith("file:"):
         raw = raw[5:].split("?", 1)[0]
-    path = os.path.normcase(os.path.abspath(os.path.expanduser(raw)))
-    for root in PROTECTED_DIRS:
-        if path == root or path.startswith(root + os.sep):
-            return root
+    for path in _forms(os.path.expanduser(raw)):
+        for root in PROTECTED_DIRS:
+            if path == root or path.startswith(root + os.sep):
+                return root
     return None
 
 
 def _audit(event: str, args: tuple[Any, ...]) -> None:
-    if not _guard_active or event not in _PATH_EVENTS or not args:
+    global _checking
+    if not _guard_active or _checking or event not in _PATH_EVENTS or not args:
         return
-    root = protected_path(args[0])
+    _checking = True
+    try:
+        root = next((found for found in map(protected_path, args[:2]) if found is not None), None)
+    finally:
+        _checking = False
     if root is not None:
         raise AssertionError(
             f"test touched the real per-user data dir {root} ({event}); "

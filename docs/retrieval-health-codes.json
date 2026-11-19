@@ -1,0 +1,162 @@
+{
+  "affects_mode": [
+    "yes",
+    "no",
+    "fallback",
+    "empty"
+  ],
+  "codes": {
+    "access_not_recorded": {
+      "affects_mode": "no",
+      "meaning": "a returned hit's access event or warm-up failed (hits unaffected)"
+    },
+    "adapters_busy": {
+      "affects_mode": "yes",
+      "meaning": "at least one recall adapter was busy"
+    },
+    "adapters_shadow": {
+      "affects_mode": "no",
+      "meaning": "recall adapters run in shadow mode (not in the answer)"
+    },
+    "adapters_timeout": {
+      "affects_mode": "yes",
+      "meaning": "at least one recall adapter timed out"
+    },
+    "all_sources_failed": {
+      "affects_mode": "empty",
+      "meaning": "every source failed: an empty answer proves nothing"
+    },
+    "empty_degraded": {
+      "affects_mode": "empty",
+      "meaning": "nothing came back while a path was degraded or fell back: not proof of absence"
+    },
+    "expansion_empty": {
+      "affects_mode": "yes",
+      "meaning": "multihop expansion added no hit; first-hop results only"
+    },
+    "fts_fallback": {
+      "affects_mode": "fallback",
+      "meaning": "a single-source answer came from the FTS fallback (primary path failed)"
+    },
+    "grep_fallback": {
+      "affects_mode": "fallback",
+      "meaning": "a single-source answer came from a plain-text grep fallback"
+    },
+    "keyword_only": {
+      "affects_mode": "no",
+      "meaning": "only literal (keyword) matching produced the answer"
+    },
+    "meta_index_stale": {
+      "affects_mode": "yes",
+      "meaning": "a metadata index the answer relies on is stale"
+    },
+    "no_match": {
+      "affects_mode": "empty",
+      "meaning": "nothing matched, with every path healthy"
+    },
+    "page_empty": {
+      "affects_mode": "empty",
+      "meaning": "this page is empty but the search has candidates (offset past them, or cap)"
+    },
+    "qmd_live_read_errors:<n>": {
+      "affects_mode": "yes",
+      "meaning": "a QMD live index had <n> read errors"
+    },
+    "resolver_error:<name>": {
+      "affects_mode": "yes",
+      "meaning": "the <name> resolver failed; its candidates were dropped"
+    },
+    "route_fallback": {
+      "affects_mode": "fallback",
+      "meaning": "the routed providers failed; the remaining ones answered"
+    },
+    "semantic_empty": {
+      "affects_mode": "yes",
+      "meaning": "the semantic side ran but recalled nothing"
+    },
+    "semantic_off": {
+      "affects_mode": "yes",
+      "meaning": "a locality setting kept the query or summaries from the embedder"
+    },
+    "semantic_partial": {
+      "affects_mode": "yes",
+      "meaning": "some providers returned partial semantic results"
+    },
+    "semantic_unavailable": {
+      "affects_mode": "yes",
+      "meaning": "no embedder is configured: the semantic side did not run"
+    },
+    "source_busy:<name>": {
+      "affects_mode": "yes",
+      "meaning": "source <name> was busy (in-flight cap) and was skipped"
+    },
+    "source_error:<name>": {
+      "affects_mode": "yes",
+      "meaning": "source <name> failed or returned invalid output"
+    },
+    "source_fallback:<name>": {
+      "affects_mode": "yes",
+      "meaning": "in a multi-source answer, source <name> answered from its own fallback"
+    },
+    "source_timeout:<name>": {
+      "affects_mode": "yes",
+      "meaning": "source <name> timed out"
+    },
+    "source_unavailable:<name>": {
+      "affects_mode": "yes",
+      "meaning": "source <name> reported itself unavailable"
+    },
+    "summaries_unavailable": {
+      "affects_mode": "yes",
+      "meaning": "session summaries/tags could not be read"
+    },
+    "vectors_partial": {
+      "affects_mode": "yes",
+      "meaning": "some memories have no vector (kept from an off-host embedder)"
+    },
+    "withheld:<category>:<n>": {
+      "affects_mode": "no",
+      "meaning": "<n> matches withheld by policy (privacy|tenant|retired|other)"
+    },
+    "withheld_only": {
+      "affects_mode": "empty",
+      "meaning": "every match was withheld by policy"
+    }
+  },
+  "confidences": [
+    "high",
+    "medium",
+    "low"
+  ],
+  "empty_order": [
+    "all_sources_failed",
+    "page_empty",
+    "empty_degraded",
+    "withheld_only",
+    "no_match"
+  ],
+  "health_schema": "retrieval-health/1",
+  "key": "retrieval_health",
+  "modes": [
+    "full",
+    "degraded",
+    "fallback",
+    "empty"
+  ],
+  "name_pattern": "[a-z][a-z0-9_.-]{0,63}",
+  "schema": "retrieval-health-codes/1",
+  "score_kinds": [
+    "rank",
+    "bm25",
+    "cosine",
+    "mixed",
+    "keyword",
+    "none"
+  ],
+  "withheld_categories": [
+    "privacy",
+    "tenant",
+    "retired",
+    "other"
+  ]
+}

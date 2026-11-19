@@ -340,7 +340,8 @@ def test_memory_semantic_off_and_partial() -> None:
         model_versions={"embedding": "m"},
     )
     out = from_memory_search(payload, requested_mode="hybrid")
-    assert out["reasons"] == ["semantic_off", "semantic_partial"]
+    # memory_hybrid's "semantic_partial" means memories without vectors.
+    assert out["reasons"] == ["semantic_off", "vectors_partial"]
     assert (out["mode"], out["score_kind"]) == ("degraded", "rank")
 
 
@@ -626,3 +627,141 @@ def test_docs_table_lists_affects_mode(doc: str) -> None:
         assert mine, f"{doc}: no table row for {template}"
         cells = [cell.strip() for cell in mine[0].strip().strip("|").split("|")]
         assert f"`{reason.affects_mode}`" in cells, f"{doc}: {template} {cells}"
+
+
+# -- review round 2: empty answers, canonical table, names ------------------------
+
+
+@pytest.mark.parametrize("code", ["semantic_unavailable", "source_timeout:hybrid", "fts_fallback"])
+def test_empty_with_a_degrading_reason_is_empty_degraded(code: str) -> None:
+    out = derive(result_count=0, reasons=[code])
+    assert out["mode"] == "empty" and out["confidence"] == "low"
+    assert "empty_degraded" in out["reasons"]
+    assert "no_match" not in out["reasons"] and "withheld_only" not in out["reasons"]
+    assert out["note"] == "没有结果不代表不存在：检索路径有降级或回退。"
+
+
+def test_empty_degraded_beats_withheld_only_and_informational_does_not_count() -> None:
+    both = derive(result_count=0, reasons=["withheld:privacy:2", "semantic_off"])
+    assert "empty_degraded" in both["reasons"] and "withheld_only" not in both["reasons"]
+    info = derive(result_count=0, reasons=["keyword_only", "adapters_shadow"])
+    assert "no_match" in info["reasons"]
+    withheld = derive(result_count=0, reasons=["withheld:tenant:1", "keyword_only"])
+    assert "withheld_only" in withheld["reasons"]
+
+
+def test_empty_order_failed_then_page_then_degraded() -> None:
+    assert health.export_codes()["empty_order"] == [
+        "all_sources_failed",
+        "page_empty",
+        "empty_degraded",
+        "withheld_only",
+        "no_match",
+    ]
+    out = derive(result_count=0, reasons=["source_error:fts"], failed=True, page_empty=True)
+    assert [code for code in out["reasons"] if health.affects_mode(code) == "empty"] == [
+        "all_sources_failed"
+    ]
+    page = derive(result_count=0, reasons=["semantic_unavailable"], page_empty=True)
+    assert "page_empty" in page["reasons"] and "empty_degraded" not in page["reasons"]
+    for case in (out, page):  # exactly one empty code
+        assert sum(health.affects_mode(code) == "empty" for code in case["reasons"]) == 1
+
+
+def test_memory_search_every_source_failed_is_all_sources_failed() -> None:
+    payload = _search(
+        degraded=True, errors=["hybrid unavailable: boom", "fts index unavailable: x"]
+    )
+    payload["results"] = []
+    out = from_memory_search(payload, requested_mode="hybrid")
+    assert out["mode"] == "empty" and "all_sources_failed" in out["reasons"]
+    only_hybrid = _search(degraded=True, errors=["hybrid unavailable: boom"])
+    only_hybrid["results"] = []
+    one = from_memory_search(only_hybrid, requested_mode="hybrid")
+    assert "empty_degraded" in one["reasons"] and "all_sources_failed" not in one["reasons"]
+    stale = {"mode": "fts", "degraded": True, "errors": ["index_stale"], "results": []}
+    gone = from_memory_search(stale, requested_mode="fts")
+    assert gone["reasons"] == ["all_sources_failed", "source_unavailable:fts"]
+
+
+def test_conversation_page_beyond_range_is_page_empty() -> None:
+    payload = _two_stage([])
+    payload["sessions"] = []
+    payload["candidates"] = {"fts": 3, "semantic": 0, "tags": 0, "total": 3}
+    out = from_conversation_search(payload)
+    assert out["mode"] == "empty" and "page_empty" in out["reasons"]
+    assert "no_match" not in out["reasons"]
+    payload["candidates"] = {"fts": 0, "semantic": 0, "tags": 0, "total": 0}
+    assert "no_match" in from_conversation_search(payload)["reasons"]
+
+
+def test_two_stage_unexplained_degraded_page_is_source_fallback() -> None:
+    payload = {
+        "mode": "two_stage",
+        "degraded": True,
+        "errors": [],
+        "results": [{"id": "m1"}],
+        "recall": _labels(providers=["fts", "hybrid"]),
+        "recall_metrics": {"dropped": {}},
+    }
+    out = from_memory_search(payload, requested_mode="two_stage")
+    assert out["reasons"] == ["source_fallback:unknown"]
+    assert (out["mode"], out["confidence"]) == ("degraded", "medium")
+    payload["degraded"] = False
+    assert from_memory_search(payload, requested_mode="two_stage")["mode"] == "full"
+
+
+def test_names_are_lowercase() -> None:
+    assert health.NAME_PATTERN == "[a-z][a-z0-9_.-]{0,63}"
+    labels = _labels(providers=["fts"], degraded={"QDrant": "timeout"})
+    out = from_recall(labels, None, result_count=1)
+    assert "source_timeout:qdrant" in out["reasons"]
+    for bad in ("source_timeout:Qdrant", "source_timeout:9x", "source_timeout:_x"):
+        with pytest.raises(ValueError):
+            check_reason(bad)
+
+
+def test_score_kinds_include_keyword_and_none() -> None:
+    assert health.SCORE_KINDS == ("rank", "bm25", "cosine", "mixed", "keyword", "none")
+    assert derive(result_count=1, score_kind="keyword")["score_kind"] == "keyword"
+
+
+def test_client_codes_are_in_the_canonical_table() -> None:
+    for template, kind in {
+        "grep_fallback": "fallback",
+        "meta_index_stale": "yes",
+        "empty_degraded": "empty",
+        "page_empty": "empty",
+        "source_fallback:<name>": "yes",
+        "vectors_partial": "yes",
+        "semantic_partial": "yes",
+    }.items():
+        assert REASON_CODES[template].affects_mode == kind, template
+    assert "partial semantic results" in REASON_CODES["semantic_partial"].meaning
+
+
+def test_export_codes_matches_the_committed_json() -> None:
+    import json
+
+    data = health.export_codes()
+    json.dumps(data)  # serialisable
+    assert set(data["codes"]) == set(REASON_CODES)
+    committed = Path(__file__).resolve().parents[1] / "docs" / "retrieval-health-codes.json"
+    assert committed.read_text(encoding="utf-8") == health.export_codes_json(), (
+        "regenerate: python -m memfw.retrieval.health > docs/retrieval-health-codes.json"
+    )
+    assert json.loads(committed.read_text(encoding="utf-8")) == data
+
+
+def test_health_imports_no_heavy_memfw_modules() -> None:
+    import subprocess
+    import sys
+
+    code = (
+        "import sys, memfw.retrieval.health; "
+        "print(sorted(m for m in sys.modules if m.startswith('memfw')))"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True
+    ).stdout
+    assert out.strip() == "['memfw', 'memfw.retrieval', 'memfw.retrieval.health']"
