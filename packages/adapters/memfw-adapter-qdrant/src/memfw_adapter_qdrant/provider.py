@@ -31,6 +31,16 @@ adds ``vault`` and ``embedder``):
     ``public``, ``shared`` or both (default ``public,shared``).
 ``timeout_seconds``
     Per-request timeout (default 2.0).
+``embedding_timeout_seconds``
+    Timeout of one embedding request, in (0, 600] (default
+    ``MEMFW_EMBEDDING_TIMEOUT``, else 30). Used by the adapter's own embedder
+    (built from ``MEMFW_EMBEDDING_*``), for ``sync`` and, being the same
+    object, for the query embedding of a search; an embedder the runtime
+    injects keeps its own timeout.
+``embedding_batch_size``
+    Texts per embedding request and memories per ``sync`` upsert, in [1, 256]
+    (default ``MEMFW_EMBEDDING_BATCH_SIZE``, else 16). Neither setting changes
+    a vector or the fingerprint.
 ``name``
     Provider name (default ``qdrant``).
 ``vault_id``
@@ -65,7 +75,14 @@ from ._ports import (
     check_name,
     is_vault,
 )
-from .embed import EmbedderError, dimension_of, embedder_from_env, fingerprint_of
+from .embed import (
+    EmbedderError,
+    check_batch_size,
+    check_timeout,
+    dimension_of,
+    embedder_from_env,
+    fingerprint_of,
+)
 from .http import QdrantClient, QdrantError, check_base_url, collection_path, is_loopback_host
 from .vault import check_vault_id, configured_vault_id, points_key
 
@@ -94,6 +111,8 @@ KNOWN: Final = frozenset(
         "allow_remote",
         "clearance",
         "timeout_seconds",
+        "embedding_timeout_seconds",
+        "embedding_batch_size",
         "name",
         "vault_id",
     }
@@ -116,6 +135,9 @@ class Settings:
     name: str = NAME
     #: Operator-chosen vault id; required with ``allow_remote`` (see ``points_key``).
     vault_id: str = ""
+    #: Embedding request timeout / batch size; None: environment, else 30 s / 16.
+    embedding_timeout_seconds: float | None = None
+    embedding_batch_size: int | None = None
 
     @classmethod
     def from_mapping(cls, settings: Mapping[str, Any]) -> Settings:
@@ -154,6 +176,12 @@ class Settings:
             raise ValueError("timeout_seconds must be a number")
         if not math.isfinite(timeout) or not 0 < timeout <= 60:
             raise ValueError("timeout_seconds must be in (0, 60]")
+        embedding_timeout = settings.get("embedding_timeout_seconds")
+        if embedding_timeout is not None:
+            embedding_timeout = check_timeout(embedding_timeout)
+        embedding_batch = settings.get("embedding_batch_size")
+        if embedding_batch is not None:
+            embedding_batch = check_batch_size(embedding_batch)
         name = settings.get("name", NAME)
         if not isinstance(name, str):
             raise ValueError("name must be a string")
@@ -176,6 +204,8 @@ class Settings:
             timeout_seconds=float(timeout),
             name=check_name(name, what="provider"),
             vault_id=str(vault_id),
+            embedding_timeout_seconds=embedding_timeout,
+            embedding_batch_size=embedding_batch,
         )
 
 
@@ -341,14 +371,19 @@ def factory(settings: Mapping[str, Any] | None = None) -> QdrantProvider:
     """``module:factory`` entry: ``memfw_adapter_qdrant:factory``.
 
     The runtime passes ``embedder``; without one (``None`` or absent) the
-    ``MEMFW_EMBEDDING_*`` environment builds the same endpoint's client.
+    ``MEMFW_EMBEDDING_*`` environment builds the same endpoint's client, with
+    ``embedding_timeout_seconds`` / ``embedding_batch_size`` when given. An
+    injected embedder is used as given (never modified).
     """
 
     values = dict(settings or {})
     embedder = values.get("embedder")
     checked = Settings.from_mapping(values)
     if embedder is None:
-        embedder = embedder_from_env()
+        embedder = embedder_from_env(
+            timeout=checked.embedding_timeout_seconds,
+            batch_size=checked.embedding_batch_size,
+        )
     return QdrantProvider(checked, embedder=embedder)
 
 

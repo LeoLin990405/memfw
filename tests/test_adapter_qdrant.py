@@ -17,6 +17,7 @@ import re
 import socket
 import sys
 import threading
+import time
 import urllib.request
 from collections.abc import Iterator, Sequence
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -46,9 +47,11 @@ if str(ADAPTER_SRC) not in sys.path:  # a workspace member; CI installs only mem
     sys.path.insert(0, str(ADAPTER_SRC))
 
 from memfw_adapter_qdrant import SPEC, QdrantProvider, factory  # noqa: E402
+from memfw_adapter_qdrant import embed as qembed  # noqa: E402
 from memfw_adapter_qdrant import http as qhttp  # noqa: E402
 from memfw_adapter_qdrant.cli import main as cli_main  # noqa: E402
 from memfw_adapter_qdrant.embed import (  # noqa: E402
+    EmbedderError,
     EnvEmbedder,
     embedder_from_env,
     fingerprint_of,
@@ -126,6 +129,8 @@ def _env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         "MEMFW_EMBEDDING_URL",
         "MEMFW_EMBEDDING_MODEL",
         "MEMFW_EMBEDDING_DIMENSION",
+        "MEMFW_EMBEDDING_TIMEOUT",
+        "MEMFW_EMBEDDING_BATCH_SIZE",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -1111,3 +1116,260 @@ def test_a_broken_http_answer_is_unreachable_not_a_crash(tmp_path: Path, kind: s
     finally:
         server.shutdown()
         server.server_close()
+
+
+# --- embedding timeout / batch size, incremental sync (slow CPU hosts) -------------------------
+
+
+def _counting_embedding_server(sizes: list[int], *, per_text: float = 0.0) -> ThreadingHTTPServer:
+    """A loopback ``/v1/embeddings`` that records each request's size and sleeps per text."""
+
+    embedder = WordsEmbedder()
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+            del format, args
+
+        def do_POST(self) -> None:  # noqa: N802
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            sizes.append(len(body["input"]))
+            time.sleep(per_text * len(body["input"]))
+            vectors = embedder.embed(body["input"])
+            data = json.dumps(
+                {"data": [{"index": i, "embedding": v} for i, v in enumerate(vectors)]}
+            ).encode()
+            try:
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            except OSError:  # the client already gave up (timeout)
+                pass
+
+    server = _QuietServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def _use_server(monkeypatch: pytest.MonkeyPatch, server: ThreadingHTTPServer) -> None:
+    monkeypatch.setenv(
+        "MEMFW_EMBEDDING_URL", f"http://127.0.0.1:{server.server_address[1]}/v1/embeddings"
+    )
+    monkeypatch.setenv("MEMFW_EMBEDDING_DIMENSION", "16")
+
+
+def _bulk(repository: Repository, count: int) -> None:
+    for index in range(count):
+        repository.add(
+            f"Bulk {index}", f"bulk note number {index}", memory_id=f"m-bulk-{index:03d}"
+        )
+
+
+def test_defaults_are_unchanged_30s_and_16_per_request(
+    tmp_path: Path, fake: FakeQdrant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = _vault(tmp_path)
+    _bulk(repository, 35)  # 5 + 35 = 40 sendable memories
+    sizes: list[int] = []
+    timeouts: list[float] = []
+    real = qembed.open_url
+
+    def spy(request: Any, timeout: float) -> Any:
+        timeouts.append(timeout)
+        return real(request, timeout)
+
+    monkeypatch.setattr(qembed, "open_url", spy)
+    server = _counting_embedding_server(sizes)
+    try:
+        _use_server(monkeypatch, server)
+        provider = factory({"vault": str(repository.root), "url": fake.url})
+        assert isinstance(provider.embedder, EnvEmbedder)
+        assert (provider.embedder.timeout, provider.embedder.batch_size) == (30.0, 16)
+        report = sync(provider)
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert sizes == [16, 16, 8]  # exactly what one 64-memory embed call used to send
+    assert set(timeouts) == {30.0}
+    assert report.upserted == 40 and report.complete
+    assert report.as_dict()["failed_batches"] == 0 and report.as_dict()["remaining"] == 0
+    upserts = [r for r in fake.requests if r["path"] == "/collections/memfw/points"]
+    assert [len(r["body"]["points"]) for r in upserts] == [16, 16, 8]
+
+
+def test_a_slow_embedder_needs_batch_1_and_a_long_timeout(
+    tmp_path: Path,
+    fake: FakeQdrant,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The live bug in miniature: one batch of 5 takes 1 s, the timeout is 0.5 s."""
+
+    repository = _vault(tmp_path)
+    sizes: list[int] = []
+    server = _counting_embedding_server(sizes, per_text=0.2)
+    args = ["sync", "--vault", str(repository.root), "--url", fake.url]
+    try:
+        _use_server(monkeypatch, server)
+        monkeypatch.setenv("MEMFW_EMBEDDING_TIMEOUT", "0.5")
+        capsys.readouterr()
+        assert cli_main(args) == 1  # one batch of 5 x 0.2 s > 0.5 s
+        failed = json.loads(capsys.readouterr().out)
+        assert failed["failed_batches"] == 1 and failed["remaining"] == 5
+        assert failed["failures"] == {"embedding_unreachable": 1} and failed["upserted"] == 0
+        sizes.clear()
+        assert cli_main([*args, "--embedding-batch-size", "1", "--embedding-timeout", "5"]) == 0
+        done = json.loads(capsys.readouterr().out)
+        assert done["upserted"] == 5 and done["remaining"] == 0 and done["failed_batches"] == 0
+        assert sizes == [1, 1, 1, 1, 1]
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert _stored_ids(fake) == {"m-backup", "m-hal", "m-release", "m-shared", "m-alpha"}
+
+
+class FlakyEmbedder(WordsEmbedder):
+    """Fails (``embedding_unreachable``) on the given 1-based call numbers."""
+
+    def __init__(self, failing: set[int] | None = None, *, always: bool = False) -> None:
+        super().__init__()
+        self.failing = failing or set()
+        self.always = always
+        self.calls = 0
+
+    def embed(self, texts: Sequence[str], *, role: str = "document") -> list[list[float]]:
+        self.calls += 1
+        if self.always or self.calls in self.failing:
+            raise EmbedderError("embedding_unreachable")
+        return super().embed(texts, role=role)
+
+
+def test_a_timed_out_batch_keeps_earlier_upserts_and_the_next_run_resumes(
+    tmp_path: Path, fake: FakeQdrant
+) -> None:
+    repository = _vault(tmp_path)
+    flaky = FlakyEmbedder({3})
+    report = sync(_provider(repository, fake, flaky, embedding_batch_size=1))
+    assert (report.embedded, report.upserted, report.failed_batches, report.remaining) == (
+        4,
+        4,
+        1,
+        1,
+    )
+    assert report.failures == {"embedding_unreachable": 1} and not report.stopped
+    assert not report.complete
+    assert len(_stored_ids(fake)) == 4  # what succeeded before and after the failure is kept
+    again = WordsEmbedder()
+    resumed = sync(_provider(repository, fake, again, embedding_batch_size=1))
+    assert (resumed.upserted, resumed.unchanged, resumed.remaining) == (1, 4, 0)
+    assert resumed.complete and len(again.seen) == 1  # only the missing memory is embedded
+    assert len(_stored_ids(fake)) == 5
+
+
+def test_three_failed_batches_in_a_row_stop_the_run(tmp_path: Path, fake: FakeQdrant) -> None:
+    repository = _vault(tmp_path)
+    down = FlakyEmbedder(always=True)
+    report = sync(_provider(repository, fake, down, embedding_batch_size=1))
+    assert down.calls == 3 and report.stopped == "failures"
+    assert (report.failed_batches, report.remaining, report.upserted) == (3, 5, 0)
+
+
+def test_max_seconds_stops_cleanly_between_batches(tmp_path: Path, fake: FakeQdrant) -> None:
+    repository = _vault(tmp_path)
+    ticks = iter(range(100))
+    provider = _provider(repository, fake, embedding_batch_size=1)
+    report = sync(provider, max_seconds=2.5, clock=lambda: float(next(ticks)))
+    # start = 0; batches checked at 1 and 2 run; the check at 3 stops the run.
+    assert (report.upserted, report.remaining, report.stopped) == (2, 3, "max_seconds")
+    assert report.failed_batches == 0 and not report.complete
+    finished = sync(_provider(repository, fake, embedding_batch_size=1), max_seconds=600)
+    assert (finished.upserted, finished.unchanged) == (3, 2) and finished.complete
+    for bad in (0, -1, 86401, float("nan"), True, "5"):
+        with pytest.raises(ValueError):
+            sync(provider, max_seconds=bad)  # type: ignore[arg-type]
+
+
+def test_embedding_settings_are_validated_and_options_win_over_env(
+    tmp_path: Path, fake: FakeQdrant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = _vault(tmp_path)
+    base = {"vault": str(repository.root), "url": fake.url}
+    for bad in (0, -1, 600.5, float("nan"), float("inf"), True, "30"):
+        with pytest.raises(ValueError, match="embedding_timeout_seconds"):
+            factory({**base, "embedding_timeout_seconds": bad})
+    for bad in (0, 257, 1.5, True, "16"):
+        with pytest.raises(ValueError, match="embedding_batch_size"):
+            factory({**base, "embedding_batch_size": bad})
+    with pytest.raises(ValueError):
+        EnvEmbedder("http://127.0.0.1:1/v1/embeddings", model="m", dimension=4, batch_size=0)
+    monkeypatch.setenv("MEMFW_EMBEDDING_URL", "http://127.0.0.1:1/v1/embeddings")
+    for name, bad in (
+        ("MEMFW_EMBEDDING_TIMEOUT", "abc"),
+        ("MEMFW_EMBEDDING_TIMEOUT", "0"),
+        ("MEMFW_EMBEDDING_TIMEOUT", "601"),
+        ("MEMFW_EMBEDDING_BATCH_SIZE", "300"),
+        ("MEMFW_EMBEDDING_BATCH_SIZE", "1.5"),
+    ):
+        monkeypatch.setenv(name, bad)
+        with pytest.raises(ValueError, match=name):
+            factory(base)
+        monkeypatch.delenv(name)
+    monkeypatch.setenv("MEMFW_EMBEDDING_TIMEOUT", "120")
+    monkeypatch.setenv("MEMFW_EMBEDDING_BATCH_SIZE", "4")
+    from_env = factory(base).embedder
+    assert isinstance(from_env, EnvEmbedder)
+    assert (from_env.timeout, from_env.batch_size) == (120.0, 4)
+    chosen = factory({**base, "embedding_timeout_seconds": 600, "embedding_batch_size": 1})
+    assert isinstance(chosen.embedder, EnvEmbedder)
+    assert (chosen.embedder.timeout, chosen.embedder.batch_size) == (600.0, 1)
+    edge = factory({**base, "embedding_batch_size": 256}).embedder
+    assert isinstance(edge, EnvEmbedder) and edge.batch_size == 256
+    # An injected (runtime) embedder is used as given, never modified.
+    injected = WordsEmbedder()
+    provider = factory({**base, "embedder": injected, "embedding_timeout_seconds": 5})
+    assert provider.embedder is injected and not hasattr(injected, "timeout")
+    args = ["sync", "--vault", str(repository.root), "--url", fake.url]
+    assert cli_main([*args, "--embedding-batch-size", "0"]) == 2
+    assert cli_main([*args, "--embedding-timeout", "0"]) == 2
+    assert cli_main([*args, "--max-seconds", "0"]) == 2
+
+
+def test_embedding_settings_do_not_change_the_fingerprint() -> None:
+    url = "http://127.0.0.1:1/v1/embeddings"
+    default = EnvEmbedder(url, model="bge-m3", dimension=1024)
+    memfws = HttpEmbeddingProvider(url, model="bge-m3", dimension=1024)
+    for timeout, batch in ((0.1, 1), (120.0, 1), (600.0, 256), (30.0, 16)):
+        other = EnvEmbedder(url, model="bge-m3", dimension=1024, timeout=timeout, batch_size=batch)
+        assert other.fingerprint == default.fingerprint == memfws.fingerprint
+        assert fingerprint_of(other) == fingerprint_of(memfws)
+
+
+def test_the_query_embedding_uses_the_same_configured_timeout(
+    tmp_path: Path, fake: FakeQdrant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same object: a search embeds its one query with the configured timeout."""
+
+    repository = _vault(tmp_path)
+    sizes: list[int] = []
+    timeouts: list[float] = []
+    real = qembed.open_url
+
+    def spy(request: Any, timeout: float) -> Any:
+        timeouts.append(timeout)
+        return real(request, timeout)
+
+    monkeypatch.setattr(qembed, "open_url", spy)
+    server = _counting_embedding_server(sizes)
+    try:
+        _use_server(monkeypatch, server)
+        provider = factory(
+            {"vault": str(repository.root), "url": fake.url, "embedding_timeout_seconds": 90}
+        )
+        sync(provider)
+        timeouts.clear()
+        sizes.clear()
+        assert _search(provider, "HAL9000 rack")[0] == "m-hal"
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert timeouts == [90.0] and sizes == [1]

@@ -46,6 +46,32 @@ PyYAML 6.0.3 (MIT, to read `vault.yaml` exactly as memfw does).
           options: {url: "http://127.0.0.1:6333", collection: memfw}
   ```
 
+- **Incremental `sync`.** Each embedding batch is upserted as soon as it is
+  embedded; a failed batch is reported (`failed_batches`, `remaining`, exit 1)
+  and the next run continues with what is missing. `--max-seconds` stops
+  cleanly between batches.
+
+## Slow CPU host
+
+Embedding timeout and batch size default to 30 s and 16 texts per request.
+Set them with the options `embedding_timeout_seconds` (0–600] and
+`embedding_batch_size` [1–256], the environment `MEMFW_EMBEDDING_TIMEOUT` /
+`MEMFW_EMBEDDING_BATCH_SIZE`, or `sync --embedding-timeout` /
+`--embedding-batch-size` (options and flags win over the environment). On a
+CPU-only host without AVX, where one long memory takes tens of seconds:
+
+```sh
+memfw-adapter-qdrant sync --vault PATH --embedding-batch-size 1 --embedding-timeout 300
+```
+
+(a timeout of at least 120 s). Do the first, bulk sync against a faster
+embedding host serving the same model file into the same collection: the
+vectors are interchangeable because the fingerprint is
+`model|dimension|instructions`, so the slow host then only embeds new or
+changed memories. Neither setting changes the fingerprint. They apply to the
+adapter's own embedder (also used for the search query); an embedder the
+memfw runtime injects keeps its own settings.
+
 `memfw_adapter_qdrant.fake.FakeQdrant` is a loopback-only fake of the REST
 calls the adapter makes, for tests. See `docs/adapter-qdrant.md` in the memfw
 repository.

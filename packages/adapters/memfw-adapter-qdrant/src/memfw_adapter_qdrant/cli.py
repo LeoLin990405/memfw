@@ -2,7 +2,8 @@
 
     memfw-adapter-qdrant sync   --vault PATH [--url URL] [--collection NAME]
                                 [--clearance public,shared] [--api-key-env NAME]
-                                [--allow-remote]
+                                [--allow-remote] [--embedding-timeout SECONDS]
+                                [--embedding-batch-size N] [--max-seconds SECONDS]
     memfw-adapter-qdrant status --vault PATH [same options]
 
 The embedder is memfw's: ``MEMFW_EMBEDDING_URL`` / ``_MODEL`` / ``_DIMENSION``,
@@ -11,6 +12,15 @@ print one JSON object of counts and codes, never an id or any text. ``sync``
 sends only memories whose privacy level is in the clearance (never
 ``local-private``) and deletes the points of memories that are no longer
 sendable.
+
+``--embedding-timeout`` / ``--embedding-batch-size`` override
+``MEMFW_EMBEDDING_TIMEOUT`` / ``MEMFW_EMBEDDING_BATCH_SIZE`` (default 30 s and
+16; a slow CPU-only host wants ``--embedding-batch-size 1 --embedding-timeout
+120`` or more). ``sync`` writes each batch as soon as it is embedded; a batch
+that fails is counted (``failed_batches``, ``remaining``) and the exit status
+is 1, and the next run continues with what is missing. ``--max-seconds``
+stops cleanly between batches once that much time is spent (also exit 1
+when anything remains).
 """
 
 from __future__ import annotations
@@ -18,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from typing import Any
 
 from .embed import EmbedderError
 from .http import QdrantError
@@ -35,8 +46,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--clearance", default=DEFAULT_CLEARANCE)
     parser.add_argument("--api-key-env", default="")
     parser.add_argument("--allow-remote", action="store_true")
+    parser.add_argument("--embedding-timeout", type=float, default=None, metavar="SECONDS")
+    parser.add_argument("--embedding-batch-size", type=int, default=None, metavar="N")
+    parser.add_argument("--max-seconds", type=float, default=None, metavar="SECONDS")
     args = parser.parse_args(argv)
-    settings = {
+    settings: dict[str, Any] = {
         "vault": args.vault,
         "url": args.url,
         "collection": args.collection,
@@ -44,7 +58,15 @@ def main(argv: list[str] | None = None) -> int:
         "api_key_env": args.api_key_env,
         "allow_remote": args.allow_remote,
     }
+    if args.embedding_timeout is not None:
+        settings["embedding_timeout_seconds"] = args.embedding_timeout
+    if args.embedding_batch_size is not None:
+        settings["embedding_batch_size"] = args.embedding_batch_size
+    from .sync import check_max_seconds, sync
+
     try:
+        if args.max_seconds is not None:
+            check_max_seconds(args.max_seconds)
         provider = factory(settings)
     except ValueError as exc:
         print(f"memfw-adapter-qdrant: {exc}", file=sys.stderr)
@@ -56,14 +78,21 @@ def main(argv: list[str] | None = None) -> int:
     if provider.embedder is None:
         print("memfw-adapter-qdrant: no embedder (set MEMFW_EMBEDDING_URL)", file=sys.stderr)
         return 1
-    from .sync import sync
-
     try:
-        report = sync(provider)
+        report = sync(provider, max_seconds=args.max_seconds)
     except (QdrantError, EmbedderError) as exc:
         print(f"memfw-adapter-qdrant: sync failed: {exc.code}", file=sys.stderr)
         return 1
     print(json.dumps(report.as_dict(), sort_keys=True))
+    if not report.complete:
+        print(
+            "memfw-adapter-qdrant: sync incomplete: "
+            f"{report.remaining} remaining, {report.failed_batches} failed batches"
+            + (f", stopped: {report.stopped}" if report.stopped else "")
+            + "; run it again to continue",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 

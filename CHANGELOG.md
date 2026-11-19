@@ -15,6 +15,15 @@ The vault format did not change in `0.4.0` either: `vault.yaml` stays at
 
 ## [Unreleased]
 
+### Fixed
+
+- Qdrant adapter: the embedding timeout and batch size were fixed at 30 s and 16, so on a slow
+  CPU-only host no incremental `sync` could ever finish a batch. They are now the options
+  `embedding_timeout_seconds` / `embedding_batch_size`, the environment
+  `MEMFW_EMBEDDING_TIMEOUT` / `MEMFW_EMBEDDING_BATCH_SIZE` and `sync` flags (defaults and
+  fingerprint unchanged). `sync` upserts after every batch, reports `failed_batches`,
+  `remaining` and exits 1 when incomplete, resumes on the next run, and takes `--max-seconds`.
+
 ### Docs
 
 - README (both languages): "One ongoing conversation per app", a session-start rule

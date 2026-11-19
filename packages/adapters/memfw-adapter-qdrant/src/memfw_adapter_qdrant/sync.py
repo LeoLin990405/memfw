@@ -17,18 +17,37 @@ reads the vault and writes only to Qdrant. Steps:
    anything is embedded or upserted (step 3 runs last), so a failing
    embedder or upsert cannot keep a withdrawn memory in Qdrant.
 
+Step 3 goes batch by batch (``embedding_batch_size``, default 16 memories):
+each batch is embedded and upserted before the next one starts, so progress
+is kept. A batch whose embedding fails (``EmbedderError``: timeout,
+unreachable, bad answer) is counted in ``failed_batches`` / ``failures`` and
+skipped; after three failed batches in a row the run stops (the endpoint is
+most likely down). With ``max_seconds`` the run also stops, between batches,
+once that budget is spent. What was not written is ``remaining``; the next
+run embeds exactly that, because what was written is ``unchanged`` by its
+hash. A Qdrant error still ends the run at once (earlier batches stay).
+Any other exception from an injected embedder propagates as before.
+
 Point ids are UUIDv5 of the vault key and the memory id, so a re-run is
 idempotent. The returned counts carry no id or text.
 """
 
 from __future__ import annotations
 
+import math
+import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from .embed import dimension_of, fingerprint_of
+from .embed import (
+    DEFAULT_BATCH_SIZE,
+    MAX_BATCH_SIZE,
+    EmbedderError,
+    dimension_of,
+    fingerprint_of,
+)
 from .http import QdrantClient, QdrantError, collection_path
 from .provider import QdrantProvider
 from .vault import Outgoing, outgoing
@@ -38,6 +57,10 @@ INDEXED_FIELDS = ("vault", "tenant", "embedder", "memory_id")
 _NAMESPACE = uuid.UUID("0b6f1c8e-6d0a-5c5e-9a43-6d656d66770a")
 UPSERT_BATCH = 64
 SCROLL_PAGE = 256
+#: Failed embedding batches in a row after which a run stops.
+MAX_CONSECUTIVE_FAILURES = 3
+#: Upper bound of ``max_seconds`` (one day).
+MAX_RUN_SECONDS = 86400.0
 
 
 def point_id(vault: str, memory_id: str) -> str:
@@ -53,6 +76,19 @@ class SyncReport:
     deleted: int = 0
     created_collection: bool = False
     skipped: dict[str, int] = field(default_factory=dict)
+    #: Memories embedded in this run (upserted unless the upsert failed).
+    embedded: int = 0
+    #: Embedding batches that failed, and their codes.
+    failed_batches: int = 0
+    failures: dict[str, int] = field(default_factory=dict)
+    #: Memories still to embed: failed or not attempted; the next run does them.
+    remaining: int = 0
+    #: Why the run stopped before the end: ``max_seconds``, ``failures`` or "".
+    stopped: str = ""
+
+    @property
+    def complete(self) -> bool:
+        return self.remaining == 0 and self.failed_batches == 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -61,6 +97,11 @@ class SyncReport:
             "deleted": self.deleted,
             "created_collection": self.created_collection,
             "skipped": dict(self.skipped),
+            "embedded": self.embedded,
+            "failed_batches": self.failed_batches,
+            "failures": dict(self.failures),
+            "remaining": self.remaining,
+            "stopped": self.stopped,
         }
 
 
@@ -126,7 +167,8 @@ def _upsert(
 ) -> None:
     vectors = provider.embedder.embed([item.text for item in batch], role="document")
     if len(vectors) != len(batch):
-        raise QdrantError("embedding_bad_response")
+        raise EmbedderError("embedding_bad_response")
+    report.embedded += len(batch)
     points = [
         {
             "id": point_id(provider.vault_key, item.memory_id),
@@ -149,9 +191,36 @@ def _upsert(
     report.upserted += len(points)
 
 
-def sync(provider: QdrantProvider) -> SyncReport:
+def batch_size_of(provider: QdrantProvider) -> int:
+    """``embedding_batch_size``, else the embedder's ``batch_size``, else 16."""
+
+    configured = provider.settings.embedding_batch_size
+    if configured is not None:
+        return configured
+    own = getattr(provider.embedder, "batch_size", None)
+    if isinstance(own, int) and not isinstance(own, bool) and own >= 1:
+        return min(own, MAX_BATCH_SIZE)
+    return DEFAULT_BATCH_SIZE
+
+
+def check_max_seconds(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("max_seconds must be a number")
+    if not math.isfinite(value) or not 0 < value <= MAX_RUN_SECONDS:
+        raise ValueError(f"max_seconds must be in (0, {MAX_RUN_SECONDS:g}]")
+    return float(value)
+
+
+def sync(
+    provider: QdrantProvider,
+    *,
+    max_seconds: float | None = None,
+    clock: Callable[[], float] = time.monotonic,
+) -> SyncReport:
     """Bring the collection in line with the vault (see the module docstring)."""
 
+    budget = None if max_seconds is None else check_max_seconds(max_seconds)
+    started = clock()
     if provider.embedder is None:
         raise QdrantError("no_embedder")
     settings = provider.settings
@@ -187,17 +256,35 @@ def sync(provider: QdrantProvider) -> SyncReport:
             report.unchanged += 1
             continue
         pending.append(item)
-        if len(pending) >= UPSERT_BATCH:
-            _upsert(provider, pending, fingerprint, report)
-            pending = []
-    if pending:
-        _upsert(provider, pending, fingerprint, report)
+    size = batch_size_of(provider)
+    in_a_row = 0
+    for start in range(0, len(pending), size):
+        if budget is not None and clock() - started >= budget:
+            report.stopped = "max_seconds"
+        elif in_a_row >= MAX_CONSECUTIVE_FAILURES:
+            report.stopped = "failures"
+        if report.stopped:
+            report.remaining += len(pending) - start
+            break
+        batch = pending[start : start + size]
+        try:
+            _upsert(provider, batch, fingerprint, report)
+        except EmbedderError as exc:
+            report.failed_batches += 1
+            report.failures[exc.code] = report.failures.get(exc.code, 0) + 1
+            report.remaining += len(batch)
+            in_a_row += 1
+            continue
+        in_a_row = 0
     return report
 
 
 __all__ = [
     "INDEXED_FIELDS",
+    "MAX_CONSECUTIVE_FAILURES",
     "SyncReport",
+    "batch_size_of",
+    "check_max_seconds",
     "ensure_collection",
     "existing_points",
     "point_id",
