@@ -130,6 +130,10 @@ CI 的 `standalone-wheels` 任务会构建两者，装进一个没有 memfw 的�
 
 `packages/adapters/memfw-adapter-tailnet`（wheel 名 `memfw_adapter_tailnet`，版本 0.1.0，只用标准库）为 Tailscale tailnet 的机器列表实现了 `Ingestor` 端口。`memfw-adapter-tailnet scan` 读取 `tailscale status --json`（运维导出的文件，或者运行一次 CLI：固定参数、不经 shell、有截止时间和输出上限、去掉代理环境变量），每台机器只保留名字、MagicDNS 的第一段（tailnet 后缀只存哈希）、tailnet IP、OS、是否在线、最后在线时间和标签，并用哈希过的主机 id 标识（从不读取用户和登录信息、密钥和 endpoint；从别的 tailnet 共享进来的节点默认排除、需显式开启，服务商出口节点一律排除）；对新出现、回来、消失、改名或有其他变化的机器，各在 `_candidates/tailnet/` 下暂存一条只含身份字段的 `host-fact` 候选，没有变化的机器不产生候选，重试只会得到重复项。候选默认是 `local-private`，除非运维另行配置。不含名字的 `report.json` 统计名单内离线超过阈值的机器、一台都匹配不到或匹配到多台的名单条目，以及没有条目担保的机器（从不按机器自报的主机名匹配）；发现结果从不修改这份名单，也不决定数据发往哪里。**默认关闭**；memfw 本身从不导入它。见 [`adapter-tailnet.md`](adapter-tailnet.md)。
 
+## Wiki 页面生成适配器
+
+`packages/adapters/memfw-adapter-wikigen`（wheel 名 `memfw_adapter_wikigen`，版本 0.1.0，只用标准库）为 LLM Wiki 实现了 `Deriver` 端口（kind `wiki_page`）：读取一个只含放行文本（`public`/`shared`）的 `memfw-wiki-job/1` 任务包，产出一页 `memfw-wiki-page/1`。提示词固定页面的节和"每句都带引用"；引用不是任务里某个来源的原样写法、或者违反节、因果、生命周期、冲突规则的句子直接丢掉，从不修补；未决问题/冲突一节和来源列表由程序生成，不由模型写。模型是 memfw 的 `ModelBackend`（自带只连字面 loopback 地址的 Ollama 后端和不跑模型的 stub 后端；非本地后端必须 `cloud: true` 且任务来源全是 `public`，并且不发送别名、定义和未决问题的文字）；页面隐私级别 = 任务包全部来源里最严的级别，页面列出全部任务来源（含未被引用的）；任务里写明的模型 digest、生成器版本和 `prompt_version`（`wiki-v1+<sha8>`，对指令文本和所有影响输出的设置——`temperature`、`seed`、`num_ctx`、`include_previous`、`max_claims_per_section`、`max_output_tokens`、模型 tag、云端闸门——取哈希）必须与 worker 实际运行的一致，并有 token 预算、单次调用超时和整任务截止时间。它跑在装有本地 Ollama 的 worker 机器上，从不在存储主机上跑。**默认关闭**；页面只会成为暂存候选，memfw 本身从不导入它。见 [`adapter-wikigen.md`](adapter-wikigen.md)。
+
 ## PageIndex 召回适配器
 
 `packages/adapters/memfw-adapter-pageindex`（wheel 名 `memfw_adapter_pageindex`，版本 0.1.1）是一个面向长文档的 `RecallProvider`，按 PageIndex 风格搜索目录树（标题、节点 id、页码范围、可选的简短摘要；从不含正文）。由 memfw 的 `ModelBackend` 挑选章节，或者用 `mode: titles` 不经模型直接给标题排序。它只返回 `kh:<路径>#<标题>` 和 `att:<id>#page=<n>` 引用。非本地后端需要 `cloud: true`，`local-private` 的目录树从不发给它，每轮有 token 和调用次数预算。目录树用 `memfw-pageindex build-md | import-tree | list` 离线构建或导入，以 `0600` 的 JSON 存在 vault 之外。**默认关闭**；memfw 本身从不导入它。见包内 README。

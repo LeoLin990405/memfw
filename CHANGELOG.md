@@ -80,6 +80,33 @@ The vault format did not change in `0.4.0` either: `vault.yaml` stays at
   - `PORTS_API_VERSION`, `memfw-ports` and `memfw-recall` move to `0.4.0`; `memfw-recall`
     and every adapter pin `memfw-ports==0.4.0` (their own versions and code are unchanged).
 
+- `memfw-adapter-wikigen` 0.1.0 (`packages/adapters/memfw-adapter-wikigen`, W1-4): a
+  `Deriver` (kind `wiki_page`) that turns one `memfw-wiki-job/1` package into one
+  `memfw-wiki-page/1` page candidate. The fixed `wiki-v1` prompt forces the page sections
+  and per-sentence citations to the job's own refs; a sentence with a ref that is not
+  exactly a job ref, or that breaks a section, causal, lifecycle or conflict rule, is
+  dropped and counted, never repaired. Only failures that can differ between runs are
+  retried with the same seed (backend transport errors `unreachable`, `timeout`,
+  `http_502`/`503`/`504`, and malformed JSON `empty_reply`/`not_json`); a reply that is
+  JSON but not the page shape is refused at once as `bad_output:<code>`. The `open`
+  conflict claims, the source list (all job sources, cited or not), privacy (strictest
+  over all job sources) and digests are written by the program, and the page must pass
+  `parse_wiki_page` and `check_wiki_page(page, job=job)` or nothing is returned. The job's
+  generator block must match the worker (model tag and digest, generator version,
+  `prompt_version` = `wiki-v1+<sha8>`, a hash of the instruction text and every
+  output-affecting setting, raw values in the report's `prompt_settings`); token budget,
+  context-window pre-check, per-call timeout and job deadline. Previous-page sentences
+  enter the prompt only when every ref they cite is a current job ref, and a previous page
+  stricter than the job's sources is left out. Ships an Ollama
+  backend (literal loopback only, proxies ignored, redirects refused, digest from
+  `/api/tags`) and a model-free stub; a non-local backend (the backend's own `local` claim,
+  operator-trusted) needs `cloud: true` and an all-`public` job, and is sent only the
+  concept label, open-question ids and conflict refs, and a previous page only if it is
+  `public`. Candidate metadata carries `tenant` and `page_key`, not the concept.
+  Unavailable when Ollama is unreachable or the model is missing. Optional `precheck` hook
+  (used only when importable). Off by default; standard library only; memfw never imports
+  it. Built and smoke-tested in the standalone-wheel CI job. See `docs/adapter-wikigen.md`.
+
 ### Fixed
 
 - Qdrant adapter: the embedding timeout and batch size were fixed at 30 s and 16, so on a slow

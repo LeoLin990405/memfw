@@ -4,7 +4,7 @@ Run it with the interpreter of a venv that has the wheels and NOT memfw:
 
     python -I tests/standalone/wheel_smoke.py [--recall] [--deepseek] [--bm25s] [--qdrant]
         [--qmd] [--ocr] [--pageindex] [--langextract] [--lightrag] [--graphrag]
-        [--pipeline] [--tailnet]
+        [--pipeline] [--tailnet] [--wikigen]
 
 It refuses to run when ``memfw`` is importable, imports the wheels, and runs
 the contract kit (``memfw_ports.testing``) against the reference
@@ -33,7 +33,9 @@ small CSV output (GraphRAG is not installed or run); with ``--pipeline`` the
 ``memfw-pipeline`` wheel runs its example stage twice (built, then unchanged)
 in a throwaway tree, taking its ``Clock`` from ``memfw_ports``; with ``--tailnet`` the
 ``memfw-adapter-tailnet`` wheel's ingestor passes ``check_ingestor`` on host-fact
-candidates from a synthetic status document. Prints one
+candidates from a synthetic status document; with ``--wikigen`` the
+``memfw-adapter-wikigen`` wheel's deriver passes ``check_deriver`` and
+``check_wiki_page`` on a synthetic job with its stub backend (no model). Prints one
 ``ok`` line per check and exits non-zero on the first failure. Standard
 library only; not collected by pytest (``tests/test_standalone_ports_wheel.py``
 drives it).
@@ -775,6 +777,66 @@ def _tailnet(root: Path) -> None:
     _ok("check_ingestor TailnetIngestor (synthetic status)")
 
 
+def _wikigen(root: Path) -> None:
+    """The wiki page deriver wheel over the memfw-ports wheel, stub backend, synthetic job."""
+
+    import hashlib
+    import json
+
+    from memfw_adapter_wikigen import _ports as seam
+    from memfw_adapter_wikigen import candidates, factory
+    from memfw_ports.staging import stage_candidates
+    from memfw_ports.testing import check_deriver, check_wiki_page
+    from memfw_ports.types import DeriveRequest
+    from memfw_ports.wiki import (
+        WikiConcept,
+        WikiJob,
+        WikiJobSource,
+        WikiSource,
+        wiki_job_digest,
+    )
+
+    assert seam.WikiJob is WikiJob, seam.WikiJob
+    _ok("import memfw_adapter_wikigen (ports from memfw_ports)")
+    deriver = factory({"backend": "memfw_adapter_wikigen.stub:factory"})
+    assert deriver.available().available, deriver.available().reason
+    generator = deriver.generator_config()
+    texts = {
+        "mem:m-smoke-a@v2": "The smoke backup runs nightly at 02:00.",
+        "mem:m-smoke-b@v1": "Retention keeps 30 daily snapshots.",
+    }
+    sources = tuple(
+        WikiJobSource(
+            WikiSource(ref, "memory", hashlib.sha256(text.encode()).hexdigest(), "shared", "none"),
+            text,
+        )
+        for ref, text in texts.items()
+    )
+    concept = WikiConcept("concept:smoke:backup", "Smoke backup")
+    digest = wiki_job_digest(
+        concept=concept, tenant="", sources=sources, open_questions=(), previous_page=None,
+        generator=generator, checker_version="wiki-gate-0.1.0",
+    )  # fmt: skip
+    job = WikiJob("job-smoke", digest, "", concept, sources, generator, "wiki-gate-0.1.0", "v1")
+    vault = root / "wg-vault"
+    (vault / "memories").mkdir(parents=True)
+    (vault / "vault.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+    view = check_deriver(
+        deriver,
+        vault=vault,
+        request=DeriveRequest(
+            "wiki_page", ("m-smoke-a", "m-smoke-b"), {"job": json.dumps(job.to_json())}
+        ),
+    )
+    page = check_wiki_page(json.loads(view.content)["page"], job=job)
+    assert page.build.job_digest == digest and page.build.model == "stub-extractive"
+    result = stage_candidates(
+        vault, "wikigen", candidates(view), proposal_id=digest, source="wikigen"
+    )
+    assert len(result.staged) == 1, result
+    _ok("check_deriver WikigenDeriver (stub backend)")
+
+
 def main(argv: list[str]) -> int:
     if importlib.util.find_spec("memfw") is not None:
         print("memfw is importable here; run this in a venv without memfw", file=sys.stderr)
@@ -806,6 +868,8 @@ def main(argv: list[str]) -> int:
             _pipeline(root)
         if "--tailnet" in argv:
             _tailnet(root)
+        if "--wikigen" in argv:
+            _wikigen(root)
     print("standalone wheel smoke passed")
     return 0
 

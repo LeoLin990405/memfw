@@ -36,6 +36,7 @@ CONSUMES = {
     "memfw-adapter-lightrag": {"Deriver"},
     "memfw-adapter-graphrag": {"Deriver"},
     "memfw-adapter-tailnet": {"Ingestor"},
+    "memfw-adapter-wikigen": {"Deriver", "ModelBackend"},
 }
 
 

@@ -1,0 +1,32 @@
+# memfw-adapter-wikigen: a Deriver (kind wiki_page) that turns one
+# memfw-wiki-job/1 package into one memfw-wiki-page/1 page candidate. The model
+# behind it is a memfw ModelBackend (a local Ollama backend on loopback and a
+# deterministic stub ship here; a non-local backend needs cloud: true). The
+# open-question/conflict section and the source list are written by the
+# program, never by the model; every model sentence must cite the job's own
+# sources or it is dropped. Standard library only. memfw never imports it.
+#
+# Build a wheel:  uv build --wheel --package memfw-adapter-wikigen
+[build-system]
+requires = ["hatchling==1.33.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "memfw-adapter-wikigen"
+version = "0.1.0"
+description = "LLM Wiki page generator Deriver for memfw (staged page candidates only)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+# Symlinks to memfw's own LICENSE and NOTICE (one copy of the text).
+license-files = ["LICENSE", "NOTICE"]
+dependencies = ["memfw-ports==0.4.0"]
+
+[project.entry-points."memfw.adapters"]
+wikigen = "memfw_adapter_wikigen:SPEC"
+
+[tool.uv.sources]
+memfw-ports = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/memfw_adapter_wikigen"]
