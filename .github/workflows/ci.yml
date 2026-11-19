@@ -18,16 +18,18 @@ jobs:
           python-version: '3.11'
       - run: pip install -e '.[dev]'
       - run: pytest
-      - run: ruff check src/memfw tests packages/adapters
+      - run: ruff check src/memfw tests packages/adapters packages/memfw-pipeline
       - run: mypy src
+      - run: mypy packages/memfw-pipeline/src
   standalone-wheels:
-    # memfw-ports, memfw-recall and the adapters build as wheels and pass the
+    # memfw-ports, memfw-recall, memfw-pipeline and the adapters build as wheels and pass the
     # contract kit in a fresh venv without memfw (docs/ports-and-recall.md
     # section 1.1); the DeepSeek and QMD adapters run against their loopback
     # fakes only, the bm25s adapter on a throwaway vault with its pinned
     # dependencies, the Qdrant adapter against its loopback FakeQdrant, the OCR
     # adapter's deriver with an in-process fake engine (no OCR tool), the
-    # PageIndex adapter's provider on a tree it builds (titles mode, no model)
+    # PageIndex adapter's provider on a tree it builds (titles mode, no model),
+    # the memfw-pipeline runner its example stage twice (built, then unchanged)
     # (the versions uv.lock resolves for Python 3.11).
     runs-on: ubuntu-latest
     steps:
@@ -40,6 +42,7 @@ jobs:
           version: '0.13.3'
       - run: uv build --wheel --package memfw-ports -o "$RUNNER_TEMP/dist"
       - run: uv build --wheel --package memfw-recall -o "$RUNNER_TEMP/dist"
+      - run: uv build --wheel --package memfw-pipeline -o "$RUNNER_TEMP/dist"
       - run: uv build --wheel --package memfw-adapter-deepseek -o "$RUNNER_TEMP/dist"
       - run: uv build --wheel --package memfw-adapter-bm25s -o "$RUNNER_TEMP/dist"
       - run: uv build --wheel --package memfw-adapter-qdrant -o "$RUNNER_TEMP/dist"
@@ -52,4 +55,4 @@ jobs:
       - run: uv venv --python 3.11 "$RUNNER_TEMP/wheel-venv"
       - run: uv pip install --python "$RUNNER_TEMP/wheel-venv/bin/python" bm25s==0.3.16 jieba==0.42.1 PyYAML==6.0.3 numpy==2.4.6
       - run: uv pip install --python "$RUNNER_TEMP/wheel-venv/bin/python" --no-index "$RUNNER_TEMP"/dist/*.whl
-      - run: '"$RUNNER_TEMP/wheel-venv/bin/python" -I tests/standalone/wheel_smoke.py --recall --deepseek --bm25s --qdrant --qmd --ocr --pageindex --langextract --lightrag --graphrag'
+      - run: '"$RUNNER_TEMP/wheel-venv/bin/python" -I tests/standalone/wheel_smoke.py --recall --deepseek --bm25s --qdrant --qmd --ocr --pageindex --langextract --lightrag --graphrag --pipeline'

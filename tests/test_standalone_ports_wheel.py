@@ -81,10 +81,12 @@ def test_wheel_versions_follow_the_ports_api_version() -> None:
         assert data["project"]["version"] == PORTS_API_VERSION, package
 
 
-#: Workspace members: the two wheels built from memfw's tree, then the adapters.
+#: Workspace members: the two wheels built from memfw's tree, the pipeline
+#: runner, then the adapters.
 MEMBERS = (
     "memfw-ports",
     "memfw-recall",
+    "memfw-pipeline",
     "adapters/memfw-adapter-deepseek",
     "adapters/memfw-adapter-bm25s",
     "adapters/memfw-adapter-qdrant",
@@ -247,6 +249,7 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
     for package in (
         "memfw-ports",
         "memfw-recall",
+        "memfw-pipeline",
         "memfw-adapter-deepseek",
         "memfw-adapter-bm25s",
         "memfw-adapter-qdrant",
@@ -271,6 +274,7 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
         "memfw_adapter_pageindex-0.1.1-py3-none-any.whl",
         "memfw_adapter_qdrant-0.1.2-py3-none-any.whl",
         "memfw_adapter_qmd-0.1.1-py3-none-any.whl",
+        "memfw_pipeline-0.1.0-py3-none-any.whl",
         f"memfw_ports-{v}-py3-none-any.whl",
         f"memfw_recall-{v}-py3-none-any.whl",
     ]
@@ -295,6 +299,7 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
         "--langextract",
         "--lightrag",
         "--graphrag",
+        "--pipeline",
         cwd=tmp_path,
     )
     assert "standalone wheel smoke passed" in out
@@ -310,6 +315,7 @@ def test_wheels_install_and_pass_the_contract_kit_without_memfw(tmp_path: Path) 
     assert "ok check_deriver LangExtractDeriver (replayed output)" in out
     assert "ok check_deriver LightRagDeriver (fake server)" in out
     assert "ok check_deriver GraphRagDeriver (recorded-shape output)" in out
+    assert "ok run_stage example (built, then unchanged)" in out
 
 
 def test_adapter_dependency_pins_match_the_lockfile_and_pyproject() -> None:
@@ -330,6 +336,7 @@ def test_adapter_dependency_pins_match_the_lockfile_and_pyproject() -> None:
 def test_ci_wheel_job_builds_and_smokes_every_adapter_with_the_pins() -> None:
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     for package in (
+        "memfw-pipeline",
         "memfw-adapter-deepseek",
         "memfw-adapter-bm25s",
         "memfw-adapter-qdrant",
@@ -343,7 +350,7 @@ def test_ci_wheel_job_builds_and_smokes_every_adapter_with_the_pins() -> None:
         assert f"uv build --wheel --package {package} " in ci, package
     assert "bm25s==0.3.16 jieba==0.42.1 PyYAML==6.0.3 numpy==2.4.6" in ci  # CI runs Python 3.11
     smoke = "wheel_smoke.py --recall --deepseek --bm25s --qdrant --qmd --ocr --pageindex"
-    smoke += " --langextract --lightrag --graphrag"
+    smoke += " --langextract --lightrag --graphrag --pipeline"
     assert smoke in ci
 
 
