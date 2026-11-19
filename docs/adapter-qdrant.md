@@ -53,6 +53,88 @@ memories:
    `local-private` or `unknown`). This runs **first**, right after the listing, so a failing
    embedder or upsert cannot keep a withdrawn memory in Qdrant.
 
+Step 3 runs **batch by batch** (`embedding_batch_size` memories, default 16), **shortest text
+first** (then id): each batch is embedded and upserted before the next starts, so a later failure
+keeps what was already written. Shortest first because on a slow host embedding time grows with
+the text: short memories land before a budget runs out, and a long one that keeps timing out sits
+at the tail instead of blocking the rest. Failures:
+
+- a failed batch of several memories is **retried once, one memory at a time**, so one bad memory
+  cannot sink the other fifteen;
+- HTTP **400, 413 or 422** (`embedding_rejected`: the endpoint refuses that input, e.g. longer
+  than the model's context) skips that memory (`rejected`) and does **not** count as the
+  endpoint being down;
+- any other 4xx (`embedding_refused`: 401/403 auth, 404/405 wrong URL path, 429 rate limit) is
+  the endpoint or its configuration, so it counts like timeouts, connection errors, 5xx and
+  malformed answers: **three in a row** stop the run (`stopped: failures`) instead of splitting
+  every batch of the vault into single requests;
+- a Qdrant error stops the run at once (earlier batches stay).
+
+`--max-seconds S` stops cleanly before the next request once `S` seconds are spent. The printed
+report adds `embedded`, `failed_requests` (failed embedding requests, retries included),
+`failures` (code → count), `remaining` (still to embed), `rejected` (of those, refused by the
+endpoint) and `stopped` (`max_seconds`, `failures` or empty); when anything remains the exit
+status is **1**. Re-run `sync`: written points are `unchanged` by their hash, so the next run
+embeds exactly what is still missing (a rejected memory is tried again each run, which costs
+one quick 400/413/422).
+
+Only one `sync` per Qdrant URL, collection and vault runs at a time: the CLI holds a
+non-blocking `flock` on a file under `$XDG_STATE_HOME/memfw-adapter-qdrant/` (default
+`~/.local/state/…`, never in the vault); a second run exits with status **3**. The kernel
+releases the lock when the process ends, so a crashed run never leaves it held. Without `fcntl`
+(Windows) there is no lock. On a schedule, keep the interval at least `--max-seconds` plus one
+`--embedding-timeout` (a request in flight when the budget runs out still finishes or times out).
+
+### Embedding timeout and batch size
+
+| Setting | Option (wins) | Environment | CLI | Default | Range |
+|---|---|---|---|---|---|
+| request timeout | `embedding_timeout_seconds` | `MEMFW_EMBEDDING_TIMEOUT` | `--embedding-timeout` | 30 s | (0, 600] |
+| texts per request (and per upsert) | `embedding_batch_size` | `MEMFW_EMBEDDING_BATCH_SIZE` | `--embedding-batch-size` | 16 | [1, 256] |
+
+Defaults are unchanged: 16 texts per embedding request with a 30 s timeout. Differences from
+earlier releases: upserts go per embedding batch (16 points by default) instead of 64 at a time,
+memories are embedded shortest first, and a value out of range is refused (`ValueError`, also
+from the `EnvEmbedder` constructor, which used to clamp a batch size below 1; CLI exit 2).
+Neither setting changes a vector, so the embedder **fingerprint is unchanged** and existing
+points stay valid.
+
+**Rule:** batch size × seconds per memory (for the longest memories) must stay below the
+timeout. When `sync` reports `embedding_unreachable` with a batch above 1 it says to lower
+`--embedding-batch-size`.
+
+They configure the adapter's own embedder (the standard-library client built from
+`MEMFW_EMBEDDING_*`: the `sync` command, and the runtime when it has no embedder of its own).
+A search embeds its one query with the same client, with the request timeout `min(timeout,
+max(budget.timeout_seconds, 30))`: never longer than before (30 s by default, so a cold model on a
+slow host still has time to load), and a long sync timeout (up to 600 s) cannot keep the
+provider's worker busy. One query is one request, so the batch size does not matter at search time. An embedder the
+runtime injects (memfw's `HttpEmbeddingProvider`: 120 s timeout, 3 retries) is used as given and
+never modified; with it the timeout option has no effect, and `embedding_batch_size` only sets
+how many memories `sync` embeds and upserts at a time.
+
+### Slow CPU host
+
+On a CPU-only host without AVX one long memory (about 900 tokens) can take tens of seconds to
+embed, so a batch of 16 never finishes within 30 s and every incremental `sync` fails with
+`embedding_unreachable`. There:
+
+```sh
+memfw-adapter-qdrant sync --vault /path/to/vault \
+  --embedding-batch-size 1 --embedding-timeout 300   # >= 120; and a --max-seconds budget if run on a schedule
+```
+
+Prefer these **flags** on the `sync` command (or its scheduled job) to
+`MEMFW_EMBEDDING_TIMEOUT` / `MEMFW_EMBEDDING_BATCH_SIZE` in an environment shared with the memfw
+server: the flags change only the sync. For the
+first, bulk sync of a large vault, run `sync` once against a faster embedding host that serves
+**the same model file** (same model name and dimension, no instructions), pointing at the same
+Qdrant collection, then let the slow host keep it up to date. The vectors are interchangeable
+because the fingerprint is `model|dimension|instructions`: the same blob gives the same
+fingerprint and the slow host's next `sync` sees every point as `unchanged`. A different model,
+quantisation or dimension gives other vectors, so check that the model name and file really are
+identical; a changed name gives a new fingerprint and a full re-embed.
+
 **Never `local-private`.** Only memories whose level (`memfw.ports.privacy.effective_level`,
 the strictest of the `privacy` field or the vault's `legacy_privacy_default`, the `privacy:`
 and `sensitivity:` tags and a top-level `sensitivity` key) is in `clearance` are embedded and
@@ -93,7 +175,9 @@ Options (anything else is refused):
 | `collection` | `memfw` | collection name (several vaults may share one) |
 | `api_key_env` | none | name of the environment variable holding the API key (sent as `api-key`); the key is never a setting; a remote URL must then be `https` |
 | `clearance` | `public,shared` | levels to send: `public`, `shared` or both |
-| `timeout_seconds` | 2.0 | per-request timeout (the coordinator's budget still applies) |
+| `timeout_seconds` | 2.0 | per-request timeout to Qdrant (the coordinator's budget still applies) |
+| `embedding_timeout_seconds` | `MEMFW_EMBEDDING_TIMEOUT`, else 30 | timeout of one embedding request, (0, 600]; the adapter's own embedder only (see above) |
+| `embedding_batch_size` | `MEMFW_EMBEDDING_BATCH_SIZE`, else 16 | texts per embedding request and points per `sync` upsert, [1, 256] |
 | `name` | `qdrant` | provider name |
 | `vault_id` | `vault.yaml` `vault_id`, else none | key for this vault's points; **required with `allow_remote`** (a shared remote collection must not key by a host path) |
 
@@ -153,6 +237,12 @@ service is down it reports `unreachable` (`no_collection`, `unauthorized`,
   idempotence and deletes, vault and embedder isolation, settings and URL rules, proxy bypass
   for loopback only, refused redirects, every availability code, T7 through the coordinator,
   hostile responses, the embedder fingerprint, the CLI, the registry spec, and the runtime
-  wiring (`runtime.recall.adapters`).
+  wiring (`runtime.recall.adapters`); embedding timeout and batch size (defaults 30 s / 16 per
+  request, validation, options over environment, fingerprint unchanged, the query timeout), a
+  slow embedder that needs batch 1 and a long timeout, a failed batch that keeps earlier upserts
+  and resumes, one rejected memory in a batch of 16 (the other 15 land), rejected memories at
+  the head (the rest land), 400/413/422 vs other 4xx (404 and 429 stop after three) vs 5xx, the stop after three failures (also with nothing
+  after), shortest first, `max_seconds`, the query timeout capped by the budget and the sync
+  lock (exit 3).
 - `tests/standalone/wheel_smoke.py --qdrant` runs it from its wheel without memfw against the
   fake.

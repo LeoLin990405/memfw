@@ -13,6 +13,14 @@ points of the current one.
 
 The endpoint is the operator's (environment only). A loopback endpoint never
 goes through a proxy; redirects are refused.
+
+Request timeout and batch size (texts per request) default to 30 s and 16.
+A slow CPU-only host may need a smaller batch and a longer timeout: the
+adapter options ``embedding_timeout_seconds`` / ``embedding_batch_size`` set
+them, else ``MEMFW_EMBEDDING_TIMEOUT`` / ``MEMFW_EMBEDDING_BATCH_SIZE``
+(options win). Timeout is in (0, 600] seconds, batch size in [1, 256]. Neither
+changes a vector, so neither is part of the fingerprint. They apply to this
+client only: an embedder the runtime injects keeps its own settings.
 """
 
 from __future__ import annotations
@@ -29,6 +37,35 @@ from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 from .http import ResponseTooLarge, open_url, read_capped
+
+DEFAULT_TIMEOUT = 30.0
+DEFAULT_BATCH_SIZE = 16
+MAX_TIMEOUT = 600.0
+MAX_BATCH_SIZE = 256
+TIMEOUT_ENV = "MEMFW_EMBEDDING_TIMEOUT"
+#: HTTP statuses that refuse this one input (bad, too large, unprocessable).
+REJECTING_STATUS = frozenset({400, 413, 422})
+BATCH_SIZE_ENV = "MEMFW_EMBEDDING_BATCH_SIZE"
+
+
+def check_timeout(value: Any, *, what: str = "embedding_timeout_seconds") -> float:
+    """A request timeout in (0, 600] seconds."""
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{what} must be a number")
+    if not math.isfinite(value) or not 0 < value <= MAX_TIMEOUT:
+        raise ValueError(f"{what} must be in (0, {MAX_TIMEOUT:g}]")
+    return float(value)
+
+
+def check_batch_size(value: Any, *, what: str = "embedding_batch_size") -> int:
+    """Texts per embedding request, in [1, 256]."""
+
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{what} must be an integer")
+    if not 1 <= value <= MAX_BATCH_SIZE:
+        raise ValueError(f"{what} must be in [1, {MAX_BATCH_SIZE}]")
+    return value
 
 
 class Embedder(Protocol):
@@ -70,8 +107,8 @@ class EnvEmbedder:
         *,
         model: str,
         dimension: int,
-        timeout: float = 30.0,
-        batch_size: int = 16,
+        timeout: float = DEFAULT_TIMEOUT,
+        batch_size: int = DEFAULT_BATCH_SIZE,
     ) -> None:
         scheme = urlsplit(endpoint).scheme if isinstance(endpoint, str) else ""
         if scheme not in {"http", "https"}:
@@ -79,8 +116,8 @@ class EnvEmbedder:
         self.endpoint = endpoint
         self.model = model
         self.dimension = dimension
-        self.timeout = timeout
-        self.batch_size = max(1, batch_size)
+        self.timeout = check_timeout(timeout, what="timeout")
+        self.batch_size = check_batch_size(batch_size, what="batch_size")
 
     @property
     def fingerprint(self) -> str:
@@ -89,8 +126,28 @@ class EnvEmbedder:
         marker = f"{self.model}|{self.dimension}||"
         return hashlib.sha256(marker.encode("utf-8")).hexdigest()[:16]
 
-    def embed(self, texts: Sequence[str], *, role: str = "document") -> list[list[float]]:
+    def embed(
+        self, texts: Sequence[str], *, role: str = "document", timeout: float | None = None
+    ) -> list[list[float]]:
+        """Vectors of ``texts``; ``timeout`` (per request) may only shorten ``self.timeout``.
+
+        Errors: ``embedding_rejected`` (HTTP 400, 413 or 422: the endpoint
+        refuses this input, e.g. too long; retrying the same text will not help),
+        ``embedding_refused`` (any other 4xx: wrong path, auth, rate limit; the
+        endpoint or its configuration), ``embedding_unreachable`` (timeout,
+        connection error, 5xx),
+        ``embedding_response_too_large``, ``embedding_bad_response``.
+        """
+
         del role  # no instructions, like the provider memfw builds from the environment
+        if timeout is not None and (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout)
+            or timeout <= 0
+        ):
+            raise ValueError("timeout must be a positive number")
+        limit = self.timeout if timeout is None else min(self.timeout, float(timeout))
         vectors: list[list[float]] = []
         for start in range(0, len(texts), self.batch_size):
             batch = list(texts[start : start + self.batch_size])
@@ -99,8 +156,19 @@ class EnvEmbedder:
                 self.endpoint, data=body, headers={"Content-Type": "application/json"}
             )
             try:
-                with open_url(request, self.timeout) as response:
+                with open_url(request, limit) as response:
                     raw = read_capped(response)
+            except urllib.error.HTTPError as exc:
+                # Checked before URLError (its base class). Only 400/413/422 are an
+                # answer about this input; any other 4xx (401, 403, 404, 405, 429, ...)
+                # is the endpoint or its configuration, and 5xx is the endpoint failing.
+                if exc.code in REJECTING_STATUS:
+                    code = "embedding_rejected"
+                elif 400 <= exc.code < 500:
+                    code = "embedding_refused"
+                else:
+                    code = "embedding_unreachable"
+                raise EmbedderError(code) from None
             except ResponseTooLarge:
                 # Checked before any OSError mapping: a cap breach is never "unreachable".
                 raise EmbedderError("embedding_response_too_large") from None
@@ -130,24 +198,66 @@ class EnvEmbedder:
         return vectors
 
 
-def embedder_from_env(environ: Mapping[str, str] | None = None) -> EnvEmbedder | None:
-    """memfw's ``MEMFW_EMBEDDING_*`` settings (same defaults), or None without a URL."""
+def _env_number(env: Mapping[str, str], name: str, parse: type[float] | type[int]) -> Any:
+    raw = (env.get(name) or "").strip()
+    if not raw:
+        return None
+    try:
+        return parse(raw)
+    except ValueError:
+        kind = "a number" if parse is float else "an integer"
+        raise ValueError(f"{name} must be {kind}") from None
+
+
+def embedder_from_env(
+    environ: Mapping[str, str] | None = None,
+    *,
+    timeout: float | None = None,
+    batch_size: int | None = None,
+) -> EnvEmbedder | None:
+    """memfw's ``MEMFW_EMBEDDING_*`` settings (same defaults), or None without a URL.
+
+    ``timeout`` / ``batch_size`` (the adapter options) win over
+    ``MEMFW_EMBEDDING_TIMEOUT`` / ``MEMFW_EMBEDDING_BATCH_SIZE``; both fall
+    back to 30 s and 16. A bad value raises ``ValueError``.
+    """
 
     env = os.environ if environ is None else environ
     endpoint = env.get("MEMFW_EMBEDDING_URL")
     if not endpoint:
         return None
+    timeout_name = "embedding_timeout_seconds"
+    if timeout is None:
+        timeout, timeout_name = _env_number(env, TIMEOUT_ENV, float), TIMEOUT_ENV
+    batch_name = "embedding_batch_size"
+    if batch_size is None:
+        batch_size, batch_name = _env_number(env, BATCH_SIZE_ENV, int), BATCH_SIZE_ENV
     return EnvEmbedder(
         endpoint,
         model=env.get("MEMFW_EMBEDDING_MODEL", "embedding-model"),
         dimension=int(env.get("MEMFW_EMBEDDING_DIMENSION", "1024")),
+        timeout=DEFAULT_TIMEOUT if timeout is None else check_timeout(timeout, what=timeout_name),
+        batch_size=(
+            DEFAULT_BATCH_SIZE
+            if batch_size is None
+            else check_batch_size(batch_size, what=batch_name)
+        ),
     )
 
 
 __all__ = [
+    "BATCH_SIZE_ENV",
+    "DEFAULT_BATCH_SIZE",
+    "DEFAULT_TIMEOUT",
+    "MAX_BATCH_SIZE",
+    "MAX_TIMEOUT",
+    "REJECTING_STATUS",
+    "TIMEOUT_ENV",
     "Embedder",
     "EmbedderError",
     "EnvEmbedder",
+    "check_batch_size",
+    "check_timeout",
     "dimension_of",
     "embedder_from_env",
     "fingerprint_of",

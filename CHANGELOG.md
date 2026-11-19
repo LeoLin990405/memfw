@@ -15,6 +15,26 @@ The vault format did not change in `0.4.0` either: `vault.yaml` stays at
 
 ## [Unreleased]
 
+### Fixed
+
+- Qdrant adapter: the embedding timeout and batch size were fixed at 30 s and 16, so on a slow
+  CPU-only host no incremental `sync` could ever finish a batch. They are now the options
+  `embedding_timeout_seconds` / `embedding_batch_size`, the environment
+  `MEMFW_EMBEDDING_TIMEOUT` / `MEMFW_EMBEDDING_BATCH_SIZE` and `sync` flags (defaults and
+  fingerprint unchanged). Out-of-range values raise `ValueError`, also in the `EnvEmbedder`
+  constructor (it used to clamp a batch size below 1).
+- Qdrant adapter `sync`: shortest memories first; upserts after every embedding batch (16 points
+  by default instead of 64 per upsert); a failed batch is retried one memory at a time; HTTP 400/413/422
+  is `embedding_rejected` (that memory is skipped and does not count as the endpoint being
+  down); timeouts, connection errors, 5xx and the other 4xx (`embedding_refused`) stop the run
+  after three in a row; reports
+  `embedded`, `failed_requests`, `failures`, `remaining`, `rejected`, `stopped`, exits 1 when
+  incomplete and resumes on the next run; `--max-seconds`; one run per vault and collection
+  (a `flock` outside the vault; a second run exits 3).
+- Qdrant adapter search: the query embedding waits at most `min(timeout,
+  max(budget.timeout_seconds, 30))`: the default stays 30 s, and a long sync timeout cannot pin
+  the provider's worker.
+
 ### Docs
 
 - README (both languages): "One ongoing conversation per app", a session-start rule
