@@ -1,0 +1,31 @@
+# memfw-wiki-gate: the deterministic evidence checks a generated wiki page goes
+# through before anyone sees it (wiki design W1-2): citation resolution against
+# the job package or an admitted-view reader, token consistency (numbers,
+# versions, dates, ids, paths, quotes, names must appear in the cited text),
+# the causal-wording lexicon (G5), lifecycle rules (G6), the conflict rule,
+# privacy recomputation and the normalised sentence hash. Per-claim verdicts
+# with fixed reason codes, never source or page text. Standard library only at
+# run time; it depends on memfw-ports for the wiki formats. The worker and the
+# intake stage run the same code. See docs/wiki-gate.md.
+#
+# Build a wheel:  uv build --wheel --package memfw-wiki-gate
+[build-system]
+requires = ["hatchling==1.33.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "memfw-wiki-gate"
+version = "0.1.0"
+description = "Deterministic evidence checks for memfw wiki pages (standard library only)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+# Symlinks to memfw's own LICENSE and NOTICE (one copy of the text).
+license-files = ["LICENSE", "NOTICE"]
+dependencies = ["memfw-ports==0.4.0"]
+
+[tool.uv.sources]
+memfw-ports = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/memfw_wiki_gate"]

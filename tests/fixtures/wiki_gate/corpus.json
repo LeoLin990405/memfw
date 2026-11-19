@@ -1,0 +1,162 @@
+{
+  "_comment": "Synthetic corpus for memfw-wiki-gate tests (W1-2). Every id, path, host label and text is made up. sha256 of each source is computed by the test from its text.",
+  "tenant": "",
+  "concept": {
+    "oid": "concept:example:backup-plan",
+    "pref_label": "Backup plan",
+    "alt_labels": ["备份方案"],
+    "definition": "How and when backups of the example vault run."
+  },
+  "sources": [
+    {
+      "key": "nightly",
+      "ref": "mem:mem-20261101-backup-nightly@v3",
+      "kind": "memory",
+      "privacy": "shared",
+      "causal": "none",
+      "status": "current",
+      "text": "Backups run nightly at 02:00 on the NAS host and keep 30 days of snapshots. The job uses restic 0.16.4 and writes to /srv/backup/restic. Configured on 2026-11-01 by the operator."
+    },
+    {
+      "key": "weekly",
+      "ref": "mem:mem-20261020-backup-weekly@v1",
+      "kind": "memory",
+      "privacy": "public",
+      "causal": "none",
+      "status": "superseded",
+      "superseded_by": "mem:mem-20261101-backup-nightly@v3",
+      "text": "Backups ran weekly on Sundays and kept 4 snapshots."
+    },
+    {
+      "key": "retention",
+      "ref": "kh:ops/backup.md#Retention",
+      "kind": "note_segment",
+      "privacy": "public",
+      "causal": "association",
+      "status": "current",
+      "text": "备份保留 30 天。三台主机里有两台参与备份。磁盘使用率与快照数量呈正相关。"
+    },
+    {
+      "key": "disk",
+      "ref": "kh:ops/disk.md#Usage",
+      "kind": "note_segment",
+      "privacy": "public",
+      "causal": "association",
+      "status": "current",
+      "text": "快照越多，磁盘使用率越高，两者呈正相关。"
+    },
+    {
+      "key": "retention_cjk",
+      "ref": "kh:ops/backup-cjk.md#Retention",
+      "kind": "note_segment",
+      "privacy": "public",
+      "causal": "none",
+      "status": "current",
+      "text": "备份保留三十天。"
+    },
+    {
+      "key": "failure",
+      "ref": "mem:mem-20261105-backup-failure@v2",
+      "kind": "memory",
+      "privacy": "shared",
+      "causal": "hypothesis",
+      "status": "current",
+      "text": "The 2026-11-03 backup failure may have been caused by the disk filling up; this is a hypothesis pending a run log. Ticket W1-2 tracks it."
+    },
+    {
+      "key": "screenshot",
+      "ref": "att:prx-01936f2a-1b2c-7d3e-8f40-123456789abc:2",
+      "kind": "attachment_segment",
+      "privacy": "shared",
+      "causal": "none",
+      "status": "current",
+      "text": "Screenshot text: the snapshot list shows 30 snapshots, the latest on 2026-11-18."
+    },
+    {
+      "key": "time_a",
+      "ref": "mem:mem-20261106-time-a@v1",
+      "kind": "memory",
+      "privacy": "public",
+      "causal": "none",
+      "status": "disputed",
+      "text": "The nightly backup starts at 02:00."
+    },
+    {
+      "key": "time_b",
+      "ref": "mem:mem-20261106-time-b@v1",
+      "kind": "memory",
+      "privacy": "public",
+      "causal": "none",
+      "status": "current",
+      "text": "The nightly backup starts at 03:00."
+    },
+    {
+      "key": "old_tool",
+      "ref": "mem:mem-20261002-old-tool@v1",
+      "kind": "memory",
+      "privacy": "public",
+      "causal": "none",
+      "status": "retired",
+      "text": "Duplicity was used before restic."
+    },
+    {
+      "key": "mirror",
+      "ref": "mem:mem-20260901-mirror@v1",
+      "kind": "memory",
+      "privacy": "public",
+      "causal": "association",
+      "status": "expired",
+      "text": "A temporary mirror ran on the laptop until 2026-10-01."
+    },
+    {
+      "key": "echo",
+      "ref": "mem:mem-20261107-echo@v1",
+      "kind": "memory",
+      "privacy": "shared",
+      "causal": "none",
+      "status": "current",
+      "text": "Summary from the agent. Backups run nightly and keep a month of snapshots."
+    },
+    {
+      "key": "echo_zh",
+      "ref": "mem:mem-20261108-echo-zh@v1",
+      "kind": "memory",
+      "privacy": "shared",
+      "causal": "none",
+      "status": "current",
+      "text": "备份每晚运行，快照保留一个月左右。"
+    },
+    {
+      "key": "render",
+      "ref": "kh:notes/wiki-render.md#Backup",
+      "kind": "note_segment",
+      "privacy": "public",
+      "causal": "none",
+      "status": "current",
+      "text": "Backups run nightly at 02:00 and keep 30 days of snapshots."
+    }
+  ],
+  "open_questions": [
+    {
+      "id": "oq-20261106-backup-time",
+      "question": "Does the nightly backup start at 02:00 or 03:00?",
+      "missing": "a run log",
+      "conflicts": ["mem-20261106-time-a", "mem-20261106-time-b"]
+    }
+  ],
+  "approved_sentences": [
+    "Backups run nightly and keep a month of snapshots.",
+    "备份每晚运行，快照保留一个月左右。"
+  ],
+  "base_claims": [
+    {"cid": "c1", "section": "summary", "text": "Backups run nightly at 02:00 on the NAS host and keep 30 days of snapshots.", "cites": ["nightly"]},
+    {"cid": "c2", "section": "facts", "text": "The job uses restic 0.16.4 and writes to /srv/backup/restic.", "cites": ["nightly"]},
+    {"cid": "c3", "section": "facts", "text": "三台主机里有两台参与备份，保留 30 天。", "cites": ["retention"]},
+    {"cid": "c4", "section": "timeline", "kind": "superseded", "text": "Backups previously ran weekly and kept 4 snapshots; the nightly schedule replaced that.", "cites": ["weekly", "nightly"]},
+    {"cid": "c5", "section": "relations", "causal": "hypothesis", "text": "The 2026-11-03 backup failure may have been caused by the disk filling up.", "cites": ["failure"]},
+    {"cid": "c6", "section": "relations", "causal": "association", "text": "快照数量与磁盘使用率呈正相关。", "cites": ["retention", "disk"]},
+    {"cid": "c7", "section": "open", "kind": "conflict", "text": "One record says the nightly backup starts at 02:00.", "cites": ["time_a"]},
+    {"cid": "c8", "section": "open", "kind": "conflict", "text": "Another record says it starts at 03:00.", "cites": ["time_b"]},
+    {"cid": "c9", "section": "open", "kind": "missing_evidence", "text": "A run log would settle the start time.", "cites": ["time_b"]}
+  ]
+}

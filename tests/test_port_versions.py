@@ -16,6 +16,7 @@ from memfw.ports import (
     CLAIMS_PORT_VERSION,
     MODELS_PORT_VERSION,
     PORT_VERSIONS,
+    PORTS_API_VERSION,
     USAGE_PORT_VERSION,
 )
 
@@ -38,6 +39,30 @@ CONSUMES = {
     "memfw-adapter-tailnet": {"Ingestor"},
     "memfw-adapter-wikigen": {"Deriver", "ModelBackend"},
 }
+
+
+PIN_ROW = re.compile(r"^\| `([a-z0-9-]+)` \| ([0-9.]+) \| ([0-9.]+) \| [^|]+ \|$")
+#: Packages that use no port, only ports value types / formats: they pin the
+#: ports API version (``memfw-ports==PORTS_API_VERSION``) instead.
+API_PINNED = {"memfw-wiki-gate"}
+
+
+def _pins() -> list[tuple[str, str, str]]:
+    text = DOC.read_text(encoding="utf-8")
+    body = text.split("<!-- ports-api-pins:start -->", 1)[1].split("<!-- ports-api-pins:end -->")[0]
+    rows = []
+    for line in body.strip().splitlines()[2:]:
+        match = PIN_ROW.match(line.strip())
+        assert match, line
+        rows.append((match[1], match[2], match[3]))
+    return rows
+
+
+def _dependencies(package: str) -> list[str]:
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    (member,) = [m for m in data["tool"]["uv"]["workspace"]["members"] if Path(m).name == package]
+    project = tomllib.loads((ROOT / member / "pyproject.toml").read_text("utf-8"))
+    return list(project["project"].get("dependencies", []))
 
 
 def _table() -> list[tuple[str, str, str, int]]:
@@ -77,7 +102,19 @@ def test_consumer_rows_match_metadata_and_versions() -> None:
 def test_every_table_package_is_a_workspace_member() -> None:
     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     members = {Path(m).name for m in data["tool"]["uv"]["workspace"]["members"]}
-    assert {row[0] for row in _table()} == members
+    in_port_table = {row[0] for row in _table()}
+    pinned = {row[0] for row in _pins()}
+    assert not in_port_table & pinned
+    assert in_port_table | pinned == members
+
+
+def test_api_pinned_packages_pin_the_ports_api_version() -> None:
+    rows = _pins()
+    assert {package for package, _, _ in rows} == API_PINNED
+    for package, version, pin in rows:
+        assert version == _version(package), package
+        assert pin == PORTS_API_VERSION, package
+        assert f"memfw-ports=={pin}" in _dependencies(package), package
 
 
 def test_named_port_constants_feed_the_table() -> None:

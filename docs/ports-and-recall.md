@@ -117,6 +117,19 @@ do not contain `memfw/__init__.py`, so this does not affect them.
 | `memfw-adapter-wikigen` | 0.1.0 | `ModelBackend` | 1 |
 <!-- port-versions:end -->
 
+Packages that implement or call no port but read ports value types or formats
+pin `memfw-ports` to the ports API version instead (`memfw.ports.PORTS_API_VERSION`,
+which a format change bumps). `tests/test_port_versions.py` checks this table
+against each package's `memfw-ports==` dependency and `PORTS_API_VERSION`.
+`memfw-wiki-gate` reads the wiki formats; it calls no `EntailmentChecker` (NLI
+scores come from the caller's own checker).
+
+<!-- ports-api-pins:start -->
+| Package | Version | memfw-ports | Uses |
+|---|---|---|---|
+| `memfw-wiki-gate` | 0.1.0 | 0.4.0 | `memfw.ports.wiki` formats, `Citation`, privacy levels |
+<!-- ports-api-pins:end -->
+
 - **Wheels only.** `uv build --wheel --package memfw-ports` (and `memfw-recall`). An sdist is
   not supported because the sources live outside the package directory. Editable installs of
   the members are not supported either; `uv sync` installs memfw alone, as before.

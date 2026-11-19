@@ -17,6 +17,29 @@ The vault format did not change in `0.4.0` either: `vault.yaml` stays at
 
 ### Added
 
+- `memfw-wiki-gate` 0.1.0 (`packages/memfw-wiki-gate`, wheel `memfw_wiki_gate`), LLM Wiki
+  W1-2: deterministic checks of a generated `memfw-wiki-page/1` page against its
+  `memfw-wiki-job/1` job and, at intake, an admitted-view reader (`SourceResolver`). Per
+  claim: citation resolution (no page, `file:`/URL/bare pointer, conversation, generated or
+  looped source), lifecycle (G6: non-current sources only in `timeline`, as `superseded`
+  claims citing the replacement), the conflict rule, causal label and wording (G5, zh + en
+  lexicon; unhedged causal and certainty wording refused), token consistency (numbers,
+  times, dates, versions, ids, paths, quotes, names; CJK numerals equal Arabic digits) and,
+  the caller's own NLI scores (`nli_scores` by cid, `nli_model`; the generator's
+  `checks.nli` and `build.nli_model` are never trusted). Claims with any `Cf` character or a
+  Latin/Cyrillic/Greek mixed word are dropped; lexicon matching ignores `Cf`/`Mn`/`Me`
+  characters, whitespace and traditional forms; every Unicode digit reads as ASCII; units,
+  signs and path/quote boundaries are compared. Per-claim verdicts with fixed reason codes,
+  a page verdict (`publish` / `needs_attention` / `retry` / `reject`), counts, privacy = the
+  strictest of *all* job sources (the page lists them all; rule shared with the W1-4
+  generator; a stricter `previous_page` is refused) and the surviving claims as a `WikiPage`
+  that passes `check_wiki_page`; open questions regenerated from the job; reports never hold
+  page or source text, and sentence hashes only as a caller-keyed HMAC. The v2 design's
+  write-gate attacks R1–R5, the v3 rules and the review rounds' evasions are 114 synthetic
+  fixtures with 0 false accepts. Standard library only plus `memfw-ports` 0.4.0; built and smoke-tested in the
+  standalone-wheel CI job. It pins `memfw-ports` to the ports API version (new ports-API pin
+  table in `docs/ports-and-recall.md`), not to a port contract. See `docs/wiki-gate.md`.
+
 - `memfw-pipeline` 0.1.0 (`packages/memfw-pipeline`, wheel `memfw_pipeline`), the v0.5.0 P1
   Stage contract and runner. A stage implements `freshness`, `inputs_digest`, `build`,
   `verify`, `publish` and optional idempotent `post_publish` steps; the runner gives every

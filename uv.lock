@@ -24,6 +24,7 @@ members = [
     "memfw-pipeline",
     "memfw-ports",
     "memfw-recall",
+    "memfw-wiki-gate",
 ]
 
 [[package]]
@@ -498,6 +499,17 @@ source = { editable = "packages/memfw-ports" }
 name = "memfw-recall"
 version = "0.4.0"
 source = { editable = "packages/memfw-recall" }
+dependencies = [
+    { name = "memfw-ports" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "memfw-ports", editable = "packages/memfw-ports" }]
+
+[[package]]
+name = "memfw-wiki-gate"
+version = "0.1.0"
+source = { editable = "packages/memfw-wiki-gate" }
 dependencies = [
     { name = "memfw-ports" },
 ]

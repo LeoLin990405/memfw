@@ -96,6 +96,11 @@ CI 的 `standalone-wheels` 任务会构建两者，装进一个没有 memfw 的�
 `packages/memfw-pipeline`（wheel 名 `memfw_pipeline`，版本 0.1.0）是派生产物（准入视图、元数据索引、FTS / bm25s / Qdrant 索引、投影）的 Stage 契约和运行器。一个 stage 只实现 `freshness`、`inputs_digest`、`build`、`verify`、`publish`，以及可选的幂等 `post_publish` 步骤；其余由运行器统一提供：放在目标旁边的单写者锁（`.<target>.lock`，`O_NOFOLLOW`，被占用时先重试几秒，仍被占用则退出码 75）、开始时写 `running` 状态、在目标旁边的临时目录里构建、每个发布出去的产物里自带一份记录（`.memfw-pipeline.json`：输入摘要和计数）、原子交换目录（不支持时退回两次 rename，失败会回滚）、缩水保护（空构建或少于基线一半时退出码 5，除非加 `--allow-shrink`；基线优先取线上产物自带的记录）、新鲜度，以及只含计数和固定原因码的状态文件。输入摘要与线上产物的记录一致时跳过构建，但 post-publish 步骤照样运行。以 root 运行时默认开启路径信任检查。`memfw-pipeline unit` 打印加固过的 systemd 或 launchd 模板供审阅，不会安装任何东西。运行时只用标准库，外加 `memfw-ports` 0.3.0；memfw 本身从不导入它。用 `uv build --wheel --package memfw-pipeline` 构建（没有发布到 PyPI）。这一版只带一个示例 stage，真正的各个 stage 之后再迁移过来。见 [`pipeline.md`](pipeline.md)。
 
 
+## Wiki 页面检查：`memfw-wiki-gate`
+
+`packages/memfw-wiki-gate`（wheel 名 `memfw_wiki_gate`，版本 0.1.0）是 LLM Wiki 的确定性闸门（W1-2）：把生成的 `memfw-wiki-page/1` 页面逐句对照它的 `memfw-wiki-job/1` 任务包检查，摄入时再对照当前放行视图。引用必须可解析（不能是页面、`file:`/URL/裸路径、生成文本或环路来源）；已取代、退役、过期、disputed 的来源只能在 `timeline`；不替冲突任何一方表态；因果标签不高于所引来源（封顶 `hypothesis`），措辞不强于标签（中英文词表）；数字、时间、日期、版本、id、路径、引文、专名必须出现在所引原文里（中文数字与阿拉伯数字等价，单位、正负号、路径和引文边界都比对）；含不可见格式字符或拉丁/西里尔/希腊混写词的句子直接丢弃；NLI 分数只用调用方自己的检查器给的，不信生成器自报。输出逐句结论（固定原因码）、页面结论（`publish`、`needs_attention`、`retry`、`reject`）、计数、隐私级别（任务包全部来源里最严格的，页面列出全部来源）和留下的句子组成的 `WikiPage`；从不输出页面或原文文本。不跑任何模型。运行时只用标准库，外加 `memfw-ports` 0.4.0。用 `uv build --wheel --package memfw-wiki-gate` 构建。见 [`wiki-gate.md`](wiki-gate.md)。
+
+
 ## DeepSeek 打标签适配器
 
 `packages/adapters/memfw-adapter-deepseek`（wheel 名 `memfw_adapter_deepseek`，版本 0.1.1）只用标准库实现了 `ModelBackend` 端口。它给会话 worker 提供 `conv-v2` 格式的输出：每个分块和每个会话一段摘要，外加标签（项目、任务类型、组件、意图、结果）；它不抽取事实或论断。它**默认关闭**：只有 `vault.yaml` 里设置了 `conversations: {backend: "memfw_adapter_deepseek:factory", cloud: true}`，并且提供了 `DEEPSEEK_API_KEY`，worker 才会用它；每一轮都有 token 和费用上限。密钥只会发往服务商的 API 地址。memfw 本身从不导入这个适配器；它单独构建成 wheel（`uv build --wheel --package memfw-adapter-deepseek`），没有发布到 PyPI。见 [`conversations-share.md`](conversations-share.md#deepseek-tagging-adapter)。
