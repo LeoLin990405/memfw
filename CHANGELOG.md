@@ -33,6 +33,10 @@ The vault format did not change in `0.4.0` either: `vault.yaml` stays at
   table is the canonical one (fleet-memory's client codes included): `export_codes()` and the
   committed `docs/retrieval-health-codes.json` carry it as data. No port contract changed
   (`PORT_VERSIONS` unchanged).
+- `memory_search` `two_stage`: `degraded_sources` (sorted provider names, only when
+  non-empty) says which providers answered with a degraded page; `retrieval_health` reads it
+  as `source_fallback:<name>`. A reply degraded only by a failed access event stays
+  `full`/`high` with `access_not_recorded`.
 - `conversations_search` `two_stage`: `retrieval_health` counts toward `max_bytes` (its
   "with sessions" form is reserved before sessions are packed), so near the cap one fewer
   session or turn window may fit than in 0.4.0; `truncated`/`next_offset` say so as usual.

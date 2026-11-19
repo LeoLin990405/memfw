@@ -452,12 +452,19 @@ def from_memory_search(
             semantic_configured = bool((payload.get("model_versions") or {}).get("embedding"))
     if requested_mode == "two_stage" and isinstance(recall, Mapping):
         extra = _error_reasons(errors)
-        unexplained = not (
-            recall.get("degraded") or recall.get("resolvers_degraded") or recall.get("fail_closed")
-        ) and all(affects_mode(code) == "no" for code in extra)
-        if payload.get("degraded") and unexplained:
-            # A provider reported a degraded page (it answered from its own
-            # fallback); the payload does not say which one.
+        # Which provider answered from its own fallback: the explicit signal.
+        named = [str(name) for name in payload.get("degraded_sources") or ()]
+        extra.update(f"source_fallback:{_safe_name(name)}" for name in named)
+        explained = bool(
+            named
+            or extra  # errors name the cause (access_not_recorded included)
+            or recall.get("degraded")
+            or recall.get("resolvers_degraded")
+            or recall.get("fail_closed")
+        )
+        if payload.get("degraded") and not explained:
+            # degraded with no reason at all (a reply without degraded_sources):
+            # some provider's page was degraded, but the payload does not say which.
             extra.add("source_fallback:unknown")
         return from_recall(
             recall,

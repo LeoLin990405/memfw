@@ -765,3 +765,36 @@ def test_health_imports_no_heavy_memfw_modules() -> None:
         [sys.executable, "-c", code], capture_output=True, text=True, check=True
     ).stdout
     assert out.strip() == "['memfw', 'memfw.retrieval', 'memfw.retrieval.health']"
+
+
+def test_two_stage_access_error_alone_is_informational() -> None:
+    payload = {
+        "mode": "two_stage",
+        "degraded": True,  # set by the access-event failure only
+        "errors": ["access_not_recorded"],
+        "results": [{"id": "m1"}],
+        "recall": _labels(providers=["fts", "hybrid"]),
+        "recall_metrics": {"dropped": {}},
+    }
+    out = from_memory_search(payload, requested_mode="two_stage")
+    assert (out["mode"], out["confidence"]) == ("full", "high")
+    assert out["reasons"] == ["access_not_recorded"]
+
+
+def test_two_stage_degraded_sources_name_the_fallback() -> None:
+    payload = {
+        "mode": "two_stage",
+        "degraded": True,
+        "degraded_sources": ["Hybrid", "qdrant"],
+        "errors": ["access_not_recorded"],
+        "results": [{"id": "m1"}],
+        "recall": _labels(providers=["fts", "hybrid", "qdrant"]),
+        "recall_metrics": {"dropped": {}},
+    }
+    out = from_memory_search(payload, requested_mode="two_stage")
+    assert out["reasons"] == [
+        "access_not_recorded",
+        "source_fallback:hybrid",
+        "source_fallback:qdrant",
+    ]
+    assert (out["mode"], out["confidence"]) == ("degraded", "medium")

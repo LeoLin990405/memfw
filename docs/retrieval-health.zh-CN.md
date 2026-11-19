@@ -98,7 +98,7 @@ fleet-memory 在升级到 memfw >= 0.5.0 之前自带一份码表副本；升级
 | `source_busy:<name>` | `yes` | 来源 `<name>` 忙（达到并发上限），被跳过 | two_stage recall、memory_context |
 | `source_error:<name>` | `yes` | 来源 `<name>` 失败或返回了无效输出 | memory_search、two_stage recall、memory_context、conversations_search（two_stage） |
 | `source_unavailable:<name>` | `yes` | 来源 `<name>` 报告自己不可用 | memory_search（fts 的 `index_stale`）、two_stage recall、memory_context |
-| `source_fallback:<name>` | `yes` | 多源输出中，来源 `<name>` 自己走了回退 | two_stage recall（只给 `source_fallback:unknown`）；其余由客户端给 |
+| `source_fallback:<name>` | `yes` | 多源输出中，来源 `<name>` 自己走了回退 | memory_search two_stage（来自 `degraded_sources`）；其余由客户端给 |
 | `resolver_error:<name>` | `yes` | `<name>` 解析器失败，它的候选被丢弃 | two_stage recall |
 | `adapters_timeout` | `yes` | 至少一个召回适配器超时 | two_stage recall |
 | `adapters_busy` | `yes` | 至少一个召回适配器忙 | two_stage recall |
@@ -167,7 +167,9 @@ fleet-memory 在升级到 memfw >= 0.5.0 之前自带一份码表副本；升级
 | memory_search hybrid/vector 自己回答 | `degraded: true` 且没有其他错误 | `semantic_empty` + `keyword_only` → `degraded` / `medium` |
 | memory_search multihop | `degraded: true` | `expansion_empty` |
 | memory_search 非 two_stage，没有结果 | 该模式读的每个源都报错或不可用（hybrid/vector：`hybrid` 和 `fts` 都是；fts/multihop：`fts`） | `all_sources_failed` |
-| memory_search two_stage | 回复标了 `degraded`，但 `recall.degraded`、`resolvers_degraded`、`fail_closed` 和 `errors` 都解释不了 | `source_fallback:unknown` |
+| memory_search two_stage | `degraded_sources: [<name>, ...]`（页面降级的 provider，只在非空时出现） | 每个给 `source_fallback:<name>` |
+| memory_search two_stage | 回复标了 `degraded`，但没有 `degraded_sources`，`recall.degraded`、`resolvers_degraded`、`fail_closed` 和 `errors` 也都没有（`degraded_sources` 之前的旧回复） | `source_fallback:unknown` |
+| memory_search two_stage | 只因访问事件写入失败而标了 `degraded`（`errors: [access_not_recorded]`） | `access_not_recorded`（提示：`full` / `high`） |
 | | `errors` | 同上面 memory_search `errors` 一节 |
 | 协调器 `recall.degraded` | `timeout` | `source_timeout:<name>` |
 | | `busy` | `source_busy:<name>` |
@@ -185,7 +187,7 @@ fleet-memory 在升级到 memfw >= 0.5.0 之前自带一份码表副本；升级
 
 ## 只留给客户端的码
 
-`semantic_partial`、`meta_index_stale`、`qmd_live_read_errors:<n>`、`grep_fallback`、`adapters_shadow` 在码表里，但 memfw 自己从不给出；`source_fallback:<name>` memfw 只给 `source_fallback:unknown`。它们描述的是客户端（例如 fleet-memory）那一侧的情况。客户端用同一套函数推导，词汇就保持一致：
+`semantic_partial`、`meta_index_stale`、`qmd_live_read_errors:<n>`、`grep_fallback`、`adapters_shadow` 在码表里，但 memfw 自己从不给出；`source_fallback:<name>` memfw 按 `degraded_sources` 给出具体名字，只有旧回复才会是 `source_fallback:unknown`。它们描述的是客户端（例如 fleet-memory）那一侧的情况。客户端用同一套函数推导，词汇就保持一致：
 
 ```python
 from memfw.retrieval.health import derive
@@ -203,7 +205,7 @@ health = derive(
 
 - two_stage 的 `keyword_only`：只有回答的 provider 全是 `fts`（且语义侧缺失）时才加；bm25s 这类同样是字面匹配的适配器参与回答时不会标。反正 `keyword_only` 只是提示（affects_mode `no`），不影响 mode 和 confidence；降级由 `semantic_unavailable`、`source_error:hybrid` 等原因码表达。
 - `errors` 里不认识前缀的自由文本错误统一归为 `source_error:unknown`；conversations two_stage 里不认识的 `degraded` 码也一样。回答仍标为降级，但说不出是哪个来源。
-- two_stage memory_search 回复标了 `degraded` 却没有别的信号时，只能给 `source_fallback:unknown`：回复里没说是哪个 provider 走了回退。
+- 只有 `degraded_sources` 出现之前的旧回复，标了 `degraded` 却没有任何其他信号时，才给 `source_fallback:unknown`：回复里没说是哪个 provider 走了回退。
 - `retrieval_health` 只反映输出里已有的信号；输出没报告的故障这里也看不到。
 - `note` 只是给人看的一句话，程序应读 `mode`、`confidence` 和 `reasons`。
 - `conversations_search` 的 `two_stage` 保持整个回复的 `max_bytes` 上限：打包会话前只按“有会话”的形态预留这个键的字节。没有会话的回复很小（什么都没追加），它的空结果形态一定放得下。接近上限时可能比以前少放一个会话或一个 turn 窗口，此时照常由 `truncated` 和 `next_offset` 说明。

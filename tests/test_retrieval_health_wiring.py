@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -262,3 +263,45 @@ def test_conversation_two_stage_empty_while_degraded(tmp_path: Path) -> None:
     got = _share(tmp_path).search("zzzqqqnothing", mode="two_stage")
     assert got["sessions"] == [] and got["degraded"] == ["no_embedder"]
     assert "empty_degraded" in got[KEY]["reasons"] and "no_match" not in got[KEY]["reasons"]
+
+
+# -- R1: an access-event failure is informational -------------------------------------
+
+
+def _plain_vault(tmp_path: Path) -> Any:
+    from memfw.core.repository import Repository
+    from memfw.index import MemoryIndex
+
+    repository = Repository(tmp_path / "vault")
+    repository.init()
+    repository.add("Homelab backup", "nightly homelab backup", memory_id="m-backup")
+    repository.add("Backup notes", "backup notes and restore drills", memory_id="m-notes")
+    MemoryIndex(repository.index_path).rebuild(repository)
+    return repository
+
+
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root ignores modes")
+def test_two_stage_access_write_failure_stays_full(tmp_path: Path) -> None:
+    repository = _plain_vault(tmp_path)
+    gateway = _gateway(repository.root, embedder=HashEmbeddingProvider(dimension=64))
+    log = repository.root / "events.jsonl"
+    log.chmod(0o444)
+    try:
+        payload = gateway.search("backup", 10, mode="two_stage")
+    finally:
+        log.chmod(0o644)
+    assert payload["results"]
+    # Today's signals: the flag is set and the error names the cause.
+    assert payload["degraded"] is True and "access_not_recorded" in payload["errors"]
+    assert "degraded_sources" not in payload  # no provider page was degraded
+    found = payload[KEY]
+    assert (found["mode"], found["confidence"]) == ("full", "high")
+    assert found["reasons"] == ["access_not_recorded"]
+
+
+def test_two_stage_healthy_reply_has_no_degraded_sources(tmp_path: Path) -> None:
+    repository = _plain_vault(tmp_path)
+    gateway = _gateway(repository.root, embedder=HashEmbeddingProvider(dimension=64))
+    payload = gateway.search("backup", 10, mode="two_stage")
+    assert "degraded_sources" not in payload and payload["degraded"] is False
+    assert payload[KEY]["mode"] == "full" and payload[KEY]["reasons"] == []

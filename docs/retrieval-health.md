@@ -134,7 +134,7 @@ for clients that wrap memfw output with their own sources.
 | `source_busy:<name>` | `yes` | source `<name>` was busy (in-flight cap) and was skipped | `two_stage` recall, `memory_context` v=2 |
 | `source_error:<name>` | `yes` | source `<name>` failed or returned invalid output | `memory_search`, `two_stage` recall, `memory_context` v=2, `conversations_search two_stage` |
 | `source_unavailable:<name>` | `yes` | source `<name>` reported itself unavailable | `memory_search` (fts `index_stale`), `two_stage` recall, `memory_context` v=2 |
-| `source_fallback:<name>` | `yes` | in a multi-source answer, source `<name>` answered from its own fallback | `memory_search two_stage` (`source_fallback:unknown` only); clients (fleet-memory) for recall and context |
+| `source_fallback:<name>` | `yes` | in a multi-source answer, source `<name>` answered from its own fallback | `memory_search two_stage` (from `degraded_sources`); clients (fleet-memory) for recall and context |
 | `resolver_error:<name>` | `yes` | the `<name>` resolver failed; its candidates were dropped | `two_stage` recall |
 | `adapters_timeout` | `yes` | at least one recall adapter timed out | `two_stage` recall |
 | `adapters_busy` | `yes` | at least one recall adapter was busy | `two_stage` recall |
@@ -219,7 +219,9 @@ Recall coordinator (`from_recall`, used for `two_stage`), from
 | no embedder configured | `semantic_unavailable` → `degraded` / `medium` |
 | every answering provider is `fts` and the semantic side was missing (no embedder, or a `:hybrid` source code) | + `keyword_only` (informational) |
 | `recall_metrics.dropped` | `withheld:<category>:<n>` |
-| payload `degraded` with no provider, resolver or `fail_closed` signal and no degrading error | `source_fallback:unknown` (a provider answered from its own fallback; the payload does not say which) |
+| `degraded_sources: [<name>, ...]` (providers whose page was degraded; present only when non-empty) | `source_fallback:<name>` each |
+| payload `degraded` with no `degraded_sources`, no recall/resolver/`fail_closed` signal and no error at all (a reply from before `degraded_sources`) | `source_fallback:unknown` |
+| payload `degraded` only because an access event failed (`errors: [access_not_recorded]`) | `access_not_recorded` (informational: `full` / `high`) |
 
 Builtin providers are `fts` and `hybrid`; any other provider name is an
 adapter. The `errors` table above also applies to `two_stage` payloads.
@@ -273,7 +275,8 @@ that cannot import memfw yet compares its copy against
   `semantic_unavailable` or `source_error:hybrid`, sets those).
 - Free-text errors that match no known code or prefix become
   `source_error:unknown`: the answer is still marked degraded, but the
-  source is not named. Likewise `source_fallback:unknown` cannot name the
+  source is not named. Likewise `source_fallback:unknown` (only for a reply
+  without `degraded_sources`, i.e. from before it existed) cannot name the
   provider that fell back.
 - `retrieval_health` reflects the signals the output already carries. A
   failure the output does not report cannot appear here.
