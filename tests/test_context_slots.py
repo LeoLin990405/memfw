@@ -165,7 +165,15 @@ def test_default_slots_match_the_explicit_core_slot(tmp_path: Path) -> None:
     assert [slot["name"] for slot in default["slots"]] == ["core"]
     del default["generated_at"], explicit["generated_at"]
     assert default == explicit
-    assert set(default) == {"v", "limit_tokens", "pack_version", "policy", "slots"}
+    # retrieval_health (retrieval-health/1) is the one key added since C2.
+    assert set(default) == {
+        "v",
+        "limit_tokens",
+        "pack_version",
+        "policy",
+        "slots",
+        "retrieval_health",
+    }
     assert set(default["slots"][0]) == {
         "name",
         "entries",

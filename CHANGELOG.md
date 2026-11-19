@@ -17,6 +17,17 @@ The vault format did not change in `0.4.0` either: `vault.yaml` stays at
 
 ### Added
 
+- `retrieval_health` (`retrieval-health/1`, `memfw.retrieval.health`): one top-level
+  summary `{schema, mode, confidence, reasons, score_kind, note}` on `memory_search` (every
+  mode), `memory_context` v=2 and `conversations_search` (default and `two_stage`), derived
+  only from signals the output already carries (`degraded`, `errors`, `recall`,
+  `recall_metrics.dropped`, slot `degraded` codes). Results, order and scores are unchanged;
+  with no degradation the new key is the only difference. Fixed reason codes are listed in
+  [`docs/retrieval-health.md`](docs/retrieval-health.md) (zh-CN alongside); the pure
+  functions are reusable by clients. No port contract changed (`PORT_VERSIONS` unchanged).
+  MCP tool descriptions now say `conversations_get` `start`/`end` are turn indexes (not the
+  search `ref`/`offset` position key), when `conversations_search` `query` may be empty, and
+  that hybrid/two_stage `score` is a fused rank, not relevance.
 - `memfw-wiki-gate` 0.1.0 (`packages/memfw-wiki-gate`, wheel `memfw_wiki_gate`), LLM Wiki
   W1-2: deterministic checks of a generated `memfw-wiki-page/1` page against its
   `memfw-wiki-job/1` job and, at intake, an admitted-view reader (`SourceResolver`). Per

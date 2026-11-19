@@ -36,6 +36,7 @@ from memfw.ports.context import ContextPack, ContextSlotProvider, SlotRequest
 from memfw.ports.privacy import admits, effective_level, privacy_value
 from memfw.ports.usage import UsageSignal, UsageSink
 from memfw.recall.coordinator import InflightRegistry
+from memfw.retrieval.health import HEALTH_KEY, from_context_pack, from_memory_search
 
 from .context_cache import ContextCache, cached_core_candidates
 from .context_sources import concept_catalogue, share_feed
@@ -466,6 +467,10 @@ class Runtime:
 
         ``client_message(text, root)`` cleans error texts that may name vault
         paths (the MCP server passes its own); the default returns the text.
+
+        The payload also carries ``retrieval_health`` (``retrieval-health/1``,
+        ``memfw.retrieval.health``), derived from its own ``degraded``,
+        ``errors`` and ``recall`` fields; rows, order and scores are unchanged.
         """
 
         from .search import checked_scope, memory_search
@@ -482,7 +487,7 @@ class Runtime:
         if source and self.allowed_sources and source not in self.allowed_sources:
             raise ValueError("source is not allowed for this account")
         repository = self.open_repository()
-        return memory_search(
+        payload = memory_search(
             self,
             repository,
             query,
@@ -498,6 +503,11 @@ class Runtime:
             client_message=client_message or _plain_message,
             app=app,
         )
+        # Read from the payload's own signals only; nothing above changes.
+        payload[HEALTH_KEY] = from_memory_search(
+            payload, requested_mode=mode, semantic_configured=self.embedder is not None
+        )
+        return payload
 
     # --- memory_remember, memory_related, memory_status (A3b) -------------------
 
@@ -1150,6 +1160,15 @@ class Runtime:
         """The original ``memory_context`` payload for the caller's open vault."""
 
         return core_context_v1(repository, keep=self._visible, limit_tokens=limit_tokens)
+
+    def context_health(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """``retrieval_health`` of a ``memory_context`` v=2 payload (its slots' codes).
+
+        Read from the payload only (``memfw.retrieval.health``); the pack and
+        its ``pack_version`` are unchanged.
+        """
+
+        return from_context_pack(payload)
 
     def context_current_enabled(self) -> bool:
         """Whether the ``current`` slot exists (U6, ``runtime.context.current``; default off)."""
