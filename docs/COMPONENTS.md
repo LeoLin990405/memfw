@@ -144,6 +144,25 @@ Build with `uv build --wheel --package memfw-pipeline` (not published to PyPI). 
 only an example stage; the real stages are ported later. See [`pipeline.md`](pipeline.md).
 
 
+## Wiki page checks: `memfw-wiki-gate`
+
+`packages/memfw-wiki-gate` (wheel `memfw_wiki_gate`, version 0.1.0) is the deterministic gate
+of the LLM Wiki (W1-2): it checks a generated `memfw-wiki-page/1` page claim by claim against
+its `memfw-wiki-job/1` job and, at intake, the current admitted view. Citations must resolve
+(never a page, a `file:`/URL/bare pointer, generated text or a looped source); superseded,
+retired, expired and disputed sources only in `timeline`; no side taken in a job conflict;
+causal label at most the cited sources' (capped at `hypothesis`) and wording no stronger
+(zh + en lexicon); every number, time, date, version, id, path, quote and name present in a
+cited source (CJK numerals and Arabic digits equivalent; units, signs and path/quote
+boundaries compared); invisible format characters and mixed-script words refused; NLI
+scores taken only from the caller's own checker. Output: per-claim verdicts with fixed
+reason codes, a page verdict (`publish`, `needs_attention`, `retry`, `reject`), counts, the
+privacy (strictest of all job sources, which the page lists) and the surviving claims as a
+`WikiPage`; never page or source text. No model runs.
+Standard library only plus `memfw-ports` 0.4.0. Build with
+`uv build --wheel --package memfw-wiki-gate`. See [`wiki-gate.md`](wiki-gate.md).
+
+
 ## DeepSeek tagging adapter
 
 `packages/adapters/memfw-adapter-deepseek` (wheel `memfw_adapter_deepseek`, version 0.1.1)

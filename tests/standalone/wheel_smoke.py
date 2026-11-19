@@ -4,7 +4,7 @@ Run it with the interpreter of a venv that has the wheels and NOT memfw:
 
     python -I tests/standalone/wheel_smoke.py [--recall] [--deepseek] [--bm25s] [--qdrant]
         [--qmd] [--ocr] [--pageindex] [--langextract] [--lightrag] [--graphrag]
-        [--pipeline] [--tailnet] [--wikigen]
+        [--pipeline] [--tailnet] [--wikigen] [--wiki-gate]
 
 It refuses to run when ``memfw`` is importable, imports the wheels, and runs
 the contract kit (``memfw_ports.testing``) against the reference
@@ -35,7 +35,10 @@ in a throwaway tree, taking its ``Clock`` from ``memfw_ports``; with ``--tailnet
 ``memfw-adapter-tailnet`` wheel's ingestor passes ``check_ingestor`` on host-fact
 candidates from a synthetic status document; with ``--wikigen`` the
 ``memfw-adapter-wikigen`` wheel's deriver passes ``check_deriver`` and
-``check_wiki_page`` on a synthetic job with its stub backend (no model). Prints one
+``check_wiki_page`` on a synthetic job with its stub backend (no model).; with ``--wiki-gate`` the
+``memfw-wiki-gate`` wheel checks a synthetic page against its job (built with
+``memfw_ports.wiki``): it publishes, an attack claim is dropped and the
+surviving page passes ``check_wiki_page``. Prints one
 ``ok`` line per check and exits non-zero on the first failure. Standard
 library only; not collected by pytest (``tests/test_standalone_ports_wheel.py``
 drives it).
@@ -837,6 +840,98 @@ def _wikigen(root: Path) -> None:
     _ok("check_deriver WikigenDeriver (stub backend)")
 
 
+def _wiki_gate() -> None:
+    """The wiki gate wheel over the memfw-ports wheel: one page, one attack claim."""
+
+    import hashlib
+
+    from memfw_ports.testing import check_wiki_page
+    from memfw_ports.wiki import (
+        WikiConcept,
+        WikiJob,
+        WikiJobSource,
+        WikiSource,
+        wiki_job_digest,
+    )
+    from memfw_wiki_gate import CHECKER_VERSION, check_page
+    from memfw_wiki_gate import _ports as seam
+
+    assert seam.WikiPage.__module__.startswith("memfw_ports"), seam.WikiPage
+    _ok("import memfw_wiki_gate (wiki formats from memfw_ports)")
+    text = "Backups run nightly at 02:00 and keep 30 days of snapshots."
+    ref = "mem:mem-20261101-backup@v1"
+    source = WikiSource(ref, "memory", hashlib.sha256(text.encode()).hexdigest(), "shared", "none")
+    concept = WikiConcept("concept:example:backup", "Backup")
+    generator = {
+        "generator": "wikigen",
+        "generator_version": "0.1.0",
+        "model": "example-model",
+        "model_digest": "sha256:" + "a" * 64,
+        "prompt_version": "wiki-v1",
+    }
+    sources = (WikiJobSource(source, text),)
+    digest = wiki_job_digest(
+        concept=concept,
+        tenant="",
+        sources=sources,
+        open_questions=(),
+        previous_page=None,
+        generator=generator,
+        checker_version=CHECKER_VERSION,
+    )
+    job = WikiJob("job-1", digest, "", concept, sources, generator, CHECKER_VERSION, "view-1")
+
+    def claim(cid: str, text: str) -> dict[str, object]:
+        return {
+            "cid": cid,
+            "text": text,
+            "cites": [ref],
+            "causal": "none",
+            "kind": "statement",
+            "epistemic": "inference",
+            "checks": {"tokens": "not_run"},
+        }
+
+    page = {
+        "format": "memfw-wiki-page/1",
+        "page_key": job.page_key,
+        "concept": concept.oid,
+        "tenant": "",
+        "privacy": "public",
+        "build": {
+            **generator,
+            "checker_version": CHECKER_VERSION,
+            "nli_model": "example-nli",
+            "view_version": "view-1",
+            "job_digest": digest,
+        },
+        "sources": [source.to_json()],
+        "sections": [
+            {
+                "id": "summary",
+                "claims": [
+                    claim("c1", "Backups run nightly at 02:00."),
+                    claim("c2", "Backups keep 30 days of snapshots."),
+                    claim("c3", "Backups keep 40 days, because the disk is large."),
+                ],
+            }
+        ],
+        "open_questions": [],
+        "built_from_digest": "sha256:" + "0" * 64,
+    }
+    report = check_page(page, job.to_json())
+    assert report.verdict == "publish", report.to_json()
+    assert [c.accepted for c in report.claims] == [True, True, False], report.to_json()
+    assert set(report.claims[2].reasons) == {
+        "causal_wording_unhedged",
+        "token_unsupported_number",
+    }, report.claims[2].reasons
+    assert report.privacy == "shared" and "privacy_recomputed" in report.page_reasons
+    check_wiki_page(report.page, job=job)
+    assert text not in report.to_bytes().decode("utf-8")
+    _ok("check_page memfw_wiki_gate (publish, attack dropped)")
+
+
 def main(argv: list[str]) -> int:
     if importlib.util.find_spec("memfw") is not None:
         print("memfw is importable here; run this in a venv without memfw", file=sys.stderr)
@@ -870,6 +965,8 @@ def main(argv: list[str]) -> int:
             _tailnet(root)
         if "--wikigen" in argv:
             _wikigen(root)
+        if "--wiki-gate" in argv:
+            _wiki_gate()
     print("standalone wheel smoke passed")
     return 0
 
