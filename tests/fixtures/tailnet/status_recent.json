@@ -1,0 +1,152 @@
+{
+  "Version": "1.90.0-synthetic",
+  "TUN": true,
+  "BackendState": "Running",
+  "AuthURL": "",
+  "TailscaleIPs": [
+    "100.64.0.10",
+    "fd7a:115c:a1e0::a"
+  ],
+  "Self": {
+    "ID": "nSYNTHSELF0001CNTRL",
+    "PublicKey": "nodekey:00000000000000000000000000000000000000000000000000000000000000a1",
+    "HostName": "laptop-a",
+    "DNSName": "laptop-a.example-tailnet.ts.net.",
+    "OS": "macOS",
+    "UserID": 1001,
+    "TailscaleIPs": [
+      "100.64.0.10",
+      "fd7a:115c:a1e0::a"
+    ],
+    "Addrs": [
+      "192.0.2.10:41641"
+    ],
+    "CurAddr": "",
+    "Relay": "syn",
+    "Online": true,
+    "LastSeen": "0001-01-01T00:00:00Z",
+    "KeyExpiry": "2027-01-01T00:00:00Z",
+    "Capabilities": [
+      "https://tailscale.com/cap/is-admin"
+    ],
+    "NodeID": "canary-nodeid-selfa"
+  },
+  "Peer": {
+    "nodekey:00000000000000000000000000000000000000000000000000000000000000b2": {
+      "ID": "nSYNTHNAS00002CNTRL",
+      "PublicKey": "nodekey:00000000000000000000000000000000000000000000000000000000000000b2",
+      "HostName": "example-nas",
+      "DNSName": "example-nas.example-tailnet.ts.net.",
+      "OS": "linux",
+      "UserID": 123456789,
+      "TailscaleIPs": [
+        "fd7a:115c:a1e0::b",
+        "100.64.0.11"
+      ],
+      "Tags": [
+        "tag:server",
+        "tag:storage"
+      ],
+      "Online": true,
+      "LastSeen": "2026-01-05T11:59:00.123456789Z",
+      "ExitNode": false,
+      "NodeID": "canary-nodeid-3a9e",
+      "sshHostKeys": [
+        "ssh-ed25519 canary-sshkey-6b1d"
+      ],
+      "CapMap": {
+        "https://example.com/cap/canary-capmap-2f7a": null
+      },
+      "Active": false,
+      "InNetworkMap": true,
+      "AllowedIPs": [
+        "100.64.0.11/32"
+      ],
+      "PeerAPIURL": [
+        "http://100.64.0.11:12345"
+      ],
+      "Created": "2025-01-01T00:00:00Z",
+      "KeyExpiry": "2027-01-01T00:00:00Z",
+      "RxBytes": 1,
+      "TxBytes": 2
+    },
+    "nodekey:00000000000000000000000000000000000000000000000000000000000000c3": {
+      "ID": "nSYNTHPHONE003CNTRL",
+      "PublicKey": "nodekey:00000000000000000000000000000000000000000000000000000000000000c3",
+      "HostName": "phone-b",
+      "DNSName": "phone-b.example-tailnet.ts.net.",
+      "OS": "iOS",
+      "UserID": 1002,
+      "TailscaleIPs": [
+        "100.64.0.12"
+      ],
+      "Online": false,
+      "LastSeen": "2026-01-01T08:00:00Z"
+    },
+    "nodekey:00000000000000000000000000000000000000000000000000000000000000d4": {
+      "ID": "nSYNTHSHARE04CNTRL",
+      "PublicKey": "nodekey:00000000000000000000000000000000000000000000000000000000000000d4",
+      "HostName": "canary-shared-host-41ac",
+      "DNSName": "canary-shared-host-41ac.other-tailnet.ts.net.",
+      "OS": "linux",
+      "UserID": 1003,
+      "TailscaleIPs": [
+        "100.64.0.40"
+      ],
+      "Online": true,
+      "ShareeNode": true
+    },
+    "nodekey:00000000000000000000000000000000000000000000000000000000000000e5": {
+      "ID": "nSYNTHEXIT005CNTRL",
+      "PublicKey": "nodekey:00000000000000000000000000000000000000000000000000000000000000e5",
+      "HostName": "canary-exit-node-77d0",
+      "DNSName": "canary-exit-node-77d0.mullvad.ts.net.",
+      "OS": "linux",
+      "TailscaleIPs": [
+        "100.64.0.50"
+      ],
+      "Online": true,
+      "ExitNodeOption": true,
+      "Location": {
+        "Country": "Exampleland",
+        "CountryCode": "XX",
+        "City": "Example City",
+        "CityCode": "EXC",
+        "Priority": 10
+      }
+    }
+  },
+  "User": {
+    "1001": {
+      "ID": 1001,
+      "LoginName": "canary-login-7f3a@example.com",
+      "DisplayName": "Canary Display Name 7f3a",
+      "ProfilePicURL": "https://example.com/canary-7f3a.png"
+    },
+    "1002": {
+      "ID": 1002,
+      "LoginName": "canary-second-9b1c@example.org",
+      "DisplayName": "Canary Second 9b1c"
+    },
+    "1003": {
+      "ID": 1003,
+      "LoginName": "canary-sharer-0d0d@example.net",
+      "DisplayName": "Canary Sharer"
+    }
+  },
+  "CurrentTailnet": {
+    "Name": "canary-tailnet-owner@example.com",
+    "MagicDNSSuffix": "example-tailnet.ts.net",
+    "MagicDNSEnabled": true
+  },
+  "MagicDNSSuffix": "example-tailnet.ts.net",
+  "CertDomains": [
+    "canary-certdomain-5e2d.example-tailnet.ts.net"
+  ],
+  "ExtraRecords": [
+    {
+      "Name": "canary-extrarecord-8c4f.example-tailnet.ts.net",
+      "Value": "100.64.0.250"
+    }
+  ]
+}

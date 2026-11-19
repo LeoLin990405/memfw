@@ -1,0 +1,34 @@
+# memfw-adapter-tailnet: an Ingestor that turns `tailscale status --json` (a
+# file the operator exports, or one bounded run of the tailscale CLI) into
+# staged host-fact candidates, one per machine that is new, gone or changed
+# since the previous run, plus a names-free report.json for alerts. It never
+# scans networks and never writes authoritative memory. Standard library only;
+# depends on memfw-ports and nothing else of memfw. memfw never imports it.
+#
+# Build a wheel:  uv build --wheel --package memfw-adapter-tailnet
+[build-system]
+requires = ["hatchling==1.33.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "memfw-adapter-tailnet"
+version = "0.1.0"
+description = "Tailnet host inventory Ingestor for memfw (staged host-fact candidates only)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+# Symlinks to memfw's own LICENSE and NOTICE (one copy of the text).
+license-files = ["LICENSE", "NOTICE"]
+dependencies = ["memfw-ports==0.3.0"]
+
+[project.scripts]
+memfw-adapter-tailnet = "memfw_adapter_tailnet.cli:main"
+
+[project.entry-points."memfw.adapters"]
+tailnet = "memfw_adapter_tailnet:adapter_spec"
+
+[tool.uv.sources]
+memfw-ports = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/memfw_adapter_tailnet"]

@@ -4,7 +4,7 @@ Run it with the interpreter of a venv that has the wheels and NOT memfw:
 
     python -I tests/standalone/wheel_smoke.py [--recall] [--deepseek] [--bm25s] [--qdrant]
         [--qmd] [--ocr] [--pageindex] [--langextract] [--lightrag] [--graphrag]
-        [--pipeline]
+        [--pipeline] [--tailnet]
 
 It refuses to run when ``memfw`` is importable, imports the wheels, and runs
 the contract kit (``memfw_ports.testing``) against the reference
@@ -31,7 +31,9 @@ in-process fake server; with ``--graphrag`` the
 ``memfw-adapter-graphrag`` wheel's deriver passes ``check_deriver`` over a
 small CSV output (GraphRAG is not installed or run); with ``--pipeline`` the
 ``memfw-pipeline`` wheel runs its example stage twice (built, then unchanged)
-in a throwaway tree, taking its ``Clock`` from ``memfw_ports``. Prints one
+in a throwaway tree, taking its ``Clock`` from ``memfw_ports``; with ``--tailnet`` the
+``memfw-adapter-tailnet`` wheel's ingestor passes ``check_ingestor`` on host-fact
+candidates from a synthetic status document. Prints one
 ``ok`` line per check and exits non-zero on the first failure. Standard
 library only; not collected by pytest (``tests/test_standalone_ports_wheel.py``
 drives it).
@@ -659,6 +661,43 @@ def _pipeline(root: Path) -> None:
     _ok("run_stage example (built, then unchanged)")
 
 
+def _tailnet(root: Path) -> None:
+    """The ingestor wheel over the memfw-ports wheel, on a synthetic status document."""
+
+    from memfw_adapter_tailnet import TailnetIngestor, build_scan, parse_status
+    from memfw_adapter_tailnet import _ports as seam
+    from memfw_ports.testing import check_ingestor
+
+    assert seam.IngestItem.__module__.startswith("memfw_ports"), seam.IngestItem
+    _ok("import memfw_adapter_tailnet (ports from memfw_ports)")
+    vault = root / "tn-vault"
+    vault.mkdir()
+    (vault / "vault.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+    status = parse_status(
+        {
+            "BackendState": "Running",
+            "Self": {
+                "ID": "n1",
+                "HostName": "laptop-a",
+                "DNSName": "laptop-a.example-tailnet.ts.net.",
+                "TailscaleIPs": ["100.64.0.10"],
+            },
+            "Peer": {"k2": {"ID": "n2", "HostName": "example-nas", "Online": False,
+                            "TailscaleIPs": ["fd7a:115c:a1e0::b"]}},
+            "User": {"1": {"LoginName": "smoke-canary@example.com"}},
+        }
+    )
+    scan = build_scan(status, None, now=T0, privacy="local-private", allowlist=frozenset(
+        {"laptop-a"}), offline_hours=24.0, mode="input")
+    assert scan.report["counts"]["unknown"] == 1, scan.report
+    result = check_ingestor(TailnetIngestor(), vault=vault, items=scan.items)
+    assert len(result.staged) == 2, result
+    staged = "".join(p.read_text(encoding="utf-8") for p in vault.rglob("*.json"))
+    assert "local-private" in staged and "smoke-canary" not in staged
+    assert "example-tailnet" not in staged  # the DNS suffix is hashed
+    _ok("check_ingestor TailnetIngestor (synthetic status)")
+
+
 def main(argv: list[str]) -> int:
     if importlib.util.find_spec("memfw") is not None:
         print("memfw is importable here; run this in a venv without memfw", file=sys.stderr)
@@ -688,6 +727,8 @@ def main(argv: list[str]) -> int:
             _graphrag(root)
         if "--pipeline" in argv:
             _pipeline(root)
+        if "--tailnet" in argv:
+            _tailnet(root)
     print("standalone wheel smoke passed")
     return 0
 

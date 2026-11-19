@@ -29,7 +29,8 @@ jobs:
     # dependencies, the Qdrant adapter against its loopback FakeQdrant, the OCR
     # adapter's deriver with an in-process fake engine (no OCR tool), the
     # PageIndex adapter's provider on a tree it builds (titles mode, no model),
-    # the memfw-pipeline runner its example stage twice (built, then unchanged)
+    # the memfw-pipeline runner its example stage twice (built, then unchanged),
+    # the tailnet adapter's ingestor on a synthetic status document
     # (the versions uv.lock resolves for Python 3.11).
     runs-on: ubuntu-latest
     steps:
@@ -52,7 +53,8 @@ jobs:
       - run: uv build --wheel --package memfw-adapter-langextract -o "$RUNNER_TEMP/dist"
       - run: uv build --wheel --package memfw-adapter-lightrag -o "$RUNNER_TEMP/dist"
       - run: uv build --wheel --package memfw-adapter-graphrag -o "$RUNNER_TEMP/dist"
+      - run: uv build --wheel --package memfw-adapter-tailnet -o "$RUNNER_TEMP/dist"
       - run: uv venv --python 3.11 "$RUNNER_TEMP/wheel-venv"
       - run: uv pip install --python "$RUNNER_TEMP/wheel-venv/bin/python" bm25s==0.3.16 jieba==0.42.1 PyYAML==6.0.3 numpy==2.4.6
       - run: uv pip install --python "$RUNNER_TEMP/wheel-venv/bin/python" --no-index "$RUNNER_TEMP"/dist/*.whl
-      - run: '"$RUNNER_TEMP/wheel-venv/bin/python" -I tests/standalone/wheel_smoke.py --recall --deepseek --bm25s --qdrant --qmd --ocr --pageindex --langextract --lightrag --graphrag --pipeline'
+      - run: '"$RUNNER_TEMP/wheel-venv/bin/python" -I tests/standalone/wheel_smoke.py --recall --deepseek --bm25s --qdrant --qmd --ocr --pageindex --langextract --lightrag --graphrag --pipeline --tailnet'

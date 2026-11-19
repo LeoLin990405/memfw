@@ -35,6 +35,7 @@ CONSUMES = {
     "memfw-adapter-langextract": {"Deriver", "ModelBackend"},
     "memfw-adapter-lightrag": {"Deriver"},
     "memfw-adapter-graphrag": {"Deriver"},
+    "memfw-adapter-tailnet": {"Ingestor"},
 }
 
 

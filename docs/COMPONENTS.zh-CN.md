@@ -126,6 +126,10 @@ CI 的 `standalone-wheels` 任务会构建两者，装进一个没有 memfw 的�
 
 `packages/adapters/memfw-adapter-langextract`（wheel 名 `memfw_adapter_langextract`，版本 0.1.0）实现了 `Deriver` 端口：用 LangExtract 1.7.2（由运维自行安装）从 `public`/`shared` 记忆里抽取能对应到原文字符位置的实体和关系，模型是 memfw 的 `ModelBackend`（自带一个只连 loopback 的 Ollama 后端），每轮有 token 预算。**默认关闭**；它产出的行只能以暂存候选的形式成为记忆。见 [`adapter-langextract.md`](adapter-langextract.md)。
 
+## Tailnet 主机清单适配器
+
+`packages/adapters/memfw-adapter-tailnet`（wheel 名 `memfw_adapter_tailnet`，版本 0.1.0，只用标准库）为 Tailscale tailnet 的机器列表实现了 `Ingestor` 端口。`memfw-adapter-tailnet scan` 读取 `tailscale status --json`（运维导出的文件，或者运行一次 CLI：固定参数、不经 shell、有截止时间和输出上限、去掉代理环境变量），每台机器只保留名字、MagicDNS 的第一段（tailnet 后缀只存哈希）、tailnet IP、OS、是否在线、最后在线时间和标签，并用哈希过的主机 id 标识（从不读取用户和登录信息、密钥和 endpoint；从别的 tailnet 共享进来的节点默认排除、需显式开启，服务商出口节点一律排除）；对新出现、回来、消失、改名或有其他变化的机器，各在 `_candidates/tailnet/` 下暂存一条只含身份字段的 `host-fact` 候选，没有变化的机器不产生候选，重试只会得到重复项。候选默认是 `local-private`，除非运维另行配置。不含名字的 `report.json` 统计名单内离线超过阈值的机器、一台都匹配不到或匹配到多台的名单条目，以及没有条目担保的机器（从不按机器自报的主机名匹配）；发现结果从不修改这份名单，也不决定数据发往哪里。**默认关闭**；memfw 本身从不导入它。见 [`adapter-tailnet.md`](adapter-tailnet.md)。
+
 ## PageIndex 召回适配器
 
 `packages/adapters/memfw-adapter-pageindex`（wheel 名 `memfw_adapter_pageindex`，版本 0.1.1）是一个面向长文档的 `RecallProvider`，按 PageIndex 风格搜索目录树（标题、节点 id、页码范围、可选的简短摘要；从不含正文）。由 memfw 的 `ModelBackend` 挑选章节，或者用 `mode: titles` 不经模型直接给标题排序。它只返回 `kh:<路径>#<标题>` 和 `att:<id>#page=<n>` 引用。非本地后端需要 `cloud: true`，`local-private` 的目录树从不发给它，每轮有 token 和调用次数预算。目录树用 `memfw-pageindex build-md | import-tree | list` 离线构建或导入，以 `0600` 的 JSON 存在 vault 之外。**默认关闭**；memfw 本身从不导入它。见包内 README。

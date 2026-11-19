@@ -41,6 +41,20 @@ The vault format did not change in `0.4.0` either: `vault.yaml` stays at
   ships; the real stages are ported in later phases. CI also lints and type-checks the
   package and builds its wheel in the standalone-wheels job. See `docs/pipeline.md`.
 
+- `memfw-adapter-tailnet` 0.1.0 (`packages/adapters/memfw-adapter-tailnet`): an `Ingestor`
+  that turns `tailscale status --json` (an exported file, or one bounded run of the CLI with a
+  fixed argv and no shell) into staged `host-fact` candidates, one per machine that is new,
+  returned, gone, renamed or changed IPs, OS or tags since the previous run; unchanged
+  machines produce nothing, and candidates hold identity fields only, so a retry after a
+  crash stages duplicates only. Hashed host ids from the Tailscale node ID; the MagicDNS
+  suffix is kept only as a hash; user and login data, keys and endpoints are never read;
+  shared-in nodes are left out unless `--include-shared`, provider exit nodes (`Location`)
+  always. Candidates default to `privacy: local-private`. A names-free `report.json` counts
+  `listed_offline`, `listed_missing`, `listed_ambiguous` and `unknown` against an operator
+  allowlist the scan only reads and never matches on the self-reported host name. Off by
+  default; memfw never imports it. Built and smoke-tested in the standalone-wheel CI job.
+  See `docs/adapter-tailnet.md`.
+
 ### Fixed
 
 - Qdrant adapter: the embedding timeout and batch size were fixed at 30 s and 16, so on a slow
