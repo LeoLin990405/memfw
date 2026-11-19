@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import re
 import socket
 import sys
 import threading
@@ -232,7 +233,17 @@ def test_stub_page_answers_the_job_with_program_written_open_and_sources() -> No
     assert page.privacy == "shared" and page.open_questions == ("oq-rotation",)
     build = page.build
     assert (build.generator, build.model, build.nli_model) == ("wikigen", "stub-extractive", "none")
-    assert build.prompt_version == "wiki-v1;t=0;s=0;ctx=16384"
+    assert re.fullmatch(r"wiki-v1\+[0-9a-f]{8}", build.prompt_version)
+    assert result.report["prompt_settings"] == {
+        "cloud_gate": False,
+        "include_previous": True,
+        "max_claims_per_section": 12,
+        "max_output_tokens": 2048,
+        "model": "stub-extractive",
+        "num_ctx": 16384,
+        "seed": 0,
+        "temperature": "0.0",
+    }
     assert build.job_digest == job.job_digest and build.view_version == job.view_version
     assert all(c.tokens == "not_run" and c.nli_min is None for c in page.claims)
     assert result.report["attempts"] == 1 and result.report["precheck"] == "off"
@@ -262,6 +273,8 @@ def test_generation_is_deterministic_and_staging_is_idempotent(vault: Path) -> N
     assert meta["model_digest"] == job.generator["model_digest"]
     assert not any(text in json.dumps(meta) for text in TEXTS.values())  # ids and counts only
     assert record["proposal_id"] == job.job_digest
+    assert "concept" not in meta and CONCEPT not in json.dumps(meta)  # L2: page_key identifies it
+    assert meta["page_key"] == job.page_key and meta["tenant"] == job.tenant
 
 
 def test_passes_the_deriver_contract_and_never_touches_the_vault(vault: Path) -> None:
@@ -353,6 +366,49 @@ def test_previous_page_is_shown_only_when_asked() -> None:
     _, user = build_prompt(job, include_previous=False, max_claims=12, max_chars=1000, max_cites=8)
     assert "previous_page" not in read_data(user)
     assert deriver.generate(job).page.build.job_digest == job.job_digest
+
+
+def test_only_previous_sentences_citing_current_job_refs_enter_the_prompt() -> None:
+    deriver = stub_deriver()
+    first = deriver.generate(job_for(deriver)).page
+    old_note = next(c for c in first.claims if c.refs() == (NOTE,))
+    # The new job no longer offers NOTE: the sentence citing it must not be shown.
+    sources = [s for s in default_sources() if s.source.ref != NOTE]
+    job = job_for(deriver, sources=sources, previous=first)
+    result = deriver.generate(job)
+    prompt = deriver.backend.calls[-1]["prompt"]
+    shown = read_data(prompt)["previous_page"]
+    refs = {s.source.ref for s in sources}
+    assert shown and all(set(item["cites"]) <= refs for item in shown)
+    assert old_note.text not in prompt
+    dropped = sum(1 for c in first.claims if not set(c.refs()) <= refs)
+    assert dropped >= 1
+    assert result.report["prompt"]["previous_claims_dropped"] == dropped
+    assert result.report["prompt"]["previous_claims_sent"] == len(shown)
+
+
+def test_a_previous_page_stricter_than_the_job_is_left_out() -> None:
+    deriver = stub_deriver()
+    shared_previous = deriver.generate(job_for(deriver)).page
+    assert shared_previous.privacy == "shared"
+    public = [_source(PLAN, privacy="public"), _source(NOTE, privacy="public")]
+    job = job_for(deriver, sources=public, questions=(), previous=shared_previous)
+    result = deriver.generate(job)
+    assert "previous_page" not in read_data(deriver.backend.calls[-1]["prompt"])
+    assert result.report["prompt"]["previous"] == "previous_stricter"
+    assert result.page.privacy == "public"
+
+
+def test_page_privacy_covers_every_job_source_not_only_the_cited_ones() -> None:
+    # The model cites only the public source; a shared source was in the prompt too.
+    public_plan = _source(PLAN, privacy="public")
+    shared_note = _source(NOTE, privacy="shared")
+    deriver = stub_deriver([reply(summary=[GOOD_SUMMARY])])
+    job = job_for(deriver, sources=[public_plan, shared_note], questions=())
+    page = check_wiki_page(deriver.generate(job).page, job=job)
+    assert {r for c in page.claims for r in c.refs()} == {PLAN}
+    assert page.privacy == "shared"
+    assert [s.ref for s in page.sources] == [PLAN, NOTE]
 
 
 # -- the reply is data: drop sentences, never repair --
@@ -530,11 +586,64 @@ def test_a_fenced_json_reply_is_read_and_nothing_else_is_cleaned() -> None:
         load_reply('Here you go: {"summary": []}')
 
 
-def test_a_bad_reply_is_retried_once_then_refused() -> None:
+def test_a_structural_refusal_is_not_retried() -> None:
     deriver = stub_deriver(['{"open": []}'])
     with pytest.raises(WikigenError) as caught:
         deriver.generate(job_for(deriver))
     assert caught.value.code == "bad_output:unknown_key"
+    assert len(deriver.backend.calls) == 1
+
+
+class _Flaky(StubBackend):
+    """Raises ``BackendUnavailable(code)`` for the first ``failures`` calls."""
+
+    def __init__(self, code: str, failures: int) -> None:
+        super().__init__()
+        self.code, self.failures = code, failures
+
+    def run(self, task: str, data: dict[str, Any], *, max_tokens: int) -> ModelReply:
+        if self.failures:
+            self.failures -= 1
+            self.calls.append(dict(data))
+            raise BackendUnavailable(self.code)
+        return super().run(task, data, max_tokens=max_tokens)
+
+
+@pytest.mark.parametrize("code", ["unreachable", "timeout", "http_503"])
+def test_a_transport_error_is_retried(code: str) -> None:
+    backend = _Flaky(code, 1)
+    deriver = WikigenDeriver(
+        Settings(backend="memfw_adapter_wikigen.stub:factory"), backend=backend
+    )
+    result = deriver.generate(job_for(deriver))
+    assert result.report["attempts"] == 2 and result.report["failed_attempts"] == [code]
+
+
+def test_a_persistent_transport_error_is_raised_after_the_attempts() -> None:
+    backend = _Flaky("unreachable", 5)
+    deriver = WikigenDeriver(
+        Settings(backend="memfw_adapter_wikigen.stub:factory"), backend=backend
+    )
+    with pytest.raises(BackendUnavailable) as caught:
+        deriver.generate(job_for(deriver))
+    assert caught.value.code == "unreachable" and len(backend.calls) == 2
+
+
+def test_a_deterministic_backend_error_is_not_retried() -> None:
+    backend = _Flaky("http_404", 1)
+    deriver = WikigenDeriver(
+        Settings(backend="memfw_adapter_wikigen.stub:factory"), backend=backend
+    )
+    with pytest.raises(BackendUnavailable) as caught:
+        deriver.generate(job_for(deriver))
+    assert caught.value.code == "http_404" and len(backend.calls) == 1
+
+
+def test_malformed_json_is_retried_once_then_refused() -> None:
+    deriver = stub_deriver(["not json at all"])
+    with pytest.raises(WikigenError) as caught:
+        deriver.generate(job_for(deriver))
+    assert caught.value.code == "bad_output:not_json"
     assert len(deriver.backend.calls) == 2
     calls = deriver.backend.calls
     assert (
@@ -580,17 +689,49 @@ def test_job_for_another_model_digest_or_prompt_is_refused_before_any_call() -> 
         deriver.generate(make_job(other))
     assert caught.value.code == "model_digest_mismatch"
     reseeded = stub_deriver(seed=7)
-    assert reseeded.generator_config()["prompt_version"] == "wiki-v1;t=0;s=7;ctx=16384"
+    assert (
+        reseeded.generator_config()["prompt_version"]
+        != deriver.generator_config()["prompt_version"]
+    )
     with pytest.raises(WikigenError) as caught:
         reseeded.generate(job_for(deriver))
     assert caught.value.code == "generator_mismatch:prompt_version"
     assert deriver.backend.calls == [] and reseeded.backend.calls == []
 
 
-def test_sampling_settings_change_the_job_digest() -> None:
-    one = job_for(stub_deriver())
-    two = job_for(stub_deriver(temperature=0.2))
+@pytest.mark.parametrize(
+    "setting",
+    [
+        {"temperature": 0.2},
+        {"temperature": 1e-9},  # %g-style rounding would hide this one
+        {"seed": 7},
+        {"num_ctx": 32768},
+        {"include_previous": False},
+        {"max_claims_per_section": 11},
+        {"max_output_tokens": 1024},
+        {"backend_options": {"replies": [], "model": "stub-other"}},
+    ],
+)
+def test_every_output_setting_changes_the_job_digest_and_candidate(
+    setting: dict[str, Any], vault: Path
+) -> None:
+    base = stub_deriver()
+    other = stub_deriver(**setting)
+    assert other.generator_config()["prompt_version"] != base.generator_config()["prompt_version"]
+    one, two = job_for(base), job_for(other)
     assert one.job_digest != two.job_digest
+    views = [
+        deriver.derive(vault, DeriveRequest("wiki_page", (), {"job": json.dumps(job.to_json())}))
+        for deriver, job in ((base, one), (other, two))
+    ]
+    first, second = (candidates(view)[0] for view in views)
+    assert first.external_ref != second.external_ref
+    assert first.metadata["job_digest"] != second.metadata["job_digest"]
+
+
+def test_prompt_version_is_stable_for_the_same_settings() -> None:
+    assert stub_deriver().generator_config() == stub_deriver().generator_config()
+    assert stub_deriver(temperature=0).generator_config() == stub_deriver().generator_config()
 
 
 def test_context_window_is_checked_before_the_call() -> None:
@@ -775,6 +916,64 @@ def test_a_non_local_backend_needs_cloud_and_an_all_public_job() -> None:
     public = [_source(PLAN, privacy="public"), _source(NOTE, privacy="public")]
     page = deriver.generate(make_job(deriver.generator_config(), sources=public, questions=())).page
     assert page.privacy == "public"
+
+
+def _cloud_deriver() -> WikigenDeriver:
+    settings = Settings(
+        backend=f"{MODULE}:fake_backend_factory", backend_options={"local": False}, cloud=True
+    )
+    backend, refused = load_backend(settings)
+    assert refused == ""
+    return WikigenDeriver(settings, backend=backend)
+
+
+PUBLIC_SOURCES = [
+    _source(PLAN, privacy="public"),
+    _source(NOTE, privacy="public"),
+    _source(SIDE_A, privacy="public"),
+    _source(SIDE_B, privacy="public"),
+]
+
+
+def test_cloud_gate_sends_no_concept_or_question_free_text() -> None:
+    deriver = _cloud_deriver()
+    assert deriver.cloud_gate is True
+    job = make_job(deriver.generator_config(), sources=PUBLIC_SOURCES)
+    result = deriver.generate(job)
+    prompt = deriver.backend.calls[0]["prompt"]
+    data = read_data(prompt)
+    assert data["concept"] == {"label": "Backup plan"}
+    assert data["open_questions"] == [{"id": "oq-rotation", "conflict_refs": [SIDE_A, SIDE_B]}]
+    for absent in ("How the vault is backed up.", QUESTION.question, QUESTION.missing):
+        assert absent not in prompt and absent not in deriver.backend.calls[0]["system"]
+    assert result.report["prompt"]["cloud_gate"] is True
+    assert result.report["prompt_settings"]["cloud_gate"] is True
+    # The open conflict claims are still rendered locally from the job.
+    assert {c.text for c in result.page.claims if c.section == "open"} == {QUESTION.question}
+    # The redacted data block is another prompt: the same settings and model, other version.
+    assert (
+        deriver.settings.prompt_version(model="fake", cloud_gate=False)
+        != (deriver.generator_config()["prompt_version"])
+    )
+
+
+def test_cloud_gate_sends_the_previous_page_only_when_public() -> None:
+    local = stub_deriver()
+    shared_previous = local.generate(job_for(local)).page
+    assert shared_previous.privacy == "shared"
+    deriver = _cloud_deriver()
+    job = make_job(deriver.generator_config(), sources=PUBLIC_SOURCES, previous=shared_previous)
+    result = deriver.generate(job)
+    assert "previous_page" not in read_data(deriver.backend.calls[0]["prompt"])
+    assert result.report["prompt"]["previous"] == "previous_not_public"
+    public_previous = local.generate(
+        make_job(local.generator_config(), sources=PUBLIC_SOURCES)
+    ).page
+    assert public_previous.privacy == "public"
+    job = make_job(deriver.generator_config(), sources=PUBLIC_SOURCES, previous=public_previous)
+    result = deriver.generate(job)
+    assert read_data(deriver.backend.calls[-1]["prompt"])["previous_page"]
+    assert result.report["prompt"]["previous"] == "included"
 
 
 def test_ollama_absent_makes_the_default_adapter_unavailable() -> None:

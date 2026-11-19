@@ -243,9 +243,13 @@ a sentence whose citation is not exactly one of the job's refs, or that breaks a
 causal, lifecycle or conflict rule, is dropped, never repaired, and the open-question and
 source sections are written by the program. The model is a memfw `ModelBackend` (a
 loopback-only Ollama backend and a model-free stub ship with it; a non-local backend needs
-`cloud: true` and an all-`public` job); the job must name the same model digest, generator
-version and prompt/sampling settings (`temperature`, `seed`, `num_ctx`) the worker runs,
-with a token budget, per-call timeout and job deadline. It runs on a worker machine with a
+`cloud: true` and an all-`public` job, and then gets no aliases, definition or
+open-question text); page privacy is the strictest level over all the job's sources, all of
+which the page lists. The job must name the same model digest, generator version and
+`prompt_version` (`wiki-v1+<sha8>`, a hash of the instructions and every output-affecting
+setting: `temperature`, `seed`, `num_ctx`, `include_previous`, `max_claims_per_section`,
+`max_output_tokens`, model tag, cloud gate) the worker runs, with a token budget,
+per-call timeout and job deadline. It runs on a worker machine with a
 local Ollama, never on the storage host. **Off by default**; a page becomes a staged
 candidate only, and memfw never imports the adapter. See
 [`adapter-wikigen.md`](adapter-wikigen.md).

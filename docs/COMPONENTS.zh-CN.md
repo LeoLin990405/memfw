@@ -132,7 +132,7 @@ CI 的 `standalone-wheels` 任务会构建两者，装进一个没有 memfw 的�
 
 ## Wiki 页面生成适配器
 
-`packages/adapters/memfw-adapter-wikigen`（wheel 名 `memfw_adapter_wikigen`，版本 0.1.0，只用标准库）为 LLM Wiki 实现了 `Deriver` 端口（kind `wiki_page`）：读取一个只含放行文本（`public`/`shared`）的 `memfw-wiki-job/1` 任务包，产出一页 `memfw-wiki-page/1`。提示词固定页面的节和"每句都带引用"；引用不是任务里某个来源的原样写法、或者违反节、因果、生命周期、冲突规则的句子直接丢掉，从不修补；未决问题/冲突一节和来源列表由程序生成，不由模型写。模型是 memfw 的 `ModelBackend`（自带只连字面 loopback 地址的 Ollama 后端和不跑模型的 stub 后端；非本地后端必须 `cloud: true` 且任务来源全是 `public`）；任务里写明的模型 digest、生成器版本和提示词/采样设置（`temperature`、`seed`、`num_ctx`）必须与 worker 实际运行的一致，并有 token 预算、单次调用超时和整任务截止时间。它跑在装有本地 Ollama 的 worker 机器上，从不在存储主机上跑。**默认关闭**；页面只会成为暂存候选，memfw 本身从不导入它。见 [`adapter-wikigen.md`](adapter-wikigen.md)。
+`packages/adapters/memfw-adapter-wikigen`（wheel 名 `memfw_adapter_wikigen`，版本 0.1.0，只用标准库）为 LLM Wiki 实现了 `Deriver` 端口（kind `wiki_page`）：读取一个只含放行文本（`public`/`shared`）的 `memfw-wiki-job/1` 任务包，产出一页 `memfw-wiki-page/1`。提示词固定页面的节和"每句都带引用"；引用不是任务里某个来源的原样写法、或者违反节、因果、生命周期、冲突规则的句子直接丢掉，从不修补；未决问题/冲突一节和来源列表由程序生成，不由模型写。模型是 memfw 的 `ModelBackend`（自带只连字面 loopback 地址的 Ollama 后端和不跑模型的 stub 后端；非本地后端必须 `cloud: true` 且任务来源全是 `public`，并且不发送别名、定义和未决问题的文字）；页面隐私级别 = 任务包全部来源里最严的级别，页面列出全部任务来源（含未被引用的）；任务里写明的模型 digest、生成器版本和 `prompt_version`（`wiki-v1+<sha8>`，对指令文本和所有影响输出的设置——`temperature`、`seed`、`num_ctx`、`include_previous`、`max_claims_per_section`、`max_output_tokens`、模型 tag、云端闸门——取哈希）必须与 worker 实际运行的一致，并有 token 预算、单次调用超时和整任务截止时间。它跑在装有本地 Ollama 的 worker 机器上，从不在存储主机上跑。**默认关闭**；页面只会成为暂存候选，memfw 本身从不导入它。见 [`adapter-wikigen.md`](adapter-wikigen.md)。
 
 ## PageIndex 召回适配器
 

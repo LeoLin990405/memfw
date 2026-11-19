@@ -13,10 +13,16 @@ repaired. The page becomes a reviewable candidate through memfw's staging
   loopback address only, ignores proxy variables and refuses redirects; it reports the
   model digest, which must match the job's. `memfw_adapter_wikigen.stub:factory` runs no
   model (tests, dry runs). A backend that is not `local` needs `cloud: true` and an
-  all-`public` job.
-- **Deterministic settings** (`temperature`, `seed`, `num_ctx`) are part of the recorded
-  `prompt_version` and so of the job digest; token budget, per-call timeout and a job
-  deadline bound every run.
+  all-`public` job, and then gets only the concept label and open-question ids/conflict
+  refs (no aliases, definition or question text) and a previous page only if it is
+  `public`. `local` is the backend's own claim, trusted as configured by the operator.
+- **Page privacy** is the strictest level over all the job's sources (everything the model
+  saw), and the page lists all of them, cited or not.
+- **Output-affecting settings** (instruction text, `temperature`, `seed`, `num_ctx`,
+  `include_previous`, `max_claims_per_section`, `max_output_tokens`, model tag, cloud
+  gate) are hashed into `prompt_version` = `wiki-v1+<sha8>` and so into the job digest;
+  token budget, per-call timeout and a job deadline bound every run. Only transport errors
+  and malformed JSON are retried (same seed); other bad replies are refused at once.
 - **Off by default.** Standard library only; depends on `memfw-ports`. Without a reachable
   Ollama (or with the model missing) the deriver reports itself unavailable.
 

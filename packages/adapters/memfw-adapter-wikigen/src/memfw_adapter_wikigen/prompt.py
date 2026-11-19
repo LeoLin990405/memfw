@@ -10,17 +10,22 @@ The data block is JSON with ``<`` and ``>`` escaped, so a source text cannot
 close the block early; everything inside it is data, not instructions. It
 holds ids and released text only: the concept's labels and definition, each
 source's ref, kind, lifecycle status, causal grade and text, the open
-questions with their conflicting refs, and (optionally) the approved page the
-job replaces. No vault path, tenant or job id goes in.
+questions with their conflicting refs, and (optionally) the sentences of the
+approved page the job replaces whose every citation is one of this job's refs.
+No vault path, tenant or job id goes in. For a backend that is not local
+(the cloud gate) only the concept label and the question ids go in, and the
+previous page only when it is ``public``; a previous page stricter than the
+job's sources is never sent.
 """
 
 from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
-from ._ports import Citation, WikiJob
+from ._ports import Citation, WikiJob, strictest
 
 #: Bump when the instructions or the data block change: it is part of the
 #: generator configuration, so it changes the job digest (a new prompt is new work).
@@ -111,9 +116,58 @@ def conflict_refs(job: WikiJob) -> dict[str, list[str]]:
     }
 
 
-def job_data(job: WikiJob, *, include_previous: bool) -> dict[str, Any]:
-    """What the model sees of ``job``: ids and released text only."""
+#: Why the previous page is not in the prompt (``PromptNotes.previous``).
+PREVIOUS_STATES: tuple[str, ...] = (
+    "included",
+    "off",
+    "none",
+    "previous_not_public",
+    "previous_stricter",
+)
 
+
+@dataclass
+class PromptNotes:
+    """What :func:`job_data` left out, as codes and counts (never text)."""
+
+    #: ``cloud_gate``: the data block is the cloud (redacted) one.
+    cloud_gate: bool = False
+    previous: str = "none"
+    previous_claims_sent: int = 0
+    #: Previous-page sentences left out because a citation is not a current job ref.
+    previous_claims_dropped: int = 0
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "cloud_gate": self.cloud_gate,
+            "previous": self.previous,
+            "previous_claims_sent": self.previous_claims_sent,
+            "previous_claims_dropped": self.previous_claims_dropped,
+        }
+
+
+def job_data(
+    job: WikiJob,
+    *,
+    include_previous: bool,
+    cloud_gate: bool = False,
+    notes: PromptNotes | None = None,
+) -> dict[str, Any]:
+    """What the model sees of ``job``: ids and released text only.
+
+    ``cloud_gate`` (a backend that is not local): the concept's aliases and
+    definition and the open questions' free text are not sent (only the
+    concept label, and per question its id and conflicting refs), and the
+    previous page only when its own privacy is ``public``
+    (``previous_not_public`` otherwise). A previous page stricter than every
+    job source is left out (``previous_stricter``): the page's privacy is the
+    strictest of the job's sources, so the model may not see anything
+    stricter. Either way only previous-page
+    sentences whose every citation is one of this job's refs are sent.
+    """
+
+    notes = notes if notes is not None else PromptNotes()
+    notes.cloud_gate = cloud_gate
     sources: list[dict[str, Any]] = []
     for item in job.sources:
         source = item.source
@@ -130,28 +184,43 @@ def job_data(job: WikiJob, *, include_previous: bool) -> dict[str, Any]:
             entry["truncated"] = True
         sources.append(entry)
     conflicts = conflict_refs(job)
-    data: dict[str, Any] = {
-        "concept": {
-            "label": job.concept.pref_label,
-            "aliases": list(job.concept.alt_labels),
-            "definition": job.concept.definition,
-        },
-        "sources": sources,
-        "open_questions": [
-            {
-                "id": question.id,
-                "question": question.question,
-                "missing": question.missing,
-                "conflict_refs": conflicts[question.id],
-            }
-            for question in job.open_questions
-        ],
-    }
-    if include_previous and job.previous_page is not None:
-        data["previous_page"] = [
-            {"section": claim.section, "text": claim.text, "cites": list(claim.refs())}
-            for claim in job.previous_page.claims
-        ]
+    concept: dict[str, Any] = {"label": job.concept.pref_label}
+    if not cloud_gate:
+        concept["aliases"] = list(job.concept.alt_labels)
+        concept["definition"] = job.concept.definition
+    questions: list[dict[str, Any]] = []
+    for question in job.open_questions:
+        entry = {"id": question.id, "conflict_refs": conflicts[question.id]}
+        if not cloud_gate:
+            entry["question"] = question.question
+            entry["missing"] = question.missing
+        questions.append(entry)
+    data: dict[str, Any] = {"concept": concept, "sources": sources, "open_questions": questions}
+    previous = job.previous_page
+    level = strictest(item.source.privacy for item in job.sources)
+    if previous is None:
+        notes.previous = "none"
+    elif not include_previous:
+        notes.previous = "off"
+    elif cloud_gate and previous.privacy != "public":
+        notes.previous = "previous_not_public"
+    elif strictest([level, previous.privacy]) != level:
+        # The page's privacy is the strictest of its (= the job's) sources; a
+        # stricter previous page is left out rather than raising the level.
+        notes.previous = "previous_stricter"
+    else:
+        refs = {item.source.ref for item in job.sources}
+        kept: list[dict[str, Any]] = []
+        for claim in previous.claims:
+            cites = list(claim.refs())
+            if not cites or any(ref not in refs for ref in cites):
+                notes.previous_claims_dropped += 1
+                continue
+            kept.append({"section": claim.section, "text": claim.text, "cites": cites})
+        notes.previous = "included"
+        notes.previous_claims_sent = len(kept)
+        if kept:
+            data["previous_page"] = kept
     return data
 
 
@@ -162,11 +231,14 @@ def build_prompt(
     max_claims: int,
     max_chars: int,
     max_cites: int,
+    cloud_gate: bool = False,
+    notes: PromptNotes | None = None,
 ) -> tuple[str, str]:
     """``(system, user)``: the fixed instructions and the job's data block."""
 
     system = instructions(max_claims=max_claims, max_chars=max_chars, max_cites=max_cites)
-    return system, render_data(job_data(job, include_previous=include_previous))
+    data = job_data(job, include_previous=include_previous, cloud_gate=cloud_gate, notes=notes)
+    return system, render_data(data)
 
 
 def joined(system: str, user: str) -> str:
@@ -179,8 +251,10 @@ __all__ = [
     "INSTRUCTIONS",
     "MISSING_KEY",
     "MODEL_SECTIONS",
+    "PREVIOUS_STATES",
     "PROMPT_VERSION",
     "REPLY_KEYS",
+    "PromptNotes",
     "build_prompt",
     "conflict_refs",
     "instructions",

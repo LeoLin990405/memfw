@@ -6,15 +6,23 @@ What one :meth:`WikigenDeriver.generate` call does (design 1, 2, 5.3, 6):
    (``generator``, ``generator_version``, ``model``, ``model_digest``,
    ``prompt_version``; all part of its ``job_digest``). The deriver computes
    its own from its settings and the backend (the model tag, the digest the
-   backend reports, and a ``prompt_version`` that spells out the prompt
-   template version *and* the sampling settings:
-   ``wiki-v1;t=<temperature>;s=<seed>;ctx=<num_ctx>``) and refuses the job
+   backend reports, and ``prompt_version = "wiki-v1+<sha8>"``: sha8 is the
+   first 8 hex of sha256 over the rendered instructions plus every setting
+   that shapes the output, see :meth:`Settings.prompt_settings`; the raw
+   settings go in the report as ``prompt_settings``) and refuses the job
    on any difference (``model_digest_mismatch``, ``generator_mismatch:<field>``):
    it never swaps in another model or prompt.
 2. **Privacy.** A job carries released (``public``/``shared``) text only;
    the generator never reads the vault. A backend whose ``local`` is not
    ``True`` needs ``cloud: true`` *and* a job whose sources are all
-   ``public`` (``cloud_needs_public``).
+   ``public`` (``cloud_needs_public``); then (the cloud gate) the prompt
+   carries no concept aliases or definition and no open-question text, and
+   the previous page only when it is ``public`` (``previous_not_public``).
+   ``backend.local`` is **operator-trusted**: the adapter believes the
+   backend's own attribute, so the operator answers for the backend module
+   configured (the bundled Ollama backend enforces literal loopback; the
+   stub talks to nothing). The page's ``privacy`` is the strictest level
+   over *all* job sources (everything the model saw), which the page lists.
 3. **Prompt.** Fixed instructions (:mod:`.prompt`) plus the job's data block.
    Before the call, the estimated prompt plus ``max_output_tokens`` must fit
    ``num_ctx`` (``context_too_small``: Ollama would otherwise cut the prompt
@@ -22,9 +30,14 @@ What one :meth:`WikigenDeriver.generate` call does (design 1, 2, 5.3, 6):
 4. **Model.** ``backend.run(TASK, {"system", "prompt", "options": {"temperature",
    "seed", "num_ctx"}, "timeout"}, max_tokens=max_output_tokens)``. A reply
    whose reported tokens reach ``num_ctx`` is refused (``context_overflow``).
-   An unusable reply (not one JSON object of the page shape) is retried, with
-   the same seed, up to ``max_attempts`` in all, inside ``deadline_seconds``
-   and the budget; then ``bad_output:<code>``.
+   Only a failure that can differ between runs is retried, with the same
+   seed, up to ``max_attempts`` in all, inside ``deadline_seconds`` and the
+   budget: a transport error or timeout (:data:`RETRY_BACKEND`) and malformed
+   JSON (:data:`RETRY_OUTPUT`). With the same seed at temperature 0 the retry
+   may well repeat the reply (for example one cut at ``max_output_tokens``);
+   it covers nondeterministic serving, it is not a repair. Any other
+   unusable reply is ``bad_output:<code>`` at once; a transport error that
+   persists is raised as ``BackendUnavailable``.
 5. **Page.** :mod:`.assemble` keeps only sentences that cite the job's own
    refs exactly and obey the section rules, renders the ``open`` conflicts,
    the sources and the privacy level itself, and runs the result through the
@@ -37,8 +50,8 @@ What one :meth:`WikigenDeriver.generate` call does (design 1, 2, 5.3, 6):
    its result is checked against the job again. The NAS re-runs every
    deterministic check at intake regardless.
 
-The page records the model tag and digest, the prompt version with the
-sampling settings, the checker version and view version of the job, and the
+The page records the model tag and digest, the prompt version (hash of the
+instructions and settings), the checker version and view version of the job, and the
 job digest. ``build.nli_model`` is ``none`` and claims carry no NLI score:
 entailment scoring is a separate step (``memfw-adapter-nli``).
 
@@ -51,6 +64,7 @@ digest: a page is a candidate, never memory.
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import math
@@ -81,7 +95,7 @@ from ._ports import (
     parse_wiki_page,
 )
 from .assemble import BadOutput, PageRefused, assemble, validate
-from .prompt import PROMPT_VERSION, build_prompt
+from .prompt import PROMPT_VERSION, PromptNotes, build_prompt, instructions
 
 __version__ = "0.1.0"
 
@@ -101,6 +115,10 @@ GENERATOR_FIELDS: tuple[str, ...] = (
     "model_digest",
     "prompt_version",
 )
+#: Backend failures that can differ between runs: retried (``BackendUnavailable.code``).
+RETRY_BACKEND = frozenset({"unreachable", "timeout", "http_502", "http_503", "http_504"})
+#: Reply failures that can differ between runs: retried (``BadOutput.code``).
+RETRY_OUTPUT = frozenset({"empty_reply", "not_json"})
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SPEC_RE = re.compile(r"^[A-Za-z_][\w.]*:[A-Za-z_]\w*$")
 
@@ -139,7 +157,8 @@ class Settings:
     backend_options: Mapping[str, Any] | None = None
     #: Required for a backend whose ``local`` is not ``True``.
     cloud: bool = False
-    #: Sampling: part of ``prompt_version`` and so of the job digest.
+    #: These shape the output: part of ``prompt_version`` and so of the job digest
+    #: (with ``max_output_tokens``, ``max_claims_per_section``, ``include_previous``).
     temperature: float = 0.0
     seed: int = 0
     num_ctx: int = 16_384
@@ -190,10 +209,39 @@ class Settings:
             raise ValueError("bad_option")
         return replace(cls(), **options)
 
-    def prompt_version(self) -> str:
-        """The prompt template version plus every sampling setting that shapes the output."""
+    def prompt_settings(self, *, model: str, cloud_gate: bool) -> dict[str, Any]:
+        """Every setting that shapes the output, raw (the report's ``prompt_settings``).
 
-        return f"{PROMPT_VERSION};t={self.temperature:g};s={self.seed};ctx={self.num_ctx}"
+        ``temperature`` is the ``repr`` of the float, so 0.1 and 0.10000001 differ.
+        ``cloud_gate`` changes the data block (design 3.2), so it is part of it too.
+        """
+
+        return {
+            "cloud_gate": cloud_gate,
+            "include_previous": self.include_previous,
+            "max_claims_per_section": self.max_claims_per_section,
+            "max_output_tokens": self.max_output_tokens,
+            "model": model,
+            "num_ctx": self.num_ctx,
+            "seed": self.seed,
+            "temperature": repr(float(self.temperature)),
+        }
+
+    def prompt_version(self, *, model: str, cloud_gate: bool) -> str:
+        """``wiki-v1+<sha8>`` over the rendered instructions and :meth:`prompt_settings`."""
+
+        rendered = instructions(
+            max_claims=self.max_claims_per_section,
+            max_chars=MAX_CLAIM_CHARS,
+            max_cites=MAX_CITES_PER_CLAIM,
+        )
+        settings = json.dumps(
+            self.prompt_settings(model=model, cloud_gate=cloud_gate),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        digest = hashlib.sha256(f"{rendered}\n{settings}".encode()).hexdigest()
+        return f"{PROMPT_VERSION}+{digest[:8]}"
 
 
 def estimate_tokens(text: str) -> int:
@@ -345,8 +393,16 @@ class WikigenDeriver:
             "generator_version": __version__,
             "model": str(self.backend.model),
             "model_digest": self._digest(),
-            "prompt_version": self.settings.prompt_version(),
+            "prompt_version": self.settings.prompt_version(
+                model=str(self.backend.model), cloud_gate=self.cloud_gate
+            ),
         }
+
+    @property
+    def cloud_gate(self) -> bool:
+        """The backend is not local (``backend.local`` is operator-trusted)."""
+
+        return self.backend is not None and self.backend.local is not True
 
     def _check_job(self, job: WikiJob, config: Mapping[str, str]) -> None:
         for name in GENERATOR_FIELDS:
@@ -370,12 +426,15 @@ class WikigenDeriver:
         settings = self.settings
         config = self.generator_config()
         self._check_job(job, config)
+        notes = PromptNotes()
         system, user = build_prompt(
             job,
             include_previous=settings.include_previous,
             max_claims=settings.max_claims_per_section,
             max_chars=MAX_CLAIM_CHARS,
             max_cites=MAX_CITES_PER_CLAIM,
+            cloud_gate=self.cloud_gate,
+            notes=notes,
         )
         estimate = estimate_tokens(system) + estimate_tokens(user)
         if estimate + settings.max_output_tokens > settings.num_ctx:
@@ -391,6 +450,7 @@ class WikigenDeriver:
         self.last_budget = budget
         deadline = self._clock() + settings.deadline_seconds
         failures: list[str] = []
+        last_error: BackendUnavailable | None = None
         page: WikiPage | None = None
         assembly: dict[str, Any] = {}
         for _ in range(settings.max_attempts):
@@ -398,27 +458,22 @@ class WikigenDeriver:
             if remaining <= 0:
                 raise WikigenError("deadline")
             budget.reserve(estimate + settings.max_output_tokens)
-            reply = self.backend.run(
-                TASK,
-                {
-                    "system": system,
-                    "prompt": user,
-                    "options": {
-                        "temperature": settings.temperature,
-                        "seed": settings.seed,
-                        "num_ctx": settings.num_ctx,
-                    },
-                    "timeout": min(settings.request_timeout, remaining),
-                },
-                max_tokens=settings.max_output_tokens,
-            )
+            try:
+                reply = self._run(system, user, remaining)
+            except BackendUnavailable as exc:
+                budget.charge(estimate + settings.max_output_tokens)
+                if exc.code not in RETRY_BACKEND:
+                    raise
+                failures.append(exc.code)
+                last_error = exc
+                continue
+            last_error = None
             text = getattr(reply, "text", None)
             tokens_in = _count(getattr(reply, "tokens_in", 0))
             tokens_out = _count(getattr(reply, "tokens_out", 0))
             if not isinstance(text, str):
                 budget.charge(estimate + settings.max_output_tokens)
-                failures.append("no_text")
-                continue
+                raise WikigenError("bad_output:no_text")
             budget.charge((tokens_in or estimate) + (tokens_out or estimate_tokens(text)))
             if tokens_in and tokens_in + tokens_out >= settings.num_ctx:
                 raise WikigenError("context_overflow")
@@ -427,6 +482,8 @@ class WikigenDeriver:
                     text, job, build=build, max_claims=settings.max_claims_per_section
                 )
             except BadOutput as exc:
+                if exc.code not in RETRY_OUTPUT:
+                    raise WikigenError(f"bad_output:{exc.code}"[:64]) from None
                 failures.append(exc.code)
                 continue
             except PageRefused as exc:
@@ -434,6 +491,8 @@ class WikigenDeriver:
             assembly = report.to_json()
             break
         if page is None:
+            if last_error is not None:
+                raise BackendUnavailable(last_error.code)
             raise WikigenError(f"bad_output:{failures[-1] if failures else 'none'}"[:64])
         page, precheck = self._run_precheck(page, job)
         result = Generation(
@@ -444,11 +503,32 @@ class WikigenDeriver:
                 "tokens_used": budget.used,
                 "calls": budget.calls,
                 "assembly": assembly,
+                "prompt": notes.to_json(),
+                "prompt_settings": settings.prompt_settings(
+                    model=config["model"], cloud_gate=self.cloud_gate
+                ),
                 "precheck": precheck,
             },
         )
         self.last = result
         return result
+
+    def _run(self, system: str, user: str, remaining: float) -> Any:
+        settings = self.settings
+        return self.backend.run(
+            TASK,
+            {
+                "system": system,
+                "prompt": user,
+                "options": {
+                    "temperature": settings.temperature,
+                    "seed": settings.seed,
+                    "num_ctx": settings.num_ctx,
+                },
+                "timeout": min(settings.request_timeout, remaining),
+            },
+            max_tokens=settings.max_output_tokens,
+        )
 
     def _run_precheck(self, page: WikiPage, job: WikiJob) -> tuple[WikiPage, str]:
         if self._precheck is None:
@@ -479,11 +559,14 @@ class WikigenDeriver:
             (claim.causal for claim in page.claims),
             key=("none", "association", "hypothesis").index,
         )
+        # The page lists every job source (its privacy covers all the model saw);
+        # the view cites what the kept sentences actually cite.
+        cited = dict.fromkeys(ref for claim in page.claims for ref in claim.refs())
         return DerivedView(
             deriver=self.name,
             kind=request.kind,
             content=view_content(result),
-            citations=tuple(Citation.from_ref(source.ref) for source in page.sources),
+            citations=tuple(Citation.from_ref(ref) for ref in cited),
             epistemic_cap="inference",
             causal_cap=causal,
         )
@@ -533,7 +616,9 @@ def candidates(view: DerivedView) -> list[IngestItem]:
     Stage it with ``memfw.ports.staging.stage_candidates(..., proposal_id=<job
     digest>, source="wikigen")``: the same job gives the same proposal, and a
     page is reviewed (per section) before anything is approved. The metadata
-    holds ids, counts and the build identity, never page text.
+    holds ids, counts and the build identity, never page text. It names no
+    concept: ``page_key`` (a hash of tenant and concept) identifies the page;
+    ``tenant`` stays because staging routes by it.
     """
 
     if view.deriver != NAME:
@@ -550,7 +635,6 @@ def candidates(view: DerivedView) -> list[IngestItem]:
         "kind": view.kind,
         "format": "memfw-wiki-page/1",
         "page_key": page.page_key,
-        "concept": page.concept,
         "tenant": page.tenant,
         "privacy": page.privacy,
         "job_digest": build.job_digest,
@@ -608,6 +692,8 @@ __all__ = [
     "KINDS",
     "NAME",
     "NLI_NOT_RUN",
+    "RETRY_BACKEND",
+    "RETRY_OUTPUT",
     "SPEC",
     "TASK",
     "VIEW_FORMAT",

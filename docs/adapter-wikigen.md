@@ -24,16 +24,39 @@ evidence: it becomes a staged candidate that a person reviews per section.
    `generator_version`, `model`, `model_digest` and `prompt_version`, all inside its
    `job_digest`. The deriver computes its own block (`generator_config()`; job builders
    use it) from the backend's model tag, the digest the backend reports, and a
-   `prompt_version` that spells out the prompt template **and** the sampling settings,
-   `wiki-v1;t=<temperature>;s=<seed>;ctx=<num_ctx>`. Any difference refuses the job before a
-   model call: `model_digest_mismatch` or `generator_mismatch:<field>`. A worker never
-   swaps models, prompts or sampling silently, and changing any of them is new work (a new
-   job digest).
+   `prompt_version` of the form `wiki-v1+<sha8>`: `sha8` is the first 8 hex characters of
+   the sha256 over the rendered instruction text plus a canonical JSON of every setting that
+   can change the output: `temperature` (the Python repr of the float, e.g. `"0.0"`),
+   `seed`, `num_ctx`, `include_previous`, `max_claims_per_section`, `max_output_tokens`,
+   `model` (the backend's model tag) and `cloud_gate` (whether the cloud redaction of step 2
+   applies, since it changes the data block). The raw settings are in the run report under
+   `prompt_settings`. Any difference refuses the job before a model call:
+   `model_digest_mismatch` or `generator_mismatch:<field>`. A worker never swaps models,
+   prompts or settings silently, and changing any of them changes `prompt_version`, hence
+   the job digest and the candidate id: it is new work.
 2. **Privacy.** A job holds released (`public` / `shared`) text only (`memfw-wiki-job/1`
    refuses anything else); the prompt carries the concept's labels and definition and each
    source's ref, kind, status, causal grade and text, never the tenant, job id, view version
-   or a path. A backend whose `local` is not `True` needs `cloud: true` in the settings
-   *and* a job whose sources are all `public` (`cloud_needs_public`).
+   or a path. Of the previous page only the sentences whose every citation ref is exactly
+   one of this job's source refs enter the prompt; the others are left out and counted
+   (`prompt.previous_claims_dropped` in the report). A previous page whose `privacy` is
+   stricter than every job source is left out of the prompt (`previous_stricter`) rather
+   than raising the page's level: the page's privacy is the strictest of the job's sources.
+
+   **Cloud gate.** A backend whose `local` is not `True` needs `cloud: true` in the
+   settings, and then:
+   - every source of the job must be `public` (`cloud_needs_public`);
+   - the previous page goes into the prompt only if its own `privacy` is `public`;
+     otherwise it is omitted and the report records `previous_not_public`;
+   - the concept's aliases and definition and the open questions' `question` / `missing`
+     free text are never sent: only the concept label (`pref_label`) and, per open
+     question, its id and `conflict_refs`. The program still writes the `open` conflict
+     claims from the job locally (step 7).
+
+   `local` is operator-trusted: the adapter believes a backend's own `local` attribute. The
+   operator chooses which backend module is configured, and a backend that claims to be
+   local when it is not defeats the cloud gate. The bundled Ollama backend enforces a
+   literal loopback address; the stub talks to nothing.
 3. **Prompt** (`wiki-v1`). Fixed instructions force the structure: the model answers one
    JSON object with `summary`, `facts`, `timeline`, `relations` and `missing_evidence`
    (at most one sentence per open question); each sentence cites 1–8 refs **copied exactly**
@@ -47,10 +70,18 @@ evidence: it becomes a staged candidate that a person reviews per section.
    (`context_overflow`). Each call gets `min(request_timeout, time left)`; the job stops at
    `deadline_seconds` (`deadline`).
 5. **Model.** `backend.run("wiki_page_generate", {"system", "prompt", "options":
-   {"temperature", "seed", "num_ctx"}, "timeout"}, max_tokens=max_output_tokens)`. A
-   reply that is not one JSON object of that shape (not JSON, a duplicate key, any other
-   key such as `open` or `sources`, a section that is not a list) is retried with the same
-   seed up to `max_attempts` in all, then `bad_output:<code>`.
+   {"temperature", "seed", "num_ctx"}, "timeout"}, max_tokens=max_output_tokens)`. A call
+   is retried (same seed, up to `max_attempts` in all, inside the deadline and the budget)
+   only for failures that can differ between runs: transport errors from the backend
+   (`BackendUnavailable` codes `unreachable`, `timeout`, `http_502`, `http_503`,
+   `http_504`) and malformed JSON (`empty_reply`, `not_json`). A reply that is JSON but not
+   the page shape (`unknown_key` such as `open` or `sources`, `section_not_list`,
+   `duplicate_key`, `not_object`, `too_deep`, `reply_too_large`) or not text at all
+   (`no_text`) is refused at once as `bad_output:<code>`; malformed JSON that persists ends
+   the same way. A transport error that persists is raised as `BackendUnavailable` with
+   its code. With the same seed and temperature 0 a retry may well repeat the same reply
+   (for example one cut at `max_output_tokens`): the retry is for nondeterministic serving,
+   not a repair.
 6. **Sentences.** Each sentence is checked on its own and **dropped, never repaired**: a
    ref that is not exactly one of the job's refs (`unknown_citation`; no case folding,
    version guessing or prefix fixing), no or too many or repeated cites, a causal grade
@@ -63,10 +94,15 @@ evidence: it becomes a staged candidate that a person reviews per section.
    `needs_attention` (design 1.2).
 7. **What the program writes.** The `open` section's `conflict` claims (per open question
    with two sides in the job: one claim per side, citing only that side, text = the
-   question as the job states it), the page `sources` (the job sources a kept sentence
-   cites, field for field), `open_questions` (every question of the job), `privacy` (the
-   strictest cited source), `built_from_digest`, the claim ids and the `build` block
-   (`nli_model: none`, every claim `tokens: not_run`; scoring is a later step).
+   question as the job states it), the page `sources` (**all** the job's sources, in job
+   order, field for field, cited or not), `open_questions` (every question of the job),
+   `privacy` (the strictest level over all the job's sources: everything the model saw
+   counts, not only what a kept sentence cites), `built_from_digest` (over all those
+   sources), the claim ids and the `build` block (`nli_model: none`, every claim
+   `tokens: not_run`; scoring is a later step). Listing every job source keeps the ports
+   invariant (a page's `privacy` equals the strictest of its listed `sources`; uncited
+   sources are allowed). A job with many sources can therefore make the page exceed
+   16 KiB, which refuses it as `page_invalid:too_large`; the source list is never trimmed.
 8. **Validation.** The assembled document goes through `memfw.ports.wiki.parse_wiki_page`
    and `memfw.ports.testing.check_wiki_page(page, job=job)`. No summary sentence left:
    `summary_empty` (no retry; a deterministic model would answer the same). Anything the
@@ -81,8 +117,9 @@ evidence: it becomes a staged candidate that a person reviews per section.
 
 The view's `content` is canonical JSON `{"format": "memfw-wikigen-view/1", "page": <page>,
 "report": <counts>}`; the report holds attempts, token use, kept/offered/dropped counts by
-reason, `needs_attention` and the pre-check status, never text. The view cites every page
-source by ref; its caps are `epistemic_cap: inference` and the page's strongest claim grade
+reason, `prompt_settings`, `needs_attention` and the pre-check status, never text. The
+view's citations are the refs the kept claims actually cite (a subset of the page
+`sources`); its caps are `epistemic_cap: inference` and the page's strongest claim grade
 (at most `hypothesis`).
 
 ## Candidates, never memory
@@ -96,9 +133,11 @@ stage_candidates(vault, "wikigen", items,
                  proposal_id=job.job_digest, source="wikigen")
 ```
 
-The candidate's metadata holds ids and counts only: `page_key`, `concept`, `tenant`,
-`privacy`, `job_digest`, `generator_version`, `model`, `model_digest`, `prompt_version`,
-`claims`, `sources`, `needs_attention`, `epistemic: inference`, `causal`. The same job with
+The candidate's metadata holds ids and counts only: `page_key`, `tenant`, `privacy`,
+`job_digest`, `generator_version`, `model`, `model_digest`, `prompt_version`, `claims`,
+`sources`, `needs_attention`, `epistemic: inference`, `causal`. It does not name the
+concept: `tenant` routes the candidate to that tenant's staging, and `page_key` (a hash of
+tenant and concept) identifies the concept without naming it. The same job with
 the same deterministic output stages the same candidate (a duplicate, not a second file).
 Where candidates land on the storage host and how pages are approved is the `wiki-intake`
 stage and `memfw wiki review/apply` (W1-3, W1-6), not this adapter.
@@ -116,7 +155,7 @@ adapters:
       # model_digest: "sha256:…"   # optional pin; any other digest on the server is refused
       # timeout: 900               # seconds per generate request
     # cloud: false
-    # temperature: 0.0             # sampling: part of prompt_version and the job digest
+    # temperature: 0.0             # output-affecting settings: part of prompt_version and the job digest
     # seed: 0
     # num_ctx: 16384
     # max_output_tokens: 2048
@@ -155,8 +194,9 @@ adapters:
 `cloud_needs_public`, `context_too_small`, `context_overflow`, `deadline`,
 `bad_output:<code>`, `summary_empty`, `page_invalid:<code>`, `precheck_error`,
 `precheck_empty`, `precheck_page_invalid:<code>`. Backend failures stay
-`BackendUnavailable` (short codes) and a spent budget `BackendBudgetExhausted`. No code
-holds job or reply text.
+`BackendUnavailable` (short codes; a transport error that persists after the retries keeps
+its code) and a spent budget `BackendBudgetExhausted`. `previous_not_public` and
+`previous_stricter` are report reasons, not refusals. No code holds job or reply text.
 
 ## Known limits
 
@@ -168,6 +208,10 @@ holds job or reply text.
 - With `temperature: 0` and a fixed seed Ollama is usually but not provably byte-for-byte
   repeatable across versions or hardware; the page records model digest and sampling so a
   difference is visible.
+- `backend.local` is trusted, not verified (step 2): a third-party backend module that
+  wrongly reports `local` bypasses the cloud gate. Configure only backends you trust.
+- Because a page lists every job source, a large job can exceed the 16 KiB page limit
+  (`page_invalid:too_large`); the job builder has to keep jobs small enough.
 - The causal-wording vocabulary (G5), the token-consistency check and entailment scoring
   are not here: they are `memfw-wiki-gate` (W1-2) and `memfw-adapter-nli` (W1-5).
 

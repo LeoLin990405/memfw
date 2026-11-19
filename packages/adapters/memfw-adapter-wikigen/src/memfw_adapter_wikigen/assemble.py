@@ -17,10 +17,14 @@ Two levels of refusal:
 
 The program then writes what the model may not: the ``open`` section's
 ``conflict`` claims (one per side of each open question, citing that side's
-refs, text = the question as the job states it), the page's ``sources`` (the
-job sources that a kept claim cites, field for field), ``open_questions``
-(every question of the job), ``privacy`` (the strictest cited source) and
-``built_from_digest``. The assembled document goes through
+refs, text = the question as the job states it), the page's ``sources``
+(*every* job source, cited or not, field for field and in job order),
+``open_questions`` (every question of the job), ``privacy`` (the strictest
+level over all job sources: everything the model saw, design 3.2; the ports
+require it to equal the strictest listed source, hence the full list) and
+``built_from_digest`` (over all of them). A job with many sources can so
+exceed the 16 KiB page limit: ``page_invalid:too_large``, never trimmed.
+The assembled document goes through
 ``memfw.ports.wiki.parse_wiki_page`` and ``memfw.ports.testing.check_wiki_page``
 (against the job); anything they refuse refuses the whole page.
 """
@@ -425,8 +429,9 @@ def assemble(
     report = assembler.report
     if not any(claim.section == "summary" for claim in claims):
         raise PageRefused("summary_empty")
-    cited = {ref for claim in claims for ref in claim.refs}
-    sources = [item.source for item in job.sources if item.source.ref in cited]
+    # All job sources, not only the cited ones: the privacy level must cover
+    # everything the model saw (an uncited shared text still shaped the reply).
+    sources = [item.source for item in job.sources]
     counters: dict[str, int] = {}
     sections: dict[str, list[dict[str, Any]]] = {}
     for claim in claims:
