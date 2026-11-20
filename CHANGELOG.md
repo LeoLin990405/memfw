@@ -17,6 +17,37 @@ projections out of the vault; see the 0.4.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Redaction (`memfw.history.redact`): an IPv4 address inside a host name
+  (`git.<ip>.sslip.io`) or at the end of a sentence is now masked; the dash
+  and hex IP forms of `sslip.io` / `nip.io` / `xip.io` (any case), the tailnet
+  label of `*.ts.net` names (also dash-encoded in project directories) and
+  phone numbers (`[REDACTED:phone]`: Chinese mobiles, `+`-prefixed
+  international numbers with a valid country code; see docs/history.md for
+  the rules and the false-positive guards; glued letters, extensions,
+  space runs and slashes are handled) are new, and leading-zero octets
+  (`192.0.2.007`) count as addresses. Masking repeats until the text is
+  stable, so redaction stays idempotent; hitting the pass limit is counted
+  (`PASS_LIMIT_HITS`) and logged without text. Host names stay visible;
+  `redact(..., redact_hostnames=True, hostnames=[...])` is an opt-in hook,
+  default off.
+- History search results and session lists apply the full redaction to the
+  transcript path (was user names only) and redact stored snippets again on
+  read; the handoff tool map and dream distillation check for secrets before
+  redacting (a secret-shaped value is dropped, not kept masked).
+
+### Upgrade notes
+
+- Text stored before this release was redacted under the old rules. Every
+  output is redacted again on the way out, but the full-text indexes still
+  hold the old terms, so a search for an unmasked phone number or address can
+  still *match* (the result shows it masked). To purge those terms, rebuild
+  the history index: stop the ingest job, delete
+  `<vault>/.memfw-history.sqlite*` and run `memfw history index`. Derived
+  files already written to the vault (distilled memories, candidates, skill
+  drafts) are not rewritten; review them with a scan if needed.
+
 ## [0.5.0] — 2026-11-20
 
 The fourth numbered release: the contracts and the first packages for the

@@ -4,9 +4,19 @@ Two pattern sets:
 
 * **secrets** -- credentials. An entry with any secret finding is skipped at
   index time (only a count is kept), and withheld at read time.
-* **personal** -- e-mail addresses, IPv4 addresses, home-directory user names
-  and long high-entropy blobs. These never cause a skip; they are masked in
-  every snippet, field and window.
+* **personal** -- e-mail addresses, IPv4 addresses (also inside a host name
+  such as ``git.192.0.2.7.sslip.io``), the IP part of ``sslip.io`` /
+  ``nip.io`` / ``xip.io`` names in dash or hex form, the tailnet label of
+  Tailscale ``*.ts.net`` names, phone numbers (Chinese mobiles with or
+  without a ``+86`` / ``0086`` / ``086`` prefix, and ``+``-prefixed
+  international numbers), home-directory user names and long high-entropy
+  blobs. These never cause a skip; they are masked in every snippet, field and
+  window.
+
+Host names (``build-01``, the machine label of ``build-01.tail0000.ts.net``)
+are kept by default: agents need them to tell machines apart. ``redact`` takes
+``redact_hostnames=True`` plus an explicit ``hostnames`` list as an opt-in hook;
+nothing turns it on yet.
 
 Matching runs on a normalised view of the text: NFKC (so a fullwidth colon
 or a no-break space becomes ASCII) with every Unicode format character
@@ -24,10 +34,11 @@ shapes, not every secret a person can type in prose (see docs/history.md).
 from __future__ import annotations
 
 import bisect
+import logging
 import re
 import sys
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -138,8 +149,98 @@ _EMAIL = re.compile(
     r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}"
     r"\.[A-Za-z]{2,24}(?![A-Za-z])"
 )
-_OCTET = r"(?:25[0-5]|2[0-4]\d|1?\d?\d)"
-_IPV4 = re.compile(r"(?<![\d.])(?:" + _OCTET + r"\.){3}" + _OCTET + r"(?![\d.])")
+# Leading zeros are accepted (``192.0.2.007``): some tools print them.
+_OCTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d|0\d{1,2})"
+# Not part of a longer dotted number (``1.2.3.4.5``): no digit, or digit and
+# dot, on either side. A dot next to a letter is fine, so an address inside a
+# host name (``git.192.0.2.7.sslip.io``) or at the end of a sentence matches.
+# A four-part version number whose parts are all 0-255 (``1.2.3.4``) is masked
+# too: it cannot be told apart from an address, and masking is the safe side.
+_IPV4 = re.compile(r"(?<!\d)(?<!\d\.)(?:" + _OCTET + r"\.){3}" + _OCTET + r"(?!\d)(?!\.\d)")
+# Wildcard-DNS services that encode an address in the name: dash form
+# (``app-192-0-2-7.sslip.io``) and, for nip.io / sslip.io, hex form
+# (``app-c0000207.nip.io``). The dotted form is caught by _IPV4.
+# The dots may be dashes: Claude Code encodes a working directory such as
+# ``git.192.0.2.7.sslip.io`` as ``git-192-0-2-7-sslip-io``.
+_IP_DNS = r"(?=[.-](?i:sslip|nip|xip)[.-](?i:io)(?![A-Za-z0-9]))"
+_IPV4_DASHED = re.compile(r"(?<!\d)(?<!\d-)(?:" + _OCTET + r"-){3}" + _OCTET + _IP_DNS)
+_IPV4_HEX = re.compile(r"(?<![A-Za-z0-9])[0-9A-Fa-f]{8}" + _IP_DNS)
+# Tailscale MagicDNS: ``<machine>.<tailnet>.ts.net``. The tailnet label names
+# the owner's network and is masked; the machine label is a host name.
+_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+_TAILNET = re.compile(
+    r"(?<![A-Za-z0-9-])(?P<tailnet>" + _LABEL + r")(?=\.ts\.net(?![A-Za-z0-9-]))", re.IGNORECASE
+)
+# The same name in a dash-encoded Claude Code project directory
+# (``-srv-box-tail0000-ts-net``): dots became dashes, so label boundaries are
+# lost. Only Tailscale's default ``tail<hex>`` tailnet name is masked there;
+# a custom two-word name cannot be told apart from ordinary directory words
+# (``-home-a-work-ts-net``) and is left alone (see docs/history.md).
+_TAILNET_DASHED = re.compile(
+    r"(?i)(?<=[-.])(?P<tailnet>tail[0-9a-f]{4,16})(?=-ts-net(?![A-Za-z0-9]))"
+)
+_TAILNET_MACHINE = re.compile(
+    r"(?<![A-Za-z0-9-])(?P<host>"
+    + _LABEL
+    + r")(?=\.(?:"
+    + _LABEL
+    + r"|\[REDACTED:tailnet\])\.ts\.net(?![A-Za-z0-9-]))",
+    re.IGNORECASE,
+)
+# Phone separators: space, dot, hyphen and the Unicode hyphens/dashes
+# U+2010-U+2013 (NFKC folds U+2011 to U+2010 but keeps U+2013).
+_DASHES = "‐-–"
+# Chinese mobile numbers: 1[3-9] and nine more digits, either in one run or
+# grouped 3-4-4 with one consistent separator, optionally after +86, 0086,
+# 086 or 86 (also in parentheses). The number must not touch a letter or
+# digit (nor be part of a dotted number), so an 11-digit run inside a hash, a
+# longer order id or a millisecond timestamp is left alone. Space-grouped
+# numbers without a prefix also need a phone word right before them
+# ("phone:", "tel", "手机", ...), because "commits 143 1024 2048" has the same
+# shape. An 11-digit id that looks exactly like a mobile number is masked.
+# A separator is one dot, slash, hyphen or dash, or a run of up to three
+# spaces; the same one must be used throughout. Letters glued to the end
+# ("13800138000x") do not stop the match: masking the digits is the safe side.
+_SEP = r"(?: {1,3}|[./" + _DASHES + r"-])"
+_CN_MOBILE = re.compile(
+    r"(?<![A-Za-z0-9+])(?<!\d\.)"
+    r"(?P<prefix>(?:\+|00|0)?86" + _SEP + r"?|\((?:\+|00)?86\)" + _SEP + r"?)?"
+    r"1[3-9]\d(?:(?P<sep>" + _SEP + r")\d{4}(?P=sep)\d{4}|\d{8})"
+    r"(?!\d)(?!\.\d)"
+)
+_PHONE_WORD = re.compile(
+    r"(?i)(?<![A-Za-z:])(?:telephone|phone|tel|mobile|mob|cell|call|contact|whatsapp|wechat|"
+    r"sms|手机|电话|联系方式|联系|号码|微信)(?:号码|号)?\.?"
+    r"(?:[ \t]{0,2}(?:no\.?|number|#))?(?:[ \t]{1,3}(?:is|was))?[ \t]{0,3}[:：]?[ \t]{0,3}$"
+)
+# International numbers need a leading "+" and a valid ITU country code, then
+# digit groups split by one space, dot (only dots, then) or hyphen; one group
+# may be in parentheses. 8-15 digits in all (E.164). Each group must end at a
+# boundary, so a following token ("5pm", a timestamp) ends the number instead
+# of hiding it; groups are possessive and start with a separator or "(", so
+# the scan stays linear. Bare national numbers without "+" are not matched.
+_INTL_PHONE = re.compile(
+    r"(?<![A-Za-z0-9+])\+[1-9]\d{0,14}+(?!\d)"
+    r"(?:(?<![A-Za-z])" + _SEP + r"\d{1,12}+(?!\d)"
+    r"|(?<![A-Za-z])" + _SEP + r"?\(\d{1,5}\)" + _SEP + r"?\d{1,12}+(?!\d)){0,6}"
+)
+_PHONE_GROUP = re.compile(_SEP + r"?\(\d+\)" + _SEP + r"?\d+|" + _SEP + r"\d+")
+# An extension right after the number ("x12", " ext. 34", "#56") is masked too.
+_PHONE_EXT = re.compile(r"(?i)(?:[ \t]{0,2}(?:x|ext\.?|#)[ \t]{0,2}\d{1,6}(?!\d))")
+# A short last group glued to one of these is a time or an ordinal ("5pm",
+# "3rd"), not part of the number.
+_UNIT_TAIL = re.compile(r"(?i)(?:am|pm|st|nd|rd|th|h|min|s)(?![A-Za-z])")
+# Country codes (ITU-T E.164 zones): 1 and 7; the two-digit codes; every
+# other code has three digits and starts with one of the listed pairs.
+_CC_2 = frozenset(
+    "20 27 30 31 32 33 34 36 39 40 41 43 44 45 46 47 48 49 51 52 53 54 55 56 57 58 "
+    "60 61 62 63 64 65 66 81 82 84 86 90 91 92 93 94 95 98".split()
+)
+_CC_3_PREFIX = frozenset(
+    "21 22 23 24 25 26 29 35 37 38 42 50 59 67 68 69 80 85 87 88 96 97 99".split()
+)
+_DATE_SHAPE = re.compile(r"(?:19|20)\d{2}[./" + _DASHES + r"-](?:0?[1-9]|1[0-2])(?![0-9])")
+_COMPACT_DATE = re.compile(r"(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])")
 _HOME = re.compile(
     r"(?P<prefix>/Users/|/home/|[A-Za-z]:\\{1,2}Users\\{1,2})(?P<user>(?!\[REDACTED)[^/\\\s\"'<>]{1,128})"
 )
@@ -151,6 +252,10 @@ _DASHED_HOME = re.compile(
 _BLOB = re.compile(r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{40,}={0,2}(?![A-Za-z0-9+/=])")
 
 SECRET_MARK = "[REDACTED:{kind}]"
+_MAX_PASSES = 8
+PASS_LIMIT_HITS = 0
+"""How often :func:`redact` stopped at :data:`_MAX_PASSES` (expected: never)."""
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -286,9 +391,84 @@ def _secret_spans(value: str) -> list[tuple[int, int, str]]:
     return spans
 
 
+def _country_code(code: str) -> bool:
+    if len(code) == 1:
+        return code in {"1", "7"}
+    if len(code) == 2:
+        return code in _CC_2
+    return len(code) == 3 and code[:2] in _CC_3_PREFIX
+
+
+def _intl_valid(code: str, groups: list[str]) -> bool:
+    digits = len(code) + sum(char.isdigit() for item in groups for char in item)
+    if not 8 <= digits <= 15:
+        return False
+    if not groups:
+        # "+15550100123": no separators, so the code is a prefix; a
+        # date-shaped run ("+20261120", a diff line) is not a number.
+        return (
+            digits >= 10
+            and any(_country_code(code[:size]) for size in (1, 2, 3))
+            and not _COMPACT_DATE.match(code)
+        )
+    separators = {
+        re.match(r" +|[^\d(]", item).group(0)  # type: ignore[union-attr]
+        for item in groups
+        if not item[0].isdigit() and item[0] != "("
+    }
+    if len(separators) > 1 and separators & {".", "/"}:
+        return False
+    if _DATE_SHAPE.search(code + "".join(groups)):
+        return False
+    if len(code) > 3 or not _country_code(code):
+        return False
+    return len(groups) >= 2 or sum(char.isdigit() for char in groups[0]) >= 7
+
+
+def _phone_spans(value: str) -> list[tuple[int, int, str]]:
+    spans: list[tuple[int, int, str]] = []
+    for match in _CN_MOBILE.finditer(value):
+        if (
+            match.group("prefix") is None
+            and match.group("sep") == " "
+            and not _PHONE_WORD.search(value[max(0, match.start() - 40) : match.start()])
+        ):
+            continue
+        spans.append((match.start(), match.end(), "phone"))
+    for match in _INTL_PHONE.finditer(value):
+        text = match.group(0)
+        code = re.match(r"\+(\d+)", text).group(1)  # type: ignore[union-attr]
+        groups = [item.group(0) for item in _PHONE_GROUP.finditer(text, 1 + len(code))]
+        glued = _UNIT_TAIL.match(value, match.end())
+        if glued and groups and sum(char.isdigit() for char in groups[-1]) <= 2:
+            groups.pop()  # "+1 555 010 0123 5pm": the "5pm" is a time
+        # Drop trailing groups ("+44 20 7946 0958 12345") until it is valid.
+        # Letters glued to the last group ("0123foo") end the number there.
+        while True:
+            if _intl_valid(code, groups):
+                end = match.start() + 1 + len(code) + sum(map(len, groups))
+                if end == match.end():
+                    extension = _PHONE_EXT.match(value, end)
+                    if extension:
+                        end = extension.end()
+                spans.append((match.start(), end, "phone"))
+                break
+            if not groups:
+                break
+            groups.pop()
+    return spans
+
+
 def _personal_spans(value: str) -> list[tuple[int, int, str]]:
     spans = [(match.start(), match.end(), "email") for match in _EMAIL.finditer(value)]
-    spans.extend((match.start(), match.end(), "ip") for match in _IPV4.finditer(value))
+    for pattern in (_IPV4, _IPV4_DASHED, _IPV4_HEX):
+        spans.extend((match.start(), match.end(), "ip") for match in pattern.finditer(value))
+    for pattern in (_TAILNET, _TAILNET_DASHED):
+        spans.extend(
+            (match.start("tailnet"), match.end("tailnet"), "tailnet")
+            for match in pattern.finditer(value)
+        )
+    spans.extend(_phone_spans(value))
     spans.extend(
         (match.start(), match.end(), "blob")
         for match in _BLOB.finditer(value)
@@ -366,10 +546,102 @@ def _apply(text: str, finders: tuple[Callable[[str], list[tuple[int, int, str]]]
     return "".join(out)
 
 
-def redact(text: str) -> str:
-    """Mask secrets and personal identifiers in the original text. Idempotent."""
+# Words that also appear in masks or field names: never treated as host names,
+# so a name list cannot eat a mask and break idempotence.
+_RESERVED_HOSTNAMES = frozenset(
+    {
+        "redacted",
+        "secret",
+        "credentials",
+        "private_key",
+        "email",
+        "ip",
+        "phone",
+        "tailnet",
+        "host",
+        "user",
+        "blob",
+        "withheld",
+    }
+)
+_MASK = re.compile(r"\[REDACTED[^\]\s]{0,40}\]")
 
-    return _apply(text, (_secret_spans, _personal_spans, _path_spans))
+
+def _hostname_finder(hostnames: Iterable[str]) -> Callable[[str], list[tuple[int, int, str]]]:
+    names = sorted(
+        {
+            name.strip()
+            for name in hostnames
+            if name and name.strip() and name.strip().lower() not in _RESERVED_HOSTNAMES
+        },
+        key=len,
+    )
+    named = (
+        re.compile(
+            r"(?i)(?<![A-Za-z0-9_-])(?:"
+            + "|".join(re.escape(name) for name in reversed(names))
+            + r")(?![A-Za-z0-9_-])"
+        )
+        if names
+        else None
+    )
+
+    def find(value: str) -> list[tuple[int, int, str]]:
+        masks = [(match.start(), match.end()) for match in _MASK.finditer(value)]
+
+        def in_mask(start: int, end: int) -> bool:
+            return any(left < end and start < right for left, right in masks)
+
+        spans = [
+            (match.start("host"), match.end("host"), "host")
+            for match in _TAILNET_MACHINE.finditer(value)
+        ]
+        if named is not None:
+            spans.extend((match.start(), match.end(), "host") for match in named.finditer(value))
+        return [span for span in spans if not in_mask(span[0], span[1])]
+
+    return find
+
+
+def redact(text: str, *, redact_hostnames: bool = False, hostnames: Iterable[str] = ()) -> str:
+    """Mask secrets and personal identifiers in the original text. Idempotent.
+
+    Host names are kept unless ``redact_hostnames`` is true (an opt-in hook,
+    default off, not wired to any setting yet): then the machine label of a
+    ``*.ts.net`` name and every whole-word occurrence of a name in
+    ``hostnames`` (case-insensitive) become ``[REDACTED:host]``. A bare host
+    name cannot be recognised by its shape, so the list is required for those.
+    """
+
+    finders: tuple[Callable[[str], list[tuple[int, int, str]]], ...] = (
+        _secret_spans,
+        _personal_spans,
+        _path_spans,
+    )
+    if redact_hostnames:
+        finders += (_hostname_finder(hostnames),)
+    # A mask can change what a neighbour's boundary check sees (in
+    # ".ts.net192.0.2.7" the tailnet label only ends at a boundary once the
+    # address is masked), so masking repeats until the text is stable. Text
+    # without findings takes one pass; each further pass only masks more.
+    return _fixpoint(text, finders)[0]
+
+
+def _fixpoint(
+    text: str, finders: tuple[Callable[[str], list[tuple[int, int, str]]], ...]
+) -> tuple[str, int]:
+    """``(masked text, passes)``; logs (no text) when the pass limit is hit."""
+
+    global PASS_LIMIT_HITS
+    previous, current, passes = text, _apply(text, finders), 1
+    while current != previous:
+        if passes >= _MAX_PASSES:
+            PASS_LIMIT_HITS += 1
+            _LOG.warning("redact: no fixed point after %d passes (%d chars)", passes, len(text))
+            break
+        previous, current = current, _apply(current, finders)
+        passes += 1
+    return current, passes
 
 
 def redact_path(text: str) -> str:

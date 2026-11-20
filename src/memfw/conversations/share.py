@@ -22,7 +22,6 @@ import re
 from collections.abc import Callable, Sequence
 from typing import Any, TypeVar
 
-from memfw.history.redact import redact_path
 from memfw.retrieval.health import HEALTH_KEY, from_conversation_search
 
 from .policy import SharePolicy
@@ -548,7 +547,8 @@ class ConversationShare:
                 if not _EDIT_TOOL.search(call.get("name", "")):
                     continue
                 for match in _PATHLIKE.findall(call.get("summary", "")):
-                    cleaned, withheld = safe_text(redact_path(match), 300)
+                    # safe_text applies the full redact() (home-directory names included).
+                    cleaned, withheld = safe_text(match, 300)
                     if not withheld and cleaned not in seen:
                         seen.append(cleaned)
                     if len(seen) >= MAX_FILES:

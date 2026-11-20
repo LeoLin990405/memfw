@@ -178,8 +178,10 @@ def _independent(
 
 
 def _clean(text: str) -> str | None:
-    cleaned = redact(" ".join(text.split()))
-    return None if has_secret(cleaned) else cleaned
+    # Check before redacting: redact() masks a secret, which would hide it
+    # from has_secret and keep text that should be dropped.
+    joined = " ".join(text.split())
+    return None if has_secret(joined) else redact(joined)
 
 
 def distill(
