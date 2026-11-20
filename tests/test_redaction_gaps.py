@@ -290,7 +290,8 @@ def test_review_phone_false_positives(text: str) -> None:
         ("C0000207.NIP.IO", "[REDACTED:ip].NIP.IO"),
         ("APP-192-0-2-7.SSLIP.IO", "APP-[REDACTED:ip].SSLIP.IO"),
         ("-srv-box-tail0000-ts-net", "-srv-box-[REDACTED:tailnet]-ts-net"),
-        ("-srv-box-cat-dog-ts-net", "-srv-box-[REDACTED:tailnet]-ts-net"),
+        # custom names in dashed form are not masked (ambiguous with directory words)
+        ("-srv-box-cat-dog-ts-net", "-srv-box-cat-dog-ts-net"),
     ],
 )
 def test_review_host_encodings(text: str, expected: str) -> None:
@@ -378,3 +379,77 @@ def test_idempotence_fuzz() -> None:
         if redact(once) != once:
             failures.append(text)
     assert failures == []
+
+
+# -- review round 3 -------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # letters glued to the tail ended the match and the number escaped
+        ("+1-555-010-0123x12", "[REDACTED:phone]"),
+        ("+1 555 010 0123 ext. 34", "[REDACTED:phone]"),
+        ("+1 555 010 0123 #56", "[REDACTED:phone]"),
+        ("+1 555 010 0123foo", "[REDACTED:phone]foo"),
+        ("+8613800138000x", "[REDACTED:phone]x"),
+        ("+44 20 7946 0958abc", "[REDACTED:phone]abc"),
+        # cue words before a space-grouped CN mobile
+        ("手机号：138 0013 8000", "手机号：[REDACTED:phone]"),
+        ("Tel. 138 0013 8000", "Tel. [REDACTED:phone]"),
+        ("Mob: 138 0013 8000", "Mob: [REDACTED:phone]"),
+        ("my phone number is 138 0013 8000", "my phone number is [REDACTED:phone]"),
+        ("号码 138 0013 8000", "号码 [REDACTED:phone]"),
+        # runs of spaces and slashes as separators, leading-zero octets
+        ("+1 555  010 0123", "[REDACTED:phone]"),
+        ("+1/555/010/0123", "[REDACTED:phone]"),
+        ("138/0013/8000", "[REDACTED:phone]"),
+        ("192.0.2.007", "[REDACTED:ip]"),
+        ("-srv-box-tail0000-ts-net-foo", "-srv-box-[REDACTED:tailnet]-ts-net-foo"),
+    ],
+)
+def test_round3_masked(text: str, expected: str) -> None:
+    assert redact(text) == expected
+    assert redact(expected) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "+1 555 010 0123 5pm",  # a time after the number stays
+        "commits 143 1024 2048",
+        "sizes 138 0013 8000",
+        "2026/11/20",
+        "+1/2",
+        "+1.555/010-0123",  # mixed dot / slash / hyphen separators
+        "a13800138000b9",
+        "x+13800138000",
+        "-srv-a-work-ts-net/x",  # no over-mask of directory words
+        "-srv-x-ts-net-foo",
+    ],
+)
+def test_round3_unmasked_parts(text: str) -> None:
+    out = redact(text)
+    if text == "+1 555 010 0123 5pm":
+        assert out == "[REDACTED:phone] 5pm"
+    else:
+        assert out == text
+
+
+def test_fixed_point_converges_quickly() -> None:
+    import importlib
+
+    module = importlib.import_module("memfw.history.redact")
+    finders = (module._secret_spans, module._personal_spans, module._path_spans)
+    realistic = [
+        SAMPLE,
+        "clone git.192.0.2.7.sslip.io then ssh box.tail0000.ts.net; tel 138 0013 8000",
+        "93rd86.ts.net192.0.2.7",  # a mask changes a neighbour's boundary
+        "1)13800138000+7 13880007",
+        "no personal data here",
+    ]
+    before = module.PASS_LIMIT_HITS
+    for text in realistic:
+        _out, passes = module._fixpoint(text, finders)
+        assert passes <= 3, text
+    assert module.PASS_LIMIT_HITS == before

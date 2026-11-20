@@ -25,8 +25,11 @@ projections out of the vault; see the 0.4.0
   label of `*.ts.net` names (also dash-encoded in project directories) and
   phone numbers (`[REDACTED:phone]`: Chinese mobiles, `+`-prefixed
   international numbers with a valid country code; see docs/history.md for
-  the rules and the false-positive guards) are new. Masking repeats until the
-  text is stable, so redaction stays idempotent. Host names stay visible;
+  the rules and the false-positive guards; glued letters, extensions,
+  space runs and slashes are handled) are new, and leading-zero octets
+  (`192.0.2.007`) count as addresses. Masking repeats until the text is
+  stable, so redaction stays idempotent; hitting the pass limit is counted
+  (`PASS_LIMIT_HITS`) and logged without text. Host names stay visible;
   `redact(..., redact_hostnames=True, hostnames=[...])` is an opt-in hook,
   default off.
 - History search results and session lists apply the full redaction to the

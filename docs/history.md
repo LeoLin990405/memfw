@@ -192,12 +192,13 @@ Behaviour:
   (`skipped_secret`) is kept, shown in `stats`;
 - redaction additionally masks e-mail addresses, IPv4 addresses (also inside
   a host name, `git.192.0.2.7.sslip.io` → `git.[REDACTED:ip].sslip.io`, and at
-  the end of a sentence; loopback and `0.0.0.0` too, as before), the dash and
+  the end of a sentence, with leading-zero octets such as `192.0.2.007`;
+  loopback and `0.0.0.0` too, as before), the dash and
   hex IP forms of `sslip.io` / `nip.io` / `xip.io` names (any letter case, dots
   or dashes), the tailnet label of Tailscale `*.ts.net` names
-  (`box.[REDACTED:tailnet].ts.net`; in a dash-encoded project directory
-  `-box-tail0000-ts-net` the `tail<hex>` segment, or else the last two
-  segments), phone numbers, home-directory user names (`/home/<name>`,
+  (`box.[REDACTED:tailnet].ts.net`; in a dash-encoded project directory only
+  a default `tail<hex>` name, `-box-[REDACTED:tailnet]-ts-net`), phone
+  numbers, home-directory user names (`/home/<name>`,
   `C:\Users\<name>` and the dash-encoded `-Users-<name>-` project directories
   that Claude Code uses) and long mixed-case base64-like blobs, in every
   snippet, field, path and read window, e.g. `[REDACTED:email]`,
@@ -209,19 +210,24 @@ Behaviour:
   except that URL userinfo is never widened into the host. Masking repeats
   until the text is stable (a mask can change a neighbour's boundary), so
   redaction is idempotent.
-- phone numbers. Separators are a space, a dot, a hyphen or U+2010–U+2013.
+- phone numbers. A separator is a run of up to three spaces, a dot, a slash,
+  a hyphen or U+2010–U+2013. Letters glued to the end (`0123foo`,
+  `13800138000x`) end the number there; the digits are masked. An extension
+  right after it (`x12`, `ext. 34`, `#56`) is masked with it.
   - Chinese mobiles: `1[3-9]` + 9 digits, in one run or grouped 3-4-4 with
     one consistent separator, optionally after `+86` / `0086` / `086` / `86`
     (also in parentheses). Space-grouped numbers without such a prefix need a
-    phone word right before them (`phone:`, `tel`, `call`, `手机`, `电话`, …),
+    phone word right before them (`phone:`, `Tel.`, `Mob:`, `call`,
+    `my phone number is`, `手机号：`, `电话`, `号码`, …),
     since `commits 143 1024 2048` has the same shape.
   - international: a leading `+`, a valid ITU country code, 8–15 digits in
     all. With separators: the code stands alone (`+44 20 7946 0958`), at
-    least two groups or one group of 7+ digits, dots only if every separator
-    is a dot, no date inside (`GMT +8 2026-11-20` stays). Without
+    least two groups or one group of 7+ digits, dots or slashes only if
+    every separator is the same one, no date inside (`GMT +8 2026-11-20` stays). Without
     separators: 10–15 digits and not date-shaped (`+20261120` stays). A
     trailing token ends the number (`+1 555 010 0123 5pm` →
-    `[REDACTED:phone] 5pm`), extra trailing groups are dropped.
+    `[REDACTED:phone] 5pm`: a short group glued to `am`/`pm`/`st`/`nd`/`rd`/
+    `th` is a time or ordinal), extra trailing groups are dropped.
 - deliberate trade-offs: a four-part version number whose parts are all 0–255
   (`1.2.3.4`) is masked as an address, and an 11-digit id shaped exactly like
   a Chinese mobile number is masked as a phone number; an 11-digit run inside
@@ -236,7 +242,9 @@ Behaviour:
 Limitations (not detected):
 
 - national phone numbers written without `+` (other than Chinese mobiles),
-  space-grouped Chinese mobiles without a prefix or phone word, IPv6
+  space-grouped Chinese mobiles without a prefix or phone word, numbers that
+  mix dot/slash with other separators, custom-named tailnets in dash-encoded
+  directories, IPv6
   addresses, and host names (see the hook above);
 - key names with more than 128 characters glued in front, or more than three
   suffixes after the key word;

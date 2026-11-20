@@ -34,6 +34,7 @@ shapes, not every secret a person can type in prose (see docs/history.md).
 from __future__ import annotations
 
 import bisect
+import logging
 import re
 import sys
 import unicodedata
@@ -148,7 +149,8 @@ _EMAIL = re.compile(
     r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}"
     r"\.[A-Za-z]{2,24}(?![A-Za-z])"
 )
-_OCTET = r"(?:25[0-5]|2[0-4]\d|1?\d?\d)"
+# Leading zeros are accepted (``192.0.2.007``): some tools print them.
+_OCTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d|0\d{1,2})"
 # Not part of a longer dotted number (``1.2.3.4.5``): no digit, or digit and
 # dot, on either side. A dot next to a letter is fine, so an address inside a
 # host name (``git.192.0.2.7.sslip.io``) or at the end of a sentence matches.
@@ -171,13 +173,11 @@ _TAILNET = re.compile(
 )
 # The same name in a dash-encoded Claude Code project directory
 # (``-srv-box-tail0000-ts-net``): dots became dashes, so label boundaries are
-# lost. A default ``tail<hex>`` name is the last segment; otherwise the last
-# two segments are masked (Tailscale's two-word tailnet names), which can take
-# a one-word machine name with it.
+# lost. Only Tailscale's default ``tail<hex>`` tailnet name is masked there;
+# a custom two-word name cannot be told apart from ordinary directory words
+# (``-home-a-work-ts-net``) and is left alone (see docs/history.md).
 _TAILNET_DASHED = re.compile(
-    r"(?i)(?<=[-.])(?P<tailnet>tail[0-9a-f]{4,16}"
-    r"|(?![a-z0-9]{1,30}-tail[0-9a-f]{4,16}-ts-net)[a-z0-9]{1,30}-[a-z0-9]{1,30})"
-    r"(?=-ts-net(?![A-Za-z0-9]))"
+    r"(?i)(?<=[-.])(?P<tailnet>tail[0-9a-f]{4,16})(?=-ts-net(?![A-Za-z0-9]))"
 )
 _TAILNET_MACHINE = re.compile(
     r"(?<![A-Za-z0-9-])(?P<host>"
@@ -198,16 +198,20 @@ _DASHES = "‐-–"
 # numbers without a prefix also need a phone word right before them
 # ("phone:", "tel", "手机", ...), because "commits 143 1024 2048" has the same
 # shape. An 11-digit id that looks exactly like a mobile number is masked.
+# A separator is one dot, slash, hyphen or dash, or a run of up to three
+# spaces; the same one must be used throughout. Letters glued to the end
+# ("13800138000x") do not stop the match: masking the digits is the safe side.
+_SEP = r"(?: {1,3}|[./" + _DASHES + r"-])"
 _CN_MOBILE = re.compile(
     r"(?<![A-Za-z0-9+])(?<!\d\.)"
-    r"(?P<prefix>(?:\+|00|0)?86[ ." + _DASHES + r"-]?|\((?:\+|00)?86\)[ " + _DASHES + r"-]?)?"
-    r"1[3-9]\d(?:(?P<sep>[ ." + _DASHES + r"-])\d{4}(?P=sep)\d{4}|\d{8})"
-    r"(?![A-Za-z0-9])(?!\.\d)"
+    r"(?P<prefix>(?:\+|00|0)?86" + _SEP + r"?|\((?:\+|00)?86\)" + _SEP + r"?)?"
+    r"1[3-9]\d(?:(?P<sep>" + _SEP + r")\d{4}(?P=sep)\d{4}|\d{8})"
+    r"(?!\d)(?!\.\d)"
 )
 _PHONE_WORD = re.compile(
-    r"(?i)(?<![A-Za-z:])(?:phone|tel|mobile|cell|call|contact|whatsapp|wechat|sms|"
-    r"手机|电话|联系方式|联系|号码|微信)"
-    r"(?:[ \t]{0,2}(?:no\.?|number|#))?[ \t]{0,3}[:：]?[ \t]{0,3}$"
+    r"(?i)(?<![A-Za-z:])(?:telephone|phone|tel|mobile|mob|cell|call|contact|whatsapp|wechat|"
+    r"sms|手机|电话|联系方式|联系|号码|微信)(?:号码|号)?\.?"
+    r"(?:[ \t]{0,2}(?:no\.?|number|#))?(?:[ \t]{1,3}(?:is|was))?[ \t]{0,3}[:：]?[ \t]{0,3}$"
 )
 # International numbers need a leading "+" and a valid ITU country code, then
 # digit groups split by one space, dot (only dots, then) or hyphen; one group
@@ -216,13 +220,16 @@ _PHONE_WORD = re.compile(
 # of hiding it; groups are possessive and start with a separator or "(", so
 # the scan stays linear. Bare national numbers without "+" are not matched.
 _INTL_PHONE = re.compile(
-    r"(?<![A-Za-z0-9+])\+[1-9]\d{0,14}+(?![A-Za-z0-9])"
-    r"(?:[ ." + _DASHES + r"-]\d{1,12}+(?![A-Za-z0-9])"
-    r"|[ " + _DASHES + r"-]?\(\d{1,5}\)[ " + _DASHES + r"-]?\d{1,12}+(?![A-Za-z0-9])){0,6}"
+    r"(?<![A-Za-z0-9+])\+[1-9]\d{0,14}+(?!\d)"
+    r"(?:(?<![A-Za-z])" + _SEP + r"\d{1,12}+(?!\d)"
+    r"|(?<![A-Za-z])" + _SEP + r"?\(\d{1,5}\)" + _SEP + r"?\d{1,12}+(?!\d)){0,6}"
 )
-_PHONE_GROUP = re.compile(
-    r"[ ." + _DASHES + r"-]?\(\d+\)[ " + _DASHES + r"-]?\d+|[ ." + _DASHES + r"-]\d+"
-)
+_PHONE_GROUP = re.compile(_SEP + r"?\(\d+\)" + _SEP + r"?\d+|" + _SEP + r"\d+")
+# An extension right after the number ("x12", " ext. 34", "#56") is masked too.
+_PHONE_EXT = re.compile(r"(?i)(?:[ \t]{0,2}(?:x|ext\.?|#)[ \t]{0,2}\d{1,6}(?!\d))")
+# A short last group glued to one of these is a time or an ordinal ("5pm",
+# "3rd"), not part of the number.
+_UNIT_TAIL = re.compile(r"(?i)(?:am|pm|st|nd|rd|th|h|min|s)(?![A-Za-z])")
 # Country codes (ITU-T E.164 zones): 1 and 7; the two-digit codes; every
 # other code has three digits and starts with one of the listed pairs.
 _CC_2 = frozenset(
@@ -246,6 +253,9 @@ _BLOB = re.compile(r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{40,}={0,2}(?![A-Za-z0-9+/=]
 
 SECRET_MARK = "[REDACTED:{kind}]"
 _MAX_PASSES = 8
+PASS_LIMIT_HITS = 0
+"""How often :func:`redact` stopped at :data:`_MAX_PASSES` (expected: never)."""
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -401,8 +411,12 @@ def _intl_valid(code: str, groups: list[str]) -> bool:
             and any(_country_code(code[:size]) for size in (1, 2, 3))
             and not _COMPACT_DATE.match(code)
         )
-    separators = {item[0] for item in groups if not item[0].isdigit() and item[0] != "("}
-    if "." in separators and separators != {"."}:
+    separators = {
+        re.match(r" +|[^\d(]", item).group(0)  # type: ignore[union-attr]
+        for item in groups
+        if not item[0].isdigit() and item[0] != "("
+    }
+    if len(separators) > 1 and separators & {".", "/"}:
         return False
     if _DATE_SHAPE.search(code + "".join(groups)):
         return False
@@ -425,10 +439,18 @@ def _phone_spans(value: str) -> list[tuple[int, int, str]]:
         text = match.group(0)
         code = re.match(r"\+(\d+)", text).group(1)  # type: ignore[union-attr]
         groups = [item.group(0) for item in _PHONE_GROUP.finditer(text, 1 + len(code))]
+        glued = _UNIT_TAIL.match(value, match.end())
+        if glued and groups and sum(char.isdigit() for char in groups[-1]) <= 2:
+            groups.pop()  # "+1 555 010 0123 5pm": the "5pm" is a time
         # Drop trailing groups ("+44 20 7946 0958 12345") until it is valid.
+        # Letters glued to the last group ("0123foo") end the number there.
         while True:
             if _intl_valid(code, groups):
                 end = match.start() + 1 + len(code) + sum(map(len, groups))
+                if end == match.end():
+                    extension = _PHONE_EXT.match(value, end)
+                    if extension:
+                        end = extension.end()
                 spans.append((match.start(), end, "phone"))
                 break
             if not groups:
@@ -602,12 +624,24 @@ def redact(text: str, *, redact_hostnames: bool = False, hostnames: Iterable[str
     # ".ts.net192.0.2.7" the tailnet label only ends at a boundary once the
     # address is masked), so masking repeats until the text is stable. Text
     # without findings takes one pass; each further pass only masks more.
-    previous, current = text, _apply(text, finders)
-    for _ in range(_MAX_PASSES):
-        if current == previous:
+    return _fixpoint(text, finders)[0]
+
+
+def _fixpoint(
+    text: str, finders: tuple[Callable[[str], list[tuple[int, int, str]]], ...]
+) -> tuple[str, int]:
+    """``(masked text, passes)``; logs (no text) when the pass limit is hit."""
+
+    global PASS_LIMIT_HITS
+    previous, current, passes = text, _apply(text, finders), 1
+    while current != previous:
+        if passes >= _MAX_PASSES:
+            PASS_LIMIT_HITS += 1
+            _LOG.warning("redact: no fixed point after %d passes (%d chars)", passes, len(text))
             break
         previous, current = current, _apply(current, finders)
-    return current
+        passes += 1
+    return current, passes
 
 
 def redact_path(text: str) -> str:
