@@ -1,6 +1,6 @@
 # GraphRAG deriver adapter
 
-`packages/adapters/memfw-adapter-graphrag` (import `memfw_adapter_graphrag`, version 0.1.0)
+`packages/adapters/memfw-adapter-graphrag` (import `memfw_adapter_graphrag`, version 0.1.1)
 implements the `Deriver` port ([ports-and-recall.md](ports-and-recall.md#24-deriver)) with
 [Microsoft GraphRAG](https://github.com/microsoft/graphrag) as an **offline batch job**. memfw
 never imports, vendors or starts GraphRAG: the operator installs it in its own environment and

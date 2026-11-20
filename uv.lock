@@ -294,7 +294,7 @@ wheels = [
 
 [[package]]
 name = "memfw"
-version = "0.4.0"
+version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "filelock" },
@@ -336,7 +336,7 @@ provides-extras = ["dev", "notes"]
 
 [[package]]
 name = "memfw-adapter-bm25s"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "packages/adapters/memfw-adapter-bm25s" }
 dependencies = [
     { name = "bm25s" },
@@ -359,7 +359,7 @@ requires-dist = [
 
 [[package]]
 name = "memfw-adapter-deepseek"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "packages/adapters/memfw-adapter-deepseek" }
 dependencies = [
     { name = "memfw-ports" },
@@ -370,7 +370,7 @@ requires-dist = [{ name = "memfw-ports", editable = "packages/memfw-ports" }]
 
 [[package]]
 name = "memfw-adapter-graphrag"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/adapters/memfw-adapter-graphrag" }
 dependencies = [
     { name = "memfw-ports" },
@@ -381,7 +381,7 @@ requires-dist = [{ name = "memfw-ports", editable = "packages/memfw-ports" }]
 
 [[package]]
 name = "memfw-adapter-langextract"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/adapters/memfw-adapter-langextract" }
 dependencies = [
     { name = "memfw-ports" },
@@ -392,7 +392,7 @@ requires-dist = [{ name = "memfw-ports", editable = "packages/memfw-ports" }]
 
 [[package]]
 name = "memfw-adapter-lightrag"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/adapters/memfw-adapter-lightrag" }
 dependencies = [
     { name = "memfw-ports" },
@@ -403,7 +403,7 @@ requires-dist = [{ name = "memfw-ports", editable = "packages/memfw-ports" }]
 
 [[package]]
 name = "memfw-adapter-ocr"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "packages/adapters/memfw-adapter-ocr" }
 dependencies = [
     { name = "memfw-ports" },
@@ -414,7 +414,7 @@ requires-dist = [{ name = "memfw-ports", editable = "packages/memfw-ports" }]
 
 [[package]]
 name = "memfw-adapter-pageindex"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "packages/adapters/memfw-adapter-pageindex" }
 dependencies = [
     { name = "memfw-ports" },
@@ -429,7 +429,7 @@ requires-dist = [
 
 [[package]]
 name = "memfw-adapter-qdrant"
-version = "0.1.2"
+version = "0.1.3"
 source = { editable = "packages/adapters/memfw-adapter-qdrant" }
 dependencies = [
     { name = "memfw-ports" },
@@ -444,7 +444,7 @@ requires-dist = [
 
 [[package]]
 name = "memfw-adapter-qmd"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "packages/adapters/memfw-adapter-qmd" }
 dependencies = [
     { name = "memfw-ports" },

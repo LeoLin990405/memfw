@@ -59,7 +59,7 @@ from ._ports import (
 )
 from ._select import shareable_memories
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 NAME = "langextract"
 #: The LangExtract release this adapter was written and recorded against.

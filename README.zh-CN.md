@@ -12,14 +12,14 @@ Markdown 即真相 · 哈希链 JSONL 事件 · 可重建 FTS5 索引 · 先核�
 
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="License"></a>
 <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.11+"></a>
-<a href="#-现状与边界"><img src="https://img.shields.io/badge/release-v0.4.0-2563EB?style=flat-square" alt="Release v0.4.0"></a>
+<a href="#-现状与边界"><img src="https://img.shields.io/badge/release-v0.5.0-2563EB?style=flat-square" alt="Release v0.5.0"></a>
 <a href="#-mcp-工具"><img src="https://img.shields.io/badge/MCP-15_tools_(%2B3_opt--in),_3_resources_(%2B1_opt--in)-8B5CF6?style=flat-square" alt="15 MCP tools (+3 opt-in), 3 resources (+1 opt-in)"></a>
 <a href="#-会话库所有-agent-汇到一处"><img src="https://img.shields.io/badge/agent_readers-15-10B981?style=flat-square" alt="15 agent readers"></a>
-<a href="#-架构分层与端口"><img src="https://img.shields.io/badge/ports-12-0EA5E9?style=flat-square" alt="12 ports"></a>
-<a href="#-可选适配器"><img src="https://img.shields.io/badge/adapters-9_(off_by_default)-64748B?style=flat-square" alt="9 adapters (off by default)"></a>
+<a href="#-架构分层与端口"><img src="https://img.shields.io/badge/ports-13-0EA5E9?style=flat-square" alt="13 ports"></a>
+<a href="#-可选适配器"><img src="https://img.shields.io/badge/adapters-11_(off_by_default)-64748B?style=flat-square" alt="11 adapters (off by default)"></a>
 <a href="#-评估结果摘要"><img src="https://img.shields.io/badge/evaluation-bounded-D97706?style=flat-square" alt="Bounded evaluation"></a>
 
-<sub>数字以 <code>main</code> 为准；release 徽章是最近一次打标签的版本（v0.4.0）。</sub>
+<sub>数字以 <code>main</code> 为准；release 徽章是最近一次打标签的版本（v0.5.0）。</sub>
 
 </div>
 
@@ -69,7 +69,7 @@ uv venv .venv && uv sync --frozen --extra dev   # 或：python -m venv .venv && 
 . .venv/bin/activate
 ```
 
-装好后有两个命令：`memfw`（命令行）和 `memfw-mcp`（stdio MCP 服务）。`memfw --version` 打印已安装的版本（`memfw 0.4.0`），发版冒烟测试会用它核对。`memfw --help` 把命令分成 Daily、Approval、Ops、Export 四组显示。
+装好后有两个命令：`memfw`（命令行）和 `memfw-mcp`（stdio MCP 服务）。`memfw --version` 打印已安装的版本（`memfw 0.5.0`），发版冒烟测试会用它核对。`memfw --help` 把命令分成 Daily、Approval、Ops、Export 四组显示。
 
 建一个 vault，加一条记忆，再搜出来：
 
@@ -334,6 +334,8 @@ memfw dream skills --root /path/to/vault --from-queue          # 用 worker 排�
 
 设置 `MEMFW_MCP_CLEARANCE=public,shared` 后，所有读取工具和资源只返回这些隐私级别的记忆（不设置就不过滤）。`runtime: {search: {record_access: false}}`（或 `MEMFW_RECORD_ACCESS=0`）能让一次会话完全不写 vault。
 
+每个 `memory_search` 回复（所有模式）、每个 `memory_context` `v=2` 上下文包和每个 `conversations_search` 回复都带一个 `retrieval_health`（`retrieval-health/1`）：`mode`（`full`，或降级、回退、空结果几类）、`confidence`、固定的 `reasons` 代码、`score_kind` 和一句简短的 `note`，全部只从回复里已有的字段推出（结果、顺序和分数都不变）。空结果会说明是哪一种空（`no_match`、`empty_degraded`、`withheld_only` 等）。29 个代码见 [`docs/retrieval-health.zh-CN.md`](docs/retrieval-health.zh-CN.md)，数据形式见 [`docs/retrieval-health-codes.json`](docs/retrieval-health-codes.json)。
+
 ## 🔒 隐私与权限
 
 - **原始会话记录原地不动。** memfw 只读 agent 的会话文件，从不改写。进入会话库和索引的只有脱敏后的文本；看起来含密钥的轮次整轮扣下，绝不以文本形式存储。
@@ -370,6 +372,13 @@ memfw dream skills --root /path/to/vault --from-queue          # 用 worker 排�
 - **嵌入本机闸门。** 嵌入、重排或查询改写服务的端点如果不是回环地址字面量（例如指向别的机器的 `MEMFW_EMBEDDING_URL`），就再也收不到 `local-private`/`unknown` 文本，也收不到任何查询：`hybrid`/`vector` 搜索改由 FTS 回答，并带上 `degraded: true` 和 `semantic_query_withheld`。要放开，设 `MEMFW_EMBEDDING_ALLOW_REMOTE=1`、`vault.yaml` 里的 `runtime: {embedding: {allow_remote: true}}`，或加 `--allow-remote`（[`docs/ports-and-recall.md`](docs/ports-and-recall.md) §4.1d）。
 - **notes 索引第一次运行时会把每篇笔记重读一遍**（`index_versions`）；`vault.yaml` 存在但读不了或解析失败时，召回接线不再退回默认值，而是直接拒绝（`recall adapter: bad_config`）。
 
+**从 0.4.0 升到 0.5.0**（细节见 [`CHANGELOG.md` → Upgrade notes (0.4.0 → 0.5.0)](CHANGELOG.md#upgrade-notes-040--050)）：
+
+- **memfw 本身没有要迁移的东西。** vault 格式、事件日志、FTS5 索引、`READ_PATH_VERSION`（2）、MCP 工具的集合和两个 HTTP 契约（`memfw-http/2`、`memfw-http/3`，逐字节不变）都不变，不需要重建。`serverInfo.version` 变成 `0.5.0`。
+- **MCP 回复多了一个键。** `memory_search`、`memory_context` `v=2` 和 `conversations_search` 的回复顶层多了 `retrieval_health` 对象（只增不改；结果、顺序和分数不变）；`memory_search` `two_stage` 在有提供方降级时多一个 `degraded_sources`；接近 `max_bytes` 时，`conversations_search` `two_stage` 可能少放一个会话或一段对话窗口（`truncated` / `next_offset` 会说明）。拒绝未知键的客户端要放行它们。`tools/list` 里几个工具的描述改了措辞。
+- **适配器 wheel 要一起升。** 每个适配器现在都锁定 `memfw-ports==0.4.0`，所以适配器的 venv 要和 memfw 分开升级，并且要把 0.4.0 的 `memfw-ports` wheel 和新的适配器 wheel 一起装（pip 不接受新旧混装）。每个适配器都升了一个补丁版本；Qdrant 0.1.3 还带上了慢 embedder 的修复（默认值和集合指纹不变，所以不用重新嵌入；`sync` 没跑完时退出码为 1，另一个实例持有锁时为 3）。
+- **新包都要显式启用。** `memfw-pipeline`、`memfw-wiki-gate`、`memfw-adapter-tailnet` 和 `memfw-adapter-wikigen` 是单独的 wheel，memfw 从不导入它们；装上 memfw 0.5.0 不会启用其中任何一个。
+
 ## 🌐 集成与联邦
 
 memfw 是引擎，编排系统和它保持一定距离地集成：
@@ -395,10 +404,12 @@ memfw 分成若干层，只允许向下依赖，并由 CI 强制检查：
 表格按依赖顺序排列，最底层在最上面。L 编号沿用设计规范里的叫法；投影（L1）排在内核（L2）之上，因为每个投影都从 vault 重建，并且要导入内核。
 
 - **架构守卫。** `tests/test_architecture_layers.py` 会解析每个模块，遇到向上导入、未登记的同层导入、循环依赖、库代码引用 `scripts/` 或未归类的模块，构建直接失败。守卫上线时已有的违规记在一份只减不增的白名单里：从 25 条减到了 1 条。
-- **端口与替换演练。** `memfw.ports.PORT_VERSIONS` 登记了十二个端口（`PORTS_API_VERSION` 为 0.3.0）。其中十一个（`RecallProvider`、`Projector`、`Ingestor`、`Deriver`、`Clock`、`IdGen`、`ClaimVerifier`、`ClaimStager`、`ContextSlotProvider`、`UsageSink`、`ProjectionStore`）各自至少有两个实现，并通过同一套 `memfw.ports.testing` 检查（`tests/test_swap_drills.py`）；第十二个 `ModelBackend` 用 extractive 和 DeepSeek 两个后端做检查（`tests/test_adapter_deepseek.py`）。只依赖标准库的参考实现在 `memfw.ports.reference`；Obsidian 投影实现的是 `Projector` 端口，边投影实现的是 `ProjectionStore`（SQLite 实现，外加一个内存参考实现）。`memfw.ports.proxies` 定义附件代理的格式和定位信息，并为适配器提供 `check_proxy_import`。
+- **端口与替换演练。** `memfw.ports.PORT_VERSIONS` 登记了十三个端口（`PORTS_API_VERSION` 为 0.4.0）。其中十一个（`RecallProvider`、`Projector`、`Ingestor`、`Deriver`、`Clock`、`IdGen`、`ClaimVerifier`、`ClaimStager`、`ContextSlotProvider`、`UsageSink`、`ProjectionStore`）各自至少有两个实现，并通过同一套 `memfw.ports.testing` 检查（`tests/test_swap_drills.py`）；第十二个 `ModelBackend` 用 extractive 和 DeepSeek 两个后端做检查（`tests/test_adapter_deepseek.py`）；第十三个 `EntailmentChecker`（ports 0.4.0）有契约检查 `check_entailment_checker`，memfw 里还没有实现。只依赖标准库的参考实现在 `memfw.ports.reference`；Obsidian 投影实现的是 `Projector` 端口，边投影实现的是 `ProjectionStore`（SQLite 实现，外加一个内存参考实现）。`memfw.ports.proxies` 定义附件代理的格式和定位信息，并为适配器提供 `check_proxy_import`。ports 0.4.0 加入 LLM Wiki 的契约：`Citation.ref`（`mem:`、`kh:`、`att:` 和 `wiki:` 引用，`memfw.ports.refs`）、`memfw-wiki-page/1` 与 `memfw-wiki-job/1` 两种格式（`memfw.ports.wiki`）以及 `check_wiki_page`；memfw 目前还没有用到它们（[`docs/ports-and-recall.md`](docs/ports-and-recall.md) 第 2.9 节）。
 - **召回协调器。** `memory_search mode=two_stage`（需显式开启）把查询分发给各个召回提供方，逐条回到 vault 核对命中，再按策略过滤（`compat_fts`，或加上隐私、状态、生命周期和归档检查的 `strict`），最后融合并打标签；每个提供方和整体都有超时。提供方从不写 vault，只有最终返回的命中才会被升温和记访问日志。其他模式不变。在 `strict` 策略下，带 `fleet_path` 标签的文档会和生命周期元索引（`status/memory-meta-index.json`）关联，被标为退役、已取代或已过期的条目会被丢掉（关联失败也丢掉，原因为 `unjoined`）。来自 QMD 笔记或 PageIndex 的 `kh:<路径>#<标题>` 引用，可以通过 `NotesSegmentResolver`（默认不注册）解析成内置笔记索引里的章节，遵循 `notes_search` 的隐私规则。
 - **从配置加载召回适配器。** `vault.yaml` 的 `runtime.recall.adapters` 列出若干 `{factory: "module:factory", options, weight, timeout_seconds}` 条目（最多 8 个），`two_stage` 会让它们和 FTS 一起跑。模块名只来自这份文件，绝不来自请求。条目有误时 `two_stage` 直接失败并给出固定的 `RecallAdapterError` 错误码；某个适配器无法服务时被标成降级，其他提供方照常回答。没有这个键就什么都不导入。见 [`docs/ports-and-recall.md`](docs/ports-and-recall.md) 第 4.1b 节。
-- **独立 wheel。** `packages/memfw-ports` 和 `packages/memfw-recall` 直接用 memfw 自己的源码构建出 `memfw_ports` 和 `memfw_recall` 两个 wheel，写适配器的人不装 memfw 也能跑契约测试。CI 会构建它们并在干净的 venv 里做冒烟测试。它们**没有发布到 PyPI**，需要时在本地用 `uv build --wheel --package memfw-ports`（以及 `memfw-recall`）构建。两者版本都是 0.3.0；各适配器的 wheel 见[可选适配器](#-可选适配器)。
+- **独立 wheel。** `packages/memfw-ports` 和 `packages/memfw-recall` 直接用 memfw 自己的源码构建出 `memfw_ports` 和 `memfw_recall` 两个 wheel，写适配器的人不装 memfw 也能跑契约测试。CI 会构建它们并在干净的 venv 里做冒烟测试。它们**没有发布到 PyPI**，需要时在本地用 `uv build --wheel --package memfw-ports`（以及 `memfw-recall`）构建。两者版本都是 0.4.0；各适配器的 wheel 见[可选适配器](#-可选适配器)。
+- **流水线运行器。** `packages/memfw-pipeline`（0.1.0，只依赖标准库和 `memfw-ports`）是派生产物的 Stage 契约和运行器：单写者锁、在目标旁边构建、原子目录交换、缩水保护、新鲜度检查和只含计数的状态文件；`memfw-pipeline unit` 打印加固过的 systemd 或 launchd 模板供审阅。目前只带一个示例 stage；memfw 从不导入它。见 [`docs/pipeline.md`](docs/pipeline.md)。
+- **wiki 闸门。** `packages/memfw-wiki-gate`（0.1.0，只依赖标准库和 `memfw-ports`）是生成的 wiki 页面给人看之前必须通过的确定性检查：引用解析、生命周期与冲突规则、因果措辞、token 一致性和隐私，逐条给出判定和固定的原因代码，从不包含页面或来源原文。见 [`docs/wiki-gate.md`](docs/wiki-gate.md)。
 
 详见 [`docs/architecture.md`](docs/architecture.md) 和 [`docs/ports-and-recall.md`](docs/ports-and-recall.md)。
 
@@ -408,17 +419,19 @@ memfw 分成若干层，只允许向下依赖，并由 CI 强制检查：
 
 | 适配器（wheel 版本） | 端口 | 作用 | 状态 |
 |---|---|---|---|
-| `memfw-adapter-deepseek`（0.1.1） | `ModelBackend` | 给会话 worker 生成 `conv-v2` 摘要和标签；需要 `conversations.cloud: true` 和 `DEEPSEEK_API_KEY` | 已合并 |
-| `memfw-adapter-bm25s`（0.1.1） | `RecallProvider` | 进程内的 bm25s 0.3.16 排序，jieba 切词；只索引 `clearance` 内的记忆（默认 `public,shared`），在 vault 之外存哈希后的词元；`memfw-adapter-bm25s build` | 已合并 |
-| `memfw-adapter-qdrant`（0.1.2） | `RecallProvider` | 基于 Qdrant v1.20.x 服务的语义召回（REST，只用标准库）；除非 `allow_remote: true`，只连 loopback；`memfw-adapter-qdrant sync` 只发送 `public` / `shared` 记忆，不存正文 | 已合并 |
-| `memfw-adapter-qmd`（0.1.1） | `RecallProvider` ×2 | 基于运行中的 QMD 2.5.3 MCP 服务：`qmd`（记忆投影 → 记忆 id）和 `qmd-notes`（笔记 → `kh:` 引用）；从不返回 `local-private` 或 `unknown` | 已合并 |
-| `memfw-adapter-pageindex`（0.1.1） | `RecallProvider` | 对长文档做 PageIndex 风格的目录树搜索（返回 `kh:` 和 `att:…#page=` 引用）；`mode: titles` 不需要模型；`memfw-pageindex build-md \| import-tree \| list` | 已合并 |
-| `memfw-adapter-ocr`（0.1.1） | 代理生成器（`ocr` deriver） | 用本地引擎（MCP stdio OCR 服务、`pdftotext` 或 `module:factory`）把 PDF 或图片附件转成 `memfw.proxy` v1 导入文件；什么都不上传；`memfw-ocr-proxy run \| check` | 已合并 |
-| `memfw-adapter-langextract`（0.1.0） | `Deriver`（`entities`） | 用 LangExtract 1.7.2 从 `public` / `shared` 记忆里抽取能对应到原文字符位置的实体和关系；模型是 memfw 的 `ModelBackend`（自带一个只连 loopback 的 Ollama 后端），每轮有 token 预算 | 已合并 |
-| `memfw-adapter-lightrag`（0.1.0） | `Deriver`（`graph`、`answer`） | 运维自己运行的 `lightrag-server` 1.5.7 的 loopback HTTP 客户端；只发送 `public` / `shared` 记忆；保留下来的每一行，其来源都必须是请求过的、可共享的、现行的记忆 | 已合并 |
-| `memfw-adapter-graphrag`（0.1.0） | `Deriver`（`graph`、`reports`） | 把 GraphRAG 3.3.0 当作离线批处理，输入是一代 `memfw projection export`（只取 `public` / `shared`）；`graphrag index` 只在被调用时运行，是一个本地子进程，除非 `cloud: true`，只连 loopback 的模型端点 | 已合并 |
+| `memfw-adapter-deepseek`（0.1.2） | `ModelBackend` | 给会话 worker 生成 `conv-v2` 摘要和标签；需要 `conversations.cloud: true` 和 `DEEPSEEK_API_KEY` | 已合并 |
+| `memfw-adapter-bm25s`（0.1.2） | `RecallProvider` | 进程内的 bm25s 0.3.16 排序，jieba 切词；只索引 `clearance` 内的记忆（默认 `public,shared`），在 vault 之外存哈希后的词元；`memfw-adapter-bm25s build` | 已合并 |
+| `memfw-adapter-qdrant`（0.1.3） | `RecallProvider` | 基于 Qdrant v1.20.x 服务的语义召回（REST，只用标准库）；除非 `allow_remote: true`，只连 loopback；`memfw-adapter-qdrant sync` 只发送 `public` / `shared` 记忆，不存正文 | 已合并 |
+| `memfw-adapter-qmd`（0.1.2） | `RecallProvider` ×2 | 基于运行中的 QMD 2.5.3 MCP 服务：`qmd`（记忆投影 → 记忆 id）和 `qmd-notes`（笔记 → `kh:` 引用）；从不返回 `local-private` 或 `unknown` | 已合并 |
+| `memfw-adapter-pageindex`（0.1.2） | `RecallProvider` | 对长文档做 PageIndex 风格的目录树搜索（返回 `kh:` 和 `att:…#page=` 引用）；`mode: titles` 不需要模型；`memfw-pageindex build-md \| import-tree \| list` | 已合并 |
+| `memfw-adapter-ocr`（0.1.2） | 代理生成器（`ocr` deriver） | 用本地引擎（MCP stdio OCR 服务、`pdftotext` 或 `module:factory`）把 PDF 或图片附件转成 `memfw.proxy` v1 导入文件；什么都不上传；`memfw-ocr-proxy run \| check` | 已合并 |
+| `memfw-adapter-langextract`（0.1.1） | `Deriver`（`entities`） | 用 LangExtract 1.7.2 从 `public` / `shared` 记忆里抽取能对应到原文字符位置的实体和关系；模型是 memfw 的 `ModelBackend`（自带一个只连 loopback 的 Ollama 后端），每轮有 token 预算 | 已合并 |
+| `memfw-adapter-lightrag`（0.1.1） | `Deriver`（`graph`、`answer`） | 运维自己运行的 `lightrag-server` 1.5.7 的 loopback HTTP 客户端；只发送 `public` / `shared` 记忆；保留下来的每一行，其来源都必须是请求过的、可共享的、现行的记忆 | 已合并 |
+| `memfw-adapter-graphrag`（0.1.1） | `Deriver`（`graph`、`reports`） | 把 GraphRAG 3.3.0 当作离线批处理，输入是一代 `memfw projection export`（只取 `public` / `shared`）；`graphrag index` 只在被调用时运行，是一个本地子进程，除非 `cloud: true`，只连 loopback 的模型端点 | 已合并 |
+| `memfw-adapter-tailnet`（0.1.0） | `Ingestor` | 读 `tailscale status --json`（导出的文件，或一次有界的 CLI 调用），为新出现、重新上线、消失或有变化的机器生成只含身份字段的 `host-fact` 候选，默认 `local-private`；主机 id 是哈希，不读用户、密钥和端点信息；另出一份不含名字的白名单报告 | 已合并 |
+| `memfw-adapter-wikigen`（0.1.0） | `Deriver`（`wiki_page`） | 通过 loopback Ollama（或 stub）`ModelBackend`，把一个 `memfw-wiki-job/1` 工作包变成一个 `memfw-wiki-page/1` 页面候选；每句话都必须引用工作包里的来源，否则丢掉；页面隐私取来源里最严格的级别 | 已合并 |
 
-派生器的输出最高只到 `epistemic: inference`，必须经过审核才能成为记忆。召回适配器挂了或太慢时会被标成降级，FTS 照常回答。各适配器的细节见 [`docs/COMPONENTS.zh-CN.md`](docs/COMPONENTS.zh-CN.md)、[`docs/adapter-bm25s.md`](docs/adapter-bm25s.md)、[`docs/adapter-qdrant.md`](docs/adapter-qdrant.md)、[`docs/adapter-langextract.md`](docs/adapter-langextract.md)、[`docs/adapter-lightrag.md`](docs/adapter-lightrag.md)、[`docs/adapter-graphrag.md`](docs/adapter-graphrag.md)、[`docs/qmd-projection.md`](docs/qmd-projection.md) 以及各包自己的 `README.md`。
+派生器的输出最高只到 `epistemic: inference`，必须经过审核才能成为记忆。召回适配器挂了或太慢时会被标成降级，FTS 照常回答。各适配器的细节见 [`docs/COMPONENTS.zh-CN.md`](docs/COMPONENTS.zh-CN.md)、[`docs/adapter-bm25s.md`](docs/adapter-bm25s.md)、[`docs/adapter-qdrant.md`](docs/adapter-qdrant.md)、[`docs/adapter-langextract.md`](docs/adapter-langextract.md)、[`docs/adapter-lightrag.md`](docs/adapter-lightrag.md)、[`docs/adapter-graphrag.md`](docs/adapter-graphrag.md)、[`docs/adapter-tailnet.md`](docs/adapter-tailnet.md)、[`docs/adapter-wikigen.md`](docs/adapter-wikigen.md)、[`docs/qmd-projection.md`](docs/qmd-projection.md) 以及各包自己的 `README.md`。
 
 ## 📊 评估结果摘要
 
@@ -451,8 +464,11 @@ memfw 分成若干层，只允许向下依赖，并由 CI 强制检查：
 | [`docs/cli-mcp-parity.md`](docs/cli-mcp-parity.md) | 每项功能在命令行、MCP、HTTP 上是否可用，每个缺口注明是有意为之还是遗漏 |
 | [`docs/obsidian-projection.md`](docs/obsidian-projection.md) | 只读 Obsidian 看板：目录结构、clearance、重建规则 |
 | [`docs/COMPONENTS.zh-CN.md`](docs/COMPONENTS.zh-CN.md) | 笔记索引、代码检索、只读 HTTP 服务、独立 wheel、各适配器、佐证投影、Obsidian 投影、关联投影 |
-| [`docs/adapter-bm25s.md`](docs/adapter-bm25s.md)、[`docs/adapter-qdrant.md`](docs/adapter-qdrant.md)、[`docs/adapter-langextract.md`](docs/adapter-langextract.md)、[`docs/adapter-lightrag.md`](docs/adapter-lightrag.md)、[`docs/adapter-graphrag.md`](docs/adapter-graphrag.md)、[`docs/qmd-projection.md`](docs/qmd-projection.md) | 适配器的配置、隐私规则和契约测试（OCR 和 PageIndex 见各自包内的 README） |
+| [`docs/adapter-bm25s.md`](docs/adapter-bm25s.md)、[`docs/adapter-qdrant.md`](docs/adapter-qdrant.md)、[`docs/adapter-langextract.md`](docs/adapter-langextract.md)、[`docs/adapter-lightrag.md`](docs/adapter-lightrag.md)、[`docs/adapter-graphrag.md`](docs/adapter-graphrag.md)、[`docs/adapter-tailnet.md`](docs/adapter-tailnet.md)、[`docs/adapter-wikigen.md`](docs/adapter-wikigen.md)、[`docs/qmd-projection.md`](docs/qmd-projection.md) | 适配器的配置、隐私规则和契约测试（OCR 和 PageIndex 见各自包内的 README） |
 | [`docs/retrieval-architecture.md`](docs/retrieval-architecture.md) | 检索架构 |
+| [`docs/retrieval-health.zh-CN.md`](docs/retrieval-health.zh-CN.md) | 搜索和上下文回复里的 `retrieval_health`：字段、29 个原因代码、mode 与 confidence 规则 |
+| [`docs/wiki-gate.md`](docs/wiki-gate.md) | `memfw-wiki-gate` 页面检查：引用、token、因果措辞、生命周期、冲突、隐私、判定 |
+| [`docs/pipeline.md`](docs/pipeline.md) | `memfw-pipeline` 的 Stage 契约与运行器：加锁、原子发布、缩水保护、新鲜度、状态文件、unit 模板 |
 | [`docs/architecture.md`](docs/architecture.md) | 包的分层、导入守卫、只减不增的白名单、组装根、逐字节一致性测试工具 |
 | [`docs/ports-and-recall.md`](docs/ports-and-recall.md) | 端口契约、召回协调器、`two_stage`、通过配置加载的召回适配器、上下文包及其槽位（含 `current`）与缓存、独立 wheel、如何写适配器 |
 | [`docs/v1-integration.md`](docs/v1-integration.md)、[`docs/READONLY-SERVICE-UPGRADE.md`](docs/READONLY-SERVICE-UPGRADE.md) | 联邦接口（`memfw-http/2` 与 `/3`、`/context`、`/forget`）与服务升级 |
@@ -460,11 +476,13 @@ memfw 分成若干层，只允许向下依赖，并由 CI 强制检查：
 | [`docs/RELEASE-READINESS.md`](docs/RELEASE-READINESS.md) | 实测检查结果与已知局限 |
 | [`docs/legacy-design-notes.md`](docs/legacy-design-notes.md) | 早期设计笔记（历史资料） |
 
-除 `COMPONENTS` 外，`docs/` 下的文档目前只有英文版。
+除 `COMPONENTS` 和 `retrieval-health` 外，`docs/` 下的文档目前只有英文版。
 
 ## 📍 现状与边界
 
-发版状态：**v0.4.0**（2026-11-18）。Apache-2.0 许可，在单机上离线运行，没有发布到 PyPI。已经实现：vault 与哈希链事件日志、保留策略与 `10MB` 预算、可重建的 FTS5 索引与读路径（按词匹配、概念别名、多跳）、认知类型、因果分级与经人审核的经验点、带十二个端口和 `memfw.runtime` 组装根的分层内核、`two_stage` 召回、带槽位、资源和 `if_version` 的上下文包 v2、待解问题、召回标签与佐证、概念层级与关系类型表、隐私级别与按需开启的 clearance、MCP 服务、notes 索引与代码检索、只读转录索引、带 15 个 reader 的会话库、跳过进行中会话的 settled 导入、共享与 worker（附一个默认关闭的 DeepSeek 打标签适配器）、交接包、dream（核对、整理、提炼、预算、技能、待解问题候选）、OKF v0.2 导出与导入、Obsidian 投影，以及只读 HTTP 服务（`memfw-http/2`）。逐条变更见 [`CHANGELOG.md`](CHANGELOG.md)。
+发版状态：**v0.5.0**（2026-11-20）。Apache-2.0 许可，在单机上离线运行，没有发布到 PyPI。已经实现：vault 与哈希链事件日志、保留策略与 `10MB` 预算、可重建的 FTS5 索引与读路径（按词匹配、概念别名、多跳）、认知类型、因果分级与经人审核的经验点、带十三个端口和 `memfw.runtime` 组装根的分层内核、`two_stage` 召回、带槽位、资源和 `if_version` 的上下文包 v2、待解问题、召回标签与佐证、概念层级与关系类型表、隐私级别与按需开启的 clearance、MCP 服务、notes 索引与代码检索、只读转录索引、带 15 个 reader 的会话库、跳过进行中会话的 settled 导入、共享与 worker（附一个默认关闭的 DeepSeek 打标签适配器）、交接包、dream（核对、整理、提炼、预算、技能、待解问题候选）、OKF v0.2 导出与导入、Obsidian 投影，以及只读 HTTP 服务（`memfw-http/2`）。逐条变更见 [`CHANGELOG.md`](CHANGELOG.md)。
+
+**v0.5.0 新增：** ports 0.4.0 里的 LLM Wiki 契约（`Citation.ref`、`memfw-wiki-page/1` 与 `memfw-wiki-job/1` 两种格式、`EntailmentChecker` 端口及其契约检查）；`memfw-pipeline` Stage 运行器（只带示例 stage）；每个 `memory_search`、`memory_context` v=2 和 `conversations_search` 回复里的 `retrieval_health`；`memfw-wiki-gate` 页面检查；两个新适配器 `memfw-adapter-tailnet`（`Ingestor`）和 `memfw-adapter-wikigen`（`Deriver`），全部默认关闭；Qdrant 适配器的 sync 能扛住慢的或出错的 embedder（0.1.3）。
 
 **v0.4.0 新增：** 需显式开启的 `current` 上下文槽位；带标签过滤的两阶段会话搜索；附件（内嵌与引用两种原件、detach、relink、purge、scan、`memfw.proxy` v1 格式的文本代理、写入闸门里把附件当作观察类证据、带需显式开启的 MCP 工具 `attachment_search` / `attachment_get` 的代理搜索）；`ProjectionStore` 端口之后的类型化边投影与有界路径模式；C4 上下文包评估；带 `/context`、`/forget` 请求和 `forget residue` 的 `memfw-http/3`；事件日志向前兼容；vault 外投影记录所属 vault（佐证投影搬出 vault）；召回里的生命周期元索引和 `kh:` 笔记解析器；`runtime.recall.adapters`；Qwen Code reader；以及 DeepSeek 之外新增的八个适配器（bm25s、Qdrant、QMD、PageIndex、OCR、LangExtract、LightRAG、GraphRAG），全部默认关闭。v0.4.0 召回的已知局限见 [`docs/ports-and-recall.md`](docs/ports-and-recall.md) §4.1c-bis。
 

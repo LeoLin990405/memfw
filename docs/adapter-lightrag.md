@@ -1,6 +1,6 @@
 # LightRAG deriver adapter
 
-`packages/adapters/memfw-adapter-lightrag` (import `memfw_adapter_lightrag`, version 0.1.0)
+`packages/adapters/memfw-adapter-lightrag` (import `memfw_adapter_lightrag`, version 0.1.1)
 implements the `Deriver` port ([ports-and-recall.md](ports-and-recall.md#24-deriver)) against
 a [LightRAG](https://github.com/HKUDS/LightRAG) server. memfw never imports, vendors or starts
 LightRAG: the operator runs `lightrag-server`, and the adapter talks to it over loopback HTTP

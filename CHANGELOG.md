@@ -5,15 +5,143 @@ All notable changes to memfw. The format follows
 [Semantic Versioning](https://semver.org/). Entries name the pull request that
 carried the change; `#N` links to `LeoLin990405/memfw` pull request `N`.
 
-The vault format did not change in `0.4.0` either: `vault.yaml` stays at
-`schema_version: 1`, and files written by an earlier version keep their bytes.
-`0.4.0` adds attachments (a vault with an `attach` event cannot go back to
-0.3.0) and moves two derived projections out of the vault; see the 0.4.0
+The vault format did not change in `0.4.0` or `0.5.0` either: `vault.yaml`
+stays at `schema_version: 1`, and files written by an earlier version keep their
+bytes. `0.5.0` changes no memfw data format; MCP replies gain one key (see the
+[0.5.0 upgrade notes](#upgrade-notes-040--050)). `0.4.0` adds attachments (a
+vault with an `attach` event cannot go back to 0.3.0) and moves two derived
+projections out of the vault; see the 0.4.0
 [Upgrade notes](#upgrade-notes), the 0.3.0
 [Compatibility / upgrade notes](#compatibility--upgrade-notes) and, for
 `0.1.x` → `0.2.0`, [Compatibility and upgrade](#compatibility-and-upgrade).
 
 ## [Unreleased]
+
+## [0.5.0] — 2026-11-20
+
+The fourth numbered release: the contracts and the first packages for the
+Stage pipeline and the LLM Wiki (generator and gate), a Tailscale host
+inventory ingestor, a Qdrant sync that survives a slow embedder, and one
+trust signal, `retrieval_health`, on every search and context reply. Two
+changes reach memfw itself: `memfw.ports` (ports 0.4.0, additive) and the
+`retrieval_health` key on three MCP replies (additive; results, order and
+scores unchanged). Every new package is a separate wheel that memfw never
+imports and that is off until an operator installs and runs it. `PORTS_API_VERSION` is 0.4.0 (thirteen ports;
+`EntailmentChecker` is new); `memfw-http/2` and `memfw-http/3`, the MCP tools,
+the vault format, the event log and the index schemas are unchanged. The
+entries after the upgrade notes give the details.
+
+### Summary
+
+- **Ports 0.4.0: LLM Wiki contracts (W1-1).** `Citation.ref` (`mem:`, `kh:`,
+  `att:`, `wiki:`), the `memfw-wiki-page/1` and `memfw-wiki-job/1` formats,
+  the `EntailmentChecker` port and the `check_wiki_page` /
+  `check_entailment_checker` contract checks (#113).
+- **Stage pipeline (P1).** `memfw-pipeline` 0.1.0, the Stage contract and
+  runner (locking, atomic publish, shrink guard, freshness, status, unit
+  templates); only an example stage ships (#111).
+- **Wiki page generator (W1-4).** `memfw-adapter-wikigen` 0.1.0, a `Deriver`
+  that turns one wiki job into one cited page candidate (#114).
+- **Wiki gate (W1-2).** `memfw-wiki-gate` 0.1.0, the deterministic evidence
+  checks a generated page passes before anyone sees it (#115).
+- **Tailnet host inventory.** `memfw-adapter-tailnet` 0.1.0, an `Ingestor` of
+  identity-only `host-fact` candidates (#112).
+- **Qdrant slow-embedder fixes.** `memfw-adapter-qdrant` 0.1.3: configurable
+  embedding timeout and batch size, incremental sync that resumes, a lock per
+  vault and collection (#110).
+- **Retrieval health.** `retrieval_health` (`retrieval-health/1`, 29 fixed
+  reason codes, `docs/retrieval-health-codes.json`) on `memory_search`,
+  `memory_context` v=2 and `conversations_search`; lazy `memfw` /
+  `memfw.retrieval` re-exports; clearer MCP tool descriptions; a test guard
+  against touching the real memfw state directories (#116).
+- **Package versions.** memfw 0.5.0; `memfw-ports` and `memfw-recall` 0.4.0;
+  every adapter gets a patch release for its `memfw-ports==0.4.0` pin.
+
+### Upgrade notes (0.4.0 → 0.5.0)
+
+- **No memfw migration.** The vault format (`schema_version: 1`), the event
+  log, the FTS5 and notes indexes, `READ_PATH_VERSION` (2), the projections,
+  the set of MCP tools and resources and both HTTP contracts are unchanged,
+  so nothing needs a rebuild and a 0.4.0 host can keep reading a vault
+  written by 0.5.0. The third-party runtime dependencies in `uv.lock` are
+  identical to 0.4.0. MCP `serverInfo.version` (`memfw`, `memfw-notes`) reads
+  `0.5.0`.
+- **MCP output shape: one added key.** `memory_search` (every mode, also the
+  `Runtime.search` payload), `memory_context` v=2 and `conversations_search`
+  (default and `two_stage`) gain a top-level `retrieval_health` object; with
+  no degradation it is the only difference from 0.4.0. `memory_search`
+  `two_stage` adds `degraded_sources` when a provider answered degraded.
+  `conversations_search` `two_stage` counts `retrieval_health` toward
+  `max_bytes`, so near the cap one session or turn window fewer may fit
+  (`truncated` / `next_offset` as usual). `memory_context` v1, its
+  `unchanged: true` reply, the `memfw://context/<slot>` resources and every
+  HTTP answer (`memfw-http/2`, `memfw-http/3` including `POST /context`) are
+  byte-identical. Some `tools/list` descriptions are reworded and a few input
+  properties gain a `description` (types, defaults and required fields
+  unchanged). A strict client that rejects unknown keys must allow
+  `retrieval_health` and `degraded_sources`.
+- **Imports.** `memfw` and `memfw.retrieval` re-export lazily; `from memfw
+  import RelatedIndex` and `from memfw.retrieval import VaultRetriever` still
+  work (`VaultRetriever` now lives in `memfw.retrieval.vault`).
+- **Ports 0.4.0 is additive, with two visible edges.** A `Citation` built the
+  old way constructs, compares and prints as before, but
+  `dataclasses.asdict(citation)` now has `ref` and `ref_kind` keys (`None`),
+  and `check_view_citations` refuses a citation that names no memory or
+  carries a non-`mem:` ref before calling `exists`.
+- **Adapter wheels pin `memfw-ports==0.4.0`.** Every adapter, `memfw-recall`
+  and the new packages require the 0.4.0 `memfw-ports` wheel; an adapter venv
+  with `memfw-ports` 0.3.0 cannot take the new adapter wheels (pip refuses the
+  mix) and an old adapter wheel cannot take ports 0.4.0. Upgrade an adapter
+  venv as one set (`memfw-ports`, then the adapters), separately from the
+  memfw install it serves; memfw itself still ships `memfw.ports` in-tree and
+  does not need the `memfw-ports` wheel.
+- **New adapter versions.** `memfw-adapter-deepseek` 0.1.2, `-bm25s` 0.1.2,
+  `-qdrant` 0.1.3, `-qmd` 0.1.2, `-pageindex` 0.1.2, `-ocr` 0.1.2,
+  `-langextract` 0.1.1, `-lightrag` 0.1.1, `-graphrag` 0.1.1. Apart from
+  Qdrant, only the version and the `memfw-ports` pin change (the version also
+  appears in user agents, MCP `clientInfo` and producer metadata). A Qdrant
+  wheel built from `main` between #110 and this release reports `0.1.2` but
+  carries the 0.1.3 code; reinstall 0.1.3 so the version tells the two apart.
+- **Qdrant 0.1.3 operator changes.** Defaults (30 s timeout, batch 16) and
+  the collection fingerprint are unchanged, so no re-embed. `sync` now
+  upserts after every batch, exits 1 when it stopped incomplete (it resumes
+  on the next run) and 3 when another run holds the per-vault lock; a timer
+  or wrapper that treated any non-zero exit as fatal should accept 1.
+  `--max-seconds`, `--embedding-timeout` and `--embedding-batch-size`
+  (or `MEMFW_EMBEDDING_TIMEOUT` / `MEMFW_EMBEDDING_BATCH_SIZE`) are new; an
+  out-of-range value is an error (CLI exit 2) instead of being clamped.
+- **New packages are opt-in.** `memfw-pipeline`, `memfw-wiki-gate`,
+  `memfw-adapter-tailnet` and `memfw-adapter-wikigen` are separate wheels; installing memfw 0.5.0 installs and enables none of them.
+
+### Known limitations
+
+- Nothing in memfw consumes the wiki contracts yet: there is no wiki store,
+  intake stage or MCP surface, and memfw has no `EntailmentChecker`
+  implementation. A wikigen page is a candidate only, and the wiki gate is a
+  library: no worker or intake stage calls it yet.
+- `retrieval_health` is not yet on the HTTP `POST /context` answer or the
+  `memfw://context/<slot>` resources; a client that has only the JSON of a
+  `two_stage` reply infers whether an embedder is configured.
+- `memfw-pipeline` ships only an example stage; the admitted view, metadata
+  index, FTS / bm25s / Qdrant indexes and projections are not yet ported to
+  it.
+- The tailnet adapter reads machine identity only; it decides nothing about
+  where data is sent, and its allowlist report needs an operator-written
+  allowlist.
+- The 0.4.0 recall limitations remain
+  ([`docs/ports-and-recall.md`](docs/ports-and-recall.md) §4.1c-bis).
+
+### Changed — release package versions
+
+- memfw 0.5.0 (`pyproject.toml`, `memfw.__version__`, both MCP `serverInfo`
+  blocks, `uv.lock`). Adapter patch releases as listed in the upgrade notes;
+  `memfw-ports`, `memfw-recall` (0.4.0), `memfw-pipeline`, `memfw-wiki-gate`,
+  `memfw-adapter-tailnet` and `memfw-adapter-wikigen` (0.1.0) keep the
+  versions they were merged with. README (both languages): release badge and
+  status, port and adapter counts, the 0.4.0 → 0.5.0 upgrade notes, the
+  pipeline runner, the wiki gate, `retrieval_health`, the tailnet and wikigen
+  adapters and the wiki contracts;
+  COMPONENTS and the adapter docs: the `memfw-ports` 0.4.0 pins.
 
 ### Added
 
@@ -135,7 +263,8 @@ The vault format did not change in `0.4.0` either: `vault.yaml` stays at
   - Contract kit: `check_wiki_page` and `check_entailment_checker` in
     `memfw.ports.testing`; the standalone wheel smoke runs both.
   - `PORTS_API_VERSION`, `memfw-ports` and `memfw-recall` move to `0.4.0`; `memfw-recall`
-    and every adapter pin `memfw-ports==0.4.0` (their own versions and code are unchanged).
+    and every adapter pin `memfw-ports==0.4.0` (their versions and code were unchanged in
+    #113; the release gives each a patch version).
 
 - `memfw-adapter-wikigen` 0.1.0 (`packages/adapters/memfw-adapter-wikigen`, W1-4): a
   `Deriver` (kind `wiki_page`) that turns one `memfw-wiki-job/1` package into one

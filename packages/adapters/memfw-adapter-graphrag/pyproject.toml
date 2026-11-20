@@ -13,7 +13,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "memfw-adapter-graphrag"
-version = "0.1.0"
+version = "0.1.1"
 description = "GraphRAG batch Deriver for memfw (projection export in, CSV tables out)"
 readme = "README.md"
 requires-python = ">=3.11"

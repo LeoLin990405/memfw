@@ -15,7 +15,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "memfw-adapter-qmd"
-version = "0.1.1"
+version = "0.1.2"
 description = "QMD recall adapter (memory projections and notes) for the memfw recall coordinator"
 readme = "README.md"
 requires-python = ">=3.11"

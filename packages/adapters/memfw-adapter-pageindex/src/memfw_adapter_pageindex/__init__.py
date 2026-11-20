@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 from .prompt import PROMPT_VERSION, TASK, parse_tree_search_reply, render_tree_search_prompt
 from .provider import NAME, PageIndexProvider, Settings, SettingsError, factory

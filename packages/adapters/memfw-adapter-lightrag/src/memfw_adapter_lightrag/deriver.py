@@ -56,7 +56,7 @@ from ._ports import (
 )
 from ._select import is_shareable, shareable_memories
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 NAME = "lightrag"
 #: The lightrag-server release whose API the fixtures were taken from.

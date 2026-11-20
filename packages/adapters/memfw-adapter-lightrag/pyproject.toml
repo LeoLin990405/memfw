@@ -11,7 +11,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "memfw-adapter-lightrag"
-version = "0.1.0"
+version = "0.1.1"
 description = "LightRAG graph/answer Deriver for memfw over a loopback lightrag-server"
 readme = "README.md"
 requires-python = ">=3.11"
