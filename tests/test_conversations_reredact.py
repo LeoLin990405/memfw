@@ -13,6 +13,7 @@ import json
 import os
 import sqlite3
 import stat
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -198,6 +199,7 @@ def test_apply_masks_backs_up_verifies_and_is_idempotent(fx: Fixture) -> None:
     assert report["store"]["verify"] == {
         "rescan_rows_changed": 0,
         "integrity": "ok",
+        "journal_mode": "delete",
         "checkpoint_busy": 0,
     }
     # The values are masked at rest; the withheld turn keeps nothing.
@@ -269,11 +271,11 @@ def test_interrupted_run_resumes(fx: Fixture, monkeypatch: pytest.MonkeyPatch) -
     real = reredact._apply_batch
     calls = {"n": 0}
 
-    def flaky(connection: sqlite3.Connection, table: str, plans: Any) -> None:
+    def flaky(connection: sqlite3.Connection, table: str, plans: Any) -> set[int]:
         calls["n"] += 1
         if calls["n"] == 2:
             raise KeyboardInterrupt
-        real(connection, table, plans)
+        return real(connection, table, plans)
 
     monkeypatch.setattr(reredact, "_apply_batch", flaky)
     options = reredact.Options(
@@ -455,3 +457,155 @@ def test_a_pass_that_is_not_idempotent_fails_verification(
     report = _json(result)
     assert report["status"] == "verify_failed"
     assert report["store"]["verify"]["rescan_rows_changed"] > 0
+
+
+def _options(fx: Fixture, **extra: Any) -> reredact.Options:
+    return reredact.Options(
+        store=fx.db,
+        apply=True,
+        worker_lock=lambda: run_lock(fx.state.with_name("x.lock")),
+        **extra,
+    )
+
+
+def test_each_batch_holds_the_write_lock_between_read_and_write(
+    fx: Fixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A writer that ignores the store lock (an older ingest) tries to write while
+    # a batch is being planned: SQLite's write lock (BEGIN IMMEDIATE) refuses it.
+    real = reredact.plan_turn
+    outcomes: list[str] = []
+
+    def planner(row: Any) -> Any:
+        with closing(sqlite3.connect(fx.db, timeout=0)) as other:
+            try:
+                other.execute("UPDATE conversation_turns SET text = 'x' WHERE offset = -1")
+                other.commit()
+                outcomes.append("written")
+            except sqlite3.OperationalError:
+                outcomes.append("locked")
+        return real(row)
+
+    monkeypatch.setattr(reredact, "plan_turn", planner)
+    report = reredact.run(_options(fx))
+    # The four rows of the writing pass (the re-scan after it only reads).
+    assert outcomes[:4] == ["locked"] * 4
+    assert report["store"]["rows_changed"] == 4
+
+
+def test_guarded_update_skips_a_row_replaced_concurrently(fx: Fixture) -> None:
+    # Read and plan a batch, then another writer replaces one row (same key,
+    # new content, as ingest's INSERT OR REPLACE does) before the write.
+    with closing(sqlite3.connect(fx.db)) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.isolation_level = None
+        rows = connection.execute(
+            "SELECT rowid AS memfw_rowid, * FROM conversation_turns ORDER BY rowid"
+        ).fetchall()
+        plans = []
+        for row in rows:
+            item = dict(row)
+            rowid = int(item.pop("memfw_rowid"))
+            plans.append((rowid, item, reredact.plan_turn(item)))
+        victim = plans[0][1]
+        with closing(sqlite3.connect(fx.db)) as other:
+            other.execute(
+                "UPDATE conversation_turns SET text = 'replaced', digest = 'new'"
+                " WHERE agent = ? AND session_id = ? AND offset = ?",
+                (victim["agent"], victim["session_id"], victim["offset"]),
+            )
+            other.commit()
+        connection.execute("BEGIN IMMEDIATE")
+        skipped = reredact._apply_batch(connection, "conversation_turns", plans)
+        connection.execute("COMMIT")
+    assert skipped == {plans[0][0]}
+    texts = {(r["session_id"], r["offset"]): r["text"] for r in fx.rows()}
+    assert texts[(victim["session_id"], victim["offset"])] == "replaced"
+
+
+def test_skipped_rows_are_counted(fx: Fixture, monkeypatch: pytest.MonkeyPatch) -> None:
+    real = reredact._apply_batch
+
+    def racing(connection: sqlite3.Connection, table: str, plans: Any) -> set[int]:
+        if not plans:
+            return real(connection, table, plans)
+        written = real(connection, table, plans[1:])
+        return written | {plans[0][0]}
+
+    monkeypatch.setattr(reredact, "_apply_batch", racing)
+    report = reredact.run(_options(fx))
+    assert report["store"]["skipped_concurrent"] == 1
+    assert report["store"]["rows_changed"] == 3
+
+
+def test_failure_after_writes_is_exit_5_with_counts_and_backup(
+    fx: Fixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = {"n": 0}
+    real_usage = reredact.shutil.disk_usage
+
+    def usage(path: Any) -> Any:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return real_usage(path)  # the backup's check passes
+
+        class Full:
+            free = 1
+
+        return Full()
+
+    monkeypatch.setattr(reredact.shutil, "disk_usage", usage)
+    result = fx.cli("--apply", "--vacuum", "--json")
+    assert result.exit_code == reredact.EXIT_FAILED, result.output
+    report = _json(result)
+    assert report["status"] == "failed_after_writes"
+    assert "space" in report["error"]
+    assert report["store"]["rows_changed"] == 4
+    assert Path(report["backups"][0]["path"]).is_file()
+    assert _plaintext(result.output) == []
+    assert _plaintext(fx.dump()) == []
+
+
+def test_sqlite_error_while_writing_is_reported_cleanly(
+    fx: Fixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(connection: sqlite3.Connection, table: str, plans: Any) -> set[int]:
+        raise sqlite3.OperationalError("database or disk is full")
+
+    monkeypatch.setattr(reredact, "_apply_batch", broken)
+    result = fx.cli("--apply", "--json")
+    assert result.exit_code == reredact.EXIT_FAILED
+    report = _json(result)
+    assert report["status"] == "failed_after_writes"
+    assert "OperationalError" in report["error"] and "Traceback" not in result.output
+    assert report["store"]["rows_changed"] == 0
+    assert _plaintext(result.output) == []
+
+
+def test_withheld_branch_cleans_role_like_ingest() -> None:
+    row = {
+        "agent": "claude",
+        "session_id": "s",
+        "offset": 0,
+        "turn": 0,
+        "role": f"user {SEEDS['ip']}",
+        "ts": "2026-01-05T10:00:00Z",
+        "text": f"key {TOKEN}",
+        "tool_calls": "[]",
+        "cwd": "",
+        "project": "",
+        "model": "",
+        "origin": "interactive",
+        "withheld": 0,
+        "parser_version": "1",
+        "locator": "l",
+        "digest": "d",
+        "parent_session": "",
+    }
+    plan = reredact.plan_turn(row)
+    assert plan.withheld and plan.updates["role"] == "user [REDACTED:ip]"
+
+
+def test_journal_mode_is_reported(fx: Fixture) -> None:
+    report = _json(fx.cli("--apply", "--json"))
+    assert report["store"]["verify"]["journal_mode"] == "delete"

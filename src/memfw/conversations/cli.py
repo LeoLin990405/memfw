@@ -309,21 +309,28 @@ Default: a dry run on a read-only connection; prints how many rows and columns
 would change and which [REDACTED:kind] masks would be added. Never prints text.
 
 --apply takes the store's writer lock and the worker's run lock (refuses when
-either is held: stop ingest and the worker first), writes a verified backup
-(<store>.bak-reredact-<UTC>, 0600; it still holds the old values: delete it once
-you are satisfied), then rewrites the changed rows in batches with
-secure_delete on, re-scans (must be 0), checks integrity and checkpoints the
-WAL. Interrupted? Run it again: batches are idempotent.
+either is held: stop the ingest/worker cycle first, or deploy the locked ingest:
+while --apply runs, each ingest reader waits 60 s for the lock and then fails
+that round, no data lost, the next round catches up). It writes a verified
+backup (<store>.bak-reredact-<UTC>, 0600; it still holds every old value:
+delete it once you are satisfied), then rewrites the changed rows in batches
+(one BEGIN IMMEDIATE transaction each, guarded UPDATEs) with secure_delete on,
+re-scans the rewritten rows (must be 0) and checks integrity. Interrupted? Run
+it again: batches are idempotent.
 
-Old values can survive in free pages of the file until --vacuum rewrites it;
-secure_delete only zeroes pages freed by this run. The worker state
+Old bytes: secure_delete zeroes pages freed by this run; pages freed earlier
+keep old values until --vacuum rewrites the file. The journal mode is detected:
+in rollback-journal mode (the default) the -journal file briefly holds old
+pages during each batch and is then deleted (its disk blocks are not wiped);
+in WAL mode the WAL is checkpointed and truncated. The worker state
 (conversations-work.sqlite: summaries, episodes) is scanned too and rewritten
 with --worker-state. The history index (<vault>/.memfw-history.sqlite) is a
 separate file rebuilt from transcripts: delete it, if it exists, and re-run
 `memfw history index`.
 
-Exit codes: 0 ok, 2 refused/error, 3 locked by another writer, 4 verification
-failed."""
+Exit codes: 0 ok, 2 refused or failed before any write, 3 locked by another
+writer, 4 verification failed, 5 failed after the backup (rows may have been
+written; counts so far and the backup path are reported; run it again)."""
 
 
 def _reredact_lines(report: dict[str, Any]) -> list[str]:
@@ -368,7 +375,14 @@ def reredact(
     ] = False,
     as_json: Annotated[bool, typer.Option("--json", help="Machine-readable summary")] = False,
 ) -> None:
-    from memfw.history.reredact import EXIT_ERROR, Options, ReredactError, ReredactVerifyError, run
+    from memfw.history.reredact import (
+        EXIT_ERROR,
+        Options,
+        ReredactError,
+        ReredactFailedError,
+        ReredactVerifyError,
+        run,
+    )
 
     try:
         config, vault = read_config(root)
@@ -395,10 +409,11 @@ def reredact(
         )
         report = run(options)
         code = 0
-    except ReredactVerifyError as exc:
-        report = {
+    except (ReredactVerifyError, ReredactFailedError) as exc:
+        # Rows may have been written: report the counts so far and the backup path.
+        report = exc.report or {
             "mode": "apply",
-            "status": "verify_failed",
+            "status": "verify_failed" if isinstance(exc, ReredactVerifyError) else "failed",
             "error": str(exc),
             "store": exc.counts,
         }

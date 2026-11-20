@@ -46,11 +46,14 @@ worker's run lock are taken without waiting (refused when either is held); a
 full backup is written first with the SQLite online backup API (``0600``,
 location rules of the store, free space checked) and verified
 (``integrity_check`` plus row counts); updates run with ``secure_delete`` on, in
-batches, one transaction each, only for rows that change. A batch is idempotent,
-so an interrupted run is simply run again. Afterwards the rewritten rows are
-scanned again (no change allowed), the file is checked (``integrity_check``) and
-checkpointed (``wal_checkpoint(TRUNCATE)``); ``--vacuum`` rewrites the file so free pages no
-longer hold old values.
+batches, one ``BEGIN IMMEDIATE`` transaction each (read, plan and write under
+SQLite's write lock), with UPDATEs guarded by the row's key and old values, only
+for rows that change. A batch is idempotent, so an interrupted run is simply run
+again. Afterwards the rewritten rows are scanned again (no change allowed) and
+the file is checked (``integrity_check``); a WAL-mode file is also checkpointed
+(``wal_checkpoint(TRUNCATE)``; the store normally uses a rollback journal).
+``--vacuum`` rewrites the file so free pages no longer hold old values. A
+failure after the backup is :data:`EXIT_FAILED` with the counts so far.
 
 Nothing here prints or returns text, values or paths taken from rows: only
 counts, column names and mask kinds.
@@ -106,6 +109,8 @@ EXIT_LOCKED = 3
 """Another writer (ingest, the worker, another re-redaction) holds a lock."""
 EXIT_VERIFY = 4
 """A verification failed: backup, re-scan (not idempotent) or integrity check."""
+EXIT_FAILED = 5
+"""Failed after the backup, while or after rows were written (counts so far reported)."""
 
 _MARK = re.compile(r"\[REDACTED(?::([^\]\s]{1,40}))?\]")
 
@@ -125,6 +130,8 @@ class TableCounts:
     rows_scanned: int = 0
     rows_changed: int = 0
     rows_withheld: int = 0
+    skipped_concurrent: int = 0
+    """Planned rows another writer replaced before the guarded UPDATE (left alone)."""
     columns: Counter[str] = field(default_factory=Counter)
     markers: Counter[str] = field(default_factory=Counter)
     key_columns_flagged: Counter[str] = field(default_factory=Counter)
@@ -135,6 +142,7 @@ class TableCounts:
         self.rows_scanned += other.rows_scanned
         self.rows_changed += other.rows_changed
         self.rows_withheld += other.rows_withheld
+        self.skipped_concurrent += other.skipped_concurrent
         self.columns.update(other.columns)
         self.markers.update(other.markers)
         self.key_columns_flagged.update(other.key_columns_flagged)
@@ -144,6 +152,7 @@ class TableCounts:
             "rows_scanned": self.rows_scanned,
             "rows_changed": self.rows_changed,
             "rows_withheld": self.rows_withheld,
+            "skipped_concurrent": self.skipped_concurrent,
             "columns": dict(sorted(self.columns.items())),
             "markers": dict(sorted(self.markers.items())),
             "key_columns_flagged": dict(sorted(self.key_columns_flagged.items())),
@@ -221,6 +230,7 @@ def plan_turn(row: Mapping[str, Any]) -> RowPlan:
     if any(value and has_secret(value) for value in scanned):
         # Ingest's rule: a secret anywhere withholds the whole turn.
         new = {
+            "role": _clean(str(row.get("role") or ""), FIELD_CHARS),
             "text": "",
             "tool_calls": "[]",
             "cwd": "",
@@ -330,18 +340,58 @@ def _columns(connection: sqlite3.Connection, table: str) -> set[str]:
     return {str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})")}
 
 
-def _apply_batch(
-    connection: sqlite3.Connection, table: str, plans: list[tuple[int, RowPlan]]
-) -> None:
-    """One transaction: write every planned row of a batch (idempotent)."""
+KEY_COLUMNS: dict[str, tuple[str, ...]] = {
+    TURNS_TABLE: ("agent", "session_id", "offset", "digest"),
+    "summaries": ("app", "session_id", "chunk_start", "chunk_end", "prompt_version"),
+    "episodes": ("episode_id",),
+}
+"""Columns the guarded UPDATE also compares, so it only writes the row it read."""
 
-    with connection:
-        for rowid, plan in plans:
-            names = sorted(plan.updates)
-            connection.execute(
-                f"UPDATE {table} SET {', '.join(f'{name} = ?' for name in names)} WHERE rowid = ?",
-                [*(plan.updates[name] for name in names), rowid],
-            )
+
+def _apply_batch(
+    connection: sqlite3.Connection,
+    table: str,
+    plans: list[tuple[int, dict[str, Any], RowPlan]],
+) -> set[int]:
+    """Write every planned row of a batch; returns the rowids it skipped.
+
+    Runs inside the batch's ``BEGIN IMMEDIATE`` transaction (see :func:`_pass`), so
+    no other writer can change a row between its read and this write. The UPDATE
+    is guarded anyway: it matches the rowid *and* the old values of the row's key
+    columns and of every column it rewrites (``IS`` so NULL compares). A row that
+    was replaced in between (rowid reused for another row) is not touched:
+    ``rowcount == 0`` is counted as ``skipped_concurrent``.
+    """
+
+    skipped: set[int] = set()
+    for rowid, old, plan in plans:
+        names = sorted(plan.updates)
+        guard = sorted({*KEY_COLUMNS.get(table, ()), *names} & set(old))
+        cursor = connection.execute(
+            f"UPDATE {table} SET {', '.join(f'{name} = ?' for name in names)}"
+            f" WHERE rowid = ? AND {' AND '.join(f'{name} IS ?' for name in guard)}",
+            [*(plan.updates[name] for name in names), rowid, *(old[name] for name in guard)],
+        )
+        if cursor.rowcount == 0:
+            skipped.add(rowid)
+    return skipped
+
+
+def _read(
+    connection: sqlite3.Connection, table: str, last: int, batch: int, chunk: list[int] | None
+) -> list[sqlite3.Row]:
+    if chunk is None:
+        return connection.execute(
+            f"SELECT rowid AS memfw_rowid, * FROM {table} WHERE rowid > ? ORDER BY rowid LIMIT ?",
+            (last, batch),
+        ).fetchall()
+    if not chunk:
+        return []
+    return connection.execute(
+        f"SELECT rowid AS memfw_rowid, * FROM {table}"
+        f" WHERE rowid IN ({', '.join('?' for _ in chunk)}) ORDER BY rowid",
+        chunk,
+    ).fetchall()
 
 
 def _pass(
@@ -352,54 +402,65 @@ def _pass(
     batch: int,
     write: bool,
     only: list[int] | None = None,
+    into: TableCounts | None = None,
 ) -> TableCounts:
     """Scan ``table`` in rowid order, ``batch`` rows at a time; write changes when asked.
 
-    ``only``: scan just these rowids (the post-pass re-scan reads the rows the pass
-    rewrote; a row the pass left alone is a fixed point, the planner being pure).
+    With ``write`` each batch is one ``BEGIN IMMEDIATE`` transaction: read, plan
+    and write happen under SQLite's write lock, so a writer that does not take the
+    store lock (an older ingest, a reader's ownership repair) cannot slip in
+    between; an error rolls the batch back. ``connection`` must be in autocommit
+    mode (``isolation_level = None``). ``only``: scan just these rowids (the
+    post-pass re-scan reads the rows the pass rewrote; a row the pass left alone
+    is a fixed point, the planner being pure). ``into``: counts to add to (kept by
+    the caller, so a failure still reports what was written).
     """
 
-    counts = TableCounts()
+    counts = into if into is not None else TableCounts()
     last = 0
     pending = sorted(only) if only is not None else None
     while True:
-        if pending is None:
-            rows = connection.execute(
-                f"SELECT rowid AS memfw_rowid, * FROM {table} WHERE rowid > ?"
-                " ORDER BY rowid LIMIT ?",
-                (last, batch),
-            ).fetchall()
-        else:
-            chunk, pending = pending[: min(batch, 500)], pending[min(batch, 500) :]
-            rows = (
-                connection.execute(
-                    f"SELECT rowid AS memfw_rowid, * FROM {table}"
-                    f" WHERE rowid IN ({', '.join('?' for _ in chunk)}) ORDER BY rowid",
-                    chunk,
-                ).fetchall()
-                if chunk
-                else []
+        chunk: list[int] | None = None
+        if pending is not None:
+            size = min(batch, 500)
+            chunk, pending = pending[:size], pending[size:]
+        if write:
+            connection.execute("BEGIN IMMEDIATE")
+        try:
+            rows = _read(connection, table, last, batch, chunk)
+            plans: list[tuple[int, dict[str, Any], RowPlan]] = []
+            for row in rows:
+                item = dict(row)
+                rowid = int(item.pop("memfw_rowid"))
+                last = rowid
+                plan = planner(item)
+                plans.append((rowid, item, plan))
+            skipped = (
+                _apply_batch(connection, table, [p for p in plans if p[2].updates])
+                if write
+                else set()
             )
+            if write:
+                connection.execute("COMMIT")
+        except BaseException:
+            if write and connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise
         if not rows:
             return counts
-        plans: list[tuple[int, RowPlan]] = []
-        for row in rows:
-            item = dict(row)
-            rowid = int(item.pop("memfw_rowid"))
-            last = rowid
+        for rowid, _old, plan in plans:
             counts.rows_scanned += 1
-            plan = planner(item)
             counts.key_columns_flagged.update(plan.flagged)
             if not plan.updates:
+                continue
+            if rowid in skipped:
+                counts.skipped_concurrent += 1
                 continue
             counts.rows_changed += 1
             counts.rows_withheld += int(plan.withheld)
             counts.columns.update(name for name in plan.updates if name != "digest")
             counts.markers.update(plan.markers)
             counts.changed_rowids.append(rowid)
-            plans.append((rowid, plan))
-        if write and plans:
-            _apply_batch(connection, table, plans)
 
 
 def _turn_planner(connection: sqlite3.Connection) -> Planner:
@@ -421,17 +482,22 @@ def _worker_tables(connection: sqlite3.Connection) -> list[tuple[str, tuple[str,
     return present
 
 
-def _scan_worker(connection: sqlite3.Connection, *, batch: int, write: bool) -> TableCounts:
-    total = TableCounts()
+def _scan_worker(
+    connection: sqlite3.Connection,
+    *,
+    batch: int,
+    write: bool,
+    into: TableCounts | None = None,
+) -> TableCounts:
+    total = into if into is not None else TableCounts()
     for table, columns in _worker_tables(connection):
-        total.add(
-            _pass(
-                connection,
-                table,
-                functools.partial(_plan_worker_row, columns=columns),
-                batch=batch,
-                write=write,
-            )
+        _pass(
+            connection,
+            table,
+            functools.partial(_plan_worker_row, columns=columns),
+            batch=batch,
+            write=write,
+            into=total,
         )
     return total
 
@@ -585,11 +651,20 @@ def run(options: Options) -> dict[str, Any]:
         raise ReredactError("worker state does not exist")
     report: dict[str, Any] = {"mode": "apply" if options.apply else "dry_run"}
     if not options.apply:
-        with closing(_readonly(store)) as connection:
-            report["store"] = _pass(
-                connection, TURNS_TABLE, _turn_planner(connection), batch=options.batch, write=False
-            ).as_dict()
-        report["worker_state"] = _worker_report(worker if worker_present else None, options, False)
+        try:
+            with closing(_readonly(store)) as connection:
+                report["store"] = _pass(
+                    connection,
+                    TURNS_TABLE,
+                    _turn_planner(connection),
+                    batch=options.batch,
+                    write=False,
+                ).as_dict()
+            report["worker_state"] = _worker_report(
+                worker if worker_present else None, options, False
+            )
+        except (sqlite3.Error, OSError) as exc:
+            raise ReredactError(f"dry run failed: {_describe(exc)}") from exc
         report["status"] = "ok"
         return report
     stamp = _stamp(options.now)
@@ -605,26 +680,49 @@ def run(options: Options) -> dict[str, Any]:
     with _locks(store, options.worker_lock):
         backups = []
         for path, target in targets:
-            with closing(_writable(path)) as connection:
-                if path == store:
-                    tables: tuple[str, ...] = (TURNS_TABLE,)
-                else:
-                    tables = tuple(table for table, _ in _worker_tables(connection))
-                backups.append(backup(connection, path, target, tables))
+            try:
+                with closing(_writable(path)) as connection:
+                    if path == store:
+                        tables: tuple[str, ...] = (TURNS_TABLE,)
+                    else:
+                        tables = tuple(table for table, _ in _worker_tables(connection))
+                    backups.append(backup(connection, path, target, tables))
+            except (sqlite3.Error, OSError) as exc:
+                raise ReredactError(f"backup failed: {_describe(exc)}") from exc
         report["backups"] = backups
-        report["store"] = _apply_one(store, options, worker=False)
-        if options.include_worker and worker is not None:
-            report["worker_state"] = {
-                "present": True,
-                "included": True,
-                **_apply_one(worker, options, worker=True),
-            }
-        else:
-            report["worker_state"] = _worker_report(
-                worker if worker_present else None, options, False
-            )
+        # From here on rows may be written: a failure is EXIT_FAILED with the counts.
+        try:
+            report["store"] = _apply_one(store, options, worker=False)
+            if options.include_worker and worker is not None:
+                report["worker_state"] = {
+                    "present": True,
+                    "included": True,
+                    **_apply_one(worker, options, worker=True),
+                }
+            else:
+                report["worker_state"] = _worker_report(
+                    worker if worker_present else None, options, False
+                )
+        except ReredactFailedError as exc:
+            report.setdefault("store" if "store" not in report else "worker_state", exc.counts)
+            exc.report = report | {"status": "failed_after_writes", "error": str(exc)}
+            raise
+        except ReredactVerifyError as exc:
+            report.setdefault("store" if "store" not in report else "worker_state", exc.counts)
+            exc.report = report | {"status": "verify_failed", "error": str(exc)}
+            raise
     report["status"] = "ok"
     return report
+
+
+def _describe(exc: BaseException) -> str:
+    """An error as its kind plus SQLite's or the OS's message (no paths, no values)."""
+
+    if isinstance(exc, OSError):
+        return f"{type(exc).__name__}: {exc.strerror or 'error'}"
+    if isinstance(exc, sqlite3.Error):
+        return f"{type(exc).__name__}: {str(exc)[:120]}"
+    return type(exc).__name__
 
 
 def _worker_report(path: Path | None, options: Options, included: bool) -> dict[str, Any]:
@@ -640,46 +738,70 @@ def _worker_report(path: Path | None, options: Options, included: bool) -> dict[
 def _apply_one(path: Path, options: Options, *, worker: bool) -> dict[str, Any]:
     """Re-redact one database in place, then re-scan, check and checkpoint it."""
 
-    with closing(_writable(path)) as connection:
-        # Rows rewritten from here on leave no old bytes in the pages they free.
-        connection.execute("PRAGMA secure_delete=ON")
+    counts = TableCounts()
+    rescan = TableCounts()
+    integrity = ""
+    journal = ""
+    checkpoint: Any = None
+    vacuumed = False
+
+    def summary() -> dict[str, Any]:
+        out = counts.as_dict()
         if worker:
-            counts = _scan_worker(connection, batch=options.batch, write=True)
-            rescan = _scan_worker(connection, batch=options.batch, write=False)
-        else:
-            planner = _turn_planner(connection)
-            counts = _pass(connection, TURNS_TABLE, planner, batch=options.batch, write=True)
-            rescan = _pass(
-                connection,
-                TURNS_TABLE,
-                planner,
-                batch=options.batch,
-                write=False,
-                only=counts.changed_rowids,
-            )
-        integrity = _integrity(connection)
-        checkpoint = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-        vacuumed = False
-        if options.vacuum and rescan.rows_changed == 0 and integrity == "ok":
-            if shutil.disk_usage(path.parent).free < _size(path) + SPACE_MARGIN:
-                raise ReredactError("not enough free disk space for --vacuum")
-            connection.execute("VACUUM")
-            connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            vacuumed = True
-    os.chmod(path, 0o600)
-    out = counts.as_dict()
-    if worker:
-        out.pop("key_columns_flagged", None)
-        out.pop("rows_withheld", None)
-    out["verify"] = {
-        "rescan_rows_changed": rescan.rows_changed,
-        "integrity": "ok" if integrity == "ok" else "failed",
-        "checkpoint_busy": int(checkpoint[0]) if checkpoint is not None else 0,
-    }
-    out["vacuumed"] = vacuumed
-    if rescan.rows_changed or integrity != "ok":
-        raise ReredactVerifyError("verification after the pass failed", out)
-    return out
+            out.pop("key_columns_flagged", None)
+            out.pop("rows_withheld", None)
+        out["verify"] = {
+            "rescan_rows_changed": rescan.rows_changed,
+            "integrity": "ok" if integrity == "ok" else ("failed" if integrity else "not_run"),
+            "journal_mode": journal,
+            "checkpoint_busy": int(checkpoint[0]) if checkpoint is not None else 0,
+        }
+        out["vacuumed"] = vacuumed
+        return out
+
+    try:
+        with closing(_writable(path)) as connection:
+            connection.isolation_level = None  # explicit BEGIN IMMEDIATE per batch
+            # Rows rewritten from here on leave no old bytes in the pages they free.
+            connection.execute("PRAGMA secure_delete=ON")
+            journal = str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+            if worker:
+                _scan_worker(connection, batch=options.batch, write=True, into=counts)
+                _scan_worker(connection, batch=options.batch, write=False, into=rescan)
+            else:
+                planner = _turn_planner(connection)
+                _pass(
+                    connection, TURNS_TABLE, planner, batch=options.batch, write=True, into=counts
+                )
+                _pass(
+                    connection,
+                    TURNS_TABLE,
+                    planner,
+                    batch=options.batch,
+                    write=False,
+                    only=counts.changed_rowids,
+                    into=rescan,
+                )
+            integrity = _integrity(connection)
+            if journal == "wal":
+                # Only a WAL store has a log to fold back and truncate.
+                checkpoint = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            if rescan.rows_changed or integrity != "ok":
+                raise ReredactVerifyError("verification after the pass failed", summary())
+            if options.vacuum:
+                if shutil.disk_usage(path.parent).free < _size(path) + SPACE_MARGIN:
+                    raise ReredactError("not enough free disk space for --vacuum")
+                connection.execute("VACUUM")
+                if journal == "wal":
+                    checkpoint = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+                vacuumed = True
+        os.chmod(path, 0o600)
+    except ReredactVerifyError:
+        raise
+    except (ReredactError, sqlite3.Error, OSError) as exc:
+        message = str(exc) if isinstance(exc, ReredactError) else _describe(exc)
+        raise ReredactFailedError(f"failed after the backup: {message}", summary()) from exc
+    return summary()
 
 
 class ReredactVerifyError(ReredactError):
@@ -688,3 +810,13 @@ class ReredactVerifyError(ReredactError):
     def __init__(self, message: str, counts: dict[str, Any]) -> None:
         super().__init__(message, EXIT_VERIFY)
         self.counts = counts
+        self.report: dict[str, Any] = {}
+
+
+class ReredactFailedError(ReredactError):
+    """Failed after the backup (rows may have been written); carries the counts so far."""
+
+    def __init__(self, message: str, counts: dict[str, Any]) -> None:
+        super().__init__(message, EXIT_FAILED)
+        self.counts = counts
+        self.report: dict[str, Any] = {}

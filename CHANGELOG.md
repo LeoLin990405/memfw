@@ -45,15 +45,22 @@ projections out of the vault; see the 0.4.0
   masks, newly withheld turns); `--apply` takes the store's writer lock and the
   worker's run lock without waiting (exit 3 when either is held), writes a
   verified `0600` backup with the SQLite online backup API, rewrites changed
-  rows in batches with `secure_delete` on, then re-scans (must find nothing),
-  runs `integrity_check` and `wal_checkpoint(TRUNCATE)`; `--vacuum` also
-  rewrites free pages; `--worker-state` covers the worker's summaries and
-  episodes; `--json` prints a machine-readable summary. Keys (`session_id`,
+  rows in batches (one `BEGIN IMMEDIATE` transaction each, guarded UPDATEs,
+  `skipped_concurrent` counted) with `secure_delete` on, then re-scans the
+  rewritten rows (must find nothing) and runs `integrity_check` (plus
+  `wal_checkpoint(TRUNCATE)` in WAL mode); `--vacuum` also rewrites free pages;
+  `--worker-state` covers the worker's summaries and episodes; `--json` prints
+  a machine-readable summary. Exit codes: 0 ok, 2 refused before writing, 3
+  locked, 4 verification failed, 5 failed after the backup (counts so far and
+  the backup path reported). Keys (`session_id`,
   `offset`, `locator`) are never rewritten, the row digest is recomputed, so a
   later ingest neither duplicates turns nor re-processes sessions. See
   docs/history.md.
 - The conversation store has a writer lock (`<store>.lock`): an ingest waits up
-  to 60 seconds for it, then fails that agent's ingest with an error.
+  to 60 seconds for it, then fails that agent's ingest for the round (no data
+  lost; the next round catches up). While `reredact --apply` runs, one ingest
+  cycle can take about 13 minutes to give up: stop the ingest/worker cycle, or
+  deploy the locked ingest, before running it.
 
 ### Upgrade notes
 
