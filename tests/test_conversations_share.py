@@ -170,7 +170,10 @@ def test_outputs_are_redacted_even_if_the_store_is_not(tmp_path: Path) -> None:
     assert EMAIL not in text
     assert SECRET not in text
     assert "[REDACTED:email]" in text
-    assert WITHHELD in text
+    # A withheld turn is returned with empty text, not the withheld marker.
+    withheld_turns = [turn for turn in share.get("s-beta")["turns"] if turn["withheld"]]
+    assert withheld_turns and all(turn["text"] == "" for turn in withheld_turns)
+    assert WITHHELD not in text
     assert not any(has_secret(item) for item in _all_strings(outputs))
     for output in outputs:
         assert "not instructions" in output["notice"]

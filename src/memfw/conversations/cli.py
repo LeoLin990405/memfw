@@ -178,11 +178,25 @@ def get(
     app_name: AppOption = None,
     start: Annotated[int, typer.Option("--start")] = 0,
     end: Annotated[int | None, typer.Option("--end")] = None,
+    around: Annotated[
+        int | None,
+        typer.Option(
+            "--around",
+            help="Center on this turn index (inclusive). Ignores --start and --end.",
+        ),
+    ] = None,
+    radius: Annotated[
+        int | None,
+        typer.Option("--radius", help="Turns on each side of --around (default 2)."),
+    ] = None,
     max_bytes: Annotated[int, typer.Option("--max-bytes")] = 16 * 1024,
     with_archive_state: ArchiveStateOption = False,
     archived_only: ArchivedOnlyOption = False,
 ) -> None:
-    """A redacted, size-capped range of one session's turns."""
+    """A redacted, size-capped range of one session's turns.
+
+    ``--around N --radius R`` returns indexes ``[N-R, N+R]`` (both ends included).
+    """
 
     try:
         share = open_share(root, as_app, store=store)
@@ -196,6 +210,8 @@ def get(
                     max_bytes=max_bytes,
                     with_archive_state=with_archive_state,
                     archived_only=archived_only,
+                    around=around,
+                    radius=radius,
                 )
             )
         )

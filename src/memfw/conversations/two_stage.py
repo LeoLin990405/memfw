@@ -33,6 +33,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Protocol
 
+from memfw.handoff.schema import OMITTED_FIELD_NAMES, REDACTION_POLICY, listed_omissions
 from memfw.notes.http import is_loopback_url
 from memfw.ports.models import (
     TAG_INTENT_CHARS,
@@ -176,6 +177,47 @@ def label_text(summary: str, tags: Mapping[str, Any] | None) -> str:
             )
         )
     return "\n".join(part for part in parts if part)
+
+
+def session_card(
+    *,
+    app: str,
+    session_id: str,
+    started_at: str | None,
+    updated_at: str | None,
+    turns: int | None,
+    summary: str | None,
+    tags: Mapping[str, Any] | None,
+    suggested_start: int | None,
+) -> dict[str, Any]:
+    """Session metadata only. ``summary`` / ``tags`` are worker labels, or null. No turn text.
+
+    ``suggested_start`` is the offset of the hit this result came from, or null when
+    this result has no turn hit. ``intent`` and ``outcome`` come from ``tags`` when
+    those strings are non-empty; they are not invented.
+    """
+
+    intent = None
+    outcome = None
+    if tags:
+        raw_intent = tags.get("intent")
+        if isinstance(raw_intent, str) and raw_intent:
+            intent = raw_intent
+        raw_outcome = tags.get("outcome")
+        if isinstance(raw_outcome, str) and raw_outcome:
+            outcome = raw_outcome
+    return {
+        "session_id": session_id,
+        "app": app,
+        "started_at": started_at,
+        "updated_at": updated_at,
+        "turns": turns,
+        "summary": summary or None,
+        "intent": intent,
+        "outcome": outcome,
+        "tags": dict(tags) if tags else None,
+        "suggested_start": suggested_start,
+    }
 
 
 def tags_match(tags: Mapping[str, Any] | None, filters: Mapping[str, str]) -> bool:
@@ -384,6 +426,8 @@ class _Search:
         #: Turns left for scanning sessions without a store hit (all sessions together).
         self.scan_budget = SCAN_BUDGET
         self.hits: dict[tuple[str, str], list[int]] = {}
+        #: Field names this call emptied or cut (see ``omitted_fields``).
+        self.omitted: set[str] = set()
 
     # -- visibility and filters, applied to every candidate before ranking ----------
 
@@ -411,6 +455,7 @@ class _Search:
         summary, withheld = safe_text(str(row.get("summary") or ""), SUMMARY_CHARS)
         self.labels[key] = {
             "summary": "" if withheld else summary,
+            "summary_withheld": withheld,
             "tags": parse_tags(row.get("tags")),
             "prompt_version": str(row.get("prompt_version") or ""),
         }
@@ -587,7 +632,7 @@ class _Search:
             out.append(
                 {
                     "hit_offset": offset,
-                    "turns": [self._window_turn(turn) for turn in turns],
+                    "turns": [self._window_turn(turn, self.omitted) for turn in turns],
                 }
             )
         return out
@@ -607,15 +652,23 @@ class _Search:
         return turns[max(0, at - around) : at + around + 1]
 
     @staticmethod
-    def _window_turn(turn: Turn) -> dict[str, Any]:
-        text, withheld = safe_text(turn.text, WINDOW_TURN_CHARS)
-        withheld = withheld or turn.withheld
+    def _window_turn(turn: Turn, omitted: set[str]) -> dict[str, Any]:
+        full, withheld = safe_text(turn.text)
+        short, short_withheld = safe_text(turn.text, WINDOW_TURN_CHARS)
+        withheld = withheld or short_withheld or turn.withheld
+        if withheld:
+            text = ""
+            omitted.add("text")
+        else:
+            text = short
+            if short != full:
+                omitted.add("text")
         return {
             "offset": turn.offset,
             "ref": turn.ref,
             "role": turn.role,
             "ts": turn.ts,
-            "text": "" if withheld else text,
+            "text": text,
             "withheld": withheld,
         }
 
@@ -632,29 +685,67 @@ class _Search:
         }
 
 
-def _shrink(item: dict[str, Any], room: int) -> int:
+def _shrink(item: dict[str, Any], room: int, omitted: set[str]) -> int:
     """Cut ``item`` towards ``room`` bytes; returns its size afterwards.
 
-    In order: the model summary (cut), its tags (dropped), the model output
-    (dropped), then ``cwd`` and ``project`` (emptied). Ids, times and ranks stay.
+    In order: the model summary (cut, and the session card's copy), its tags
+    (dropped), the model output (dropped), then ``cwd`` and ``project``.
+    Ids, times and ranks stay. The session card keeps the same summary and tags
+    as ``model_output`` so the two cannot disagree, and so a duplicate cannot
+    hold the item over ``room``.
     """
 
+    card = item.get("session_card")
+    if not isinstance(card, dict):
+        card = None
     model = item.get("model_output")
-    if isinstance(model, dict) and _size(item) > room:
-        summary = str(model.get("summary") or "")
+    if not isinstance(model, dict):
+        model = None
+
+    def too_big() -> bool:
+        return _size(item) > room
+
+    if too_big() and ((model and model.get("summary")) or (card and card.get("summary"))):
+        omitted.add("summary")
+        summary = ""
+        if model and isinstance(model.get("summary"), str):
+            summary = model["summary"]
+        elif card and isinstance(card.get("summary"), str):
+            summary = str(card["summary"])
         over = _size(item) - room
+        shortened = ""
         if summary and over < len(summary.encode()):
             data = summary.encode()[: max(0, len(summary.encode()) - over - 3)]
-            model["summary"] = data.decode(errors="ignore") + "…"
-        else:
-            model["summary"] = ""
-    if isinstance(model, dict) and _size(item) > room:
-        model["tags"] = None
-    if _size(item) > room:
+            shortened = data.decode(errors="ignore") + "…"
+        if model is not None:
+            model["summary"] = shortened
+        if card is not None:
+            card["summary"] = shortened or None
+        if too_big():
+            if model is not None:
+                model["summary"] = ""
+            if card is not None:
+                card["summary"] = None
+    if too_big() and ((model and model.get("tags")) or (card and card.get("tags"))):
+        omitted.add("tags")
+        if model is not None:
+            model["tags"] = None
+        if card is not None:
+            card["tags"] = None
+            card["intent"] = None
+            card["outcome"] = None
+    if too_big() and item.get("model_output") is not None:
+        omitted.add("model_output")
         item["model_output"] = None
     for name in ("cwd", "project"):
-        if _size(item) > room and item.get(name):
+        if too_big() and item.get(name):
+            omitted.add(name)
             item[name] = ""
+    if card is not None:
+        for name in ("intent", "outcome"):
+            if too_big() and card.get(name):
+                omitted.add(name)
+                card[name] = None
     return _size(item)
 
 
@@ -724,6 +815,9 @@ def two_stage_search(
         "sessions": [],
         "truncated": False,
         "next_offset": offset + limit if offset + limit < len(fused) else None,
+        "redaction_policy": REDACTION_POLICY,
+        # Reserved at full width so the real list, written last, cannot overflow.
+        "omitted_fields": list(OMITTED_FIELD_NAMES),
     }
     # retrieval_health is reserved inside the cap in its "with sessions" form.
     # A reply that ends with no session is small (nothing was appended), so
@@ -735,6 +829,29 @@ def two_stage_search(
         info = search._info(key)
         if info is None:  # admitted above, so only a store change in between
             continue
+        label = search._label(key)
+        summary = None
+        tags = None
+        if label:
+            if label.get("summary_withheld"):
+                search.omitted.add("summary")
+            elif label.get("summary"):
+                summary = str(label["summary"])
+            tags = label.get("tags")
+        known_hits = search.hits.get(key) or []
+        # A hit not known yet (semantic scan runs while building windows) is sized as a
+        # wide integer, then replaced with the real offset or null. null and a real
+        # offset are both smaller, so the cap still holds.
+        card = session_card(
+            app=info.app,
+            session_id=info.session_id,
+            started_at=info.started_at,
+            updated_at=info.updated_at,
+            turns=info.turns,
+            summary=summary,
+            tags=tags,
+            suggested_start=known_hits[0] if known_hits else 10**18,
+        )
         item = {
             **info.as_dict(),
             "archived": search._archived(key),
@@ -742,12 +859,13 @@ def two_stage_search(
             "score": round(score, 6),
             "matched_by": [name for name in lists if key in members[name]],
             "model_output": search.model_output(key),
+            "session_card": card,
             "windows": [],
         }
         size = _size(item) + 2
         if used + size > cap and not response["sessions"]:
             # The first session alone is too big: shrink it rather than stall the cursor.
-            size = _shrink(item, cap - used - 2) + 2
+            size = _shrink(item, cap - used - 2, search.omitted) + 2
             response["truncated"] = True
             if used + size > cap:
                 # Nothing fits even shrunk: skip it so a paging client moves on.
@@ -759,6 +877,9 @@ def two_stage_search(
             break
         response["sessions"].append(item)
         used += size
+    pending_start = [
+        item for item in response["sessions"] if item["session_card"]["suggested_start"] == 10**18
+    ]
     for item in response["sessions"]:
         if not count:
             break
@@ -773,7 +894,11 @@ def two_stage_search(
                 continue
             item["windows"].append(window)
             used += size
+    for item in pending_start:
+        windows = item["windows"]
+        item["session_card"]["suggested_start"] = windows[0]["hit_offset"] if windows else None
     response[HEALTH_KEY] = from_conversation_search(response)
+    response["omitted_fields"] = listed_omissions(search.omitted)
     return response
 
 
@@ -788,6 +913,7 @@ __all__ = [
     "parse_tags",
     "since_key",
     "tag_filters",
+    "session_card",
     "tags_match",
     "two_stage_search",
 ]

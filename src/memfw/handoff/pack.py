@@ -43,10 +43,13 @@ from .schema import (
     MIN_BYTES,
     MODEL_KEYS,
     NOTICE,
+    OMITTED_FIELD_NAMES,
     REASONS,
+    REDACTION_POLICY,
     SCHEMA,
     SYSTEM_LABEL,
     TURN_BYTES,
+    listed_omissions,
     validate_pack,
 )
 from .source import StoredSession, load_session
@@ -93,19 +96,29 @@ def _goal(session: StoredSession, task_text: str | None) -> tuple[str, str]:
     return "", "none"
 
 
-def _calls(calls: list[dict[str, str]]) -> list[dict[str, str]]:
+def _calls(calls: list[dict[str, str]]) -> tuple[list[dict[str, str]], bool]:
+    """``(calls, blanked)``. A secret-shaped name is dropped; a secret summary is emptied."""
+
     out = []
+    blanked = False
     for call in calls[:MAX_CALLS_PER_TURN]:
         name, name_withheld = safe_text(call.get("name", ""), 64)
         summary, summary_withheld = safe_text(call.get("summary", ""), CALL_SUMMARY_CHARS)
         if name_withheld:
+            blanked = True
             continue
-        out.append({"name": name, "summary": "" if summary_withheld else summary})
-    return out
+        if summary_withheld:
+            blanked = True
+            summary = ""
+        out.append({"name": name, "summary": summary})
+    return out, blanked
 
 
-def _recent(session: StoredSession, count: int) -> list[dict[str, Any]]:
-    """The last ``count`` user/assistant turns; tool turns in that window keep only calls."""
+def _recent(session: StoredSession, count: int, omitted: set[str]) -> list[dict[str, Any]]:
+    """The last ``count`` user/assistant turns; tool turns in that window keep only calls.
+
+    A withheld turn is kept with ``text`` empty (the marker is not returned).
+    """
 
     talk = [index for index, turn in enumerate(session.tail) if turn.role in TALK_ROLES]
     if not talk:
@@ -114,12 +127,25 @@ def _recent(session: StoredSession, count: int) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for turn in session.tail[start:]:
         if turn.role in TALK_ROLES:
-            text, withheld = _safe(turn.text, TURN_BYTES) if turn.text else ("", False)
-            withheld = withheld or turn.withheld
-            calls = [] if withheld else _calls(turn.tool_calls)
-            text = WITHHELD if turn.withheld else text
+            cleaned, secret = safe_text(turn.text) if turn.text else ("", False)
+            withheld = secret or turn.withheld
+            if withheld:
+                text, calls = "", []
+                omitted.add("text")
+                if turn.tool_calls:
+                    omitted.add("tool_calls")
+            else:
+                text = trim_bytes(cleaned, TURN_BYTES)
+                if text != cleaned:
+                    omitted.add("text")
+                calls, blanked = _calls(turn.tool_calls)
+                if blanked:
+                    omitted.add("tool_calls")
         elif turn.tool_calls and not turn.withheld:
-            text, withheld, calls = "", False, _calls(turn.tool_calls)
+            calls, blanked = _calls(turn.tool_calls)
+            if blanked:
+                omitted.add("tool_calls")
+            text, withheld = "", False
         else:
             continue  # tool output and other roles: no text in the pack
         out.append(
@@ -133,6 +159,21 @@ def _recent(session: StoredSession, count: int) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def _mirror_derived(pack: dict[str, Any]) -> None:
+    """``files`` and ``evidence_refs`` stay equal to what the pack still holds.
+
+    Refs are ``agent:session@offset`` for turns still in ``recent_turns``. No turn text.
+    """
+
+    system = pack["system"]
+    source = pack["source"]
+    system["files"] = list(system["files_touched"])
+    system["evidence_refs"] = [
+        f"{source['agent']}:{source['session_id']}@{turn['offset']}"
+        for turn in system["recent_turns"]
+    ]
 
 
 def _source(session: StoredSession) -> dict[str, Any]:
@@ -205,7 +246,8 @@ def build_pack(
             snapshot = gitinfo.git_snapshot(work_tree)
         if snapshot is None:
             notes.append(NOTE_GIT_UNAVAILABLE)
-    recent_turns = _recent(session, int(recent))
+    omitted: set[str] = set()
+    recent_turns = _recent(session, int(recent), omitted)
     pack: dict[str, Any] = {
         "schema": SCHEMA,
         "notice": NOTICE,
@@ -216,6 +258,12 @@ def build_pack(
             "goal": goal,
             "goal_source": goal_source,
             "files_touched": tools_map.files_from_calls(name, session.calls, limit=MAX_FILES),
+            "decisions": [],
+            "open_questions": [],
+            "constraints": [],
+            "files": [],
+            "next_step": "",
+            "evidence_refs": [],
             "git": snapshot,
             "recent_turns": recent_turns,
             "lineage": {
@@ -228,7 +276,11 @@ def build_pack(
         "truncated_parts": [],
         "max_bytes": cap,
         "saved_as": saved_as,
+        "redaction_policy": REDACTION_POLICY,
+        # Widest list while fitting, so the real (smaller) list cannot overflow the cap.
+        "omitted_fields": list(OMITTED_FIELD_NAMES),
     }
+    _mirror_derived(pack)
     if notes:
         pack["system"]["notes"] = notes  # optional field: present only when non-empty
     if summarize_spec is not None:
@@ -244,21 +296,36 @@ def build_pack(
             allow_cloud=allow_cloud,
             loader=loader,
         )
-    fit(pack, cap, measure or json_size)
+        model = pack["model_summarized"]
+        if model.get("status") == "ok":
+            # Copies of lists already on the pack. Cleared again if fit drops the model part.
+            pack["system"]["decisions"] = list(model.get("decisions") or [])
+            pack["system"]["open_questions"] = list(model.get("open_questions") or [])
+            nxt = [item for item in (model.get("next") or []) if item]
+            pack["system"]["next_step"] = nxt[0] if nxt else ""
+    fit(pack, cap, measure or json_size, omitted)
+    pack["omitted_fields"] = listed_omissions(omitted)
     validate_pack(pack)
     return pack
 
 
-def fit(pack: dict[str, Any], cap: int, measure: Callable[[dict[str, Any]], int]) -> None:
+def fit(
+    pack: dict[str, Any],
+    cap: int,
+    measure: Callable[[dict[str, Any]], int],
+    omitted: set[str] | None = None,
+) -> None:
     """Cut ``pack`` in place until ``measure(pack) <= cap``, recording what was cut.
 
     Order: oldest recent turns, files touched, git state, model part, goal,
     lineage, then the source cwd and project. :class:`HandoffError`
-    (``pack_too_large``) when even that is not enough.
+    (``pack_too_large``) when even that is not enough. ``files`` and
+    ``evidence_refs`` stay mirrored to whatever remains.
     """
 
     system = pack["system"]
     parts: list[str] = pack["truncated_parts"]
+    dropped: set[str] = set() if omitted is None else omitted
 
     def over() -> bool:
         pack["truncated"] = True  # measured with the flag set, so clearing it never grows
@@ -270,19 +337,33 @@ def fit(pack: dict[str, Any], cap: int, measure: Callable[[dict[str, Any]], int]
         if part not in parts:
             parts.append(part)
         pack["truncated"] = True
+        dropped.add(part)
 
     while over() and system["recent_turns"]:
         system["recent_turns"].pop(0)
+        _mirror_derived(pack)
         mark("recent_turns")
     while over() and system["files_touched"]:
         system["files_touched"].pop()
+        _mirror_derived(pack)
         mark("files_touched")
+        dropped.add("files")
     if over() and system.get("git"):
         system["git"] = None
         mark("git")
     if over() and "model_summarized" in pack:
         del pack["model_summarized"]
         mark("model_summarized")
+        # Those lists were copies of the model part; dropping it drops the copies too.
+        if system.get("decisions"):
+            system["decisions"] = []
+            dropped.add("decisions")
+        if system.get("open_questions"):
+            system["open_questions"] = []
+            dropped.add("open_questions")
+        if system.get("next_step"):
+            system["next_step"] = ""
+            dropped.add("next_step")
 
     def shorten(holder: dict[str, Any], key: str, part: str) -> None:
         while over() and holder[key]:

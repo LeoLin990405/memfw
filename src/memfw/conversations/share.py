@@ -22,6 +22,12 @@ import re
 from collections.abc import Callable, Sequence
 from typing import Any, TypeVar
 
+from memfw.handoff.schema import (
+    CONVERSATIONS_HANDOFF_SCHEMA,
+    OMITTED_FIELD_NAMES,
+    REDACTION_POLICY,
+    listed_omissions,
+)
 from memfw.retrieval.health import HEALTH_KEY, from_conversation_search
 
 from .policy import SharePolicy
@@ -39,8 +45,10 @@ from .store import (
 )
 from .two_stage import (
     MODES,
+    SUMMARY_CHARS,
     LabelLookup,
     parse_tags,
+    session_card,
     tag_filters,
     tags_match,
     two_stage_search,
@@ -86,13 +94,43 @@ def _snippet(text: str, terms: Sequence[str]) -> str:
     return ("…" if start else "") + window + ("…" if start + SNIPPET_CHARS < len(text) else "")
 
 
-def _calls(turn: Turn) -> list[dict[str, str]]:
+def _calls(turn: Turn, omitted: set[str]) -> list[dict[str, str]]:
+    """Tool calls with secrets removed. A secret name is dropped; a secret summary is emptied."""
+
     out = []
     for call in turn.tool_calls[:20]:
-        name, _ = safe_text(call.get("name", ""), 80)
-        summary, _ = safe_text(call.get("summary", ""), ITEM_CHARS)
+        name, name_withheld = safe_text(call.get("name", ""), 80)
+        summary, summary_withheld = safe_text(call.get("summary", ""), ITEM_CHARS)
+        if name_withheld or summary_withheld:
+            omitted.add("tool_calls")
+            if name_withheld:
+                continue
+            summary = ""
         out.append({"name": name, "summary": summary})
     return out
+
+
+def _label_summary_tags(
+    row: dict[str, Any] | None, omitted: set[str]
+) -> tuple[str | None, dict[str, Any] | None]:
+    """Worker summary and tags for a session card. A withheld summary is null, not invented."""
+
+    if not row:
+        return None, None
+    raw = str(row.get("summary") or "")
+    summary = None
+    if raw:
+        full, withheld = safe_text(raw)
+        if withheld:
+            omitted.add("summary")
+        else:
+            summary = full
+            if len(full) > SUMMARY_CHARS:
+                summary = full[: SUMMARY_CHARS - 1] + "…"
+                omitted.add("summary")
+            if not summary:
+                summary = None
+    return summary, parse_tags(row.get("tags"))
 
 
 def _size(value: Any) -> int:
@@ -358,9 +396,28 @@ class ConversationShare:
         hits, next_offset = _page(fetch, keep, limit, offset)
         if not hits:
             next_offset = None  # an empty page never hints at filtered matches
+        omitted: set[str] = set()
+        keys = list(dict.fromkeys((hit.app, hit.session_id) for hit in hits))
+        label_rows: dict[tuple[str, str], dict[str, Any]] = {}
+        if keys and self.labels is not None:
+            rows = self.labels.session_labels(keys=keys, limit=len(keys))
+            if rows:
+                for row in rows:
+                    label_rows[(str(row["app"]), str(row["session_id"]))] = row
+        infos: dict[tuple[str, str], SessionInfo | None] = {}
+        for key in keys:
+            if key not in infos:
+                infos[key] = self.source.session(*key)
         results = []
         for hit in hits:
             text, _ = safe_text(hit.text)
+            key = (hit.app, hit.session_id)
+            info = infos.get(key)
+            summary, tags = _label_summary_tags(label_rows.get(key), omitted)
+            if summary is None and key not in label_rows and self.summaries is not None:
+                raw = self.summaries(*key)
+                if raw:
+                    summary, tags = _label_summary_tags({"summary": raw, "tags": None}, omitted)
             results.append(
                 {
                     "ref": hit.ref,
@@ -370,6 +427,16 @@ class ConversationShare:
                     "role": hit.role,
                     "ts": hit.ts,
                     "snippet": _snippet(text, terms),
+                    "session_card": session_card(
+                        app=hit.app,
+                        session_id=hit.session_id,
+                        started_at=None if info is None else info.started_at,
+                        updated_at=None if info is None else info.updated_at,
+                        turns=None if info is None else info.turns,
+                        summary=summary,
+                        tags=tags,
+                        suggested_start=hit.offset,
+                    ),
                 }
             )
             if with_archive_state:
@@ -378,6 +445,8 @@ class ConversationShare:
             "notice": DATA_NOTICE,
             "results": results,
             "next_offset": next_offset,
+            "redaction_policy": REDACTION_POLICY,
+            "omitted_fields": listed_omissions(omitted),
         }
         # Newest-first keyword turns: no score; only an empty page changes it.
         payload[HEALTH_KEY] = from_conversation_search(payload)
@@ -393,6 +462,8 @@ class ConversationShare:
         max_bytes: int = DEFAULT_BYTES,
         with_archive_state: bool = False,
         archived_only: bool = False,
+        around: int | None = None,
+        radius: int | None = None,
     ) -> dict[str, Any]:
         self._ready()
         info = self._resolve(session_id, app)
@@ -403,23 +474,50 @@ class ConversationShare:
                 raise ConversationError("session is not archived")
             if with_archive_state:
                 session["archived"] = archived
-        start = max(0, int(start))
-        stop = start + MAX_RANGE if end is None else _clamp(end, start, start + MAX_RANGE)
+        if around is not None:
+            # ``--around`` is a turn index (the same axis as start/end). start/end are ignored.
+            if isinstance(around, bool) or not isinstance(around, int) or around < 0:
+                raise ConversationError("around must be an integer >= 0")
+            if radius is None:
+                radius = 2
+            elif isinstance(radius, bool) or not isinstance(radius, int) or radius < 0:
+                raise ConversationError("radius must be an integer >= 0")
+            start = max(0, around - radius)
+            end = around + radius + 1  # inclusive window [center - radius, center + radius]
+        elif radius is not None:
+            raise ConversationError("radius requires around")
+        else:
+            start = max(0, int(start))
+        stop = start + MAX_RANGE if end is None else _clamp(int(end), start, start + MAX_RANGE)
         cap = _clamp(max_bytes, MIN_BYTES, MAX_BYTES)
         turns = self.source.turns(info.app, info.session_id, start=start, limit=stop - start)
         out: list[dict[str, Any]] = []
+        omitted: set[str] = set()
         frame = {
             "notice": DATA_NOTICE,
             "session": session,
             "turns": [],
             "truncated": True,
             "next_start": 10**9,
+            "redaction_policy": REDACTION_POLICY,
+            "omitted_fields": list(OMITTED_FIELD_NAMES),
         }
         used = _size(frame)
         truncated = False
         for position, turn in enumerate(turns, start=start):
-            text, withheld = safe_text(turn.text, TURN_CHARS)
+            full, withheld = safe_text(turn.text)
             withheld = withheld or turn.withheld
+            if withheld:
+                text = ""
+                omitted.add("text")
+                calls: list[dict[str, str]] = []
+                if turn.tool_calls:
+                    omitted.add("tool_calls")
+            else:
+                text = full if len(full) <= TURN_CHARS else full[: TURN_CHARS - 1] + "…"
+                if text != full:
+                    omitted.add("text")
+                calls = _calls(turn, omitted)
             item: dict[str, Any] = {
                 "index": position,
                 "ref": turn.ref,
@@ -427,7 +525,7 @@ class ConversationShare:
                 "ts": turn.ts,
                 "text": text,
                 "withheld": withheld,
-                "tool_calls": _calls(turn),
+                "tool_calls": calls,
             }
             size = _size(item) + 2
             if used + size > cap:
@@ -435,11 +533,15 @@ class ConversationShare:
                 if out:
                     break
                 # The first turn alone is too big: drop its tool calls, then cut its text.
+                if item["tool_calls"]:
+                    omitted.add("tool_calls")
                 item["tool_calls"] = []
                 item["text"] = ""
+                omitted.add("text")
                 room = cap - used - _size(item) - 8
+                source_text = "" if withheld else full
                 while room > 0:
-                    item["text"] = _trim_bytes(text, room)
+                    item["text"] = _trim_bytes(source_text, room)
                     size = _size(item) + 2
                     if used + size <= cap:
                         break
@@ -459,6 +561,8 @@ class ConversationShare:
             "truncated": truncated,
             # Nothing fitted: no cursor, so a paging client cannot loop on the same start.
             "next_start": next_index if out and next_index < limit_end else None,
+            "redaction_policy": REDACTION_POLICY,
+            "omitted_fields": listed_omissions(omitted),
         }
 
     def handoff(
@@ -498,10 +602,18 @@ class ConversationShare:
         if found:
             goal, _ = safe_text(found, GOAL_CHARS)
         talk = [turn for turn in turns if turn.role in {"user", "assistant"}]
+        omitted: set[str] = set()
         recent_turns = []
         for turn in talk[-recent:]:
-            text, withheld = safe_text(turn.text, RECENT_CHARS)
+            full, withheld = safe_text(turn.text)
             withheld = withheld or turn.withheld
+            if withheld:
+                text = ""
+                omitted.add("text")
+            else:
+                text = full if len(full) <= RECENT_CHARS else full[: RECENT_CHARS - 1] + "…"
+                if text != full:
+                    omitted.add("text")
             recent_turns.append(
                 {
                     "ref": turn.ref,
@@ -511,7 +623,9 @@ class ConversationShare:
                     "withheld": withheld,
                 }
             )
+        files_touched = self._files(turns)
         pack: dict[str, Any] = {
+            "schema": CONVERSATIONS_HANDOFF_SCHEMA,
             "notice": DATA_NOTICE,
             "kind": "handoff",
             "for_agent": target,
@@ -519,22 +633,31 @@ class ConversationShare:
             "system": {
                 "label": "[system] derived by code from the stored, redacted session",
                 "goal": goal,
-                "files_touched": self._files(turns),
+                "files_touched": files_touched,
+                "files": list(files_touched),
                 "decisions": self._sentences(talk, _DECISION),
                 "open_questions": self._questions(talk[-20:]),
+                "constraints": [],
+                "next_step": "",
+                "evidence_refs": [turn["ref"] for turn in recent_turns],
                 "recent_turns": recent_turns,
             },
+            "redaction_policy": REDACTION_POLICY,
+            "omitted_fields": list(OMITTED_FIELD_NAMES),
         }
         summary = self.summaries(info.app, info.session_id) if self.summaries else None
         if summary:
             text, withheld = safe_text(summary, 4096)
-            if not withheld:
+            if withheld:
+                omitted.add("summary")
+            elif text:
                 pack["model_summarized"] = {
                     "label": "[model_summarized: not verified]",
                     "summary": text,
                 }
         pack["truncated"] = True  # sized with the flag present
-        pack["truncated"] = self._fit(pack, cap)
+        pack["truncated"] = self._fit(pack, cap, omitted)
+        pack["omitted_fields"] = listed_omissions(omitted)
         return pack
 
     # -- handoff parts ----------------------------------------------------------
@@ -583,26 +706,45 @@ class ConversationShare:
         return found[-MAX_ITEMS:]
 
     @staticmethod
-    def _fit(pack: dict[str, Any], cap: int) -> bool:
-        """Trim to ``cap`` bytes: recent turns, then files, then the model part."""
+    def _fit(pack: dict[str, Any], cap: int, omitted: set[str]) -> bool:
+        """Trim to ``cap`` bytes: recent turns, then files, then the model part.
+
+        ``files`` and ``evidence_refs`` stay aligned with what remains. Refs are the
+        turn refs still in ``recent_turns`` (``app:session@offset``), never new text.
+        """
 
         system = pack["system"]
         truncated = False
+
+        def sync() -> None:
+            system["files"] = list(system["files_touched"])
+            system["evidence_refs"] = [turn["ref"] for turn in system["recent_turns"]]
+
         while _size(pack) > cap and system["recent_turns"]:
             system["recent_turns"].pop(0)
+            sync()
+            omitted.add("recent_turns")
             truncated = True
         while _size(pack) > cap and system["files_touched"]:
             system["files_touched"].pop()
+            sync()
+            omitted.add("files_touched")
+            omitted.add("files")
             truncated = True
         if _size(pack) > cap and "model_summarized" in pack:
             del pack["model_summarized"]
+            omitted.add("model_summarized")
             truncated = True
         for key in ("decisions", "open_questions"):
             while _size(pack) > cap and system[key]:
                 system[key].pop(0)
+                omitted.add(key)
                 truncated = True
         if _size(pack) > cap:
-            system["goal"] = system["goal"][: max(0, len(system["goal"]) - (_size(pack) - cap))]
+            shortened = system["goal"][: max(0, len(system["goal"]) - (_size(pack) - cap))]
+            if shortened != system["goal"]:
+                system["goal"] = shortened
+                omitted.add("goal")
             truncated = True
         return truncated
 
