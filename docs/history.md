@@ -265,7 +265,85 @@ Limitations (not detected):
   then masked as an e-mail address, so `redact()` output can hide the host.
   The secret scan still flags such a line, so it is never indexed;
 - a secret that slips through ends up in a snippet; delete the index file to
-  purge it, then re-index.
+  purge it, then re-index. In the conversation store, use
+  `memfw conversations reredact` (below) instead.
+
+## Re-redacting stored conversations
+
+The redaction rules get stricter over time. Every read redacts again, but the
+conversation store (`~/.local/share/memfw/conversations.sqlite` by default,
+written by `memfw history ingest` and the conversation worker) keeps what was
+written under the rules of its day. The store is the data, not a cache: many
+raw transcripts no longer exist, so it cannot be deleted and ingested again.
+`memfw conversations reredact` rewrites it in place instead.
+
+```sh
+memfw conversations reredact --root VAULT                 # dry run: counts only
+memfw conversations reredact --root VAULT --apply --worker-state --vacuum --json
+```
+
+- **Dry run (default).** Opens the store read-only and reports rows scanned,
+  rows and columns that would change, the `[REDACTED:kind]` masks that would be
+  added and turns that would now be withheld. It never prints text, values or
+  paths from rows, and does not create or modify any file.
+- **What is rewritten.** The columns ingest redacts: `role`, `text`,
+  `tool_calls` (each call's name and summary), `cwd`, `project`, `model`. A turn
+  whose stored text now trips the secret scan is withheld, as ingest would
+  withhold it. `digest` is recomputed from the new values with ingest's formula.
+- **What is not.** `agent`, `session_id`, `offset` (the key, also used by the
+  locator table, the archive, the worker state and every handoff or `get`
+  reference) and `locator` (an opaque hash, never redacted). `session_id`,
+  `parent_session` and `ts` are only checked: rows whose value would change are
+  counted in `key_columns_flagged`. Such a session is re-keyed by the next full
+  re-read of its transcript anyway; the command does not do it.
+- **No duplicates afterwards.** Keys and cursors stay, so an unchanged
+  transcript is still skipped and a changed one updates the same rows (equal
+  digest: nothing written). Session fingerprints (turn count, last offset, last
+  timestamp) do not change, so archive state and worker jobs stay as they are.
+- **`--apply`.** Takes the store's writer lock (`<store>.lock`) and the
+  worker's run lock without waiting; exits `3` when either is held. Writes a
+  full backup first (`<store>.bak-reredact-<UTC>` or `--backup PATH`, `0600`,
+  refused in a git work tree, the vault or a synced folder, free space checked)
+  and verifies it (`integrity_check`, equal row counts). Then rewrites changed
+  rows in batches of `--batch` rows (default 2000) with `secure_delete` on.
+  Each batch is one `BEGIN IMMEDIATE` transaction: read, plan and write happen
+  under SQLite's write lock, so even a writer that does not take the store lock
+  cannot change a row in between. Each UPDATE is also guarded by the row's key,
+  digest and old values; a row replaced anyway is left alone and counted as
+  `skipped_concurrent` (run the command again). Afterwards it re-scans the
+  rewritten rows (must find nothing, else exit `4`; rows the pass left alone
+  are already stable) and runs `integrity_check`. Interrupted? Run it again:
+  every batch is idempotent and the next run continues with what is left.
+- **Ingest while `--apply` runs.** Ingest waits up to 60 seconds for the store
+  lock, then that agent's ingest fails for this round (an error count, no data
+  lost); the next round catches up. With every reader waiting, one ingest
+  cycle can take about 13 minutes to give up. An ingest built before this lock
+  existed does not wait for it (each batch's transaction still keeps it out of
+  a batch), so stop the launchd ingest/worker cycle, or deploy the locked
+  ingest, before `--apply`.
+- **Old bytes.** `secure_delete` zeroes the pages this run frees. Pages freed
+  earlier can still hold old values until `--vacuum` rewrites the file. The
+  journal mode is detected at runtime (`verify.journal_mode`): the store
+  normally runs in rollback-journal (`delete`) mode, where the `-journal` file
+  briefly holds the old pages of each batch and is then deleted (its disk
+  blocks are not wiped); in WAL mode the WAL is checkpointed and truncated
+  (`wal_checkpoint(TRUNCATE)`). The backup keeps every old value: delete it
+  once you are satisfied.
+- **Other stores.** The worker state (`conversations-work.sqlite`: summaries,
+  intents, outcomes, tags, episodes) holds text derived from conversations; the
+  dry run scans it and `--worker-state` rewrites it (backed up the same way).
+  The history index (`<vault>/.memfw-history.sqlite`) is separate derived data
+  rebuilt from the transcripts on disk: if it exists, delete
+  `.memfw-history.sqlite*` and run `memfw history index`. Files already written
+  to the vault (memories, candidates, skill drafts) are not covered.
+- **Exit codes.** `0` ok; `2` refused or failed before anything was written
+  (location, missing store, space for the backup, a dry-run SQLite error); `3`
+  locked by another writer; `4` a verification failed; `5` failed after the
+  backup (an SQLite or disk error while writing, no space for `--vacuum`): rows
+  may have been written, the summary carries the counts so far and the backup
+  path; run it again. `--json` prints the summary as JSON with `status` `ok`,
+  `refused`, `verify_failed` or `failed_after_writes`; errors name the SQLite or
+  OS error kind, never a value.
 
 ## Incremental refresh
 

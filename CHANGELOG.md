@@ -37,16 +37,47 @@ projections out of the vault; see the 0.4.0
   read; the handoff tool map and dream distillation check for secrets before
   redacting (a secret-shaped value is dropped, not kept masked).
 
+### Added
+
+- `memfw conversations reredact`: re-redacts text already at rest in the
+  conversation store under the current rules. Dry run by default (read-only,
+  counts only: rows and columns that would change, new `[REDACTED:kind]`
+  masks, newly withheld turns); `--apply` takes the store's writer lock and the
+  worker's run lock without waiting (exit 3 when either is held), writes a
+  verified `0600` backup with the SQLite online backup API, rewrites changed
+  rows in batches (one `BEGIN IMMEDIATE` transaction each, guarded UPDATEs,
+  `skipped_concurrent` counted) with `secure_delete` on, then re-scans the
+  rewritten rows (must find nothing) and runs `integrity_check` (plus
+  `wal_checkpoint(TRUNCATE)` in WAL mode); `--vacuum` also rewrites free pages;
+  `--worker-state` covers the worker's summaries and episodes; `--json` prints
+  a machine-readable summary. Exit codes: 0 ok, 2 refused before writing, 3
+  locked, 4 verification failed, 5 failed after the backup (counts so far and
+  the backup path reported). Keys (`session_id`,
+  `offset`, `locator`) are never rewritten, the row digest is recomputed, so a
+  later ingest neither duplicates turns nor re-processes sessions. See
+  docs/history.md.
+- The conversation store has a writer lock (`<store>.lock`): an ingest waits up
+  to 60 seconds for it, then fails that agent's ingest for the round (no data
+  lost; the next round catches up). While `reredact --apply` runs, one ingest
+  cycle can take about 13 minutes to give up: stop the ingest/worker cycle, or
+  deploy the locked ingest, before running it.
+
 ### Upgrade notes
 
 - Text stored before this release was redacted under the old rules. Every
-  output is redacted again on the way out, but the full-text indexes still
-  hold the old terms, so a search for an unmasked phone number or address can
-  still *match* (the result shows it masked). To purge those terms, rebuild
-  the history index: stop the ingest job, delete
-  `<vault>/.memfw-history.sqlite*` and run `memfw history index`. Derived
-  files already written to the vault (distilled memories, candidates, skill
-  drafts) are not rewritten; review them with a scan if needed.
+  output is redacted again on the way out, but the stored rows still hold the
+  old values. **The conversation store is the data, not a cache**: do not
+  delete it (many raw transcripts no longer exist to ingest again). Instead,
+  stop the ingest and worker jobs, run `memfw conversations reredact` (dry
+  run), then `memfw conversations reredact --apply --worker-state --vacuum`,
+  check the result, and delete the `*.bak-reredact-*` backup once satisfied
+  (it still holds the old values).
+- The history index (`<vault>/.memfw-history.sqlite`) is separate derived data
+  rebuilt from the transcripts on disk: if that file exists, delete
+  `<vault>/.memfw-history.sqlite*` and run `memfw history index`; if it does
+  not exist there is nothing to do. Derived files already written to the vault
+  (distilled memories, candidates, skill drafts) are not rewritten; review
+  them with a scan if needed.
 
 ## [0.5.0] — 2026-11-20
 

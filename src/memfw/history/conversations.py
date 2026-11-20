@@ -9,6 +9,11 @@ passed through :func:`redact`. The store never holds an unredacted value and
 raw lines are never copied. The location rules live in
 :mod:`memfw.history.store_location`.
 
+Writers are serialised by ``<store>.lock`` (:func:`store_writer_lock`): an
+ingest waits up to :data:`WRITER_LOCK_WAIT` seconds for it, then fails;
+``memfw conversations reredact --apply`` (:mod:`memfw.history.reredact`) takes
+it without waiting.
+
 Rows are keyed by ``(agent, session_id, offset)``: re-ingesting the same turn
 is a no-op, a changed turn is updated in place. The same session seen under
 two roots (a Worker home mirroring it) is stored once; ``conversation_turn_locators``
@@ -71,12 +76,15 @@ the next settled ingest.
 
 from __future__ import annotations
 
+import fcntl
 import fnmatch
 import hashlib
 import json
 import os
 import re
 import sqlite3
+import stat
+import time
 from collections.abc import Iterable, Iterator
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
@@ -118,6 +126,10 @@ CLOCK_SKEW = timedelta(minutes=5)
 ARCHIVE_TABLE = "conversation_archive"
 TS_FUNCTION = "memfw_ts_key"
 """Consecutive empty re-reads of one unchanged fingerprint before ingest gives up."""
+LOCK_SUFFIX = ".lock"
+"""The store's writer lock file is ``<store>.lock`` (see :func:`store_writer_lock`)."""
+WRITER_LOCK_WAIT = 60.0
+"""Seconds an ingest waits for another writer (a running re-redaction) before failing."""
 _SURROGATES = re.compile("[\ud800-\udfff]")
 
 
@@ -212,6 +224,61 @@ def _session_fingerprint(locator: SessionLocator) -> dict[str, Any]:
     if isinstance(marker, str):
         return {"session": marker}
     return _fingerprint(locator.path)
+
+
+def turn_digest(turn: int, values: tuple[Any, ...], parent: str) -> str:
+    """Digest of one stored turn's content: the ingest dedupe key (see ``_row``).
+
+    ``values`` are the stored ``(role, ts, text, tool_calls, cwd, project, model,
+    origin, withheld, parser_version)``. Origin is not part of the digest: the same
+    turn seen from another root (a Worker home mirroring a session) is a
+    duplicate, not a rewrite. :mod:`memfw.history.reredact` recomputes it after
+    re-redacting a row, so the digest always describes what is stored.
+    """
+
+    content: list[Any] = [turn, *values[:7], *values[8:]]
+    if parent:
+        # Only when set, so turns stored before parent links keep their digest.
+        content.append(parent)
+    return hashlib.sha256(json.dumps(content).encode()).hexdigest()[:24]
+
+
+@contextmanager
+def store_writer_lock(db: Path | str, *, wait: float | None = None) -> Iterator[bool]:
+    """``True`` while this process holds the store's writer lock, ``False`` if it timed out.
+
+    An exclusive ``flock`` on ``<store>.lock`` (``0600``, ``O_NOFOLLOW``, never
+    truncated). :meth:`ConversationStore.ingest` waits up to
+    :data:`WRITER_LOCK_WAIT` seconds for it; ``memfw conversations reredact
+    --apply`` does not wait (``wait=0``) and refuses to run while another
+    writer holds it. ``wait=None`` means :data:`WRITER_LOCK_WAIT`.
+    """
+
+    path = Path(str(db) + LOCK_SUFFIX)
+    limit = WRITER_LOCK_WAIT if wait is None else max(0.0, float(wait))
+    try:
+        descriptor = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    except OSError as exc:
+        raise HistoryError(f"cannot open conversation store lock: {exc.strerror}") from exc
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise HistoryError("conversation store lock is not a regular file")
+        deadline = time.monotonic() + limit
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    yield False
+                    return
+                time.sleep(0.1)
+        try:
+            yield True
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+    finally:
+        os.close(descriptor)
 
 
 @dataclass
@@ -474,14 +541,8 @@ class ConversationStore:
             int(withheld),
             version,
         )
-        # Origin is not part of the digest: the same turn seen from another root
-        # (a Worker home mirroring a session) is a duplicate, not a rewrite.
         parent = "" if withheld else _clean(record.parent_session)
-        content: list[Any] = [record.turn, *values[:7], *values[8:]]
-        if parent:
-            # Only when set, so turns stored before parent links keep their digest.
-            content.append(parent)
-        digest = hashlib.sha256(json.dumps(content).encode()).hexdigest()[:24]
+        digest = turn_digest(record.turn, values, parent)
         return (
             agent,
             _clean(record.session_id),
@@ -521,6 +582,18 @@ class ConversationStore:
             self._settled = self._now - timedelta(minutes=float(settled_minutes))
             counts.extra["sessions_unsettled"] = 0
             counts.extra["sessions_archived"] = 0
+        prepare_store_path(self.db)  # the lock file lives next to the store
+        with store_writer_lock(self.db) as held:
+            if not held:
+                raise HistoryError("conversation store is locked by another writer")
+            return self._ingest_locked(reader, roots, counts)
+
+    def _ingest_locked(
+        self,
+        reader: Reader,
+        roots: Iterable[StoreRoot | Path],
+        counts: IngestCounts,
+    ) -> IngestCounts:
         with self._open() as connection:
             if reader.agent in self.optout.agents:
                 # Opting out also forgets what was stored before.
