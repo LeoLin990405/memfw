@@ -1,7 +1,7 @@
 # LangExtract deriver adapter
 
 `packages/adapters/memfw-adapter-langextract` (import `memfw_adapter_langextract`, version
-0.1.0) implements the `Deriver` port ([ports-and-recall.md](ports-and-recall.md#24-deriver))
+0.1.1) implements the `Deriver` port ([ports-and-recall.md](ports-and-recall.md#24-deriver))
 with [Google LangExtract](https://github.com/google/langextract). It reads the memories a
 request names, asks a model for the entities and relations they state, and returns a
 read-only `DerivedView` in which every row points at a character span of a memory body.

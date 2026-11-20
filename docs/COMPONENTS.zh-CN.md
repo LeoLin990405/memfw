@@ -65,7 +65,7 @@ memfw code map --db /tmp/memfw-code.sqlite
 2. `src/memfw/index/readonly.py`（查询规则、`search_vault`）；
 3. `src/memfw/index/read_path.py`（读路径共用字段）。
 
-两个库文件只依赖标准库和 PyYAML。脚本按顺序加载读路径：先找旁边的 `readonly.py`，再找仓库里的 `src/memfw/index/`，最后找已安装的 `memfw`，并在日志里写明用了哪一个；三者都没有就报错退出，并指出缺了哪些文件。`read_path.py` 带有 `READ_PATH_VERSION`（0.3.0 和 0.4.0 中为 2）；脚本和 `readonly.py` 遇到更旧的副本会拒绝启动，这样只升级了一部分时，启动就会失败，而不是每次 `/search` 都报错。它从不写盘，所以升级后要先跑一次 `memfw index rebuild`。
+两个库文件只依赖标准库和 PyYAML。脚本按顺序加载读路径：先找旁边的 `readonly.py`，再找仓库里的 `src/memfw/index/`，最后找已安装的 `memfw`，并在日志里写明用了哪一个；三者都没有就报错退出，并指出缺了哪些文件。`read_path.py` 带有 `READ_PATH_VERSION`（0.3.0 到 0.5.0 中都为 2）；脚本和 `readonly.py` 遇到更旧的副本会拒绝启动，这样只升级了一部分时，启动就会失败，而不是每次 `/search` 都报错。它从不写盘，所以升级后要先跑一次 `memfw index rebuild`。
 
 `--clearance` / `MEMFW_READONLY_CLEARANCE`（例如 `public,shared`）把 `/search` 和 `/related` 限制在这些隐私级别；不设置就不过滤。没有 `privacy` 字段的记忆按 vault 的 `legacy_privacy_default` 处理（没设时是 `local-private`），所以要先设好它，否则旧记忆会全部被挡掉。见 [`READONLY-SERVICE-UPGRADE.md`](READONLY-SERVICE-UPGRADE.md)。
 
@@ -93,7 +93,7 @@ CI 的 `standalone-wheels` 任务会构建两者，装进一个没有 memfw 的�
 
 ## 流水线运行器：`memfw-pipeline`
 
-`packages/memfw-pipeline`（wheel 名 `memfw_pipeline`，版本 0.1.0）是派生产物（准入视图、元数据索引、FTS / bm25s / Qdrant 索引、投影）的 Stage 契约和运行器。一个 stage 只实现 `freshness`、`inputs_digest`、`build`、`verify`、`publish`，以及可选的幂等 `post_publish` 步骤；其余由运行器统一提供：放在目标旁边的单写者锁（`.<target>.lock`，`O_NOFOLLOW`，被占用时先重试几秒，仍被占用则退出码 75）、开始时写 `running` 状态、在目标旁边的临时目录里构建、每个发布出去的产物里自带一份记录（`.memfw-pipeline.json`：输入摘要和计数）、原子交换目录（不支持时退回两次 rename，失败会回滚）、缩水保护（空构建或少于基线一半时退出码 5，除非加 `--allow-shrink`；基线优先取线上产物自带的记录）、新鲜度，以及只含计数和固定原因码的状态文件。输入摘要与线上产物的记录一致时跳过构建，但 post-publish 步骤照样运行。以 root 运行时默认开启路径信任检查。`memfw-pipeline unit` 打印加固过的 systemd 或 launchd 模板供审阅，不会安装任何东西。运行时只用标准库，外加 `memfw-ports` 0.3.0；memfw 本身从不导入它。用 `uv build --wheel --package memfw-pipeline` 构建（没有发布到 PyPI）。这一版只带一个示例 stage，真正的各个 stage 之后再迁移过来。见 [`pipeline.md`](pipeline.md)。
+`packages/memfw-pipeline`（wheel 名 `memfw_pipeline`，版本 0.1.0）是派生产物（准入视图、元数据索引、FTS / bm25s / Qdrant 索引、投影）的 Stage 契约和运行器。一个 stage 只实现 `freshness`、`inputs_digest`、`build`、`verify`、`publish`，以及可选的幂等 `post_publish` 步骤；其余由运行器统一提供：放在目标旁边的单写者锁（`.<target>.lock`，`O_NOFOLLOW`，被占用时先重试几秒，仍被占用则退出码 75）、开始时写 `running` 状态、在目标旁边的临时目录里构建、每个发布出去的产物里自带一份记录（`.memfw-pipeline.json`：输入摘要和计数）、原子交换目录（不支持时退回两次 rename，失败会回滚）、缩水保护（空构建或少于基线一半时退出码 5，除非加 `--allow-shrink`；基线优先取线上产物自带的记录）、新鲜度，以及只含计数和固定原因码的状态文件。输入摘要与线上产物的记录一致时跳过构建，但 post-publish 步骤照样运行。以 root 运行时默认开启路径信任检查。`memfw-pipeline unit` 打印加固过的 systemd 或 launchd 模板供审阅，不会安装任何东西。运行时只用标准库，外加 `memfw-ports` 0.4.0；memfw 本身从不导入它。用 `uv build --wheel --package memfw-pipeline` 构建（没有发布到 PyPI）。这一版只带一个示例 stage，真正的各个 stage 之后再迁移过来。见 [`pipeline.md`](pipeline.md)。
 
 
 ## Wiki 页面检查：`memfw-wiki-gate`
@@ -103,33 +103,33 @@ CI 的 `standalone-wheels` 任务会构建两者，装进一个没有 memfw 的�
 
 ## DeepSeek 打标签适配器
 
-`packages/adapters/memfw-adapter-deepseek`（wheel 名 `memfw_adapter_deepseek`，版本 0.1.1）只用标准库实现了 `ModelBackend` 端口。它给会话 worker 提供 `conv-v2` 格式的输出：每个分块和每个会话一段摘要，外加标签（项目、任务类型、组件、意图、结果）；它不抽取事实或论断。它**默认关闭**：只有 `vault.yaml` 里设置了 `conversations: {backend: "memfw_adapter_deepseek:factory", cloud: true}`，并且提供了 `DEEPSEEK_API_KEY`，worker 才会用它；每一轮都有 token 和费用上限。密钥只会发往服务商的 API 地址。memfw 本身从不导入这个适配器；它单独构建成 wheel（`uv build --wheel --package memfw-adapter-deepseek`），没有发布到 PyPI。见 [`conversations-share.md`](conversations-share.md#deepseek-tagging-adapter)。
+`packages/adapters/memfw-adapter-deepseek`（wheel 名 `memfw_adapter_deepseek`，版本 0.1.2）只用标准库实现了 `ModelBackend` 端口。它给会话 worker 提供 `conv-v2` 格式的输出：每个分块和每个会话一段摘要，外加标签（项目、任务类型、组件、意图、结果）；它不抽取事实或论断。它**默认关闭**：只有 `vault.yaml` 里设置了 `conversations: {backend: "memfw_adapter_deepseek:factory", cloud: true}`，并且提供了 `DEEPSEEK_API_KEY`，worker 才会用它；每一轮都有 token 和费用上限。密钥只会发往服务商的 API 地址。memfw 本身从不导入这个适配器；它单独构建成 wheel（`uv build --wheel --package memfw-adapter-deepseek`），没有发布到 PyPI。见 [`conversations-share.md`](conversations-share.md#deepseek-tagging-adapter)。
 
 
 ## bm25s 召回适配器
 
-`packages/adapters/memfw-adapter-bm25s`（wheel 名 `memfw_adapter_bm25s`，版本 0.1.1）是一个进程内的 `RecallProvider`：用 bm25s 0.3.16（MIT）给记忆排序，中文用 jieba 切词。它**默认关闭**：只有 `vault.yaml` 的 `runtime.recall.adapters` 里写了 `memfw_adapter_bm25s:factory`，MCP `memory_search` 的 `mode=two_stage` 才会用它。它只索引隐私级别在 `clearance` 里的记忆（默认 `public,shared`），索引放在 vault 之外的私有目录（`~/.local/share/memfw/adapters/bm25s/`）。memfw 本身从不导入它。见 [`adapter-bm25s.md`](adapter-bm25s.md)。
+`packages/adapters/memfw-adapter-bm25s`（wheel 名 `memfw_adapter_bm25s`，版本 0.1.2）是一个进程内的 `RecallProvider`：用 bm25s 0.3.16（MIT）给记忆排序，中文用 jieba 切词。它**默认关闭**：只有 `vault.yaml` 的 `runtime.recall.adapters` 里写了 `memfw_adapter_bm25s:factory`，MCP `memory_search` 的 `mode=two_stage` 才会用它。它只索引隐私级别在 `clearance` 里的记忆（默认 `public,shared`），索引放在 vault 之外的私有目录（`~/.local/share/memfw/adapters/bm25s/`）。memfw 本身从不导入它。见 [`adapter-bm25s.md`](adapter-bm25s.md)。
 
 ## Qdrant 召回适配器
 
-`packages/adapters/memfw-adapter-qdrant`（wheel 名 `memfw_adapter_qdrant`，版本 0.1.2）是一个语义 `RecallProvider`，后端是运维自己运行的 Qdrant v1.20.x 服务（只绑 loopback，遥测关闭：`QDRANT__TELEMETRY_DISABLED=true`）。查询用 memfw 自己的 embedder 向量化，只取回记忆 id。它**默认关闭**；`memfw-adapter-qdrant sync` 只发送 `public`/`shared` 记忆，从不发送 `local-private`，也不在 Qdrant 里存正文。memfw 本身从不导入它。见 [`adapter-qdrant.md`](adapter-qdrant.md)。
+`packages/adapters/memfw-adapter-qdrant`（wheel 名 `memfw_adapter_qdrant`，版本 0.1.3）是一个语义 `RecallProvider`，后端是运维自己运行的 Qdrant v1.20.x 服务（只绑 loopback，遥测关闭：`QDRANT__TELEMETRY_DISABLED=true`）。查询用 memfw 自己的 embedder 向量化，只取回记忆 id。它**默认关闭**；`memfw-adapter-qdrant sync` 只发送 `public`/`shared` 记忆，从不发送 `local-private`，也不在 Qdrant 里存正文。memfw 本身从不导入它。见 [`adapter-qdrant.md`](adapter-qdrant.md)。
 
 
 ## LightRAG 派生适配器
 
-`packages/adapters/memfw-adapter-lightrag`（wheel 名 `memfw_adapter_lightrag`，版本 0.1.0）实现了 `Deriver` 端口，是运维自己运行的 `lightrag-server` 1.5.7（绑定在 `127.0.0.1`，带 API key）的 loopback HTTP 客户端：产出图谱视图和问答视图，其中每一条的来源都必须是请求过的、可共享的、现行的记忆。**默认关闭**；它产出的行只能以暂存候选的形式成为记忆。见 [`adapter-lightrag.md`](adapter-lightrag.md)。
+`packages/adapters/memfw-adapter-lightrag`（wheel 名 `memfw_adapter_lightrag`，版本 0.1.1）实现了 `Deriver` 端口，是运维自己运行的 `lightrag-server` 1.5.7（绑定在 `127.0.0.1`，带 API key）的 loopback HTTP 客户端：产出图谱视图和问答视图，其中每一条的来源都必须是请求过的、可共享的、现行的记忆。**默认关闭**；它产出的行只能以暂存候选的形式成为记忆。见 [`adapter-lightrag.md`](adapter-lightrag.md)。
 
 ## GraphRAG 派生适配器
 
-`packages/adapters/memfw-adapter-graphrag`（wheel 名 `memfw_adapter_graphrag`，版本 0.1.0）实现了 `Deriver` 端口，把 GraphRAG 3.3.0 当作离线批处理任务：输入是一代 `memfw projection export` 里可共享的文档；只有运维主动调用时，才以子进程方式运行 `graphrag index`（除非 `cloud: true`，只连 loopback 的模型端点）；它输出的 CSV 表再读回来，成为图谱视图和社区报告视图。**默认关闭**；它产出的行只能以暂存候选的形式成为记忆。见 [`adapter-graphrag.md`](adapter-graphrag.md)。
+`packages/adapters/memfw-adapter-graphrag`（wheel 名 `memfw_adapter_graphrag`，版本 0.1.1）实现了 `Deriver` 端口，把 GraphRAG 3.3.0 当作离线批处理任务：输入是一代 `memfw projection export` 里可共享的文档；只有运维主动调用时，才以子进程方式运行 `graphrag index`（除非 `cloud: true`，只连 loopback 的模型端点）；它输出的 CSV 表再读回来，成为图谱视图和社区报告视图。**默认关闭**；它产出的行只能以暂存候选的形式成为记忆。见 [`adapter-graphrag.md`](adapter-graphrag.md)。
 
 ## QMD 召回适配器
 
-`packages/adapters/memfw-adapter-qmd`（wheel 名 `memfw_adapter_qmd`，版本 0.1.1）只用标准库和 PyYAML，对一个正在运行的 [QMD](https://github.com/tobi/qmd)（MIT，锁定 2.5.3）MCP 服务实现了两个 `RecallProvider`：`qmd` 查由 `memfw projection export` 建成的 collection，按投影 manifest 映射回记忆 id；`qmd-notes` 查 Knowledge-Hub 的 collection，返回 `kh:<路径>#<标题>` 引用。两者都只返回引用、QMD 的分数和来源标签；映射不到可见文档的结果一律丢弃（`local-private` 和 `unknown` 永远不返回）；**默认关闭**（要在 `AdaptersConfig` 的 `enabled` 里打开）。端点默认必须是 loopback（除非设 `allow_remote`），loopback 请求不走代理。QMD 不可用或超时时，协调层把它标成降级，由 FTS 回答。memfw 本身从不导入这个适配器。见 [`qmd-projection.md`](qmd-projection.md#qmd-recall-adapter) 和包内 README。
+`packages/adapters/memfw-adapter-qmd`（wheel 名 `memfw_adapter_qmd`，版本 0.1.2）只用标准库和 PyYAML，对一个正在运行的 [QMD](https://github.com/tobi/qmd)（MIT，锁定 2.5.3）MCP 服务实现了两个 `RecallProvider`：`qmd` 查由 `memfw projection export` 建成的 collection，按投影 manifest 映射回记忆 id；`qmd-notes` 查 Knowledge-Hub 的 collection，返回 `kh:<路径>#<标题>` 引用。两者都只返回引用、QMD 的分数和来源标签；映射不到可见文档的结果一律丢弃（`local-private` 和 `unknown` 永远不返回）；**默认关闭**（要在 `AdaptersConfig` 的 `enabled` 里打开）。端点默认必须是 loopback（除非设 `allow_remote`），loopback 请求不走代理。QMD 不可用或超时时，协调层把它标成降级，由 FTS 回答。memfw 本身从不导入这个适配器。见 [`qmd-projection.md`](qmd-projection.md#qmd-recall-adapter) 和包内 README。
 
 ## LangExtract 派生适配器
 
-`packages/adapters/memfw-adapter-langextract`（wheel 名 `memfw_adapter_langextract`，版本 0.1.0）实现了 `Deriver` 端口：用 LangExtract 1.7.2（由运维自行安装）从 `public`/`shared` 记忆里抽取能对应到原文字符位置的实体和关系，模型是 memfw 的 `ModelBackend`（自带一个只连 loopback 的 Ollama 后端），每轮有 token 预算。**默认关闭**；它产出的行只能以暂存候选的形式成为记忆。见 [`adapter-langextract.md`](adapter-langextract.md)。
+`packages/adapters/memfw-adapter-langextract`（wheel 名 `memfw_adapter_langextract`，版本 0.1.1）实现了 `Deriver` 端口：用 LangExtract 1.7.2（由运维自行安装）从 `public`/`shared` 记忆里抽取能对应到原文字符位置的实体和关系，模型是 memfw 的 `ModelBackend`（自带一个只连 loopback 的 Ollama 后端），每轮有 token 预算。**默认关闭**；它产出的行只能以暂存候选的形式成为记忆。见 [`adapter-langextract.md`](adapter-langextract.md)。
 
 ## Tailnet 主机清单适配器
 
@@ -141,11 +141,11 @@ CI 的 `standalone-wheels` 任务会构建两者，装进一个没有 memfw 的�
 
 ## PageIndex 召回适配器
 
-`packages/adapters/memfw-adapter-pageindex`（wheel 名 `memfw_adapter_pageindex`，版本 0.1.1）是一个面向长文档的 `RecallProvider`，按 PageIndex 风格搜索目录树（标题、节点 id、页码范围、可选的简短摘要；从不含正文）。由 memfw 的 `ModelBackend` 挑选章节，或者用 `mode: titles` 不经模型直接给标题排序。它只返回 `kh:<路径>#<标题>` 和 `att:<id>#page=<n>` 引用。非本地后端需要 `cloud: true`，`local-private` 的目录树从不发给它，每轮有 token 和调用次数预算。目录树用 `memfw-pageindex build-md | import-tree | list` 离线构建或导入，以 `0600` 的 JSON 存在 vault 之外。**默认关闭**；memfw 本身从不导入它。见包内 README。
+`packages/adapters/memfw-adapter-pageindex`（wheel 名 `memfw_adapter_pageindex`，版本 0.1.2）是一个面向长文档的 `RecallProvider`，按 PageIndex 风格搜索目录树（标题、节点 id、页码范围、可选的简短摘要；从不含正文）。由 memfw 的 `ModelBackend` 挑选章节，或者用 `mode: titles` 不经模型直接给标题排序。它只返回 `kh:<路径>#<标题>` 和 `att:<id>#page=<n>` 引用。非本地后端需要 `cloud: true`，`local-private` 的目录树从不发给它，每轮有 token 和调用次数预算。目录树用 `memfw-pageindex build-md | import-tree | list` 离线构建或导入，以 `0600` 的 JSON 存在 vault 之外。**默认关闭**；memfw 本身从不导入它。见包内 README。
 
 ## OCR 代理适配器
 
-`packages/adapters/memfw-adapter-ocr`（wheel 名 `memfw_adapter_ocr`，版本 0.1.1，只用标准库）把 PDF 或图片附件转成 `memfw.proxy` v1 导入文件：带规范化定位信息的文本片段、`coverage`、`source_sha256`、生成者，以及引擎给出时的逐段置信度。可用的引擎：以子进程方式通过 MCP stdio 调用的 OCR 服务（有截止时间和页数预算，结束时停掉整个进程组）、处理带文字层 PDF 的 `pdftotext`，或一个 `module:factory`（不在“只用本地”的保证范围内）。什么都不上传；只有隐私级别在 `clearance` 内（默认 `public,shared`）的附件才会交给引擎，处理前后都会核对原件的 sha256。`memfw-ocr-proxy run | check` 生成文件，`memfw attach proxy import` 把它存进来。**默认关闭**；memfw 本身从不导入它。见包内 README 和 [`attachment-proxies.md`](attachment-proxies.md)。
+`packages/adapters/memfw-adapter-ocr`（wheel 名 `memfw_adapter_ocr`，版本 0.1.2，只用标准库）把 PDF 或图片附件转成 `memfw.proxy` v1 导入文件：带规范化定位信息的文本片段、`coverage`、`source_sha256`、生成者，以及引擎给出时的逐段置信度。可用的引擎：以子进程方式通过 MCP stdio 调用的 OCR 服务（有截止时间和页数预算，结束时停掉整个进程组）、处理带文字层 PDF 的 `pdftotext`，或一个 `module:factory`（不在“只用本地”的保证范围内）。什么都不上传；只有隐私级别在 `clearance` 内（默认 `public,shared`）的附件才会交给引擎，处理前后都会核对原件的 sha256。`memfw-ocr-proxy run | check` 生成文件，`memfw attach proxy import` 把它存进来。**默认关闭**；memfw 本身从不导入它。见包内 README 和 [`attachment-proxies.md`](attachment-proxies.md)。
 
 
 ## 佐证投影

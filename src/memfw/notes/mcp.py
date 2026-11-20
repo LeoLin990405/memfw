@@ -39,7 +39,7 @@ from .feedback import FeedbackEvent, FeedbackStore
 from .index import HttpEmbeddingProvider, NoteParseError, NotesIndex, split_frontmatter
 from .retrieval import HttpRerankerProvider, NotesRetriever, RetrievalConfig, query_coverage
 
-SERVER_INFO = {"name": "memfw-notes", "version": "0.4.0"}
+SERVER_INFO = {"name": "memfw-notes", "version": "0.5.0"}
 CLEARANCE_ENV = "MEMFW_NOTES_CLEARANCE"
 PROTOCOL = "2024-11-05"
 

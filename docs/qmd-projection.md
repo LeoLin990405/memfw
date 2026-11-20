@@ -396,7 +396,7 @@ Decisions the implementation took where the spec left a choice open:
 
 ## QMD recall adapter
 
-`memfw-adapter-qmd` (0.1.1, QMD 2.5.3, default off) implements two
+`memfw-adapter-qmd` (0.1.2, QMD 2.5.3, default off) implements two
 `RecallProvider`s over a running `qmd mcp --http` server:
 
 - **`qmd`** searches the collection that indexes `<generation>/files` of a

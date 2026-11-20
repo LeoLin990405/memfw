@@ -52,7 +52,7 @@ from ._ports import (
     parse_clearance,
 )
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 #: The bm25s release this adapter is pinned to and tested with.
 BM25S_VERSION: Final = "0.3.16"
 NAME: Final = "bm25s"

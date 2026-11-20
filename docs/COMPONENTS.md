@@ -78,7 +78,7 @@ remain authoritative.
 The two library files need only the standard library and PyYAML. The script loads its read
 path from `readonly.py` beside it, else the checkout's `src/memfw/index/`, else an installed
 `memfw`, and logs which one it chose; with none of them it exits with an error naming the
-missing files. `read_path.py` carries `READ_PATH_VERSION` (2 in 0.3.0 and 0.4.0); the script and
+missing files. `read_path.py` carries `READ_PATH_VERSION` (2 in 0.3.0 through 0.5.0); the script and
 `readonly.py` refuse to start with an older copy, so a partial upgrade fails at startup instead
 of on every `/search`. It never writes, so run `memfw index rebuild` once after an upgrade.
 
@@ -139,7 +139,7 @@ is the live artifact's record first, exits 5 unless `--allow-shrink`), freshness
 file of counts and fixed reason codes only. Inputs whose digest matches the live artifact's
 record skip the build but still run post-publish steps. The path-trust check is on by default
 when the runner runs as root. `memfw-pipeline unit` prints a hardened systemd or launchd template to review; nothing is
-installed. Standard library only at run time plus `memfw-ports` 0.3.0; memfw never imports it.
+installed. Standard library only at run time plus `memfw-ports` 0.4.0; memfw never imports it.
 Build with `uv build --wheel --package memfw-pipeline` (not published to PyPI). This release has
 only an example stage; the real stages are ported later. See [`pipeline.md`](pipeline.md).
 
@@ -165,7 +165,7 @@ Standard library only plus `memfw-ports` 0.4.0. Build with
 
 ## DeepSeek tagging adapter
 
-`packages/adapters/memfw-adapter-deepseek` (wheel `memfw_adapter_deepseek`, version 0.1.1)
+`packages/adapters/memfw-adapter-deepseek` (wheel `memfw_adapter_deepseek`, version 0.1.2)
 implements the `ModelBackend` port with the standard library only. It gives the conversation
 worker a `conv-v2` summary plus tags (project, task type, components, intent, outcome) per
 chunk and session; it extracts no facts or claims. It is **off by default**: the worker uses it
@@ -178,7 +178,7 @@ only to the provider's API host. memfw never imports the adapter; it is built as
 
 ## bm25s recall adapter
 
-`packages/adapters/memfw-adapter-bm25s` (wheel `memfw_adapter_bm25s`, version 0.1.1) is an
+`packages/adapters/memfw-adapter-bm25s` (wheel `memfw_adapter_bm25s`, version 0.1.2) is an
 in-process `RecallProvider` that ranks memories with bm25s 0.3.16 (MIT), jieba-segmented. It is
 **off by default**: MCP `memory_search` `mode=two_stage` runs it only when `vault.yaml` lists
 `memfw_adapter_bm25s:factory` under `runtime.recall.adapters`. It indexes only memories whose
@@ -188,7 +188,7 @@ the vault (`~/.local/share/memfw/adapters/bm25s/`). memfw never imports it. See
 
 ## Qdrant recall adapter
 
-`packages/adapters/memfw-adapter-qdrant` (wheel `memfw_adapter_qdrant`, version 0.1.2) is a
+`packages/adapters/memfw-adapter-qdrant` (wheel `memfw_adapter_qdrant`, version 0.1.3) is a
 semantic `RecallProvider` over a Qdrant v1.20.x service the operator runs, bound to loopback with
 telemetry off (`QDRANT__TELEMETRY_DISABLED=true`). It embeds queries with memfw's own embedder
 and asks for memory ids only. It is **off by default**; `memfw-adapter-qdrant sync` sends only
@@ -197,7 +197,7 @@ and asks for memory ids only. It is **off by default**; `memfw-adapter-qdrant sy
 
 ## LightRAG deriver adapter
 
-`packages/adapters/memfw-adapter-lightrag` (wheel `memfw_adapter_lightrag`, version 0.1.0)
+`packages/adapters/memfw-adapter-lightrag` (wheel `memfw_adapter_lightrag`, version 0.1.1)
 implements the `Deriver` port as a loopback HTTP client of an operator-run `lightrag-server`
 1.5.7 (bound to `127.0.0.1`, with an API key): graph and answer views whose every source is a
 requested, shareable, current memory. **Off by default**; rows become memory only as staged
@@ -205,7 +205,7 @@ candidates. See [`adapter-lightrag.md`](adapter-lightrag.md).
 
 ## GraphRAG deriver adapter
 
-`packages/adapters/memfw-adapter-graphrag` (wheel `memfw_adapter_graphrag`, version 0.1.0)
+`packages/adapters/memfw-adapter-graphrag` (wheel `memfw_adapter_graphrag`, version 0.1.1)
 implements the `Deriver` port with GraphRAG 3.3.0 as an offline batch job: shareable documents
 from a `memfw projection export` generation go in, `graphrag index` runs as a subprocess only
 when the operator calls it (loopback model endpoints unless `cloud: true`), and its CSV output
@@ -214,7 +214,7 @@ only as staged candidates. See [`adapter-graphrag.md`](adapter-graphrag.md).
 
 ## QMD recall adapter
 
-`packages/adapters/memfw-adapter-qmd` (wheel `memfw_adapter_qmd`, version 0.1.1) implements
+`packages/adapters/memfw-adapter-qmd` (wheel `memfw_adapter_qmd`, version 0.1.2) implements
 the `RecallProvider` port twice, with the standard library and PyYAML, over a running
 [QMD](https://github.com/tobi/qmd) (MIT, pinned 2.5.3) MCP server: `qmd` searches a collection
 built from a `memfw projection export` and returns memory ids mapped through the projection
@@ -228,7 +228,7 @@ coordinator marks the provider degraded and FTS answers. memfw never imports the
 
 ## LangExtract deriver adapter
 
-`packages/adapters/memfw-adapter-langextract` (wheel `memfw_adapter_langextract`, version 0.1.0)
+`packages/adapters/memfw-adapter-langextract` (wheel `memfw_adapter_langextract`, version 0.1.1)
 implements the `Deriver` port: character-grounded entities and relations from `public`/`shared`
 memories via LangExtract 1.7.2 (installed by the operator), with a memfw `ModelBackend` as the
 model (a loopback-only Ollama backend ships with it) and a per-run token budget. **Off by
@@ -275,7 +275,7 @@ candidate only, and memfw never imports the adapter. See
 
 ## PageIndex recall adapter
 
-`packages/adapters/memfw-adapter-pageindex` (wheel `memfw_adapter_pageindex`, version 0.1.1) is
+`packages/adapters/memfw-adapter-pageindex` (wheel `memfw_adapter_pageindex`, version 0.1.2) is
 a `RecallProvider` for long documents that searches PageIndex-style table-of-contents trees
 (titles, node ids, page ranges, optional short summaries; never body text). A memfw
 `ModelBackend` picks the sections, or `mode: titles` ranks titles without a model. It returns
@@ -287,7 +287,7 @@ README.
 
 ## OCR proxy adapter
 
-`packages/adapters/memfw-adapter-ocr` (wheel `memfw_adapter_ocr`, version 0.1.1, standard
+`packages/adapters/memfw-adapter-ocr` (wheel `memfw_adapter_ocr`, version 0.1.2, standard
 library only) turns a PDF or image attachment into a `memfw.proxy` v1 import file: text
 segments with canonical locators, `coverage`, `source_sha256`, the producer and per-segment
 confidence when the engine gives one. Engines: an OCR server run as a child process over MCP

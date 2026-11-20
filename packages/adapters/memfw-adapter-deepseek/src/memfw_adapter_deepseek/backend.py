@@ -64,7 +64,7 @@ from ._ports import (
     render_tag_prompt,
 )
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 KEY_ENV = "DEEPSEEK_API_KEY"
 DEFAULT_BASE_URL = "https://api.deepseek.com"

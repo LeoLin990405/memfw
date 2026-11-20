@@ -1,6 +1,6 @@
 # Qdrant recall adapter
 
-`packages/adapters/memfw-adapter-qdrant` (import `memfw_adapter_qdrant`, version 0.1.2) is a
+`packages/adapters/memfw-adapter-qdrant` (import `memfw_adapter_qdrant`, version 0.1.3) is a
 semantic `RecallProvider` (see [Ports and the recall coordinator](ports-and-recall.md)) backed by
 a [Qdrant](https://github.com/qdrant/qdrant) service that the operator runs. It embeds the query
 with memfw's own embedder, asks Qdrant for the nearest points of this vault and tenant, and
@@ -11,7 +11,7 @@ imports it; it is **off** until `vault.yaml` names it.
 |---|---|
 | External project | Qdrant server **v1.20.x** (fixtures from v1.20.2), Apache-2.0, `github.com/qdrant/qdrant` (licence re-read from its `LICENSE`) |
 | Client | none: REST with the standard library (`urllib`); PyYAML 6.0.3 (MIT) reads `vault.yaml` exactly as memfw does. `qdrant-client` 1.20.0 is Apache-2.0 too but is not used, so the adapter controls redirects and proxies itself and pulls in no gRPC, httpx or numpy |
-| Port | `RecallProvider`, `PORT_VERSION` 1 (`memfw-ports` 0.3.0) |
+| Port | `RecallProvider`, `PORT_VERSION` 1 (`memfw-ports` 0.4.0) |
 | Coupling | cross-process service over HTTP (architecture section 3) |
 | Default | off; with it off every output is byte-identical |
 

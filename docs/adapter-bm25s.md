@@ -1,6 +1,6 @@
 # bm25s recall adapter
 
-`packages/adapters/memfw-adapter-bm25s` (import `memfw_adapter_bm25s`, version 0.1.1) is a
+`packages/adapters/memfw-adapter-bm25s` (import `memfw_adapter_bm25s`, version 0.1.2) is a
 `RecallProvider` (see [Ports and the recall coordinator](ports-and-recall.md)) that ranks a
 vault's memories with [bm25s](https://github.com/xhluca/bm25s) inside the memfw process. It is
 a second lexical provider next to the built-in FTS: it returns `memory_id` refs, scores and
@@ -10,7 +10,7 @@ a second lexical provider next to the built-in FTS: it returns `memory_id` refs,
 |---|---|
 | External project | bm25s **0.3.16** (pinned), MIT, `github.com/xhluca/bm25s` (licence re-read from its `LICENSE`) |
 | Other dependencies | numpy 2.4.6 / 2.5.5 (BSD-3-Clause), jieba 0.42.1 (MIT, the segmenter memfw's FTS already uses), PyYAML 6.0.3 (MIT, to read `vault.yaml` exactly as memfw does) |
-| Port | `RecallProvider`, `PORT_VERSION` 1 (`memfw-ports` 0.3.0) |
+| Port | `RecallProvider`, `PORT_VERSION` 1 (`memfw-ports` 0.4.0) |
 | Coupling | optional extra in process (architecture section 3); no service, no network |
 | Default | off; with it off every output is byte-identical |
 

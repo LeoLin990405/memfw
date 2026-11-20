@@ -12,14 +12,14 @@ Markdown is the source of truth · hash-linked JSONL events · rebuildable FTS5 
 
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="License"></a>
 <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.11+"></a>
-<a href="#-status-and-boundaries"><img src="https://img.shields.io/badge/release-v0.4.0-2563EB?style=flat-square" alt="Release v0.4.0"></a>
+<a href="#-status-and-boundaries"><img src="https://img.shields.io/badge/release-v0.5.0-2563EB?style=flat-square" alt="Release v0.5.0"></a>
 <a href="#-mcp-tools"><img src="https://img.shields.io/badge/MCP-15_tools_(%2B3_opt--in),_3_resources_(%2B1_opt--in)-8B5CF6?style=flat-square" alt="15 MCP tools (+3 opt-in), 3 resources (+1 opt-in)"></a>
 <a href="#-conversation-store-every-agent-one-place"><img src="https://img.shields.io/badge/agent_readers-15-10B981?style=flat-square" alt="15 agent readers"></a>
-<a href="#-architecture-layers-and-ports"><img src="https://img.shields.io/badge/ports-12-0EA5E9?style=flat-square" alt="12 ports"></a>
-<a href="#-optional-adapters"><img src="https://img.shields.io/badge/adapters-9_(off_by_default)-64748B?style=flat-square" alt="9 adapters (off by default)"></a>
+<a href="#-architecture-layers-and-ports"><img src="https://img.shields.io/badge/ports-13-0EA5E9?style=flat-square" alt="13 ports"></a>
+<a href="#-optional-adapters"><img src="https://img.shields.io/badge/adapters-11_(off_by_default)-64748B?style=flat-square" alt="11 adapters (off by default)"></a>
 <a href="#-evaluation-summary"><img src="https://img.shields.io/badge/evaluation-bounded-D97706?style=flat-square" alt="Bounded evaluation"></a>
 
-<sub>Counts reflect <code>main</code>; the release badge is the latest tagged release (v0.4.0).</sub>
+<sub>Counts reflect <code>main</code>; the release badge is the latest tagged release (v0.5.0).</sub>
 
 </div>
 
@@ -104,7 +104,7 @@ uv venv .venv && uv sync --frozen --extra dev   # or: python -m venv .venv && pi
 ```
 
 This installs two commands: `memfw` (CLI) and `memfw-mcp` (stdio MCP server).
-`memfw --version` prints the installed version (`memfw 0.4.0`); the release smoke test checks it.
+`memfw --version` prints the installed version (`memfw 0.5.0`); the release smoke test checks it.
 `memfw --help` groups the commands into Daily, Approval, Ops and Export panels.
 
 Create a vault, add a memory and search it:
@@ -532,6 +532,15 @@ served. Switched off, `tools/list`, `resources/list` and every pack are byte-ide
 (unset: no filtering). `runtime: {search: {record_access: false}}` (or `MEMFW_RECORD_ACCESS=0`)
 makes a session write nothing to the vault.
 
+Every `memory_search` reply (all modes), every `memory_context` `v=2` pack and every
+`conversations_search` reply carries `retrieval_health` (`retrieval-health/1`): `mode`
+(`full` or a degraded/fallback/empty class), `confidence`, fixed `reasons` codes,
+`score_kind` and a short `note`, derived only from fields the reply already has (results,
+order and scores are unchanged). An empty answer says which kind of empty it is
+(`no_match`, `empty_degraded`, `withheld_only`, …). The 29 codes are in
+[`docs/retrieval-health.md`](docs/retrieval-health.md) and, as data,
+[`docs/retrieval-health-codes.json`](docs/retrieval-health-codes.json).
+
 ## 🔒 Privacy and permissions
 
 - **Raw transcripts stay where they are.** memfw reads agent session files and never writes to
@@ -645,6 +654,27 @@ before enabling a cloud backend), and two `memfw-http/2` answers changed:
   `vault.yaml` that exists but cannot be read or parsed now fails recall wiring closed
   (`recall adapter: bad_config`) instead of using defaults.
 
+**From 0.4.0 to 0.5.0** (details: [`CHANGELOG.md` → Upgrade notes (0.4.0 → 0.5.0)](CHANGELOG.md#upgrade-notes-040--050)):
+
+- **Nothing to migrate in memfw itself.** The vault format, the event log, the FTS5 index,
+  `READ_PATH_VERSION` (2), the set of MCP tools and both HTTP contracts (`memfw-http/2`,
+  `memfw-http/3`, byte-identical) are unchanged; no rebuild is needed. `serverInfo.version`
+  is `0.5.0`.
+- **MCP replies gain one key.** `memory_search`, `memory_context` `v=2` and
+  `conversations_search` add a top-level `retrieval_health` object (additive; results, order
+  and scores unchanged); `memory_search` `two_stage` adds `degraded_sources` when a provider
+  degraded; near `max_bytes`, `conversations_search` `two_stage` may fit one session or turn
+  window fewer (`truncated` / `next_offset` say so). A client that rejects unknown keys must
+  allow them. Several tool descriptions in `tools/list` are reworded.
+- **Adapter wheels move together.** Every adapter now pins `memfw-ports==0.4.0`, so an adapter
+  venv upgrades separately from memfw and needs the 0.4.0 `memfw-ports` wheel beside the new
+  adapter wheels (pip refuses a mix). Each adapter has a new patch version; Qdrant 0.1.3 also
+  has the slow-embedder fixes (defaults and collection fingerprint unchanged, so no re-embed;
+  `sync` now exits 1 when incomplete and 3 when another run holds the lock).
+- **New packages are opt-in.** `memfw-pipeline`, `memfw-wiki-gate`, `memfw-adapter-tailnet`
+  and `memfw-adapter-wikigen` are separate wheels that memfw never imports; installing memfw
+  0.5.0 enables none of them.
+
 ## 🌐 Integration and federation
 
 memfw is an engine; orchestrators integrate with it at arm's length:
@@ -691,16 +721,22 @@ and imports the kernel.
   build on an upward import, an unlisted same-layer import, a cycle, a library reference to
   `scripts/` or an unclassified module. Violations that existed when the guard landed sit in a
   shrink-only allowlist: it went from 25 entries to 1.
-- **Ports with swap drills.** `memfw.ports.PORT_VERSIONS` lists twelve ports
-  (`PORTS_API_VERSION` 0.3.0). Eleven (`RecallProvider`, `Projector`, `Ingestor`, `Deriver`,
+- **Ports with swap drills.** `memfw.ports.PORT_VERSIONS` lists thirteen ports
+  (`PORTS_API_VERSION` 0.4.0). Eleven (`RecallProvider`, `Projector`, `Ingestor`, `Deriver`,
   `Clock`, `IdGen`, `ClaimVerifier`, `ClaimStager`, `ContextSlotProvider`, `UsageSink`,
   `ProjectionStore`) each have at least two implementations that pass the same
   `memfw.ports.testing` check (`tests/test_swap_drills.py`); the twelfth, `ModelBackend`, is
-  checked against the extractive and DeepSeek backends (`tests/test_adapter_deepseek.py`).
+  checked against the extractive and DeepSeek backends (`tests/test_adapter_deepseek.py`); the
+  thirteenth, `EntailmentChecker` (ports 0.4.0), has the contract check
+  `check_entailment_checker` and no implementation in memfw yet.
   Stdlib-only reference implementations live in `memfw.ports.reference`; the Obsidian
   projection implements `Projector`, and the edge projection implements `ProjectionStore`
   (SQLite, with an in-memory reference). `memfw.ports.proxies` defines the attachment proxy
-  format and its locators, with `check_proxy_import` for adapters.
+  format and its locators, with `check_proxy_import` for adapters. Ports 0.4.0 adds the LLM
+  Wiki contracts: `Citation.ref` (`mem:`, `kh:`, `att:` and `wiki:` refs, `memfw.ports.refs`),
+  the `memfw-wiki-page/1` and `memfw-wiki-job/1` formats (`memfw.ports.wiki`) and
+  `check_wiki_page`; nothing in memfw uses them yet
+  ([`docs/ports-and-recall.md`](docs/ports-and-recall.md) §2.9).
 - **Recall coordinator.** `memory_search mode=two_stage` (opt-in) routes a query to recall
   providers, resolves every hit against the vault, filters it through a policy (`compat_fts`,
   or `strict` with privacy, status, lifecycle and archive checks), fuses and labels the result,
@@ -721,8 +757,18 @@ and imports the kernel.
   `memfw_ports` and `memfw_recall` from memfw's own sources, so an adapter author can run the
   contract kit without installing memfw. CI builds them and smoke-tests them in a clean venv.
   They are **not published to PyPI**; build them locally with
-  `uv build --wheel --package memfw-ports` (and `memfw-recall`). Both are version 0.3.0; the
+  `uv build --wheel --package memfw-ports` (and `memfw-recall`). Both are version 0.4.0; the
   adapter wheels are listed under [Optional adapters](#-optional-adapters).
+- **Pipeline runner.** `packages/memfw-pipeline` (0.1.0, standard library plus `memfw-ports`)
+  is the Stage contract and runner for derived artifacts: a single-writer lock, build beside
+  the target, an atomic directory exchange, a shrink guard, freshness and a counts-only status
+  file; `memfw-pipeline unit` prints hardened systemd or launchd templates to review. Only an
+  example stage ships; memfw never imports it. See [`docs/pipeline.md`](docs/pipeline.md).
+- **Wiki gate.** `packages/memfw-wiki-gate` (0.1.0, standard library plus `memfw-ports`) holds
+  the deterministic checks a generated wiki page passes before anyone sees it: citation
+  resolution, lifecycle and conflict rules, causal wording, token consistency and privacy,
+  with per-claim verdicts and fixed reason codes, never page or source text. See
+  [`docs/wiki-gate.md`](docs/wiki-gate.md).
 
 Details: [`docs/architecture.md`](docs/architecture.md) and
 [`docs/ports-and-recall.md`](docs/ports-and-recall.md).
@@ -739,15 +785,17 @@ only as staged candidates or an explicit `attach proxy import`.
 
 | Adapter (wheel version) | Port | What it does | Status |
 |---|---|---|---|
-| `memfw-adapter-deepseek` (0.1.1) | `ModelBackend` | `conv-v2` summary and tags for the conversations worker; needs `conversations.cloud: true` and `DEEPSEEK_API_KEY` | merged |
-| `memfw-adapter-bm25s` (0.1.1) | `RecallProvider` | in-process bm25s 0.3.16 ranking with jieba; indexes only its `clearance` (default `public,shared`), hashed tokens outside the vault; `memfw-adapter-bm25s build` | merged |
-| `memfw-adapter-qdrant` (0.1.2) | `RecallProvider` | semantic recall over a Qdrant v1.20.x service (REST, stdlib); loopback unless `allow_remote: true`; `memfw-adapter-qdrant sync` sends only `public` / `shared` memories and stores no text | merged |
-| `memfw-adapter-qmd` (0.1.1) | `RecallProvider` ×2 | `qmd` (memory projections → memory ids) and `qmd-notes` (notes → `kh:` refs) over a running QMD 2.5.3 MCP server; never returns `local-private` or `unknown` | merged |
-| `memfw-adapter-pageindex` (0.1.1) | `RecallProvider` | PageIndex-style tree search over long documents (`kh:` and `att:…#page=` refs); `mode: titles` needs no model; `memfw-pageindex build-md \| import-tree \| list` | merged |
-| `memfw-adapter-ocr` (0.1.1) | proxy producer (`ocr` deriver) | turns a PDF or image attachment into a `memfw.proxy` v1 import file through a local engine (an MCP stdio OCR server, `pdftotext`, or a `module:factory`); nothing uploaded; `memfw-ocr-proxy run \| check` | merged |
-| `memfw-adapter-langextract` (0.1.0) | `Deriver` (`entities`) | character-grounded entities and relations from `public` / `shared` memories with LangExtract 1.7.2; a memfw `ModelBackend` (a loopback Ollama backend ships with it) inside a per-run token budget | merged |
-| `memfw-adapter-lightrag` (0.1.0) | `Deriver` (`graph`, `answer`) | loopback HTTP client of an operator-run `lightrag-server` 1.5.7; sends only `public` / `shared` memories; every kept row's sources must be requested, shareable, current memories | merged |
-| `memfw-adapter-graphrag` (0.1.0) | `Deriver` (`graph`, `reports`) | GraphRAG 3.3.0 as an offline batch over a `memfw projection export` generation (`public` / `shared` only); `graphrag index` runs only when called, as a local subprocess against loopback model endpoints unless `cloud: true` | merged |
+| `memfw-adapter-deepseek` (0.1.2) | `ModelBackend` | `conv-v2` summary and tags for the conversations worker; needs `conversations.cloud: true` and `DEEPSEEK_API_KEY` | merged |
+| `memfw-adapter-bm25s` (0.1.2) | `RecallProvider` | in-process bm25s 0.3.16 ranking with jieba; indexes only its `clearance` (default `public,shared`), hashed tokens outside the vault; `memfw-adapter-bm25s build` | merged |
+| `memfw-adapter-qdrant` (0.1.3) | `RecallProvider` | semantic recall over a Qdrant v1.20.x service (REST, stdlib); loopback unless `allow_remote: true`; `memfw-adapter-qdrant sync` sends only `public` / `shared` memories and stores no text | merged |
+| `memfw-adapter-qmd` (0.1.2) | `RecallProvider` ×2 | `qmd` (memory projections → memory ids) and `qmd-notes` (notes → `kh:` refs) over a running QMD 2.5.3 MCP server; never returns `local-private` or `unknown` | merged |
+| `memfw-adapter-pageindex` (0.1.2) | `RecallProvider` | PageIndex-style tree search over long documents (`kh:` and `att:…#page=` refs); `mode: titles` needs no model; `memfw-pageindex build-md \| import-tree \| list` | merged |
+| `memfw-adapter-ocr` (0.1.2) | proxy producer (`ocr` deriver) | turns a PDF or image attachment into a `memfw.proxy` v1 import file through a local engine (an MCP stdio OCR server, `pdftotext`, or a `module:factory`); nothing uploaded; `memfw-ocr-proxy run \| check` | merged |
+| `memfw-adapter-langextract` (0.1.1) | `Deriver` (`entities`) | character-grounded entities and relations from `public` / `shared` memories with LangExtract 1.7.2; a memfw `ModelBackend` (a loopback Ollama backend ships with it) inside a per-run token budget | merged |
+| `memfw-adapter-lightrag` (0.1.1) | `Deriver` (`graph`, `answer`) | loopback HTTP client of an operator-run `lightrag-server` 1.5.7; sends only `public` / `shared` memories; every kept row's sources must be requested, shareable, current memories | merged |
+| `memfw-adapter-graphrag` (0.1.1) | `Deriver` (`graph`, `reports`) | GraphRAG 3.3.0 as an offline batch over a `memfw projection export` generation (`public` / `shared` only); `graphrag index` runs only when called, as a local subprocess against loopback model endpoints unless `cloud: true` | merged |
+| `memfw-adapter-tailnet` (0.1.0) | `Ingestor` | `tailscale status --json` (a file or one bounded CLI run) → identity-only `host-fact` candidates for new, returned, gone or changed machines, `local-private` by default; hashed host ids, no user, key or endpoint data; a names-free allowlist report | merged |
+| `memfw-adapter-wikigen` (0.1.0) | `Deriver` (`wiki_page`) | one `memfw-wiki-job/1` package → one `memfw-wiki-page/1` page candidate through a loopback Ollama (or stub) `ModelBackend`; every sentence must cite a job ref or is dropped; page privacy is the strictest source level | merged |
 
 Deriver outputs are capped at `epistemic: inference` and become memory only through review. A recall
 adapter that is down or slow is reported degraded and FTS still answers. Per-adapter details:
@@ -756,6 +804,8 @@ adapter that is down or slow is reported degraded and FTS still answers. Per-ada
 [`docs/adapter-langextract.md`](docs/adapter-langextract.md),
 [`docs/adapter-lightrag.md`](docs/adapter-lightrag.md),
 [`docs/adapter-graphrag.md`](docs/adapter-graphrag.md),
+[`docs/adapter-tailnet.md`](docs/adapter-tailnet.md),
+[`docs/adapter-wikigen.md`](docs/adapter-wikigen.md),
 [`docs/qmd-projection.md`](docs/qmd-projection.md) and each package's `README.md`.
 
 ## 📊 Evaluation summary
@@ -795,8 +845,11 @@ changes no default. Full evidence and limits: [`docs/evaluation.md`](docs/evalua
 | [`docs/cli-mcp-parity.md`](docs/cli-mcp-parity.md) | every capability × CLI / MCP / HTTP, with each gap marked by design or accidental |
 | [`docs/obsidian-projection.md`](docs/obsidian-projection.md) | the read-only Obsidian board: layout, clearance, rebuild rules |
 | [`docs/COMPONENTS.md`](docs/COMPONENTS.md) | notes index, code retrieval, read-only HTTP service, standalone wheels, the adapters, corroboration, Obsidian projection, relatedness |
-| [`docs/adapter-bm25s.md`](docs/adapter-bm25s.md), [`docs/adapter-qdrant.md`](docs/adapter-qdrant.md), [`docs/adapter-langextract.md`](docs/adapter-langextract.md), [`docs/adapter-lightrag.md`](docs/adapter-lightrag.md), [`docs/adapter-graphrag.md`](docs/adapter-graphrag.md), [`docs/qmd-projection.md`](docs/qmd-projection.md) | adapter setup, privacy rules and contract tests (OCR and PageIndex: their package READMEs) |
+| [`docs/adapter-bm25s.md`](docs/adapter-bm25s.md), [`docs/adapter-qdrant.md`](docs/adapter-qdrant.md), [`docs/adapter-langextract.md`](docs/adapter-langextract.md), [`docs/adapter-lightrag.md`](docs/adapter-lightrag.md), [`docs/adapter-graphrag.md`](docs/adapter-graphrag.md), [`docs/adapter-tailnet.md`](docs/adapter-tailnet.md), [`docs/adapter-wikigen.md`](docs/adapter-wikigen.md), [`docs/qmd-projection.md`](docs/qmd-projection.md) | adapter setup, privacy rules and contract tests (OCR and PageIndex: their package READMEs) |
 | [`docs/retrieval-architecture.md`](docs/retrieval-architecture.md) | retrieval design |
+| [`docs/retrieval-health.md`](docs/retrieval-health.md) | the `retrieval_health` object on search and context replies: fields, the 29 reason codes, mode and confidence rules |
+| [`docs/wiki-gate.md`](docs/wiki-gate.md) | the `memfw-wiki-gate` page checks: citations, tokens, causal wording, lifecycle, conflicts, privacy, verdicts |
+| [`docs/pipeline.md`](docs/pipeline.md) | the `memfw-pipeline` Stage contract and runner: locking, atomic publish, shrink guard, freshness, status, unit templates |
 | [`docs/architecture.md`](docs/architecture.md) | package layers, import guards, the shrinking allowlist, the composition root, the byte-identical harness |
 | [`docs/ports-and-recall.md`](docs/ports-and-recall.md) | port contracts, the recall coordinator, `two_stage`, configured recall adapters, context packs, slots (including `current`) and cache, standalone wheels, writing an adapter |
 | [`docs/v1-integration.md`](docs/v1-integration.md), [`docs/READONLY-SERVICE-UPGRADE.md`](docs/READONLY-SERVICE-UPGRADE.md) | federation surface (`memfw-http/2` and `/3`, `/context`, `/forget`) and service upgrades |
@@ -806,10 +859,10 @@ changes no default. Full evidence and limits: [`docs/evaluation.md`](docs/evalua
 
 ## 📍 Status and boundaries
 
-Release status: **v0.4.0** (2026-11-18). Apache-2.0; runs offline on one machine; not published
+Release status: **v0.5.0** (2026-11-20). Apache-2.0; runs offline on one machine; not published
 to PyPI. Implemented: the vault and hash-linked event log, retention and the `10MB` budget, the
 disposable FTS5 index and the read path (per-term matching, concept aliases, multi-hop),
-epistemic types, causal grades and reviewed experience points, the layered core with twelve
+epistemic types, causal grades and reviewed experience points, the layered core with thirteen
 ports and the `memfw.runtime` composition root, `two_stage` recall, context packs v2 with
 slots, resources and `if_version`, open questions, recall labels and corroboration, the concept
 taxonomy and relation-type table, privacy levels with opt-in clearance, the MCP servers, the
@@ -819,7 +872,15 @@ tagging adapter), handoff packs, dream (verify, curate, distill, budget, skills,
 candidates), OKF v0.2 export and import, the Obsidian projection and the read-only HTTP service
 (`memfw-http/2`). Changes are listed in [`CHANGELOG.md`](CHANGELOG.md).
 
-**New in v0.4.0:** the opt-in `current` context slot,
+**New in v0.5.0:** the LLM Wiki contracts in ports 0.4.0 (`Citation.ref`, the
+`memfw-wiki-page/1` and `memfw-wiki-job/1` formats, the `EntailmentChecker` port and their
+contract checks), `retrieval_health` on every `memory_search`, `memory_context` v=2 and
+`conversations_search` reply, the `memfw-pipeline` Stage runner (example stage only), the
+`memfw-wiki-gate` page checks and two adapters, `memfw-adapter-tailnet` (`Ingestor`) and
+`memfw-adapter-wikigen` (`Deriver`), all off by default; the Qdrant adapter's sync survives
+slow or failing embedders (0.1.3).
+
+**Added in v0.4.0:** the opt-in `current` context slot,
 two-stage conversation search with tag filters, attachments (embedded and referenced originals,
 detach, relink, purge, scan, text proxies in the `memfw.proxy` v1 format, attachments as
 observation evidence in the write gate, proxy search with the opt-in MCP tools

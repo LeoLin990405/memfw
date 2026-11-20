@@ -61,7 +61,7 @@ from ._ports import (
 )
 from ._select import is_shareable, shareable_memories
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 NAME = "graphrag"
 #: The GraphRAG release whose CLI and output tables this adapter reads.
