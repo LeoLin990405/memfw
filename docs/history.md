@@ -190,18 +190,36 @@ Behaviour:
 
 - an entry with any hit is **skipped**; only a per-file count
   (`skipped_secret`) is kept, shown in `stats`;
-- redaction additionally masks e-mail addresses, IPv4 addresses, home-directory
+- redaction additionally masks e-mail addresses, IPv4 addresses (also inside
+  a host name, `git.192.0.2.7.sslip.io` → `git.[REDACTED:ip].sslip.io`, and at
+  the end of a sentence), the dash and hex IP forms of `sslip.io` / `nip.io` /
+  `xip.io` names, the tailnet label of Tailscale `*.ts.net` names
+  (`box.[REDACTED:tailnet].ts.net`), phone numbers (Chinese mobiles `1[3-9]` +
+  9 digits, optionally grouped 3-4-4 and prefixed `+86` / `0086` / `086` /
+  `86`; `+`-prefixed international numbers with 8–15 digits), home-directory
   user names (`/home/<name>`, `C:\Users\<name>` and the dash-encoded
   `-Users-<name>-` project directories that Claude Code uses) and long
   mixed-case base64-like blobs, in every snippet, field, path and read window,
-  e.g. `[REDACTED:email]`, `[REDACTED:ip]`, `-Users-[REDACTED:user]-`,
-  `[REDACTED:blob]`, `[REDACTED:secret]`. Overlapping matches are masked as
-  their union (a token inside an e-mail address hides the whole address),
-  except that URL userinfo is never widened into the host.
-  Redaction is idempotent.
+  e.g. `[REDACTED:email]`, `[REDACTED:ip]`, `[REDACTED:phone]`,
+  `[REDACTED:tailnet]`, `-Users-[REDACTED:user]-`, `[REDACTED:blob]`,
+  `[REDACTED:secret]`. Index snippets and transcript paths are redacted again
+  when read, so rows indexed under older rules get the current ones.
+  Overlapping matches are masked as their union (a token inside an e-mail
+  address hides the whole address), except that URL userinfo is never widened
+  into the host. Redaction is idempotent.
+- deliberate trade-offs: a four-part version number whose parts are all 0–255
+  (`1.2.3.4`) is masked as an address, and an 11-digit id shaped exactly like
+  a Chinese mobile number is masked as a phone number; an 11-digit run inside
+  a hash or a longer id, dates, timestamps, diff headers and amounts such as
+  `+100.00` are not;
+- host names (`build-01`, the machine label of `*.ts.net`) are kept by
+  default. `redact(text, redact_hostnames=True, hostnames=[...])` is an opt-in
+  hook that masks them as `[REDACTED:host]`; no setting turns it on yet.
 
 Limitations (not detected):
 
+- national phone numbers written without `+` (other than Chinese mobiles),
+  IPv6 addresses, and host names (see the hook above);
 - key names with more than 128 characters glued in front, or more than three
   suffixes after the key word;
 - a YAML block scalar whose value starts more than three lines below the key,

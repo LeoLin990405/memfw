@@ -4,9 +4,19 @@ Two pattern sets:
 
 * **secrets** -- credentials. An entry with any secret finding is skipped at
   index time (only a count is kept), and withheld at read time.
-* **personal** -- e-mail addresses, IPv4 addresses, home-directory user names
-  and long high-entropy blobs. These never cause a skip; they are masked in
-  every snippet, field and window.
+* **personal** -- e-mail addresses, IPv4 addresses (also inside a host name
+  such as ``git.192.0.2.7.sslip.io``), the IP part of ``sslip.io`` /
+  ``nip.io`` / ``xip.io`` names in dash or hex form, the tailnet label of
+  Tailscale ``*.ts.net`` names, phone numbers (Chinese mobiles with or
+  without a ``+86`` / ``0086`` / ``086`` prefix, and ``+``-prefixed
+  international numbers), home-directory user names and long high-entropy
+  blobs. These never cause a skip; they are masked in every snippet, field and
+  window.
+
+Host names (``build-01``, the machine label of ``build-01.tail0000.ts.net``)
+are kept by default: agents need them to tell machines apart. ``redact`` takes
+``redact_hostnames=True`` plus an explicit ``hostnames`` list as an opt-in hook;
+nothing turns it on yet.
 
 Matching runs on a normalised view of the text: NFKC (so a fullwidth colon
 or a no-break space becomes ASCII) with every Unicode format character
@@ -27,7 +37,7 @@ import bisect
 import re
 import sys
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -139,7 +149,54 @@ _EMAIL = re.compile(
     r"\.[A-Za-z]{2,24}(?![A-Za-z])"
 )
 _OCTET = r"(?:25[0-5]|2[0-4]\d|1?\d?\d)"
-_IPV4 = re.compile(r"(?<![\d.])(?:" + _OCTET + r"\.){3}" + _OCTET + r"(?![\d.])")
+# Not part of a longer dotted number (``1.2.3.4.5``): no digit, or digit and
+# dot, on either side. A dot next to a letter is fine, so an address inside a
+# host name (``git.192.0.2.7.sslip.io``) or at the end of a sentence matches.
+# A four-part version number whose parts are all 0-255 (``1.2.3.4``) is masked
+# too: it cannot be told apart from an address, and masking is the safe side.
+_IPV4 = re.compile(r"(?<!\d)(?<!\d\.)(?:" + _OCTET + r"\.){3}" + _OCTET + r"(?!\d)(?!\.\d)")
+# Wildcard-DNS services that encode an address in the name: dash form
+# (``app-192-0-2-7.sslip.io``) and, for nip.io / sslip.io, hex form
+# (``app-c0000207.nip.io``). The dotted form is caught by _IPV4.
+# The dots may be dashes: Claude Code encodes a working directory such as
+# ``git.192.0.2.7.sslip.io`` as ``git-192-0-2-7-sslip-io``.
+_IP_DNS = r"(?=[.-](?:sslip|nip|xip)[.-]io(?![A-Za-z0-9]))"
+_IPV4_DASHED = re.compile(r"(?<!\d)(?<!\d-)(?:" + _OCTET + r"-){3}" + _OCTET + _IP_DNS)
+_IPV4_HEX = re.compile(r"(?<![A-Za-z0-9])[0-9A-Fa-f]{8}" + _IP_DNS)
+# Tailscale MagicDNS: ``<machine>.<tailnet>.ts.net``. The tailnet label names
+# the owner's network and is masked; the machine label is a host name.
+_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+_TAILNET = re.compile(
+    r"(?<![A-Za-z0-9-])(?P<tailnet>" + _LABEL + r")(?=\.ts\.net(?![A-Za-z0-9-]))", re.IGNORECASE
+)
+_TAILNET_MACHINE = re.compile(
+    r"(?<![A-Za-z0-9-])(?P<host>"
+    + _LABEL
+    + r")(?=\.(?:"
+    + _LABEL
+    + r"|\[REDACTED:tailnet\])\.ts\.net(?![A-Za-z0-9-]))",
+    re.IGNORECASE,
+)
+# Chinese mobile numbers: 1[3-9] and nine more digits, optionally grouped
+# 3-4-4 by a space or hyphen, optionally after +86, 0086, 086 or 86 (also in
+# parentheses). The number must not touch a letter or digit, so an 11-digit
+# run inside a hash, a longer order id or a millisecond timestamp is left
+# alone; an 11-digit id that looks exactly like a mobile number is masked.
+_CN_MOBILE = re.compile(
+    r"(?<![A-Za-z0-9+])(?:(?:\+|00|0)?86[ -]?|\((?:\+|00)?86\)[ -]?)?"
+    r"1[3-9]\d(?:[ -]?\d{4}){2}(?![A-Za-z0-9])"
+)
+# International numbers need a leading "+" and a country code, then digit
+# groups split by at most one space or hyphen (one group may be in
+# parentheses), 8-15 digits in all (E.164). Dots are not separators, so
+# "+100.00 (1234.56)" stays; bare national numbers without "+" are not matched.
+# Possessive quantifiers keep the scan linear: a group starts only after a
+# separator or "(", so there is one way to split the digits.
+_INTL_PHONE = re.compile(
+    r"(?<![A-Za-z0-9+])\+[1-9]\d{0,14}+"
+    r"(?:[ -]?\(\d{1,5}\)[ -]?\d{1,8}+|[ -]\d{1,8}+){0,6}+(?![A-Za-z0-9])"
+)
+_PHONE_SPLIT = re.compile(r"[ -]?(?:\(\d+\)|\d+)")
 _HOME = re.compile(
     r"(?P<prefix>/Users/|/home/|[A-Za-z]:\\{1,2}Users\\{1,2})(?P<user>(?!\[REDACTED)[^/\\\s\"'<>]{1,128})"
 )
@@ -286,9 +343,34 @@ def _secret_spans(value: str) -> list[tuple[int, int, str]]:
     return spans
 
 
+def _phone_spans(value: str) -> list[tuple[int, int, str]]:
+    spans = [(match.start(), match.end(), "phone") for match in _CN_MOBILE.finditer(value)]
+    for match in _INTL_PHONE.finditer(value):
+        # The match can run into a following number ("+1 555 0100 2026");
+        # drop trailing groups until 8-15 digits remain.
+        groups = [item.group(0) for item in _PHONE_SPLIT.finditer(match.group(0), 1)]
+        head = match.group(0)[: len(match.group(0)) - sum(map(len, groups))]
+        while groups:
+            digits = sum(char.isdigit() for char in head + "".join(groups))
+            if 8 <= digits <= 15:
+                end = match.start() + len(head) + sum(map(len, groups))
+                spans.append((match.start(), end, "phone"))
+                break
+            if digits < 8:
+                break
+            groups.pop()
+    return spans
+
+
 def _personal_spans(value: str) -> list[tuple[int, int, str]]:
     spans = [(match.start(), match.end(), "email") for match in _EMAIL.finditer(value)]
-    spans.extend((match.start(), match.end(), "ip") for match in _IPV4.finditer(value))
+    for pattern in (_IPV4, _IPV4_DASHED, _IPV4_HEX):
+        spans.extend((match.start(), match.end(), "ip") for match in pattern.finditer(value))
+    spans.extend(
+        (match.start("tailnet"), match.end("tailnet"), "tailnet")
+        for match in _TAILNET.finditer(value)
+    )
+    spans.extend(_phone_spans(value))
     spans.extend(
         (match.start(), match.end(), "blob")
         for match in _BLOB.finditer(value)
@@ -366,10 +448,48 @@ def _apply(text: str, finders: tuple[Callable[[str], list[tuple[int, int, str]]]
     return "".join(out)
 
 
-def redact(text: str) -> str:
-    """Mask secrets and personal identifiers in the original text. Idempotent."""
+def _hostname_finder(hostnames: Iterable[str]) -> Callable[[str], list[tuple[int, int, str]]]:
+    names = sorted({name.strip() for name in hostnames if name and name.strip()}, key=len)
+    named = (
+        re.compile(
+            r"(?i)(?<![A-Za-z0-9_-])(?:"
+            + "|".join(re.escape(name) for name in reversed(names))
+            + r")(?![A-Za-z0-9_-])"
+        )
+        if names
+        else None
+    )
 
-    return _apply(text, (_secret_spans, _personal_spans, _path_spans))
+    def find(value: str) -> list[tuple[int, int, str]]:
+        spans = [
+            (match.start("host"), match.end("host"), "host")
+            for match in _TAILNET_MACHINE.finditer(value)
+        ]
+        if named is not None:
+            spans.extend((match.start(), match.end(), "host") for match in named.finditer(value))
+        return spans
+
+    return find
+
+
+def redact(text: str, *, redact_hostnames: bool = False, hostnames: Iterable[str] = ()) -> str:
+    """Mask secrets and personal identifiers in the original text. Idempotent.
+
+    Host names are kept unless ``redact_hostnames`` is true (an opt-in hook,
+    default off, not wired to any setting yet): then the machine label of a
+    ``*.ts.net`` name and every whole-word occurrence of a name in
+    ``hostnames`` (case-insensitive) become ``[REDACTED:host]``. A bare host
+    name cannot be recognised by its shape, so the list is required for those.
+    """
+
+    finders: tuple[Callable[[str], list[tuple[int, int, str]]], ...] = (
+        _secret_spans,
+        _personal_spans,
+        _path_spans,
+    )
+    if redact_hostnames:
+        finders += (_hostname_finder(hostnames),)
+    return _apply(text, finders)
 
 
 def redact_path(text: str) -> str:

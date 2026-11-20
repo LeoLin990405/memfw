@@ -17,7 +17,7 @@ import re
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from memfw.history.redact import has_secret, redact_path
+from memfw.history.redact import has_secret, redact
 
 PATH_CHARS = 300
 STORED_SUMMARY_CHARS = 200
@@ -107,10 +107,12 @@ def _clean(value: str) -> str | None:
     value = value.strip()
     if not value or len(value) > PATH_CHARS or "\n" in value or value.endswith("…"):
         return None
-    value = redact_path(value)
+    # A secret-shaped path is dropped, so check before redacting (redact()
+    # would mask the secret and hide it from has_secret).
     if has_secret(value):
         return None
-    return value
+    # Paths come from conversation text: full redaction, not only user names.
+    return redact(value)
 
 
 def _keys_for(agent: str, tool: str) -> tuple[str, ...]:

@@ -39,7 +39,7 @@ from memfw.index.fts_terms import (
 )
 
 from .parse import Record, parse_line
-from .redact import MAX_SCAN_CHARS, has_secret, redact, redact_path, secret_continues
+from .redact import MAX_SCAN_CHARS, has_secret, redact, secret_continues
 
 DEFAULT_DB_NAME = ".memfw-history.sqlite"
 CONFIG_KEY = "history_sources"
@@ -1026,7 +1026,10 @@ class TranscriptIndex:
         return {
             "ref": make_ref(row["source"], fid, row["offset"]),
             "source": row["source"],
-            "path": redact_path(row["path"]),
+            # The transcript location is metadata, but its directory names
+            # encode a working directory (``-Users-name-project``) that can
+            # carry any personal value, so it gets the full redaction too.
+            "path": redact(row["path"]),
             "offset": row["offset"],
             "line": row["line"],
             "session_id": row["session_id"],
@@ -1039,7 +1042,9 @@ class TranscriptIndex:
             "kind": row["kind"],
             "agent": row["agent"],
             "timestamp": row["ts"] or None,
-            "snippet": row["snippet"],
+            # Stored redacted at index time; redacted again so rows indexed
+            # under older rules get the current ones (idempotent).
+            "snippet": redact(row["snippet"]),
         }
 
     @staticmethod
@@ -1158,7 +1163,7 @@ class TranscriptIndex:
                 "session_id": row["session_id"],
                 "parent_session_id": row["parent_session_id"] or None,
                 "agent": row["agent"],
-                "path": redact_path(row["path"]),
+                "path": redact(row["path"]),
                 "started_at": row["started_at"],
                 "ended_at": row["ended_at"],
                 "entries": row["entries"],

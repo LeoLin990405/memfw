@@ -17,6 +17,21 @@ projections out of the vault; see the 0.4.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Redaction (`memfw.history.redact`): an IPv4 address inside a host name
+  (`git.<ip>.sslip.io`) or at the end of a sentence is now masked; the dash
+  and hex IP forms of `sslip.io` / `nip.io` / `xip.io`, the tailnet label of
+  `*.ts.net` names and phone numbers (`[REDACTED:phone]`: Chinese mobiles with
+  or without `+86`, `+`-prefixed international numbers) are new. Host names
+  stay visible; `redact(..., redact_hostnames=True, hostnames=[...])` is an
+  opt-in hook, default off.
+- History search results and session lists apply the full redaction to the
+  transcript path (was user names only) and redact stored snippets again on
+  read; the handoff tool map does the same for file paths taken from tool
+  calls. Already-stored rows keep their old text until re-indexed; outputs
+  are masked on the way out.
+
 ## [0.5.0] — 2026-11-20
 
 The fourth numbered release: the contracts and the first packages for the
