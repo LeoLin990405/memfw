@@ -122,6 +122,7 @@ existing vault) and writes nothing.
 | Read a range | `conversations get` | `conversations_get` | — | none |
 | Continuation pack | `conversations handoff`, `handoff` | `conversations_handoff` | — | none |
 | Worker run / status / schedule | `conversations worker`, `conversations status`, `conversations schedule` | — | — | by design (ops) |
+| Re-redact the stored text | `conversations reredact` | — | — | by design (ops, writes the store) |
 | Ingest transcripts | `history ingest` | — | — | by design (ops) |
 | Transcript index: index / list / search / read | `history index/list/search/read` | `history_list/search/read` | — | MCP index build: by design |
 | Registered readers | `history agents` | — | — | by design |

@@ -2,7 +2,9 @@
 
 Every read command prints redacted text only, labelled as data, and obeys the
 same per-app policy as the MCP tools (the caller is ``operator`` unless
-``--as-app`` names an app). Nothing here writes to the store.
+``--as-app`` names an app). Nothing here writes to the store except
+``worker`` (through the store's own ingest) and ``reredact --apply``
+(:mod:`memfw.history.reredact`).
 """
 
 from __future__ import annotations
@@ -14,13 +16,14 @@ from typing import Annotated, Any
 import typer
 
 from ..core.errors import MemfwError
+from .adapter import checked_location, store_path
 from .backends import backend_status, gated_loader
 from .policy import OPERATOR
 from .schedule import DEFAULT_INTERVAL, default_log_dir, render
 from .service import open_share, open_worker, read_config
 from .share import render_markdown
 from .store import ConversationError
-from .worker import WorkState, state_path
+from .worker import LOCK_NAME, WorkState, run_lock, state_path
 
 app = typer.Typer(
     help="Shared, redacted conversation store: read, process, schedule", no_args_is_help=True
@@ -298,6 +301,123 @@ def worker(
     except (ConversationError, MemfwError, ValueError) as exc:
         raise _fail(exc) from exc
     typer.echo(_dump(report.as_dict()))
+
+
+REREDACT_HELP = """Re-redact text already stored under older redaction rules (counts only).
+
+Default: a dry run on a read-only connection; prints how many rows and columns
+would change and which [REDACTED:kind] masks would be added. Never prints text.
+
+--apply takes the store's writer lock and the worker's run lock (refuses when
+either is held: stop ingest and the worker first), writes a verified backup
+(<store>.bak-reredact-<UTC>, 0600; it still holds the old values: delete it once
+you are satisfied), then rewrites the changed rows in batches with
+secure_delete on, re-scans (must be 0), checks integrity and checkpoints the
+WAL. Interrupted? Run it again: batches are idempotent.
+
+Old values can survive in free pages of the file until --vacuum rewrites it;
+secure_delete only zeroes pages freed by this run. The worker state
+(conversations-work.sqlite: summaries, episodes) is scanned too and rewritten
+with --worker-state. The history index (<vault>/.memfw-history.sqlite) is a
+separate file rebuilt from transcripts: delete it, if it exists, and re-run
+`memfw history index`.
+
+Exit codes: 0 ok, 2 refused/error, 3 locked by another writer, 4 verification
+failed."""
+
+
+def _reredact_lines(report: dict[str, Any]) -> list[str]:
+    lines = [f"mode: {report.get('mode')}  status: {report.get('status')}"]
+    for name in ("store", "worker_state"):
+        part = report.get(name) or {}
+        if not part or part.get("present") is False:
+            lines.append(f"{name}: not present")
+            continue
+        lines.append(
+            f"{name}: scanned {part.get('rows_scanned', 0)}, changed {part.get('rows_changed', 0)}"
+            + (f", newly withheld {part['rows_withheld']}" if part.get("rows_withheld") else "")
+            + (" (not included: pass --worker-state)" if part.get("included") is False else "")
+        )
+        for key in ("columns", "markers", "key_columns_flagged"):
+            if part.get(key):
+                pairs = ", ".join(f"{k}={v}" for k, v in part[key].items())
+                lines.append(f"  {key}: {pairs}")
+        if part.get("verify"):
+            lines.append(f"  verify: {part['verify']}")
+    for item in report.get("backups") or []:
+        lines.append(f"backup: {item['path']} (integrity {item['integrity']})")
+    return lines
+
+
+@app.command("reredact", help=REREDACT_HELP)
+def reredact(
+    root: RootOption = None,
+    store: StoreOption = None,
+    state: Annotated[Path | None, typer.Option("--state", help="Worker state path")] = None,
+    apply: Annotated[bool, typer.Option("--apply", help="Rewrite (default: dry run)")] = False,
+    backup: Annotated[
+        Path | None,
+        typer.Option("--backup", help="Backup path (default <store>.bak-reredact-<UTC>)"),
+    ] = None,
+    batch: Annotated[int, typer.Option("--batch", min=1, help="Rows per transaction")] = 2000,
+    vacuum: Annotated[
+        bool, typer.Option("--vacuum", help="After --apply, VACUUM so free pages hold no old text")
+    ] = False,
+    worker_state: Annotated[
+        bool, typer.Option("--worker-state", help="Also rewrite the worker state")
+    ] = False,
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable summary")] = False,
+) -> None:
+    from memfw.history.reredact import EXIT_ERROR, Options, ReredactError, ReredactVerifyError, run
+
+    try:
+        config, vault = read_config(root)
+        db = (
+            checked_location(store, config, vault=vault)
+            if store
+            else store_path(config, vault=vault)
+        )
+        work = (
+            checked_location(state, config, vault=vault)
+            if state
+            else state_path(config, vault=vault)
+        )
+        options = Options(
+            store=db,
+            apply=apply,
+            batch=batch,
+            backup=backup.expanduser() if backup is not None else None,
+            vacuum=vacuum,
+            worker_state=work,
+            include_worker=worker_state,
+            worker_lock=lambda: run_lock(work.with_name(LOCK_NAME)),
+            check_backup=lambda path: checked_location(path, config, vault=vault),
+        )
+        report = run(options)
+        code = 0
+    except ReredactVerifyError as exc:
+        report = {
+            "mode": "apply",
+            "status": "verify_failed",
+            "error": str(exc),
+            "store": exc.counts,
+        }
+        code = exc.code
+    except ReredactError as exc:
+        report = {"mode": "apply" if apply else "dry_run", "status": "refused", "error": str(exc)}
+        code = exc.code
+    except (ConversationError, MemfwError) as exc:
+        report = {"mode": "apply" if apply else "dry_run", "status": "refused", "error": str(exc)}
+        code = EXIT_ERROR
+    if as_json:
+        typer.echo(_dump(report))
+    else:
+        if report.get("error"):
+            typer.echo(f"error: {str(report['error'])[:300]}", err=True)
+        if report.get("status") != "refused":
+            typer.echo("\n".join(_reredact_lines(report)))
+    if code:
+        raise typer.Exit(code)
 
 
 @app.command("status")
