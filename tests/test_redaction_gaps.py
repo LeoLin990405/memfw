@@ -18,6 +18,10 @@ from memfw.handoff import tools_map
 from memfw.history.index import TranscriptIndex
 from memfw.history.redact import redact, redact_path
 
+# Built at run time so the tracked file names no home directory.
+MAC_HOME = "/" + "Users" + "/someone/"
+LINUX_HOME = "/" + "home" + "/someone/"
+
 # -- IPv4, also inside host names ---------------------------------------------
 
 
@@ -161,7 +165,7 @@ def test_cn_mobile_shaped_id_is_masked_by_design() -> None:
 # -- idempotence and older behaviour ------------------------------------------
 
 SAMPLE = (
-    "user a.person@example.test at /Users/someone/x on git.192.0.2.7.sslip.io, "
+    "user a.person@example.test at " + MAC_HOME + "x on git.192.0.2.7.sslip.io, "
     "svc-192-0-2-7.sslip.io, box.tail0000.ts.net, +86 138 0013 8000, "
     "+1-555-010-0199, ping 10.0.0.1. token=abcd1234efgh"
 )
@@ -176,7 +180,7 @@ def test_idempotent() -> None:
 
 def test_redact_path_unchanged() -> None:
     # redact_path still masks only home-directory user names.
-    text = "/Users/someone/git.192.0.2.7.sslip.io +86 138 0013 8000"
+    text = MAC_HOME + "git.192.0.2.7.sslip.io +86 138 0013 8000"
     assert redact_path(text) == "/Users/[REDACTED:user]/git.192.0.2.7.sslip.io +86 138 0013 8000"
 
 
@@ -207,7 +211,7 @@ def test_history_entry_redacts_path_and_snippet() -> None:
         kind="text",
         agent="claude",
         ts="",
-        path="/home/someone/.claude/projects/-home-someone-git-192-0-2-7-sslip-io/a.jsonl",
+        path=LINUX_HOME + ".claude/projects/-home-someone-git-192-0-2-7-sslip-io/a.jsonl",
         # a snippet indexed under the older rules
         snippet="clone git.192.0.2.7.sslip.io, call +86 138 0013 8000",
     )
@@ -230,3 +234,147 @@ def test_share_files_uses_full_redaction() -> None:
     )
     files = ConversationShare._files([turn])  # type: ignore[list-item]
     assert files == ["/srv/backup-[REDACTED:ip]/notes.txt"]
+
+
+# -- review round 2 -------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # a trailing token used to make the whole number escape
+        ("+1 555 010 0123 5pm", "[REDACTED:phone] 5pm"),
+        ("+1 555 010 0123 1763596800", "[REDACTED:phone] 1763596800"),
+        ("+44 20 7946 0958 3rd", "[REDACTED:phone] 3rd"),
+        ("+15550100123 1763596800", "[REDACTED:phone] 1763596800"),
+        ("+1 (555) 010-0123 13800138000", "[REDACTED:phone] [REDACTED:phone]"),
+        ("+44 2079460958", "[REDACTED:phone]"),
+        # Unicode hyphens / dashes and dots as separators
+        ("138‑0013‑8000", "[REDACTED:phone]"),
+        ("+1–555–010–0123", "[REDACTED:phone]"),
+        ("138.0013.8000", "[REDACTED:phone]"),
+        ("+1.555.010.0123", "[REDACTED:phone]"),
+        # space-grouped CN numbers: prefix or a phone word required
+        ("phone: 138 0013 8000", "phone: [REDACTED:phone]"),
+        ("手机 138 0013 8000", "手机 [REDACTED:phone]"),
+        ("电话：138 0013 8000", "电话：[REDACTED:phone]"),
+        ("0086 138 0013 8000", "[REDACTED:phone]"),
+    ],
+)
+def test_review_phone_cases(text: str, expected: str) -> None:
+    assert redact(text) == expected
+    assert redact(expected) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "GMT +8 2026-11-20 10:00",
+        "+20261120",
+        "+5 10 15 20 25 30",
+        "+2 1024 4096",
+        "commits 143 1024 2048",
+        "sizes 138 0013 8000",  # space-grouped, no phone word, no prefix
+        "+86 2026-11-20",
+        "v1.138.0013.8000",
+        "+1.555 010-0123",  # mixed dots and other separators
+    ],
+)
+def test_review_phone_false_positives(text: str) -> None:
+    assert redact(text) == text
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("C0000207.NIP.IO", "[REDACTED:ip].NIP.IO"),
+        ("APP-192-0-2-7.SSLIP.IO", "APP-[REDACTED:ip].SSLIP.IO"),
+        ("-srv-box-tail0000-ts-net", "-srv-box-[REDACTED:tailnet]-ts-net"),
+        ("-srv-box-cat-dog-ts-net", "-srv-box-[REDACTED:tailnet]-ts-net"),
+    ],
+)
+def test_review_host_encodings(text: str, expected: str) -> None:
+    assert redact(text) == expected
+
+
+def test_loopback_and_any_unchanged() -> None:
+    # Same as before this change: every dotted IPv4, loopback included.
+    assert redact("bind 127.0.0.1 not 0.0.0.0") == "bind [REDACTED:ip] not [REDACTED:ip]"
+
+
+def test_hostname_hook_skips_reserved_words_and_masks() -> None:
+    text = "phone [REDACTED:phone] ip host box"
+    names = ["phone", "ip", "REDACTED", "host", "box"]
+    out = redact(text, redact_hostnames=True, hostnames=names)
+    assert out == "phone [REDACTED:phone] ip host [REDACTED:host]"
+    assert redact(out, redact_hostnames=True, hostnames=names) == out
+
+
+def test_distill_drops_secret_before_redacting() -> None:
+    from memfw.dream.distill import _clean
+
+    assert _clean("set password=hunter2hunter2 now") is None
+    assert _clean("call +1 555 010 0199") == "call [REDACTED:phone]"
+
+
+_TOKENS = [
+    "+",
+    "1",
+    "7",
+    "44",
+    "86",
+    "138",
+    "0013",
+    "8000",
+    "555",
+    "010",
+    "0123",
+    "20",
+    "7946",
+    "1763596800",
+    "13800138000",
+    "2026",
+    "-11-20",
+    " ",
+    " ",
+    "-",
+    ".",
+    "(",
+    ")",
+    "–",
+    "5pm",
+    "3rd",
+    "tel ",
+    "phone: ",
+    "手机",
+    "[REDACTED:phone]",
+    "[REDACTED:ip]",
+    "x",
+    "192.0.2.7",
+    ".sslip.io",
+    "-sslip-io",
+    "c0000207",
+    ".nip.io",
+    "box",
+    ".tail0000",
+    ".ts.net",
+    "-ts-net",
+    "tail0000",
+    "-",
+    "0086",
+    "00",
+    "9",
+]
+
+
+def test_idempotence_fuzz() -> None:
+    import random
+
+    rng = random.Random(20261120)
+    failures = []
+    for _ in range(20000):
+        text = "".join(rng.choice(_TOKENS) for _ in range(rng.randint(1, 14)))
+        once = redact(text)
+        if redact(once) != once:
+            failures.append(text)
+    assert failures == []

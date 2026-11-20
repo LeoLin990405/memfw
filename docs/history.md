@@ -192,34 +192,52 @@ Behaviour:
   (`skipped_secret`) is kept, shown in `stats`;
 - redaction additionally masks e-mail addresses, IPv4 addresses (also inside
   a host name, `git.192.0.2.7.sslip.io` → `git.[REDACTED:ip].sslip.io`, and at
-  the end of a sentence), the dash and hex IP forms of `sslip.io` / `nip.io` /
-  `xip.io` names, the tailnet label of Tailscale `*.ts.net` names
-  (`box.[REDACTED:tailnet].ts.net`), phone numbers (Chinese mobiles `1[3-9]` +
-  9 digits, optionally grouped 3-4-4 and prefixed `+86` / `0086` / `086` /
-  `86`; `+`-prefixed international numbers with 8–15 digits), home-directory
-  user names (`/home/<name>`, `C:\Users\<name>` and the dash-encoded
-  `-Users-<name>-` project directories that Claude Code uses) and long
-  mixed-case base64-like blobs, in every snippet, field, path and read window,
-  e.g. `[REDACTED:email]`, `[REDACTED:ip]`, `[REDACTED:phone]`,
-  `[REDACTED:tailnet]`, `-Users-[REDACTED:user]-`, `[REDACTED:blob]`,
-  `[REDACTED:secret]`. Index snippets and transcript paths are redacted again
-  when read, so rows indexed under older rules get the current ones.
-  Overlapping matches are masked as their union (a token inside an e-mail
-  address hides the whole address), except that URL userinfo is never widened
-  into the host. Redaction is idempotent.
+  the end of a sentence; loopback and `0.0.0.0` too, as before), the dash and
+  hex IP forms of `sslip.io` / `nip.io` / `xip.io` names (any letter case, dots
+  or dashes), the tailnet label of Tailscale `*.ts.net` names
+  (`box.[REDACTED:tailnet].ts.net`; in a dash-encoded project directory
+  `-box-tail0000-ts-net` the `tail<hex>` segment, or else the last two
+  segments), phone numbers, home-directory user names (`/home/<name>`,
+  `C:\Users\<name>` and the dash-encoded `-Users-<name>-` project directories
+  that Claude Code uses) and long mixed-case base64-like blobs, in every
+  snippet, field, path and read window, e.g. `[REDACTED:email]`,
+  `[REDACTED:ip]`, `[REDACTED:phone]`, `[REDACTED:tailnet]`,
+  `-Users-[REDACTED:user]-`, `[REDACTED:blob]`, `[REDACTED:secret]`. Index
+  snippets and transcript paths are redacted again when read, so rows indexed
+  under older rules get the current ones. Overlapping matches are masked as
+  their union (a token inside an e-mail address hides the whole address),
+  except that URL userinfo is never widened into the host. Masking repeats
+  until the text is stable (a mask can change a neighbour's boundary), so
+  redaction is idempotent.
+- phone numbers. Separators are a space, a dot, a hyphen or U+2010–U+2013.
+  - Chinese mobiles: `1[3-9]` + 9 digits, in one run or grouped 3-4-4 with
+    one consistent separator, optionally after `+86` / `0086` / `086` / `86`
+    (also in parentheses). Space-grouped numbers without such a prefix need a
+    phone word right before them (`phone:`, `tel`, `call`, `手机`, `电话`, …),
+    since `commits 143 1024 2048` has the same shape.
+  - international: a leading `+`, a valid ITU country code, 8–15 digits in
+    all. With separators: the code stands alone (`+44 20 7946 0958`), at
+    least two groups or one group of 7+ digits, dots only if every separator
+    is a dot, no date inside (`GMT +8 2026-11-20` stays). Without
+    separators: 10–15 digits and not date-shaped (`+20261120` stays). A
+    trailing token ends the number (`+1 555 010 0123 5pm` →
+    `[REDACTED:phone] 5pm`), extra trailing groups are dropped.
 - deliberate trade-offs: a four-part version number whose parts are all 0–255
   (`1.2.3.4`) is masked as an address, and an 11-digit id shaped exactly like
   a Chinese mobile number is masked as a phone number; an 11-digit run inside
-  a hash or a longer id, dates, timestamps, diff headers and amounts such as
-  `+100.00` are not;
+  a hash or a longer id, dates, timestamps, diff headers, number lists
+  (`+5 10 15 20`) and amounts such as `+100.00` are not;
 - host names (`build-01`, the machine label of `*.ts.net`) are kept by
   default. `redact(text, redact_hostnames=True, hostnames=[...])` is an opt-in
-  hook that masks them as `[REDACTED:host]`; no setting turns it on yet.
+  hook that masks them as `[REDACTED:host]`; mask words (`phone`, `ip`,
+  `redacted`, ...) are never treated as host names and existing masks are
+  left alone. No setting turns it on yet.
 
 Limitations (not detected):
 
 - national phone numbers written without `+` (other than Chinese mobiles),
-  IPv6 addresses, and host names (see the hook above);
+  space-grouped Chinese mobiles without a prefix or phone word, IPv6
+  addresses, and host names (see the hook above);
 - key names with more than 128 characters glued in front, or more than three
   suffixes after the key word;
 - a YAML block scalar whose value starts more than three lines below the key,
