@@ -728,6 +728,12 @@ def _shrink(item: dict[str, Any], room: int, omitted: set[str]) -> int:
                 card["summary"] = None
     if too_big() and ((model and model.get("tags")) or (card and card.get("tags"))):
         omitted.add("tags")
+        if card is not None:
+            # Clearing tags also empties intent and outcome copied from them.
+            if card.get("intent"):
+                omitted.add("intent")
+            if card.get("outcome"):
+                omitted.add("outcome")
         if model is not None:
             model["tags"] = None
         if card is not None:

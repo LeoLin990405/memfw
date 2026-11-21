@@ -14,6 +14,7 @@ from memfw.conversations.adapter import SqliteStoreSource
 from memfw.conversations.backends import ModelReply
 from memfw.conversations.share import ConversationShare
 from memfw.conversations.store import WITHHELD
+from memfw.conversations.two_stage import _shrink
 from memfw.conversations.worker import WorkState, state_path
 from memfw.handoff.pack import build_pack
 from memfw.handoff.schema import (
@@ -23,6 +24,7 @@ from memfw.handoff.schema import (
     PACK_SCHEMA,
     REDACTION_POLICY,
     SCHEMA,
+    listed_omissions,
     validate_pack,
 )
 from tests.conversation_fixtures import (
@@ -353,6 +355,30 @@ def test_handoff_continuation_keys_and_evidence_refs(tmp_path: Path) -> None:
     # Existing keys stay.
     assert system["goal"].startswith("Add a retry")
     assert "files_touched" in system and "recent_turns" in system
+
+
+def test_two_stage_shrink_names_cleared_tags_and_intent() -> None:
+    """Emptying tags or intent in a two_stage reply lists those names in omitted_fields."""
+
+    tags = {"intent": "classify the uploader failure", "project": ["uploader"], "outcome": "done"}
+    item = {
+        "cwd": "c" * 200,
+        "project": "demo",
+        "model_output": {"summary": "s" * 300, "tags": dict(tags)},
+        "session_card": {
+            "summary": "s" * 300,
+            "intent": tags["intent"],
+            "outcome": "done",
+            "tags": dict(tags),
+        },
+    }
+    omitted: set[str] = set()
+    _shrink(item, 32, omitted)
+    assert item["session_card"]["tags"] is None
+    assert item["session_card"]["intent"] is None
+    assert "tags" in omitted and "intent" in omitted
+    named = listed_omissions(omitted)
+    assert "tags" in named and "intent" in named
 
 
 def test_search_omits_a_secret_summary_instead_of_inventing_one(tmp_path: Path) -> None:
