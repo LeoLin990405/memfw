@@ -58,12 +58,13 @@ backend_error`). The `[system]` part does not change either way.
   such as e-mail addresses or home-directory user names is masked.
 - `--max-bytes` (default 16 KiB, range 2 KiB to 64 KiB) caps the printed
   output in the chosen format. When a pack is too big, parts are cut in this
-  order: the oldest recent turns, then files touched (and the git state),
-  then the model part, then the tail of the goal, then the lineage, and
-  last the source cwd and project. `truncated` and `truncated_parts` record
-  what was cut. The notice and labels are never cut. If the pack still does
-  not fit, it is refused (`pack_too_large`, exit 2) rather than printed over
-  the cap.
+  order: system fields that only repeat `model_summarized` (that part still
+  holds them, so this is not listed in `truncated_parts`), then the oldest
+  recent turns, then files touched (and the git state), then the model part,
+  then the tail of the goal, then the lineage, and last the source cwd and
+  project. `truncated` and `truncated_parts` record what was cut. The notice
+  and labels are never cut. If the pack still does not fit, it is refused
+  (`pack_too_large`, exit 2) rather than printed over the cap.
 - In Markdown, everything that comes from the session is untrusted. The
   goal and each turn's text are rendered as `>` quotes, with a `#` at the
   start of a line escaped. Single-line values (paths, tool calls, model

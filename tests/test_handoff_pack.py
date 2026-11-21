@@ -14,9 +14,12 @@ from memfw.handoff.pack import json_size, markdown_size
 from memfw.handoff.schema import (
     EXIT_NOT_INDEXED,
     EXIT_USAGE,
+    MAX_BYTES,
+    MIN_BYTES,
     MODEL_KEYS,
     MODEL_LABEL,
     NOTICE,
+    OMITTED_FIELD_NAMES,
     SCHEMA,
     SYSTEM_LABEL,
     PackSchemaError,
@@ -244,6 +247,56 @@ def test_no_summarize_means_no_model_call(db: Path) -> None:
     backend = FakeBackend(_reply())
     pack = build_pack(db, "claude", "s1", git=False, loader=_loader(backend))
     assert backend.calls == [] and "model_summarized" not in pack
+
+
+def test_system_copy_of_model_fields_does_not_evict_extra_recent_turns(tmp_path: Path) -> None:
+    """A tight cap keeps as many recent turns as a pack that does not copy the model into system."""
+
+    class Backend:
+        name = "fake-local"
+        local = True
+
+        def run(self, task: str, data: dict[str, Any], *, max_tokens: int) -> ModelReply:
+            body = {key: [f"{key} item " + "x" * 60 for _ in range(2)] for key in MODEL_KEYS}
+            return ModelReply(text=json.dumps(body))
+
+    db = make_store(tmp_path, {"claude": {"c": standard_session("claude", "c")}})
+    loader = lambda spec, allow_cloud=False: Backend()  # noqa: E731
+    full = build_pack(
+        db, "claude", "c", git=False, summarize_spec="x:y", loader=loader, max_bytes=MAX_BYTES
+    )
+    assert full["model_summarized"]["status"] == "ok"
+    assert full["system"]["decisions"] and full["system"]["open_questions"]
+    kept_when_roomy = len(full["system"]["recent_turns"])
+    assert kept_when_roomy >= 5
+
+    def without_system_copy(cap: int) -> dict[str, Any]:
+        clone = json.loads(json.dumps(full))
+        clone["max_bytes"] = cap
+        clone["system"]["decisions"] = []
+        clone["system"]["open_questions"] = []
+        clone["system"]["next_step"] = ""
+        clone["truncated"] = False
+        clone["truncated_parts"] = []
+        clone["omitted_fields"] = list(OMITTED_FIELD_NAMES)
+        return clone
+
+    cap = MIN_BYTES
+    for _ in range(6):
+        cap = json_size(without_system_copy(cap))
+    assert MIN_BYTES <= cap <= MAX_BYTES
+    copied = json.loads(json.dumps(without_system_copy(cap)))
+    copied["system"]["decisions"] = list(full["system"]["decisions"])
+    copied["system"]["open_questions"] = list(full["system"]["open_questions"])
+    copied["system"]["next_step"] = full["system"]["next_step"]
+    assert json_size(copied) > cap
+
+    packed = build_pack(
+        db, "claude", "c", git=False, summarize_spec="x:y", loader=loader, max_bytes=cap
+    )
+    assert len(packed["system"]["recent_turns"]) == kept_when_roomy
+    assert packed["model_summarized"]["decisions"] == full["model_summarized"]["decisions"]
+    assert json_size(packed) <= cap
 
 
 def test_model_part_is_cut_after_files(tmp_path: Path) -> None:

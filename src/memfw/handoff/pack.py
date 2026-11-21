@@ -9,9 +9,11 @@ model part (:mod:`.summarize`) is built only when a spec is given.
 
 Every text is redacted again on the way out (a value that still looks like a
 secret is withheld). The pack is cut to ``max_bytes`` of its rendered form,
-dropping the oldest recent turns first, then files touched (and git state),
-then the model part, then the goal's tail, the lineage and the source cwd
-and project; a pack that still does not fit is refused (``pack_too_large``).
+first dropping the system fields that only repeat ``model_summarized`` (that
+part still holds them), then the oldest recent turns, then files touched
+(and git state), then the model part, then the goal's tail, the lineage and
+the source cwd and project; a pack that still does not fit is refused
+(``pack_too_large``).
 
 The goal is the first user message that is the person's own words: turns
 holding only harness-injected text (a ``<system-reminder>`` block) are skipped
@@ -310,6 +312,32 @@ def build_pack(
     return pack
 
 
+def _drop_model_copies(pack: dict[str, Any]) -> None:
+    """Clear system fields that only repeat an ok model part. The model part stays.
+
+    No truncated mark: the values are still on ``model_summarized``. A mismatch
+    is left alone (those fields are not a copy).
+    """
+
+    model = pack.get("model_summarized")
+    system = pack.get("system")
+    if not isinstance(model, dict) or model.get("status") != "ok" or not isinstance(system, dict):
+        return
+    decisions = list(model.get("decisions") or [])
+    questions = list(model.get("open_questions") or [])
+    nxt = [item for item in (model.get("next") or []) if item]
+    next_step = nxt[0] if nxt else ""
+    if (
+        system.get("decisions") != decisions
+        or system.get("open_questions") != questions
+        or system.get("next_step") != next_step
+    ):
+        return
+    system["decisions"] = []
+    system["open_questions"] = []
+    system["next_step"] = ""
+
+
 def fit(
     pack: dict[str, Any],
     cap: int,
@@ -318,10 +346,12 @@ def fit(
 ) -> None:
     """Cut ``pack`` in place until ``measure(pack) <= cap``, recording what was cut.
 
-    Order: oldest recent turns, files touched, git state, model part, goal,
-    lineage, then the source cwd and project. :class:`HandoffError`
-    (``pack_too_large``) when even that is not enough. ``files`` and
-    ``evidence_refs`` stay mirrored to whatever remains.
+    Order: system fields that only repeat an ok ``model_summarized`` (removed
+    without a truncated mark; the model part still has them), oldest recent
+    turns, files touched, git state, model part, goal, lineage, then the
+    source cwd and project. :class:`HandoffError` (``pack_too_large``) when
+    even that is not enough. ``files`` and ``evidence_refs`` stay mirrored
+    to whatever remains.
     """
 
     system = pack["system"]
@@ -339,6 +369,11 @@ def fit(
             parts.append(part)
         pack["truncated"] = True
         dropped.add(part)
+
+    if over():
+        # These three are copies of the model part. Dropping turns first would
+        # lose recent_turns while the duplicate was still on the pack.
+        _drop_model_copies(pack)
 
     while over() and system["recent_turns"]:
         system["recent_turns"].pop(0)
