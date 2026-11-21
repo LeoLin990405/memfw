@@ -130,7 +130,8 @@ def _recent(session: StoredSession, count: int, omitted: set[str]) -> list[dict[
             cleaned, secret = safe_text(turn.text) if turn.text else ("", False)
             withheld = secret or turn.withheld
             if withheld:
-                text, calls = "", []
+                text = ""
+                calls: list[dict[str, str]] = []
                 omitted.add("text")
                 if turn.tool_calls:
                     omitted.add("tool_calls")

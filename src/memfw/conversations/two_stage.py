@@ -895,8 +895,12 @@ def two_stage_search(
             item["windows"].append(window)
             used += size
     for item in pending_start:
-        windows = item["windows"]
-        item["session_card"]["suggested_start"] = windows[0]["hit_offset"] if windows else None
+        # Not the ``windows`` parameter (an int). Rebinding that name stays an int
+        # under mypy, so the list from the session is a separate name.
+        turn_windows = item["windows"]
+        item["session_card"]["suggested_start"] = (
+            turn_windows[0]["hit_offset"] if turn_windows else None
+        )
     response[HEALTH_KEY] = from_conversation_search(response)
     response["omitted_fields"] = listed_omissions(search.omitted)
     return response
