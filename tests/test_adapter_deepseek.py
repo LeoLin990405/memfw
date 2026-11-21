@@ -31,6 +31,7 @@ from memfw.conversations.backends import (
     configured_backend,
     load_backend,
     parse_reply,
+    reply_issue,
 )
 from memfw.conversations.worker import Budgets, ConversationWorker, WorkState
 from memfw.dream.claims import DreamClaimStager, DreamClaimVerifier
@@ -389,7 +390,18 @@ def test_parse_conv_v2_normalises_and_redacts() -> None:
         "intent": "fix the worker",
         "outcome": "success",
     }
-    assert parse_reply("chunk_summary", _v2(), prompt_version=TAG_PROMPT_VERSION) is None
+    # An empty tags object omits every key. Rev 32 fills the defaults and keeps
+    # the summary. Rev 31 rejected it (missing_tag_key).
+    assert parse_reply("chunk_summary", _v2(), prompt_version=TAG_PROMPT_VERSION) == {
+        "summary": "Fixed it.",
+        "tags": {
+            "project": [],
+            "task_type": "other",
+            "components": [],
+            "intent": "",
+            "outcome": "unknown",
+        },
+    }
     filled = parse_reply(
         "chunk_summary",
         _v2(project=[], task_type="other", components=[], intent="", outcome="unknown"),
@@ -1208,17 +1220,9 @@ def _output_cases() -> list[tuple[str, str, str, str]]:
     """(code, reply body, finish_reason, a snippet that must not be stored)."""
 
     tags = _valid_tags()
-    missing = dict(tags)
-    del missing["intent"]
     return [
         ("not_json", "{not json", "stop", "not json"),
         ("missing_summary", json.dumps({"tags": tags}), "stop", "Uploader"),
-        (
-            "missing_tag_key",
-            json.dumps({"summary": "harbor-note", "tags": missing}),
-            "stop",
-            "harbor-note",
-        ),
         (
             "bad_enum",
             json.dumps({"summary": "harbor-note", "tags": {**tags, "task_type": "coding"}}),
@@ -1276,6 +1280,35 @@ def test_fake_backend_records_one_reason_code(
     shown = WorkState(tmp_path / "data" / "work.sqlite").status(now=NOW)
     assert shown["recent_runs"]["reasons"][code] == 1
     assert shown["bad_output_share"] == 1.0
+
+
+def test_omitted_tag_key_is_stored_and_counted_by_name(
+    tmp_path: Path, fake: FakeDeepSeek
+) -> None:
+    """A legal summary with intent omitted is kept. The report names the key only."""
+
+    tags = _valid_tags()
+    del tags["intent"]
+    note = "harbor-kept-summary"
+    fake.default = tag_reply(content=json.dumps({"summary": note, "tags": tags}))
+    write_store(tmp_path / "data" / "conversations.sqlite", _harbor_rows())
+    report = _worker(tmp_path, _backend(fake)).run()
+    assert report.errors == {}
+    assert report.tag_key_defaulted == {"intent": 2}
+    assert report.as_dict()["tag_key_defaulted"] == {"intent": 2}
+    assert note not in json.dumps(report.as_dict())
+    stored = [json.loads(row["tags"]) for row in _rows_of(tmp_path, "SELECT tags FROM summaries")]
+    assert len(stored) == 2
+    assert all(row["intent"] == "" and row["task_type"] == "dev" for row in stored)
+    assert all(row["outcome"] == "done" for row in stored)
+
+
+def test_present_empty_task_type_is_not_the_missing_key_default() -> None:
+    tags = _valid_tags()
+    tags["task_type"] = ""
+    reply = json.dumps({"summary": "kept", "tags": tags})
+    assert parse_reply("chunk_summary", reply, prompt_version="conv-v2") is None
+    assert reply_issue("chunk_summary", reply, prompt_version="conv-v2") == "bad_enum"
 
 
 def test_worker_maps_project_aliases_and_prompts_canonical_names(

@@ -207,12 +207,28 @@ def _items(raw: Any) -> list[str] | None:
     return out[:TAG_MAX_ITEMS]
 
 
-def tag_issue(value: Any) -> str:
-    """A ``conv-v2`` reason code, or ``""`` when ``value`` matches the tag schema.
+def omitted_tag_keys(raw: Any) -> tuple[str, ...]:
+    """Tag key names absent from ``raw``, in :data:`TAG_KEYS` order.
 
-    Codes only: the return value never contains model text. Omitted tag keys are
-    ``missing_tag_key`` (they are not filled in). A list item that looks like a
-    URL or a path is ``item_looks_like_url``.
+    Names only: values are never returned. A key that is present, even with
+    ``None`` or ``""``, is not omitted. ``()`` when ``raw`` is not a mapping.
+    """
+
+    if not isinstance(raw, Mapping):
+        return ()
+    return tuple(key for key in TAG_KEYS if key not in raw)
+
+
+def tag_issue(value: Any) -> str:
+    """A ``conv-v2`` reason code, or ``""`` when ``value`` can be stored.
+
+    Codes only: the return value never contains model text. An omitted tag key
+    is not a reason. :func:`normalize_tags` fills ``task_type`` ``other``,
+    ``outcome`` ``unknown``, ``intent`` ``""`` and empty lists. Tags that are
+    not an object, an unknown key, a value outside the ``task_type`` or
+    ``outcome`` vocabulary, or a wrong type still reject. A list item that
+    looks like a URL or a path is ``item_looks_like_url`` (the whole reply,
+    not that item alone).
     """
 
     if not isinstance(value, Mapping):
@@ -228,14 +244,12 @@ def tag_issue(value: Any) -> str:
         return "bad_shape"
     raw = value.get("tags")
     if not isinstance(raw, Mapping):
-        return "missing_tag_key"
-    if set(TAG_KEYS) - set(raw):
-        return "missing_tag_key"
+        return "bad_shape"
     if set(raw) - set(TAG_KEYS):
         return "bad_shape"
-    task_type = raw.get("task_type")
-    outcome = raw.get("outcome")
-    intent = raw.get("intent")
+    task_type = raw.get("task_type", "other")
+    outcome = raw.get("outcome", "unknown")
+    intent = raw.get("intent", "")
     if not isinstance(task_type, str) or not isinstance(outcome, str):
         return "bad_enum"
     if _clean(task_type, 16) not in TASK_TYPES or _clean(outcome, 16) not in TAG_OUTCOMES:
@@ -243,6 +257,8 @@ def tag_issue(value: Any) -> str:
     if not isinstance(intent, str):
         return "bad_shape"
     for key in ("project", "components"):
+        if key not in raw:
+            continue
         items = raw.get(key)
         if items is None:
             continue
@@ -259,20 +275,22 @@ def normalize_tags(raw: Any) -> dict[str, Any] | None:
     """The tags in canonical form, or ``None`` when they do not match the schema.
 
     Lower-cased, whitespace collapsed, lists de-duplicated and capped, every
-    key present. A missing key, an unknown key, a value outside the ``task_type``
-    or ``outcome`` vocabulary, a wrong type, or a ``project`` / ``components``
-    item that looks like a URL, a path or a host rejects the whole reply
-    (dropped, never repaired). Secrets are the caller's check and still drop
-    the whole reply.
+    key present. A missing ``task_type`` is ``other``, a missing ``outcome``
+    is ``unknown``, a missing ``intent`` is ``""``, and a missing ``project``
+    or ``components`` is ``[]``. An unknown key, a value outside the vocabulary,
+    a wrong type, or a ``project`` / ``components`` item that looks like a URL,
+    a path or a host rejects the whole reply (dropped, never repaired). A
+    present empty ``task_type`` or ``outcome`` is not the missing-key default.
+    Secrets are the caller's check and still drop the whole reply.
     """
 
-    if not isinstance(raw, Mapping) or set(raw) != set(TAG_KEYS):
+    if not isinstance(raw, Mapping) or set(raw) - set(TAG_KEYS):
         return None
     project = _items(raw.get("project"))
     components = _items(raw.get("components"))
-    task_type = raw.get("task_type")
-    outcome = raw.get("outcome")
-    intent = raw.get("intent")
+    task_type = raw.get("task_type", "other")
+    outcome = raw.get("outcome", "unknown")
+    intent = raw.get("intent", "")
     if project is None or components is None:
         return None
     if not isinstance(task_type, str) or not isinstance(outcome, str):
@@ -376,6 +394,7 @@ __all__ = [
     "ModelReply",
     "map_project_names",
     "normalize_tags",
+    "omitted_tag_keys",
     "parse_tagged",
     "render_tag_data",
     "render_tag_prompt",

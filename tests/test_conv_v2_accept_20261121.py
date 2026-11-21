@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from memfw.conversations.backends import reply_issue
+from memfw.conversations.backends import parse_reply, reply_issue
 from memfw.ports.models import BackendUnavailable, map_project_names, render_tag_prompt
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -104,18 +104,34 @@ def test_render_tag_prompt_defaults_to_chinese() -> None:
 
 
 def test_reply_issue_reports_structural_codes_without_echoing_model_text() -> None:
-    missing_intent = _tags()
-    del missing_intent["intent"]
     cases = (
         ("not json", "not_json"),
         (_reply(None, _tags()), "missing_summary"),
         (_reply("x" * 801, _tags()), "summary_too_long"),
-        (_reply("ok", missing_intent), "missing_tag_key"),
         (_reply("ok", _tags(task_type="coding")), "bad_enum"),
     )
-    assert set(missing_intent) == set(_TAG_KEYS) - {"intent"}
     for text, expected in cases:
         assert _issue(text) == expected
+
+
+def test_omitted_intent_is_kept_and_not_a_reason_code() -> None:
+    """Rev 32: an omitted tag key is filled and the reply is kept.
+
+    Rev 31 recorded ``missing_tag_key`` for this case. That reject dropped a
+    usable summary. The assignment reversed it. A present bad enum still rejects.
+    """
+
+    missing_intent = _tags()
+    del missing_intent["intent"]
+    assert set(missing_intent) == set(_TAG_KEYS) - {"intent"}
+    text = _reply("ok", missing_intent)
+    assert _issue(text) == ""
+    parsed = parse_reply("chunk_summary", text, prompt_version="conv-v2")
+    assert parsed is not None
+    assert parsed["summary"] == "ok"
+    assert parsed["tags"]["intent"] == ""
+    assert parsed["tags"]["task_type"] == "dev"
+    assert parsed["tags"]["outcome"] == "done"
 
 
 def test_reply_issue_url_code_does_not_contain_the_host() -> None:

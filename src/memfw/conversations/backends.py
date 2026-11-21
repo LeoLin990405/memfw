@@ -48,6 +48,7 @@ from typing import Any
 from ..ports.models import (
     TAG_INTENT_CHARS,
     TAG_ITEM_CHARS,
+    TAG_KEYS,
     TAG_PROMPT_VERSION,
     TAG_SUMMARY_CHARS,
     TAG_TASKS,
@@ -99,6 +100,7 @@ __all__ = [
     "gated_loader",
     "estimate_tokens",
     "load_backend",
+    "defaulted_tag_keys",
     "parse_reply",
     "prompt_version_of",
     "render_prompt",
@@ -273,6 +275,9 @@ OUTPUT_ISSUE_CODES = frozenset(
     {
         "not_json",
         "missing_summary",
+        # Rev 31 emitted this when a tag key was absent. Absent keys are now
+        # defaults (see defaulted_tag_keys). The code stays so an old run row
+        # still counts as model output rather than a backend failure.
         "missing_tag_key",
         "bad_enum",
         "summary_too_long",
@@ -337,6 +342,31 @@ def reply_issue(
     if parse_reply(task, reply, prompt_version=prompt_version) is None:
         return "bad_output"
     return ""
+
+
+def defaulted_tag_keys(reply: str) -> tuple[str, ...]:
+    """Tag key names a structurally acceptable ``conv-v2`` reply left out.
+
+    Names only, in :data:`TAG_KEYS` order. ``()`` when the reply is not a
+    tagged object :func:`tag_issue` accepts. A present key is not listed, even
+    when its value is empty. This does not decide redaction: the worker counts
+    the names only after :func:`parse_reply` has kept the reply.
+    """
+
+    text = reply.strip()
+    fence = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.S)
+    if fence:
+        text = fence.group(1)
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return ()
+    if not isinstance(value, dict) or tag_issue(value):
+        return ()
+    raw = value.get("tags")
+    if not isinstance(raw, Mapping):
+        return ()
+    return tuple(key for key in TAG_KEYS if key not in raw)
 
 
 def conversation_labels(

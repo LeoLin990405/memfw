@@ -53,7 +53,13 @@ from urllib.parse import quote
 
 from ..history.injected import has_content, strip_structural
 from ..ports.claims import ClaimEvidence, ClaimStager, ClaimVerifier, StagedClaim
-from ..ports.models import BackendBudgetExhausted, BackendUnavailable, map_project_names
+from ..ports.models import (
+    TAG_PROMPT_VERSION,
+    TAG_TASKS,
+    BackendBudgetExhausted,
+    BackendUnavailable,
+    map_project_names,
+)
 from .adapter import Ingestor, checked_location, data_dir
 from .backends import (
     OUTPUT_ISSUE_CODES,
@@ -61,6 +67,7 @@ from .backends import (
     ExtractiveBackend,
     ModelBackend,
     accepts,
+    defaulted_tag_keys,
     estimate_tokens,
     parse_reply,
     prompt_version_of,
@@ -168,6 +175,8 @@ class RunReport:
     """Sessions whose whole-session summary was stored during this run."""
     project_unmapped: int = 0
     """Project tag values that matched no canonical name or alias."""
+    tag_key_defaulted: dict[str, int] = field(default_factory=dict)
+    """How many kept conv-v2 replies omitted each tag key. Key names only."""
     replan_held_back: int = 0
     """Already-processed sessions a new prompt version did not re-plan this run (older
     than the lookback, or past the re-plan cap). Reported only when not 0."""
@@ -179,6 +188,8 @@ class RunReport:
         out = asdict(self)
         if not out["replan_held_back"]:
             del out["replan_held_back"]  # conv-v1 runs keep their exact report shape
+        if not out["tag_key_defaulted"]:
+            del out["tag_key_defaulted"]  # absent when no kept reply omitted a tag key
         return out
 
 
@@ -1507,6 +1518,9 @@ class ConversationWorker:
         parsed = parse_reply(task, reply.text, prompt_version=version)
         if parsed is None:
             return None, tokens_in, tokens_out, "bad_output"
+        if version == TAG_PROMPT_VERSION and task in TAG_TASKS:
+            for key in defaulted_tag_keys(reply.text):
+                report.bump(report.tag_key_defaulted, key)
         tags = parsed.get("tags")
         if isinstance(tags, dict) and self.project_vocab:
             names, missed = map_project_names(list(tags.get("project") or []), self.project_vocab)
