@@ -106,9 +106,68 @@ def test_gapped_offsets_suggested_start_is_the_hit_offset_not_the_index(tmp_path
     hit = share.search("uploader at 30")["results"][0]
     assert hit["offset"] == 30
     assert hit["session_card"]["suggested_start"] == 30
-    window = share.get("gaps", around=1, radius=0)
+    # suggested_start is the store offset, not the 0-based turn index (1).
+    window = share.get("gaps", around=hit["session_card"]["suggested_start"], radius=0)
+    assert window["center_offset"] == 30
+    assert window["center_index"] == 1
     assert [item["index"] for item in window["turns"]] == [1]
     assert window["turns"][0]["ref"].endswith("@30")
+    with pytest.raises(ConversationError):
+        share.get("gaps", around=1, radius=0)
+
+
+def test_search_card_suggested_start_feeds_get_around(tmp_path: Path) -> None:
+    """search → session_card.suggested_start → get --around, on gapped store offsets."""
+
+    offsets = (0, 812, 2051, 4400)
+    vault = make_vault(tmp_path / "vault", SHARE_ON)
+    rows = [
+        turn("codex", "s-gap", offset, "user", f"needle {offset}", f"2026-01-01T00:0{i}:00Z")
+        for i, offset in enumerate(offsets)
+    ]
+    store = write_store(tmp_path / "data" / "c.sqlite", rows)
+    share = open_share(vault, "claude", store=store)
+    hit = share.search("needle 2051")["results"][0]
+    suggested = hit["session_card"]["suggested_start"]
+    assert suggested == 2051 == hit["offset"]
+    window = share.get("s-gap", around=suggested, radius=1)
+    assert [item["ref"].rsplit("@", 1)[1] for item in window["turns"]] == ["812", "2051", "4400"]
+    assert window["center_offset"] == 2051
+    assert window["center_index"] == 2
+    center = next(item for item in window["turns"] if item["index"] == window["center_index"])
+    assert center["ref"].endswith("@2051")
+    with pytest.raises(ConversationError):
+        missed = share.get("s-gap", around=1, radius=1)
+        assert missed["turns"] == []  # must not come back empty
+
+    runner = CliRunner()
+    base = ["--root", str(vault), "--store", str(store)]
+    searched = runner.invoke(cli_app, ["conversations", "search", "needle 2051", *base])
+    assert searched.exit_code == 0, searched.output
+    card_start = json.loads(searched.output)["results"][0]["session_card"]["suggested_start"]
+    assert card_start == 2051
+    got = runner.invoke(
+        cli_app,
+        ["conversations", "get", "s-gap", "--around", str(card_start), "--radius", "1", *base],
+    )
+    assert got.exit_code == 0, got.output
+    body = json.loads(got.output)
+    assert [item["ref"].rsplit("@", 1)[1] for item in body["turns"]] == ["812", "2051", "4400"]
+    assert body["center_offset"] == 2051
+    assert body["center_index"] == 2
+    missing = runner.invoke(
+        cli_app, ["conversations", "get", "s-gap", "--around", "999", "--radius", "0", *base]
+    )
+    assert missing.exit_code == 2
+    assert not missing.output.strip().startswith("{")
+    help_text = runner.invoke(cli_app, ["conversations", "get", "--help"])
+    assert help_text.exit_code == 0
+    # Rich wraps the option panel, so the phrase is not one physical line.
+    flat_help = " ".join(
+        "".join(ch if ch.isalnum() or ch in " .-_@" else " " for ch in help_text.output).split()
+    ).lower()
+    assert "store offset" in flat_help
+    assert "not a turn index" in flat_help
 
 
 def test_get_around_is_inclusive_and_ignores_start_end(tmp_path: Path) -> None:

@@ -11,7 +11,7 @@ asynchronous worker that summarises sessions.
 |---|---|---|
 | `conversations_search(query, app?, agent?, since?, limit, offset, mode?, task_type?, outcome?, project?, component?, intent_like?, archived_only?, ...)` | `memfw conversations search QUERY` | redacted snippets with refs `app:session@offset`; `mode=two_stage`: ranked sessions (see [Two-stage conversation search](#two-stage-conversation-search)) |
 | `conversations_list(app?, since?, limit, offset)` | `memfw conversations list` | sessions, newest first |
-| `conversations_get(session_id, app?, start, end, max_bytes)` | `memfw conversations get SESSION` | a range of turns; follow `next_start` |
+| `conversations_get(session_id, app?, start, end, max_bytes)` | `memfw conversations get SESSION` | a range of turns (`start`/`end` are turn indexes); follow `next_start`. CLI `--around OFFSET --radius R` centers on a store offset (the number after `@` in a ref, and `session_card.suggested_start`), then returns that turn plus R neighbors in order. The reply names `center_offset` and the 0-based `center_index`. An unknown offset exits 2. MCP has no `--around`. |
 | `conversations_handoff(session_id, app?, for_agent?, max_bytes)` | `memfw conversations handoff SESSION --for APP` | continuation pack: goal, decisions, open questions, files touched, recent turns, worker summary (labelled) |
 
 Every output is redacted again on the way out (a turn that still looks like it

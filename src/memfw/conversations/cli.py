@@ -182,12 +182,19 @@ def get(
         int | None,
         typer.Option(
             "--around",
-            help="Center on this turn index (inclusive). Ignores --start and --end.",
+            help=(
+                "Center on this store offset (the number after @ in a turn ref, "
+                "and session_card.suggested_start). Not a turn index. "
+                "Ignores --start and --end. Unknown offset exits 2."
+            ),
         ),
     ] = None,
     radius: Annotated[
         int | None,
-        typer.Option("--radius", help="Turns on each side of --around (default 2)."),
+        typer.Option(
+            "--radius",
+            help="Turns on each side of the --around offset, in session order (default 2).",
+        ),
     ] = None,
     max_bytes: Annotated[int, typer.Option("--max-bytes")] = 16 * 1024,
     with_archive_state: ArchiveStateOption = False,
@@ -195,7 +202,13 @@ def get(
 ) -> None:
     """A redacted, size-capped range of one session's turns.
 
-    ``--around N --radius R`` returns indexes ``[N-R, N+R]`` (both ends included).
+    ``--around OFFSET --radius R`` finds the turn stored at that offset (the
+    same number as ``session_card.suggested_start`` and the part after ``@``
+    in a ref), then returns that turn and R turns before and after it, in
+    session order, both ends included. The reply names the center turn's
+    store offset (``center_offset``) and its 0-based index (``center_index``).
+    ``--start`` and ``--end`` are turn indexes and are ignored when
+    ``--around`` is set. An offset that is not in the session exits 2.
     """
 
     try:

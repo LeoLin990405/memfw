@@ -343,7 +343,8 @@ TOOLS: list[dict[str, Any]] = [
             "each returned turn's index field), not offsets. The ref and offset that "
             "conversations_search returns are the turn's position key in the source record (a "
             "byte offset for JSONL transcripts, a gapped ordinal for other stores) and are not "
-            "valid start/end values. Follow next_start to page."
+            "valid start/end values. The CLI flag --around accepts that store offset "
+            "(session_card.suggested_start); this tool does not. Follow next_start to page."
         ),
         "inputSchema": {
             "type": "object",

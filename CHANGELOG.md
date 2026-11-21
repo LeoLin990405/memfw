@@ -19,6 +19,13 @@ projections out of the vault; see the 0.4.0
 
 ### Fixed
 
+- `memfw conversations get --around` takes a store offset (the number after
+  `@` in a turn ref, and `session_card.suggested_start`), not a turn index.
+  Offsets are not contiguous. The command finds that turn, then returns it
+  plus `--radius` turns on each side in session order. The reply names the
+  center turn's `center_offset` and its 0-based `center_index`. An offset
+  that is not in the session exits 2 instead of an empty window. `--start`
+  and `--end` stay turn indexes and are ignored when `--around` is set.
 - Redaction (`memfw.history.redact`): an IPv4 address inside a host name
   (`git.<ip>.sslip.io`) or at the end of a sentence is now masked; the dash
   and hex IP forms of `sslip.io` / `nip.io` / `xip.io` (any case), the tailnet

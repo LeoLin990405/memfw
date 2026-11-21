@@ -474,16 +474,24 @@ class ConversationShare:
                 raise ConversationError("session is not archived")
             if with_archive_state:
                 session["archived"] = archived
+        center_offset: int | None = None
+        center_index: int | None = None
         if around is not None:
-            # ``--around`` is a turn index (the same axis as start/end). start/end are ignored.
+            # ``--around`` is a store offset (ref after ``@``, session_card.suggested_start),
+            # not a turn index. start/end are ignored. A missing offset is an error, not [].
             if isinstance(around, bool) or not isinstance(around, int) or around < 0:
-                raise ConversationError("around must be an integer >= 0")
+                raise ConversationError("around must be a store offset (integer >= 0)")
             if radius is None:
                 radius = 2
             elif isinstance(radius, bool) or not isinstance(radius, int) or radius < 0:
                 raise ConversationError("radius must be an integer >= 0")
-            start = max(0, around - radius)
-            end = around + radius + 1  # inclusive window [center - radius, center + radius]
+            found = self._turn_index_for_offset(info, around)
+            if found is None:
+                raise ConversationError(f"around offset {around} is not a turn in this session")
+            center_offset = around
+            center_index = found
+            start = max(0, found - radius)
+            end = found + radius + 1  # inclusive window, radius turns each side
         elif radius is not None:
             raise ConversationError("radius requires around")
         else:
@@ -502,6 +510,10 @@ class ConversationShare:
             "redaction_policy": REDACTION_POLICY,
             "omitted_fields": list(OMITTED_FIELD_NAMES),
         }
+        if center_offset is not None:
+            # Wider than any real offset/index, so writing the real pair cannot overflow.
+            frame["center_offset"] = 10**18
+            frame["center_index"] = 10**9
         used = _size(frame)
         truncated = False
         for position, turn in enumerate(turns, start=start):
@@ -554,7 +566,7 @@ class ConversationShare:
                 break
         next_index = start + len(out)
         limit_end = info.turns if end is None else min(int(end), info.turns)
-        return {
+        payload = {
             "notice": DATA_NOTICE,
             "session": session,
             "turns": out,
@@ -564,6 +576,34 @@ class ConversationShare:
             "redaction_policy": REDACTION_POLICY,
             "omitted_fields": listed_omissions(omitted),
         }
+        if center_offset is not None:
+            # Both coordinates of the window center: store offset, and which turn it is.
+            payload["center_offset"] = center_offset
+            payload["center_index"] = center_index
+        return payload
+
+    def _turn_index_for_offset(self, info: SessionInfo, offset: int) -> int | None:
+        """0-based index of the turn stored at ``offset``, or None.
+
+        Offsets increase with the index but are not contiguous (a JSONL byte
+        offset, or a gapped ordinal). ``start``/``end`` stay indexes.
+        """
+
+        lo = 0
+        hi = info.turns
+        while lo < hi:
+            mid = (lo + hi) // 2
+            page = self.source.turns(info.app, info.session_id, start=mid, limit=1)
+            if not page:
+                return None
+            found = page[0].offset
+            if found == offset:
+                return mid
+            if found < offset:
+                lo = mid + 1
+            else:
+                hi = mid
+        return None
 
     def handoff(
         self,
