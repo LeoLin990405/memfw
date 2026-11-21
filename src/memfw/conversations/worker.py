@@ -464,7 +464,8 @@ class WorkState:
                 payload = {}
             if not isinstance(payload, dict):
                 payload = {}
-            errors = payload.get("errors") if isinstance(payload.get("errors"), dict) else {}
+            raw_errors = payload.get("errors")
+            errors: dict[Any, Any] = raw_errors if isinstance(raw_errors, dict) else {}
             stopped = str(payload.get("stopped") or "")
             if row["status"] == "degraded" or stopped in {"backend_refused", "backend_unavailable"}:
                 degraded += 1
@@ -484,7 +485,8 @@ class WorkState:
                     bad += count
             if stopped in {"backend_refused", "backend_unavailable"} and stopped not in reasons:
                 reasons[stopped] = reasons.get(stopped, 0) + 1
-            job_counts = payload.get("jobs") if isinstance(payload.get("jobs"), dict) else {}
+            raw_jobs = payload.get("jobs")
+            job_counts: dict[Any, Any] = raw_jobs if isinstance(raw_jobs, dict) else {}
             for name in ("chunk_summary:done", "session_summary:done"):
                 value = job_counts.get(name, 0)
                 if isinstance(value, int) and not isinstance(value, bool):
@@ -1272,7 +1274,7 @@ class ConversationWorker:
             picked = self._pick_conv2(report, focus, opened)
             if picked is None:
                 return
-            if picked == "again":
+            if isinstance(picked, str):
                 focus = None
                 continue
             job, focus = picked
