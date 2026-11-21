@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -166,9 +167,11 @@ def test_search_card_suggested_start_feeds_get_around(tmp_path: Path) -> None:
     assert not missing.output.strip().startswith("{")
     help_text = runner.invoke(cli_app, ["conversations", "get", "--help"])
     assert help_text.exit_code == 0
-    # Rich wraps the option panel, so the phrase is not one physical line.
+    # Rich wraps the option panel, and a forced-color terminal paints each
+    # line. Drop those color codes before joining the wrapped words.
+    plain_help = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", help_text.output)
     flat_help = " ".join(
-        "".join(ch if ch.isalnum() or ch in " .-_@" else " " for ch in help_text.output).split()
+        "".join(ch if ch.isalnum() or ch in " .-_@" else " " for ch in plain_help).split()
     ).lower()
     assert "store offset" in flat_help
     assert "not a turn index" in flat_help
