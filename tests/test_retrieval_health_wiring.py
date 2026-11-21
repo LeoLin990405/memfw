@@ -202,7 +202,14 @@ def test_conversation_search_only_adds_the_key(
 def test_conversation_default_mode_keys_and_health(tmp_path: Path) -> None:
     share = _share(tmp_path)
     got = share.search("uploader")
-    assert set(got) == {"notice", "results", "next_offset", KEY}
+    assert set(got) == {
+        "notice",
+        "results",
+        "next_offset",
+        "redaction_policy",
+        "omitted_fields",
+        KEY,
+    }
     assert got[KEY]["mode"] == "full" and got[KEY]["score_kind"] == "none"
     empty = share.search("zzzqqqnothing")[KEY]
     assert empty["mode"] == "empty" and empty["reasons"] == ["no_match"]

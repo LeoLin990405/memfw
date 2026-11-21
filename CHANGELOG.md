@@ -39,6 +39,10 @@ projections out of the vault; see the 0.4.0
 
 ### Added
 
+- Conversations `search`, `get` and `handoff` responses add `redaction_policy`
+  (a fixed short sentence) and `omitted_fields` (the names of fields this
+  response emptied or truncated, never the values). This is a contract
+  change, not a silent extra key.
 - `memfw conversations reredact`: re-redacts text already at rest in the
   conversation store under the current rules. Dry run by default (read-only,
   counts only: rows and columns that would change, new `[REDACTED:kind]`

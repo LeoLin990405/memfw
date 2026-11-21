@@ -28,6 +28,9 @@ because they sit in a different layer from their package:
   import (allowlisted until A5 makes the root lazy).
 * ``memfw.recall.builtin`` is the one recall module that may reach memfw
   internals; the rest of ``memfw.recall`` may import only ``memfw.ports``.
+* ``memfw.handoff.schema`` is the stdlib-only response contract
+  (``redaction_policy``, ``omitted_fields``, pack schema). ``conversations``
+  and the rest of ``handoff`` both import it, so it sits below L3.
 
 Relation to ``memfw-architecture`` section 2 (L0 ports, L1 index/projections,
 L2 core, L3 capabilities, L4 runtime, L5 interfaces): every projection is
@@ -65,6 +68,9 @@ UNITS: Final[dict[str, str]] = {
     "memfw.core": "L2-kernel-model",
     # Byte/record budget accounting; no memfw imports.
     "memfw.budget": "L2-kernel-model",
+    # Pure response contract. Below L3 so conversations and handoff can both
+    # import it without a same-layer capability edge.
+    "memfw.handoff.schema": "L2-kernel-model",
     # Pure budget selectors over the budget model.
     "memfw.policies": "L2-kernel-model",
     # --- L2 kernel parts: pieces the vault facade is assembled from.
