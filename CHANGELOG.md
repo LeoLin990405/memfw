@@ -19,6 +19,9 @@ projections out of the vault; see the 0.4.0
 
 ### Fixed
 
+- Withheld conversation turns keep the row and set `withheld` true, but
+  `text` is an empty string. It is not a `[withheld: ...]` marker. Readers
+  must use the `withheld` flag and must not expect a marker string in `text`.
 - `memfw conversations get --around` takes a store offset (the number after
   `@` in a turn ref, and `session_card.suggested_start`), not a turn index.
   Offsets are not contiguous. The command finds that turn, then returns it

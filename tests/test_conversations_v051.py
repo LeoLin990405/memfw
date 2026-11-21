@@ -10,8 +10,10 @@ from typer.testing import CliRunner
 
 from memfw.cli import app as cli_app
 from memfw.conversations import ConversationError, open_share
+from memfw.conversations.adapter import SqliteStoreSource
 from memfw.conversations.backends import ModelReply
 from memfw.conversations.share import ConversationShare
+from memfw.conversations.store import WITHHELD
 from memfw.conversations.worker import WorkState, state_path
 from memfw.handoff.pack import build_pack
 from memfw.handoff.schema import (
@@ -224,6 +226,29 @@ def test_cli_around_radius_and_illegal_exit_code(tmp_path: Path) -> None:
         cli_app, ["conversations", "get", "s-alpha", "--radius", "-3", *base]
     )
     assert bad_radius.exit_code == 2
+
+
+def test_withheld_row_text_is_empty_and_withheld_is_true(tmp_path: Path) -> None:
+    """A withheld row stays, with text "" — readers use the flag, not a marker string."""
+
+    vault = make_vault(tmp_path / "vault", SHARE_ON)
+    held = turn("codex", "s-hold", 0, "assistant", "must-not-leak", "2026-01-01T00:00:00Z")
+    held["withheld"] = 1
+    held["text"] = ""
+    plain = turn("codex", "s-hold", 1, "user", "still here", "2026-01-01T00:01:00Z")
+    store = write_store(tmp_path / "data" / "c.sqlite", [held, plain])
+    rows = SqliteStoreSource(store).turns("codex", "s-hold")
+    assert [row.offset for row in rows] == [0, 1]
+    withheld_rows = [row for row in rows if row.withheld]
+    assert len(withheld_rows) == 1
+    assert withheld_rows[0].text == "" and withheld_rows[0].withheld is True
+    assert WITHHELD not in withheld_rows[0].text
+    got = open_share(vault, "claude", store=store).get("s-hold")
+    shown = [item for item in got["turns"] if item["withheld"]]
+    assert len(shown) == 1
+    assert shown[0]["text"] == "" and shown[0]["withheld"] is True
+    assert WITHHELD not in json.dumps(got)
+    assert len(got["turns"]) == 2
 
 
 def test_get_withheld_text_is_empty_and_named_in_omitted_fields(tmp_path: Path) -> None:

@@ -248,7 +248,8 @@ episodes keep their vocabulary.
 `memfw.history.conversations` (schema version 1, table
 `conversation_turns`). It opens the file read-only; `withheld = 1` turns (the
 store kept no text because a secret shape was found) come back as withheld,
-never as text, and never match a search. Ingest is the store's own
+with `text` an empty string (not a `[withheld: ...]` marker — use the
+`withheld` flag), and never match a search. Ingest is the store's own
 `ConversationStore.ingest` with its `OptOut` (`conversation_optout`); an agent
 opted out there is skipped and its stored rows are deleted, the same as with
 `memfw history ingest`. The store path follows `conversation_store.path`; the
