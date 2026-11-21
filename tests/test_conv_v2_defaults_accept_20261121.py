@@ -13,7 +13,12 @@ from typing import Any
 
 import pytest
 
-from memfw.conversations.backends import defaulted_tag_keys, parse_reply, reply_issue
+from memfw.conversations.backends import (
+    defaulted_tag_keys,
+    dropped_tag_items,
+    parse_reply,
+    reply_issue,
+)
 from memfw.ports.models import ModelReply
 
 _SUMMARY = "Kept the chunk."
@@ -150,14 +155,20 @@ def test_tags_that_are_not_an_object_are_bad_shape(tags: str | None) -> None:
     assert _parsed(text) is None
 
 
-def test_project_url_code_does_not_contain_the_host() -> None:
+def test_project_url_is_dropped_and_the_reply_is_kept() -> None:
+    """Rev 32 supplement: drop the location item. Do not reject the reply."""
+
     raw = "https://example.com/a"
-    text = _reply(_tags(project=[raw]))
-    code = _issue(text)
-    assert code == "item_looks_like_url"
-    assert "example.com" not in code
-    assert raw not in code
-    assert _parsed(text) is None
+    text = _reply(_tags(project=["uploader", raw], components=["retry", "~/notes"]))
+    assert _issue(text) == ""
+    parsed = _parsed(text)
+    assert parsed is not None
+    assert parsed["summary"] == _SUMMARY
+    assert parsed["tags"]["project"] == ["uploader"]
+    assert parsed["tags"]["components"] == ["retry"]
+    assert dropped_tag_items(text) == 2
+    blob = json.dumps(parsed)
+    assert raw not in blob and "notes" not in blob
 
 
 def test_finish_reason_length_is_truncated_even_when_json_parses() -> None:

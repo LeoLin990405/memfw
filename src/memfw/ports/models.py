@@ -184,11 +184,10 @@ def _clean(value: str, limit: int) -> str:
 
 
 def _items(raw: Any) -> list[str] | None:
-    """List items, or ``None`` when a value is the wrong type or looks like a location.
+    """List items, or ``None`` when a value is the wrong type.
 
-    A URL, a path or a host used to be dropped while the rest of the reply was
-    kept. It now rejects the reply: the worker records ``item_looks_like_url``
-    and does not store the name.
+    A URL, a path or a host is not a name. That one item is skipped. The rest
+    of the reply is kept: a temperature-0 retry would repeat the same text.
     """
 
     if raw is None:
@@ -200,11 +199,35 @@ def _items(raw: Any) -> list[str] | None:
     out: list[str] = []
     for item in raw:
         if _LOCATION.search(item.strip()):
-            return None
+            continue
         cleaned = _clean(item, TAG_ITEM_CHARS)
         if cleaned and cleaned not in out:
             out.append(cleaned)
     return out[:TAG_MAX_ITEMS]
+
+
+def dropped_location_items(raw: Any) -> int:
+    """How many ``project`` or ``components`` strings look like a location.
+
+    ``raw`` is a tags object. The return value is a count. The strings are
+    not returned. A wrong type counts as zero: that reply is rejected, not trimmed.
+    """
+
+    if not isinstance(raw, Mapping):
+        return 0
+    total = 0
+    for key in ("project", "components"):
+        items = raw.get(key)
+        if isinstance(items, str):
+            items = [items]
+        if not isinstance(items, list):
+            continue
+        total += sum(
+            1
+            for item in items
+            if isinstance(item, str) and _LOCATION.search(item.strip())
+        )
+    return total
 
 
 def omitted_tag_keys(raw: Any) -> tuple[str, ...]:
@@ -227,8 +250,7 @@ def tag_issue(value: Any) -> str:
     ``outcome`` ``unknown``, ``intent`` ``""`` and empty lists. Tags that are
     not an object, an unknown key, a value outside the ``task_type`` or
     ``outcome`` vocabulary, or a wrong type still reject. A list item that
-    looks like a URL or a path is ``item_looks_like_url`` (the whole reply,
-    not that item alone).
+    looks like a URL or a path is not a reason: :func:`_items` drops that item.
     """
 
     if not isinstance(value, Mapping):
@@ -266,8 +288,6 @@ def tag_issue(value: Any) -> str:
             items = [items]
         if not isinstance(items, list) or not all(isinstance(item, str) for item in items):
             return "bad_shape"
-        if any(_LOCATION.search(item.strip()) for item in items):
-            return "item_looks_like_url"
     return ""
 
 
@@ -278,10 +298,11 @@ def normalize_tags(raw: Any) -> dict[str, Any] | None:
     key present. A missing ``task_type`` is ``other``, a missing ``outcome``
     is ``unknown``, a missing ``intent`` is ``""``, and a missing ``project``
     or ``components`` is ``[]``. An unknown key, a value outside the vocabulary,
-    a wrong type, or a ``project`` / ``components`` item that looks like a URL,
-    a path or a host rejects the whole reply (dropped, never repaired). A
-    present empty ``task_type`` or ``outcome`` is not the missing-key default.
-    Secrets are the caller's check and still drop the whole reply.
+    or a wrong type rejects the whole reply (dropped, never repaired). A
+    ``project`` or ``components`` item that looks like a URL, a path or a host
+    is dropped on its own; the rest of the reply is kept. A present empty
+    ``task_type`` or ``outcome`` is not the missing-key default. Secrets are
+    the caller's check and still drop the whole reply.
     """
 
     if not isinstance(raw, Mapping) or set(raw) - set(TAG_KEYS):
@@ -392,6 +413,7 @@ __all__ = [
     "BackendUnavailable",
     "ModelBackend",
     "ModelReply",
+    "dropped_location_items",
     "map_project_names",
     "normalize_tags",
     "omitted_tag_keys",

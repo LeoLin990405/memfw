@@ -513,7 +513,7 @@ def test_home_paths_are_redacted_before_lowercasing() -> None:
         "go to https://e.example now",
     ],
 )
-def test_urls_and_paths_reject_the_reply(item: str) -> None:
+def test_urls_and_paths_are_dropped_and_the_reply_is_kept(item: str) -> None:
     base = {
         "project": ["uploader"],
         "task_type": "dev",
@@ -525,7 +525,10 @@ def test_urls_and_paths_reject_the_reply(item: str) -> None:
         tags = dict(base)
         tags[key] = ["uploader", item, "retry"]
         parsed = parse_reply("chunk_summary", _v2("Fixed it.", **tags), prompt_version="conv-v2")
-        assert parsed is None, (key, item)
+        assert parsed is not None, (key, item)
+        assert parsed["summary"] == "Fixed it."
+        assert item.lower() not in json.dumps(parsed["tags"])
+        assert parsed["tags"][key] == ["uploader", "retry"]
     names = ["uploader", "next.js", "c++", "retry worker"]
     ok = parse_reply(
         "chunk_summary",
@@ -542,7 +545,7 @@ def test_urls_and_paths_reject_the_reply(item: str) -> None:
     assert ok is not None and ok["tags"]["components"] == names
 
 
-def test_a_path_like_name_is_an_output_code(tmp_path: Path, fake: FakeDeepSeek) -> None:
+def test_a_path_like_name_is_dropped_and_counted(tmp_path: Path, fake: FakeDeepSeek) -> None:
     fake.default = tag_reply(
         tags={
             "project": ["src/memfw", "some-user/memfw"],
@@ -553,15 +556,23 @@ def test_a_path_like_name_is_an_output_code(tmp_path: Path, fake: FakeDeepSeek) 
         }
     )
     report = _worker(tmp_path, _backend(fake)).run()
-    assert report.errors == {"item_looks_like_url": 3}
-    assert _rows_of(tmp_path, "SELECT * FROM summaries") == []
-    stored = json.dumps(_rows_of(tmp_path, "SELECT error FROM jobs"))
-    assert "src/memfw" not in stored and "item_looks_like_url" in stored
+    assert report.errors == {}
+    assert report.tag_item_dropped == 12  # two path items on each of six kept calls
+    assert report.as_dict()["tag_item_dropped"] == 12
+    rows = _rows_of(tmp_path, "SELECT tags FROM summaries")
+    assert rows
+    stored = json.dumps(rows)
+    assert "src/memfw" not in stored and "some-user" not in stored
+    assert all(json.loads(row["tags"])["project"] == [] for row in rows)
+    assert all(json.loads(row["tags"])["components"] == ["worker"] for row in rows)
 
 
 def test_a_secret_in_a_tag_still_drops_the_whole_reply() -> None:
     reply = _v2(project=["memfw", f"key {AWS}"], components=["/Users/" + "someone/x"])
     assert parse_reply("session_summary", reply, prompt_version="conv-v2") is None
+    code = reply_issue("session_summary", reply, prompt_version="conv-v2")
+    assert code == "secret"
+    assert AWS not in code and SECRET not in code
 
 
 def test_conv_v1_parsing_is_unchanged() -> None:
@@ -648,7 +659,12 @@ def test_invalid_output_is_not_written_and_retried_next_run(
 def test_a_secret_in_model_output_drops_the_reply(tmp_path: Path, fake: FakeDeepSeek) -> None:
     fake.default = tag_reply(f"Saved {SECRET}.")
     report = _worker(tmp_path, _backend(fake)).run()
-    assert report.errors == {"bad_output": 3}
+    assert report.errors == {"secret": 3}
+    assert report.tag_key_defaulted == {}
+    assert report.tag_item_dropped == 0
+    jobs = _rows_of(tmp_path, "SELECT error FROM jobs")
+    blob = json.dumps({"errors": report.errors, "jobs": jobs})
+    assert SECRET not in blob
     assert _rows_of(tmp_path, "SELECT * FROM summaries") == []
 
 
@@ -1236,14 +1252,6 @@ def _output_cases() -> list[tuple[str, str, str, str]]:
             "长长长",
         ),
         (
-            "item_looks_like_url",
-            json.dumps(
-                {"summary": "harbor-note", "tags": {**tags, "project": ["https://example.com/a"]}}
-            ),
-            "stop",
-            "example.com",
-        ),
-        (
             "truncated",
             json.dumps({"summary": "Added a retry wrapper. Tests pass.", "tags": tags}),
             "length",
@@ -1296,6 +1304,8 @@ def test_omitted_tag_key_is_stored_and_counted_by_name(
     assert report.errors == {}
     assert report.tag_key_defaulted == {"intent": 2}
     assert report.as_dict()["tag_key_defaulted"] == {"intent": 2}
+    assert report.as_dict()["tag_key_defaulted_total"] == 2
+    assert "tag_item_dropped" not in report.as_dict()
     assert note not in json.dumps(report.as_dict())
     stored = [json.loads(row["tags"]) for row in _rows_of(tmp_path, "SELECT tags FROM summaries")]
     assert len(stored) == 2

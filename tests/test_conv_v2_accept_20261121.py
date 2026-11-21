@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from memfw.conversations.backends import parse_reply, reply_issue
+from memfw.conversations.backends import dropped_tag_items, parse_reply, reply_issue
 from memfw.ports.models import BackendUnavailable, map_project_names, render_tag_prompt
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -134,13 +134,18 @@ def test_omitted_intent_is_kept_and_not_a_reason_code() -> None:
     assert parsed["tags"]["outcome"] == "done"
 
 
-def test_reply_issue_url_code_does_not_contain_the_host() -> None:
+def test_reply_issue_drops_a_url_item_and_keeps_the_reply() -> None:
+    """A path-like list item is removed. The summary stays. No item text is a code."""
+
     raw = "https://example.com/a"
-    text = _reply("ok", _tags(project=[raw]))
-    code = _issue(text)
-    assert code == "item_looks_like_url"
-    assert "example.com" not in code
-    assert raw not in code
+    text = _reply("ok", _tags(project=[raw, "uploader"]))
+    assert _issue(text) == ""
+    parsed = parse_reply("chunk_summary", text, prompt_version="conv-v2")
+    assert parsed is not None
+    assert parsed["summary"] == "ok"
+    assert parsed["tags"]["project"] == ["uploader"]
+    assert dropped_tag_items(text) == 1
+    assert raw not in json.dumps(parsed)
 
 
 def test_reply_issue_length_is_truncated_even_when_json_is_valid() -> None:

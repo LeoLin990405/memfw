@@ -55,6 +55,7 @@ from ..ports.models import (
     BackendUnavailable,
     ModelBackend,
     ModelReply,
+    dropped_location_items,
     parse_tagged,
     tag_issue,
 )
@@ -101,6 +102,7 @@ __all__ = [
     "estimate_tokens",
     "load_backend",
     "defaulted_tag_keys",
+    "dropped_tag_items",
     "parse_reply",
     "prompt_version_of",
     "render_prompt",
@@ -281,7 +283,11 @@ OUTPUT_ISSUE_CODES = frozenset(
         "missing_tag_key",
         "bad_enum",
         "summary_too_long",
+        # Rev 31 emitted this when one list item looked like a URL. That item
+        # is now dropped and the reply is kept (see dropped_tag_items). The
+        # code stays so an old run row still counts as model output.
         "item_looks_like_url",
+        "secret",
         "truncated",
         "bad_shape",
         "bad_output",
@@ -295,8 +301,9 @@ def reply_issue(
     """Why ``reply`` cannot be stored, or ``""`` when :func:`parse_reply` accepts it.
 
     ``finish_reason="length"`` is ``truncated`` even when the text parses. The
-    code never includes the reply text. A secret that fails redaction stays
-    ``bad_output``: the shape was fine, the content was not.
+    code never includes the reply text. When the shape is acceptable and a
+    string fails redaction, the code is ``secret``. A location-shaped list
+    item is not a reason: that item is dropped and the reply is kept.
     """
 
     if finish_reason == "length":
@@ -339,6 +346,8 @@ def reply_issue(
             return "bad_shape"
     else:
         return "bad_shape"
+    if _redacted_raw(value) is _SECRET:
+        return "secret"
     if parse_reply(task, reply, prompt_version=prompt_version) is None:
         return "bad_output"
     return ""
@@ -367,6 +376,27 @@ def defaulted_tag_keys(reply: str) -> tuple[str, ...]:
     if not isinstance(raw, Mapping):
         return ()
     return tuple(key for key in TAG_KEYS if key not in raw)
+
+
+def dropped_tag_items(reply: str) -> int:
+    """Location-shaped list items a structurally acceptable conv-v2 reply drops.
+
+    A count only: the item text is not returned. ``0`` when the reply is not a
+    tagged object :func:`tag_issue` accepts, or when redaction withholds it.
+    The worker adds this only after :func:`parse_reply` has kept the reply.
+    """
+
+    text = reply.strip()
+    fence = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.S)
+    if fence:
+        text = fence.group(1)
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return 0
+    if not isinstance(value, dict) or tag_issue(value) or _redacted_raw(value) is _SECRET:
+        return 0
+    return dropped_location_items(value.get("tags"))
 
 
 def conversation_labels(

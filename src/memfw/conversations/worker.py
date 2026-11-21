@@ -68,6 +68,7 @@ from .backends import (
     ModelBackend,
     accepts,
     defaulted_tag_keys,
+    dropped_tag_items,
     estimate_tokens,
     parse_reply,
     prompt_version_of,
@@ -177,6 +178,8 @@ class RunReport:
     """Project tag values that matched no canonical name or alias."""
     tag_key_defaulted: dict[str, int] = field(default_factory=dict)
     """How many kept conv-v2 replies omitted each tag key. Key names only."""
+    tag_item_dropped: int = 0
+    """Location-shaped project or components items removed from kept replies."""
     replan_held_back: int = 0
     """Already-processed sessions a new prompt version did not re-plan this run (older
     than the lookback, or past the re-plan cap). Reported only when not 0."""
@@ -188,8 +191,15 @@ class RunReport:
         out = asdict(self)
         if not out["replan_held_back"]:
             del out["replan_held_back"]  # conv-v1 runs keep their exact report shape
-        if not out["tag_key_defaulted"]:
+        defaulted = out["tag_key_defaulted"]
+        if not defaulted:
             del out["tag_key_defaulted"]  # absent when no kept reply omitted a tag key
+        else:
+            # Key names stay in the dict. Callers that only read integers still
+            # see that a kept reply filled a missing tag key.
+            out["tag_key_defaulted_total"] = sum(int(count) for count in defaulted.values())
+        if not out["tag_item_dropped"]:
+            del out["tag_item_dropped"]  # absent when no kept reply dropped an item
         return out
 
 
@@ -1521,6 +1531,7 @@ class ConversationWorker:
         if version == TAG_PROMPT_VERSION and task in TAG_TASKS:
             for key in defaulted_tag_keys(reply.text):
                 report.bump(report.tag_key_defaulted, key)
+            report.tag_item_dropped += dropped_tag_items(reply.text)
         tags = parsed.get("tags")
         if isinstance(tags, dict) and self.project_vocab:
             names, missed = map_project_names(list(tags.get("project") or []), self.project_vocab)

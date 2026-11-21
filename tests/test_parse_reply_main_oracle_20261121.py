@@ -1,28 +1,25 @@
-"""parse_reply stays aligned with main, except one intentional rev 31 rule.
+"""parse_reply stays aligned with main on the seed-7 sample.
 
 The generator follows the 4000-case probe (seed 7): random replies, random
 prompt versions, dropped keys, an extra key, truncated JSON, a fence, or a
 blank. It does not import anything outside this repository. Main's
 ``parse_reply`` is executed from commit b7ca370 in a subprocess.
 
-An omitted tag key is filled, so those replies match main. A project or
-component item that looks like a URL or a path still rejects the whole reply
-here; main drops that item and keeps the reply. That is the only allowed
-disagreement. Any other disagreement fails this test.
+An omitted tag key is filled. A project or component item that looks like a
+URL or a path is dropped and the reply is kept. Both match main. Any
+disagreement fails this test.
 """
 
 from __future__ import annotations
 
 import json
 import random
-import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 from memfw.conversations.backends import parse_reply
-from memfw.ports.models import _LOCATION
 
 ROOT = Path(__file__).resolve().parents[1]
 MAIN = "b7ca370410a56faf3ba14b35e3a08a4d49eda588"
@@ -157,75 +154,15 @@ json.dump(out, sys.stdout, default=str)
     return [_canon(item) for item in json.loads(completed.stdout)]
 
 
-def _without_location_items(text: str) -> str | None:
-    """Drop URL-or-path list items from tags. None when there is nothing to drop."""
-
-    body = text.strip()
-    fenced = False
-    fence = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", body, flags=re.S)
-    if fence:
-        body = fence.group(1)
-        fenced = True
-    try:
-        value = json.loads(body)
-    except ValueError:
-        return None
-    if not isinstance(value, dict) or not isinstance(value.get("tags"), dict):
-        return None
-    tags = value["tags"]
-    changed = False
-    for key in ("project", "components"):
-        items = tags.get(key)
-        if isinstance(items, str):
-            items = [items]
-        if not isinstance(items, list):
-            continue
-        kept = []
-        for item in items:
-            if isinstance(item, str) and _LOCATION.search(item.strip()):
-                changed = True
-                continue
-            kept.append(item)
-        tags[key] = kept
-    if not changed:
-        return None
-    dumped = json.dumps(value, ensure_ascii=False)
-    if fenced:
-        dumped = "```json\n" + dumped + "\n```"
-    return dumped
-
-
-def test_parse_reply_matches_main_except_whole_reply_location_reject(tmp_path: Path) -> None:
+def test_parse_reply_matches_main(tmp_path: Path) -> None:
     cases = _cases()
     assert len(cases) == 4000
     current = _current(cases)
     baseline = _main(cases, tmp_path)
     assert len(baseline) == 4000
-    unexpected: list[int] = []
-    url_only = 0
-    matched = 0
-    for index, (task, version, text) in enumerate(cases):
-        if current[index] == baseline[index]:
-            matched += 1
-            continue
-        if current[index] is not None or baseline[index] is None:
-            unexpected.append(index)
-            continue
-        stripped = _without_location_items(text)
-        if stripped is None:
-            unexpected.append(index)
-            continue
-        try:
-            again = _canon(parse_reply(task, stripped, prompt_version=version))
-        except Exception:
-            unexpected.append(index)
-            continue
-        if again == baseline[index]:
-            url_only += 1
-        else:
-            unexpected.append(index)
-    assert not unexpected, (
-        f"match={matched} url_only={url_only} unexpected={len(unexpected)} "
-        f"first={unexpected[:5]}"
-    )
-    assert matched + url_only == 4000
+    mismatched = [
+        index
+        for index, (got, expected) in enumerate(zip(current, baseline, strict=True))
+        if got != expected
+    ]
+    assert not mismatched, f"mismatched={len(mismatched)} first={mismatched[:5]}"
