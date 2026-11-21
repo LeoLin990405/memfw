@@ -17,7 +17,7 @@ Markdown 即真相 · 哈希链 JSONL 事件 · 可重建 FTS5 索引 · 先核�
 <a href="#-会话库所有-agent-汇到一处"><img src="https://img.shields.io/badge/agent_readers-15-10B981?style=flat-square" alt="15 agent readers"></a>
 <a href="#-架构分层与端口"><img src="https://img.shields.io/badge/ports-13-0EA5E9?style=flat-square" alt="13 ports"></a>
 <a href="#-可选适配器"><img src="https://img.shields.io/badge/adapters-11_(off_by_default)-64748B?style=flat-square" alt="11 adapters (off by default)"></a>
-<a href="#-评估结果摘要"><img src="https://img.shields.io/badge/evaluation-bounded-D97706?style=flat-square" alt="Bounded evaluation"></a>
+<a href="#评估"><img src="https://img.shields.io/badge/evaluation-bounded-D97706?style=flat-square" alt="Bounded evaluation"></a>
 
 <sub>数字以 <code>main</code> 为准；release 徽章是最近一次打标签的版本（v0.5.0）。</sub>
 
@@ -443,12 +443,12 @@ memfw 分成若干层，只允许向下依赖，并由 CI 强制检查：
 
 ## 🗓️ 迭代
 
-memfw 一次只合一个小 PR，每个 PR 只做一件事，到目前已有 119 个合进 `main`。几个 PR 凑成一组完整功能后，发一个带编号的版本。[`CHANGELOG.md`](CHANGELOG.md) 里每个版本都以摘要和升级说明开头。
+memfw 用小 PR 推进，每个 PR 只做一件事；截至 2026-11-20，已有 119 个合进 `main`。几个 PR 凑成一组完整功能后，发一个带编号的版本。[`CHANGELOG.md`](CHANGELOG.md) 里每个版本都以摘要和升级说明开头。
 
 | 版本 | 日期 | 内容 |
 |---|---|---|
 | 0.1.0 | 2026-11-04 | 第一个独立内核，从早先的 Conductor 代码树里拆出来：Markdown vault、哈希链事件日志、保留策略、可丢弃的 FTS5 索引、命令行和本地 MCP 服务。 |
-| 0.1.1 | 2026-11-04 | 修了 CI 的可复现性问题（只打了 tag，没有作为编号版本发布）。 |
+| 0.1.1 | 2026-11-04 | 修了 CI 的可复现性问题和实验输出（只打了 tag，没有作为编号版本发布）。 |
 | 0.2.0 | 2026-11-15 | 笔记、概念、转录索引、会话库、交接包、dream、OKF 导出，以及拿真实 vault 的副本试跑时发现的问题的修复。 |
 | 0.3.0 | 2026-11-17 | 可替换端口后面的分层内核、召回与上下文包 v2、认知类型与经人审核的经验点、把不确定性记成记录、概念层级、按条记忆的隐私级别与需显式开启的 clearance，以及跳过进行中会话的会话库。 |
 | 0.4.0 | 2026-11-18 | 附件及其文本代理、类型化边知识图谱、`memfw-http/3`（`/context`、经审核的 `/forget`），以及召回和派生适配器，全部默认关闭。 |
@@ -463,7 +463,7 @@ memfw 一次只合一个小 PR，每个 PR 只做一件事，到目前已有 119
 - **补上脱敏漏洞**（#118）：主机名里的 IPv4、`sslip.io` 一类的名字、tailnet 标签和电话号码现在都会遮掉；遮挡会反复执行，直到文本不再变化。
 - **`memfw conversations reredact`**（#119）：用当前规则重新处理会话库里已经存下的文本。
   - 默认只演练，不写盘。
-  - 加 `--apply` 后，依次：拿会话库的锁，写一份校验过的备份，分批改写（每批都有防并发保护），改完复扫确认不再有变化，最后做完整性检查。
+  - 加 `--apply` 后，依次：拿会话库的锁和 worker 的锁（任一被占就以 exit 3 退出），写一份校验过的备份，分批改写（每批都有防并发保护），改完复扫确认不再有变化，最后做完整性检查。
   - 需要改动主键的行只报告，不改写。
 
 ### 进行中：0.5.1
@@ -485,19 +485,19 @@ memfw 一次只合一个小 PR，每个 PR 只做一件事，到目前已有 119
 
 ## 🧪 测试
 
-每个改动都要通过下面这几道关才能合并。
+按约定，每个改动都要通过下面这几道关才能合并。
 
 | 关卡 | 检查什么 | 位置 |
 |---|---|---|
-| 测试集 | 6,789 个 pytest 测试，覆盖 vault、事件日志、索引、各 reader、脱敏、会话、交接、dream、MCP、HTTP 和每个适配器的契约 | [`tests/`](tests)，`pytest -q` |
-| 架构守卫 | 包的分层表、只减不增的导入白名单、替换演练、逐字节一致性测试工具 | [`tests/architecture/`](tests/architecture)、`tests/test_architecture_layers.py`、`tests/test_swap_drills.py` |
+| 测试集 | 6,789 个 pytest 测试（v0.5.0 加 #118–#119 时的数量），覆盖 vault、事件日志、索引、各 reader、脱敏、会话、交接、dream、MCP、HTTP 和每个适配器的契约 | [`tests/`](tests)，`pytest -q` |
+| 架构守卫 | 包的分层表、只减不增的导入白名单、替换演练、逐字节一致性测试工具 | [`tests/architecture/`](tests/architecture)、[`tests/harness/`](tests/harness)、`tests/test_architecture_layers.py`、`tests/test_swap_drills.py` |
 | 静态检查 | `ruff`；`src` 和带类型的包跑 `mypy` | CI 的 `checks` 任务 |
 | 独立 wheel | 每个包单独构建 wheel，在不含 memfw 源码的干净环境里安装并冒烟测试 | `standalone-wheels` 任务、[`tests/standalone/wheel_smoke.py`](tests/standalone/wheel_smoke.py) |
 | CI | 每次 push 和 PR，GitHub Actions 都会跑 `checks` 和 `standalone-wheels` | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
 
 **测试做法**
 
-- 所有检查全绿，PR 才能合并。
+- CI 的检查全部变绿后，PR 才会合并（`checks` 任务在 `main` 上也是必过检查）。
 - 维护者推分支之前，会先在自建的预检上跑一遍同样的测试：Linux 分片、macOS，加上 Windows 冒烟测试。这一步只是为了尽早发现失败，最终关卡仍然是 GitHub CI。
 - 测试要**串行**跑。用 `pytest-xdist` 并行跑，计时敏感的测试会误报失败。
 - 测试只用合成数据，仓库里没有真实会话记录、真实记忆或个人数据。

@@ -17,7 +17,7 @@ Markdown is the source of truth · hash-linked JSONL events · rebuildable FTS5 
 <a href="#-conversation-store-every-agent-one-place"><img src="https://img.shields.io/badge/agent_readers-15-10B981?style=flat-square" alt="15 agent readers"></a>
 <a href="#-architecture-layers-and-ports"><img src="https://img.shields.io/badge/ports-13-0EA5E9?style=flat-square" alt="13 ports"></a>
 <a href="#-optional-adapters"><img src="https://img.shields.io/badge/adapters-11_(off_by_default)-64748B?style=flat-square" alt="11 adapters (off by default)"></a>
-<a href="#-evaluation-summary"><img src="https://img.shields.io/badge/evaluation-bounded-D97706?style=flat-square" alt="Bounded evaluation"></a>
+<a href="#evaluation"><img src="https://img.shields.io/badge/evaluation-bounded-D97706?style=flat-square" alt="Bounded evaluation"></a>
 
 <sub>Counts reflect <code>main</code>; the release badge is the latest tagged release (v0.5.0).</sub>
 
@@ -818,14 +818,14 @@ adapter that is down or slow is reported degraded and FTS still answers. Per-ada
 
 ## 🗓️ Iterations
 
-memfw moves in small pull requests (119 merged into `main` so far), each with one purpose, and
+memfw moves in small pull requests (119 merged into `main` as of 2026-11-20), each with one purpose, and
 cuts a numbered release when a set of them belongs together. Every release entry in
 [`CHANGELOG.md`](CHANGELOG.md) starts with a summary and upgrade notes.
 
 | Version | Date | What it brought |
 |---|---|---|
 | 0.1.0 | 2026-11-04 | The first standalone core, extracted from the earlier Conductor tree: the Markdown vault, the hash-linked event log, retention, the disposable FTS5 index, the CLI and the local MCP server. |
-| 0.1.1 | 2026-11-04 | A CI reproducibility fix (a tag only, never published as a numbered package). |
+| 0.1.1 | 2026-11-04 | A CI reproducibility fix and an experiment-output fix (a tag only, never published as a numbered package). |
 | 0.2.0 | 2026-11-15 | Notes, concepts, the transcript index, the conversation store, handoff packs, dream and OKF export, plus the fixes found by running the branch against a copy of a real vault. |
 | 0.3.0 | 2026-11-17 | A layered core behind swappable ports, recall and context packs v2, epistemic types and reviewed experience points, uncertainty as a record, a concept taxonomy, per-memory privacy levels with opt-in clearance, and a settled conversation store. |
 | 0.4.0 | 2026-11-18 | Attachments and their text proxies, a typed-edge knowledge graph, `memfw-http/3` (`/context`, reviewed `/forget`), and recall and deriver adapters, all off by default. |
@@ -857,7 +857,7 @@ LightRAG, GraphRAG), all off by default. Known limitations of v0.4.0 recall are 
 - **Redaction gaps closed** (#118): IPv4 addresses inside host names, `sslip.io`-style names,
   tailnet labels and phone numbers are masked, and masking repeats until the text is stable.
 - **`memfw conversations reredact`** (#119) applies the current rules to text already stored in
-  the conversation store. It is a dry run by default; `--apply` takes the store lock, writes a
+  the conversation store. It is a dry run by default; `--apply` takes the store lock and the worker lock (exit 3 if either is held), writes a
   verified backup, rewrites in guarded batches, then rescans (zero further changes) and checks
   integrity. Rows that would need a key change are reported, never rewritten.
 
@@ -883,19 +883,19 @@ This is the direction; it is not a commitment:
 
 ## 🧪 Testing
 
-Every change passes the same gates before it is merged.
+By convention, every change passes these gates before it is merged.
 
 | Gate | What it checks | Where |
 |---|---|---|
-| Test suite | 6,789 pytest tests over the vault, event log, index, readers, redaction, conversations, handoff, dream, MCP, HTTP and each adapter's contract | [`tests/`](tests), `pytest -q` |
-| Architecture guards | the package layer map, the shrinking import allowlist, the swap drills and the byte-identical harness | [`tests/architecture/`](tests/architecture), `tests/test_architecture_layers.py`, `tests/test_swap_drills.py` |
+| Test suite | 6,789 pytest tests (at v0.5.0 plus #118–#119) over the vault, event log, index, readers, redaction, conversations, handoff, dream, MCP, HTTP and each adapter's contract | [`tests/`](tests), `pytest -q` |
+| Architecture guards | the package layer map, the shrinking import allowlist, the swap drills and the byte-identical harness | [`tests/architecture/`](tests/architecture), [`tests/harness/`](tests/harness), `tests/test_architecture_layers.py`, `tests/test_swap_drills.py` |
 | Static checks | `ruff`, and `mypy` on `src` and the typed packages | the `checks` job in CI |
 | Standalone wheels | builds every package as its own wheel, then installs and smoke-tests them in a clean environment without the memfw source tree | the `standalone-wheels` job, [`tests/standalone/wheel_smoke.py`](tests/standalone/wheel_smoke.py) |
 | CI | GitHub Actions runs `checks` and `standalone-wheels` on every push and pull request | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
 
 **How changes are tested**
 
-- A pull request merges only when every check is green.
+- A pull request is merged only after every CI check is green (the `checks` job is also a required status check on `main`).
 - Maintainers also run the same suite on a self-hosted pre-check (Linux shards, macOS and a
   Windows smoke test) before pushing a branch. That only catches failures early: GitHub CI
   stays the final gate.
