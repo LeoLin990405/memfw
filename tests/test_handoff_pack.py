@@ -299,6 +299,33 @@ def test_system_copy_of_model_fields_does_not_evict_extra_recent_turns(tmp_path:
     assert json_size(packed) <= cap
 
 
+def test_fit_does_not_drop_an_extra_turn_for_the_omitted_placeholder(tmp_path: Path) -> None:
+    """A wide omitted_fields reserve must not evict a recent turn that still fits.
+
+    fake-local, max_bytes=4103: the uncut pack is about 4317 bytes. Dropping the
+    system copy of the model fields leaves about 3889, already under the cap.
+    Measuring with every omitted name reserved is about 4180, so the old fit
+    dropped one more recent turn and finished near 3700.
+    """
+
+    class Backend:
+        name = "fake-local"
+        local = True
+
+        def run(self, task: str, data: dict[str, Any], *, max_tokens: int) -> ModelReply:
+            body = {key: [f"{key} item " + "x" * 60 for _ in range(2)] for key in MODEL_KEYS}
+            return ModelReply(text=json.dumps(body))
+
+    db = make_store(tmp_path, {"claude": {"c": standard_session("claude", "c")}})
+    loader = lambda spec, allow_cloud=False: Backend()  # noqa: E731
+    cap = 4103
+    pack = build_pack(
+        db, "claude", "c", git=False, summarize_spec="x:y", loader=loader, max_bytes=cap
+    )
+    assert len(pack["system"]["recent_turns"]) == 5
+    assert len(render_json(pack).encode("utf-8")) <= cap
+
+
 def test_model_part_is_cut_after_files(tmp_path: Path) -> None:
     db = _big_db(tmp_path)
     backend = FakeBackend(json.dumps({key: ["z" * 150] * 4 for key in MODEL_KEYS}))

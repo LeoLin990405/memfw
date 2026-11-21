@@ -13,7 +13,9 @@ first dropping the system fields that only repeat ``model_summarized`` (that
 part still holds them), then the oldest recent turns, then files touched
 (and git state), then the model part, then the goal's tail, the lineage and
 the source cwd and project; a pack that still does not fit is refused
-(``pack_too_large``).
+(``pack_too_large``). The cut reserves every ``omitted_fields`` name. The
+real list is written afterwards, and recent turns removed in this pass are
+put back, newest first, while the rendered pack still fits.
 
 The goal is the first user message that is the person's own words: turns
 holding only harness-injected text (a ``<system-reminder>`` block) are skipped
@@ -280,7 +282,8 @@ def build_pack(
         "max_bytes": cap,
         "saved_as": saved_as,
         "redaction_policy": REDACTION_POLICY,
-        # Widest list while fitting, so the real (smaller) list cannot overflow the cap.
+        # Widest list while cutting. fit() then writes the real list and puts
+        # back any recent turn that only this reserve pushed out.
         "omitted_fields": list(OMITTED_FIELD_NAMES),
     }
     _mirror_derived(pack)
@@ -310,6 +313,49 @@ def build_pack(
     pack["omitted_fields"] = listed_omissions(omitted)
     validate_pack(pack)
     return pack
+
+
+def _put_back_recent_turns(
+    pack: dict[str, Any],
+    cap: int,
+    measure: Callable[[dict[str, Any]], int],
+    system: dict[str, Any],
+    parts: list[str],
+    dropped: set[str],
+    evicted: list[dict[str, Any]],
+) -> None:
+    """Write the real omitted list, then restore newest evicted turns that fit.
+
+    ``evicted`` is oldest-first, the order :func:`fit` popped them. Model-copy
+    removal and every later cut stay. A fully restored turn list is no longer
+    recorded as omitted.
+    """
+
+    def publish() -> None:
+        pack["omitted_fields"] = listed_omissions(dropped)
+        pack["truncated"] = bool(parts)
+
+    publish()
+    while evicted:
+        system["recent_turns"].insert(0, evicted[-1])
+        _mirror_derived(pack)
+        undone = False
+        index = 0
+        if len(evicted) == 1 and "recent_turns" in parts:
+            index = parts.index("recent_turns")
+            del parts[index]
+            dropped.discard("recent_turns")
+            undone = True
+        publish()
+        if measure(pack) > cap:
+            system["recent_turns"].pop(0)
+            _mirror_derived(pack)
+            if undone:
+                parts.insert(index, "recent_turns")
+                dropped.add("recent_turns")
+            publish()
+            break
+        evicted.pop()
 
 
 def _drop_model_copies(pack: dict[str, Any]) -> None:
@@ -349,9 +395,11 @@ def fit(
     Order: system fields that only repeat an ok ``model_summarized`` (removed
     without a truncated mark; the model part still has them), oldest recent
     turns, files touched, git state, model part, goal, lineage, then the
-    source cwd and project. :class:`HandoffError` (``pack_too_large``) when
-    even that is not enough. ``files`` and ``evidence_refs`` stay mirrored
-    to whatever remains.
+    source cwd and project. The loop measures the widest ``omitted_fields``.
+    After it stops, the real list is written and evicted recent turns are
+    put back from newest to oldest until one more would exceed ``cap``.
+    :class:`HandoffError` (``pack_too_large``) when even that is not enough.
+    ``files`` and ``evidence_refs`` stay mirrored to whatever remains.
     """
 
     system = pack["system"]
@@ -375,8 +423,9 @@ def fit(
         # lose recent_turns while the duplicate was still on the pack.
         _drop_model_copies(pack)
 
+    evicted: list[dict[str, Any]] = []
     while over() and system["recent_turns"]:
-        system["recent_turns"].pop(0)
+        evicted.append(system["recent_turns"].pop(0))
         _mirror_derived(pack)
         mark("recent_turns")
     while over() and system["files_touched"]:
@@ -414,7 +463,8 @@ def fit(
         mark("lineage")
     shorten(pack["source"], "cwd", "cwd")
     shorten(pack["source"], "project", "project")
-    if over():
+    _put_back_recent_turns(pack, cap, measure, system, parts, dropped, evicted)
+    if measure(pack) > cap:
         # Only fixed fields are left (ids, labels, file name): the cap is too small.
         raise HandoffError(EXIT_USAGE, "pack_too_large", f"the pack does not fit in {cap} bytes")
 

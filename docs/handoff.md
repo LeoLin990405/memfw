@@ -64,7 +64,11 @@ backend_error`). The `[system]` part does not change either way.
   then the tail of the goal, then the lineage, and last the source cwd and
   project. `truncated` and `truncated_parts` record what was cut. The notice
   and labels are never cut. If the pack still does not fit, it is refused
-  (`pack_too_large`, exit 2) rather than printed over the cap.
+  (`pack_too_large`, exit 2) rather than printed over the cap. The cut
+  reserves every `omitted_fields` name; the rendered pack then lists only the
+  names it actually cut, and recent turns removed in that pass are put back,
+  newest first, until one more would exceed the cap. Model-field copies stay
+  removed.
 - In Markdown, everything that comes from the session is untrusted. The
   goal and each turn's text are rendered as `>` quotes, with a `#` at the
   start of a line escaped. Single-line values (paths, tool calls, model

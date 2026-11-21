@@ -19,6 +19,11 @@ projections out of the vault; see the 0.4.0
 
 ### Fixed
 
+- Handoff fitting reserved every `omitted_fields` name while measuring, so a
+  pack that already fit after the model-field copies were dropped could lose
+  one more `recent_turns` entry. The real list is written after the cut, and
+  those turns are put back from newest to oldest while the rendered pack stays
+  within `max_bytes`. The copies are still removed before any turn.
 - Withheld conversation turns keep the row and set `withheld` true, but
   `text` is an empty string. It is not a `[withheld: ...]` marker. Readers
   must use the `withheld` flag and must not expect a marker string in `text`.
