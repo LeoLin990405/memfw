@@ -23,6 +23,14 @@ Markdown 即真相 · 哈希链 JSONL 事件 · 可重建 FTS5 索引 · 先核�
 
 </div>
 
+## 📑 目录
+
+- **上手**：[memfw 是什么](#memfw-是什么) · [设计原则](#-设计原则) · [安装与快速开始](#-安装与快速开始) · [vault 结构](#-vault-结构)
+- **使用**：[记忆相关命令](#-记忆相关命令) · [附件：文本之外的证据](#-附件文本之外的证据) · [会话库：所有 agent 汇到一处](#-会话库所有-agent-汇到一处) · [交接：换一个 agent 接着做](#-交接换一个-agent-接着做) · [做梦（dream）：先核对，再整理](#-做梦dream先核对再整理) · [MCP 工具](#-mcp-工具)
+- **安全与运维**：[隐私与权限](#-隐私与权限) · [reader 升级顺序](#-reader-升级顺序) · [集成与联邦](#-集成与联邦)
+- **内部**：[架构：分层与端口](#-架构分层与端口) · [可选适配器](#-可选适配器)
+- **项目**：[迭代](#-迭代) · [测试](#-测试) · [现状与边界](#-现状与边界) · [参考与相关项目](#-参考与相关项目) · [文档地图](#-文档地图) · [开发](#-开发) · [参与贡献](#-参与贡献) · [许可证](#-许可证)
+
 ## memfw 是什么？
 
 memfw 是一个跑在本机的 AI agent 记忆引擎，主要做三件事：
@@ -433,7 +441,70 @@ memfw 分成若干层，只允许向下依赖，并由 CI 强制检查：
 
 派生器的输出最高只到 `epistemic: inference`，必须经过审核才能成为记忆。召回适配器挂了或太慢时会被标成降级，FTS 照常回答。各适配器的细节见 [`docs/COMPONENTS.zh-CN.md`](docs/COMPONENTS.zh-CN.md)、[`docs/adapter-bm25s.md`](docs/adapter-bm25s.md)、[`docs/adapter-qdrant.md`](docs/adapter-qdrant.md)、[`docs/adapter-langextract.md`](docs/adapter-langextract.md)、[`docs/adapter-lightrag.md`](docs/adapter-lightrag.md)、[`docs/adapter-graphrag.md`](docs/adapter-graphrag.md)、[`docs/adapter-tailnet.md`](docs/adapter-tailnet.md)、[`docs/adapter-wikigen.md`](docs/adapter-wikigen.md)、[`docs/qmd-projection.md`](docs/qmd-projection.md) 以及各包自己的 `README.md`。
 
-## 📊 评估结果摘要
+## 🗓️ 迭代
+
+memfw 一次只合一个小 PR，每个 PR 只做一件事，到目前已有 119 个合进 `main`。几个 PR 凑成一组完整功能后，发一个带编号的版本。[`CHANGELOG.md`](CHANGELOG.md) 里每个版本都以摘要和升级说明开头。
+
+| 版本 | 日期 | 内容 |
+|---|---|---|
+| 0.1.0 | 2026-11-04 | 第一个独立内核，从早先的 Conductor 代码树里拆出来：Markdown vault、哈希链事件日志、保留策略、可丢弃的 FTS5 索引、命令行和本地 MCP 服务。 |
+| 0.1.1 | 2026-11-04 | 修了 CI 的可复现性问题（只打了 tag，没有作为编号版本发布）。 |
+| 0.2.0 | 2026-11-15 | 笔记、概念、转录索引、会话库、交接包、dream、OKF 导出，以及拿真实 vault 的副本试跑时发现的问题的修复。 |
+| 0.3.0 | 2026-11-17 | 可替换端口后面的分层内核、召回与上下文包 v2、认知类型与经人审核的经验点、把不确定性记成记录、概念层级、按条记忆的隐私级别与需显式开启的 clearance，以及跳过进行中会话的会话库。 |
+| 0.4.0 | 2026-11-18 | 附件及其文本代理、类型化边知识图谱、`memfw-http/3`（`/context`、经审核的 `/forget`），以及召回和派生适配器，全部默认关闭。 |
+| **0.5.0** | **2026-11-20** | Stage 流水线和 LLM Wiki 的契约及首批包、Tailscale 主机清单导入器、扛得住慢 embedder 的 Qdrant 同步，以及每个搜索和上下文回复里的 `retrieval_health`。 |
+
+**v0.5.0 新增：** ports 0.4.0 里的 LLM Wiki 契约（`Citation.ref`、`memfw-wiki-page/1` 与 `memfw-wiki-job/1` 两种格式、`EntailmentChecker` 端口及其契约检查）；`memfw-pipeline` Stage 运行器（只带示例 stage）；每个 `memory_search`、`memory_context` v=2 和 `conversations_search` 回复里的 `retrieval_health`；`memfw-wiki-gate` 页面检查；两个新适配器 `memfw-adapter-tailnet`（`Ingestor`）和 `memfw-adapter-wikigen`（`Deriver`），全部默认关闭；Qdrant 适配器的 sync 能扛住慢的或出错的 embedder（0.1.3）。
+
+**v0.4.0 新增：** 需显式开启的 `current` 上下文槽位；带标签过滤的两阶段会话搜索；附件（内嵌与引用两种原件、detach、relink、purge、scan、`memfw.proxy` v1 格式的文本代理、写入闸门里把附件当作观察类证据、带需显式开启的 MCP 工具 `attachment_search` / `attachment_get` 的代理搜索）；`ProjectionStore` 端口之后的类型化边投影与有界路径模式；C4 上下文包评估；带 `/context`、`/forget` 请求和 `forget residue` 的 `memfw-http/3`；事件日志向前兼容；vault 外投影记录所属 vault（佐证投影搬出 vault）；召回里的生命周期元索引和 `kh:` 笔记解析器；`runtime.recall.adapters`；Qwen Code reader；以及 DeepSeek 之外新增的八个适配器（bm25s、Qdrant、QMD、PageIndex、OCR、LangExtract、LightRAG、GraphRAG），全部默认关闭。v0.4.0 召回的已知局限见 [`docs/ports-and-recall.md`](docs/ports-and-recall.md) §4.1c-bis。
+
+### 已在 `main`、尚未发版
+
+- **补上脱敏漏洞**（#118）：主机名里的 IPv4、`sslip.io` 一类的名字、tailnet 标签和电话号码现在都会遮掉；遮挡会反复执行，直到文本不再变化。
+- **`memfw conversations reredact`**（#119）：用当前规则重新处理会话库里已经存下的文本。
+  - 默认只演练，不写盘。
+  - 加 `--apply` 后，依次：拿会话库的锁，写一份校验过的备份，分批改写（每批都有防并发保护），改完复扫确认不再有变化，最后做完整性检查。
+  - 需要改动主键的行只报告，不改写。
+
+### 进行中：0.5.1
+
+以下改动还在审查分支上，可能还会变：
+
+- 会话搜索的命中带上**会话卡**：摘要、标签、建议从哪里开始读。
+- **交接包**改为固定的一组字段。
+- **`conversations get --around`**：读取命中位置前后的一段对话。
+- 每个会话回复都写明 **`redaction_policy`**，并列出 **`omitted_fields`**（只列字段名，不含值）。
+
+### 计划：0.6.0
+
+只是方向，不是承诺：
+
+- **元认知**：每个 agent 的工作规则作为经审核的记忆存在 vault 里，再从这里下发给 agent；另外为任务级的细小事实定写入规范。
+- **可编辑的记忆视图**：带防护的、可编辑的 Obsidian vault 视图。每次编辑仍然记成事件，并经过审核。
+- **更多导入来源**，例如听写工具的自定义词表。
+
+## 🧪 测试
+
+每个改动都要通过下面这几道关才能合并。
+
+| 关卡 | 检查什么 | 位置 |
+|---|---|---|
+| 测试集 | 6,789 个 pytest 测试，覆盖 vault、事件日志、索引、各 reader、脱敏、会话、交接、dream、MCP、HTTP 和每个适配器的契约 | [`tests/`](tests)，`pytest -q` |
+| 架构守卫 | 包的分层表、只减不增的导入白名单、替换演练、逐字节一致性测试工具 | [`tests/architecture/`](tests/architecture)、`tests/test_architecture_layers.py`、`tests/test_swap_drills.py` |
+| 静态检查 | `ruff`；`src` 和带类型的包跑 `mypy` | CI 的 `checks` 任务 |
+| 独立 wheel | 每个包单独构建 wheel，在不含 memfw 源码的干净环境里安装并冒烟测试 | `standalone-wheels` 任务、[`tests/standalone/wheel_smoke.py`](tests/standalone/wheel_smoke.py) |
+| CI | 每次 push 和 PR，GitHub Actions 都会跑 `checks` 和 `standalone-wheels` | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
+
+**测试做法**
+
+- 所有检查全绿，PR 才能合并。
+- 维护者推分支之前，会先在自建的预检上跑一遍同样的测试：Linux 分片、macOS，加上 Windows 冒烟测试。这一步只是为了尽早发现失败，最终关卡仍然是 GitHub CI。
+- 测试要**串行**跑。用 `pytest-xdist` 并行跑，计时敏感的测试会误报失败。
+- 测试只用合成数据，仓库里没有真实会话记录、真实记忆或个人数据。
+- 关键的地方，造的数据要像真实数据。比如会话库里的 offset 是不连续的字节位置，不是 0、1、2。数据造得太整齐，可能掩盖两个组件之间对不上的问题。
+- 会动到已存数据的迁移，一律先演练。`--apply` 会先写一份校验过的备份，改写之后再复扫一遍。
+
+### 评估
 
 | 指标 | 结果 |
 |---|---|
@@ -445,7 +516,12 @@ memfw 分成若干层，只允许向下依赖，并由 CI 强制检查：
 | 本地 Mem0 基线（n=18） | memfw 66.7%，Mem0 62.5%（@100% 证据召回），无显著差异 |
 | 多模态因果闸门（`eval causal --multimodal`，合成数据） | 59 个用例：**0** 次虚假提升，**0** 次升为事实，**37 / 37** 次绕过尝试被挡下 |
 
-这些是**有边界的负面结果**，不是质量宣称：样本小、每组只跑一次，而且保留策略用的是逻辑投影，不是真实 vault 的容量测试。dream 的整理步骤用合成的重复、冲突和过期用例打分（`python -m eval.dreams`，见 [`eval/dreams/`](eval/dreams)）。`memfw eval context SNAPSHOT` 在只读 vault 快照的私有副本上测量上下文包（每个槽位的覆盖率、浪费、P50/P95 延迟和 token 开销，并扫过不同的槽位上限和常驻前缀上限）；报告里只有计数、比例和耗时，不改任何默认值。完整证据和局限见 [`docs/evaluation.md`](docs/evaluation.md)。
+这些是**有边界的负面结果**，不是质量宣称：样本小，每组只跑一次，保留策略用的是逻辑投影，不是真实 vault 的容量测试。
+
+- **dream 的整理步骤**：用合成的重复、冲突和过期用例打分，命令是 `python -m eval.dreams`，见 [`eval/dreams/`](eval/dreams)。
+- **`memfw eval context SNAPSHOT`**：在只读 vault 快照的私有副本上测量上下文包，包括每个槽位的覆盖率、浪费、P50/P95 延迟和 token 开销，并扫过不同的槽位上限和常驻前缀上限。报告里只有计数、比例和耗时，不改任何默认值。
+
+完整证据和局限见 [`docs/evaluation.md`](docs/evaluation.md)。
 
 ## 📚 文档地图
 
@@ -482,15 +558,56 @@ memfw 分成若干层，只允许向下依赖，并由 CI 强制检查：
 
 发版状态：**v0.5.0**（2026-11-20）。Apache-2.0 许可，在单机上离线运行，没有发布到 PyPI。已经实现：vault 与哈希链事件日志、保留策略与 `10MB` 预算、可重建的 FTS5 索引与读路径（按词匹配、概念别名、多跳）、认知类型、因果分级与经人审核的经验点、带十三个端口和 `memfw.runtime` 组装根的分层内核、`two_stage` 召回、带槽位、资源和 `if_version` 的上下文包 v2、待解问题、召回标签与佐证、概念层级与关系类型表、隐私级别与按需开启的 clearance、MCP 服务、notes 索引与代码检索、只读转录索引、带 15 个 reader 的会话库、跳过进行中会话的 settled 导入、共享与 worker（附一个默认关闭的 DeepSeek 打标签适配器）、交接包、dream（核对、整理、提炼、预算、技能、待解问题候选）、OKF v0.2 导出与导入、Obsidian 投影，以及只读 HTTP 服务（`memfw-http/2`）。逐条变更见 [`CHANGELOG.md`](CHANGELOG.md)。
 
-**v0.5.0 新增：** ports 0.4.0 里的 LLM Wiki 契约（`Citation.ref`、`memfw-wiki-page/1` 与 `memfw-wiki-job/1` 两种格式、`EntailmentChecker` 端口及其契约检查）；`memfw-pipeline` Stage 运行器（只带示例 stage）；每个 `memory_search`、`memory_context` v=2 和 `conversations_search` 回复里的 `retrieval_health`；`memfw-wiki-gate` 页面检查；两个新适配器 `memfw-adapter-tailnet`（`Ingestor`）和 `memfw-adapter-wikigen`（`Deriver`），全部默认关闭；Qdrant 适配器的 sync 能扛住慢的或出错的 embedder（0.1.3）。
-
-**v0.4.0 新增：** 需显式开启的 `current` 上下文槽位；带标签过滤的两阶段会话搜索；附件（内嵌与引用两种原件、detach、relink、purge、scan、`memfw.proxy` v1 格式的文本代理、写入闸门里把附件当作观察类证据、带需显式开启的 MCP 工具 `attachment_search` / `attachment_get` 的代理搜索）；`ProjectionStore` 端口之后的类型化边投影与有界路径模式；C4 上下文包评估；带 `/context`、`/forget` 请求和 `forget residue` 的 `memfw-http/3`；事件日志向前兼容；vault 外投影记录所属 vault（佐证投影搬出 vault）；召回里的生命周期元索引和 `kh:` 笔记解析器；`runtime.recall.adapters`；Qwen Code reader；以及 DeepSeek 之外新增的八个适配器（bm25s、Qdrant、QMD、PageIndex、OCR、LangExtract、LightRAG、GraphRAG），全部默认关闭。v0.4.0 召回的已知局限见 [`docs/ports-and-recall.md`](docs/ports-and-recall.md) §4.1c-bis。
+各版本加了什么、`main` 上已有什么、接下来做什么，见[迭代](#-迭代)。
 
 **升级边界。** `vault.yaml` 仍是 `schema_version: 1`；不带新键的文件解析再渲染后保持原字节。新的 frontmatter（`epistemic`、`causal`、`causal_record`、`limitations`、`experience`、`open_question`、`privacy`、顶层 `sensitivity:`）只在设置时才写出，而 memfw 0.2.0 改写文件时会把它们丢掉，所以共用一个 vault 的机器要一次性全部升级。FTS5 索引是可丢弃的投影，**不会就地迁移**：MCP 服务（`memfw-mcp`）和 `memfw index search` 会在使用前重建过期索引；只读 HTTP 服务从不写盘，所以要把它的三个文件一起部署，并先跑一次 `memfw index rebuild` 再指向升级后的 vault。
 
 **边界。** 内置匹配是基于词面的（语义召回需要 embedder 或适配器；没有共同用词的改写会漏掉）；dream 只暂存候选（没有 `dream apply`：由人用 `update` / `supersede` 落地，待解问题候选用 `dream accept-question` 写入）；notes、转录和会话索引都是派生索引，与 vault 分开；记忆的 `two_stage` 召回和上下文 v2 只在 MCP 里提供，唯一例外是 `memfw-http/3` `POST /context` 提供的 v2 `core` 包；附件可以从命令行访问，设置 `mcp.attachments: true` 后也可以通过 MCP 工具访问（HTTP 服务从不提供）；类型化关系图没有 MCP 工具；只读 HTTP 服务用读写 token 鉴权，未配置写路径时一律拒绝；定时运行只提供打印出来的 launchd plist；评估规模较小。详见 [`docs/dream.md`](docs/dream.md#limitations) 和 [`docs/RELEASE-READINESS.md`](docs/RELEASE-READINESS.md)。
 
+## 🔗 参考与相关项目
+
+下面是 memfw 依赖、对接或用来对比的项目。适配器是单独的 wheel，memfw 从不 import 它们，运维人员配置之后才会启用；表里的版本号是该适配器契约测试所针对的上游版本。
+
+**核心依赖**
+
+| 项目 | 在 memfw 里的作用 |
+|---|---|
+| [SQLite FTS5](https://www.sqlite.org/fts5.html) | 可丢弃的全文索引，以及会话库 |
+| [Model Context Protocol](https://modelcontextprotocol.io/) | 给 agent 用的接口（`memfw-mcp`） |
+| [pydantic](https://github.com/pydantic/pydantic)、[PyYAML](https://github.com/yaml/pyyaml)、[Typer](https://github.com/fastapi/typer)、[zstandard](https://github.com/indygreg/python-zstandard)、[filelock](https://github.com/tox-dev/filelock) | 数据模型、frontmatter、命令行、冷归档、跨进程锁 |
+| [jieba](https://github.com/fxsjy/jieba) | 搜索用的中文分词 |
+| [sqlite-vec](https://github.com/asg017/sqlite-vec) | 可选的向量索引（`notes` 和 `dev` extra） |
+
+**适配器（单独的 wheel，默认关闭）**
+
+| 项目 | 适配器 | 作用 |
+|---|---|---|
+| [bm25s](https://github.com/xhluca/bm25s) 0.3.16 | `memfw-adapter-bm25s` | 进程内的 BM25 召回 |
+| [Qdrant](https://github.com/qdrant/qdrant) v1.20.x | `memfw-adapter-qdrant` | 语义召回 |
+| [QMD](https://github.com/tobi/qmd) 2.5.3 | `memfw-adapter-qmd` | 记忆投影和笔记的召回 |
+| [PageIndex](https://github.com/VectifyAI/PageIndex) | `memfw-adapter-pageindex` | 长文档的树状检索 |
+| [LangExtract](https://github.com/google/langextract) 1.7.2 | `memfw-adapter-langextract` | 有原文依据的实体与关系抽取 |
+| [LightRAG](https://github.com/HKUDS/LightRAG) 1.5.7 | `memfw-adapter-lightrag` | 通过运维人员自己跑的服务派生知识图谱 |
+| [GraphRAG](https://github.com/microsoft/graphrag) 3.3.0 | `memfw-adapter-graphrag` | 离线批量生成图谱和报告 |
+| [Ollama](https://github.com/ollama/ollama) | LangExtract、wikigen | 本机回环地址上的模型后端 |
+| [DeepSeek API](https://api-docs.deepseek.com/) | `memfw-adapter-deepseek` | 会话摘要和标签（云端，需显式开启） |
+| [Tailscale](https://tailscale.com/) | `memfw-adapter-tailnet` | 从 `tailscale status --json` 读取主机清单 |
+| OCR 引擎（MCP stdio 服务、`pdftotext` 或一个模块） | `memfw-adapter-ocr` | 为 PDF 和图片附件生成文本代理 |
+
+**格式、数据与对比基线**
+
+| 项目 | 用途 |
+|---|---|
+| [Open Knowledge Format v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format) | `memfw okf export` / `import` 的包格式（只用格式，不含 OKF 代码） |
+| [OpenCC](https://github.com/BYVoid/OpenCC) | `src/memfw/ontology/t2s.py` 里的繁简转换表（Apache-2.0，见 `NOTICE`） |
+| [LoCoMo](https://github.com/snap-research/locomo) | 评估用的长对话基准（本仓库不含该语料） |
+| [Mem0](https://github.com/mem0ai/mem0) | 只作对比基线（memfw 没有使用 Mem0 的代码） |
+| [Obsidian](https://obsidian.md/) | 只读 vault 投影的目标 |
+| [llama.cpp server](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)、[bge-m3](https://huggingface.co/BAAI/bge-m3)、Qwen3 embedding 与 reranker | [`docs/retrieval-architecture.md`](docs/retrieval-architecture.md) 里考察过的本地 embedding 和重排服务 |
+
 ## 🛠️ 开发
+
+每个改动要过的关卡见[测试](#-测试)。
 
 `dev` extra 会装上运行时、测试工具和 `sqlite-vec`（没有单独的 `test` extra）：
 
