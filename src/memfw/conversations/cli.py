@@ -10,6 +10,7 @@ same per-app policy as the MCP tools (the caller is ``operator`` unless
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -17,7 +18,7 @@ import typer
 
 from ..core.errors import MemfwError
 from .adapter import checked_location, store_path
-from .backends import backend_status, gated_loader
+from .backends import PROMPT_VERSION, backend_status, expect_backend, gated_loader
 from .policy import OPERATOR
 from .schedule import DEFAULT_INTERVAL, default_log_dir, render
 from .service import open_share, open_worker, read_config
@@ -436,18 +437,41 @@ def reredact(
 
 
 @app.command("status")
-def status(root: RootOption = None) -> None:
-    """Worker job and episode counts (no text)."""
+def status(
+    root: RootOption = None,
+    runs: Annotated[int, typer.Option("--runs", min=1, max=100)] = 20,
+) -> None:
+    """Worker counts and recent failure codes (no summary text).
+
+    When ``conversations.expect_backend`` is set, exit 1 with
+    ``degraded: backend_not_in_use`` if the backend in use is not that one,
+    or if the last 24 hours stored no summary of its prompt version.
+    Installing a check for that exit code is left to the operator.
+    """
 
     try:
         config, vault = read_config(root)
-        result = WorkState(state_path(config, vault=vault)).status()
+        result = WorkState(state_path(config, vault=vault)).status(
+            now=datetime.now(UTC), runs=runs
+        )
         configured = backend_status(config)
         if configured is not None:  # only when vault.yaml names a backend
             result["backend"] = configured
+        expected = expect_backend(config)
+        if expected is not None:
+            names = {"extractive"}
+            version = PROMPT_VERSION
+            if configured is not None:
+                names = {configured.get("spec", ""), configured.get("name", "")}
+                version = str(configured.get("prompt_version") or PROMPT_VERSION)
+            recent = int((result.get("summaries_24h") or {}).get(version, 0))
+            if expected not in names or recent <= 0:
+                result["degraded"] = "backend_not_in_use"
         typer.echo(_dump(result))
     except (ConversationError, MemfwError) as exc:
         raise _fail(exc) from exc
+    if result.get("degraded") == "backend_not_in_use":
+        raise typer.Exit(1)
 
 
 @app.command("schedule")

@@ -53,9 +53,10 @@ from urllib.parse import quote
 
 from ..history.injected import has_content, strip_structural
 from ..ports.claims import ClaimEvidence, ClaimStager, ClaimVerifier, StagedClaim
-from ..ports.models import BackendBudgetExhausted, BackendUnavailable
+from ..ports.models import BackendBudgetExhausted, BackendUnavailable, map_project_names
 from .adapter import Ingestor, checked_location, data_dir
 from .backends import (
+    OUTPUT_ISSUE_CODES,
     PROMPT_VERSION,
     ExtractiveBackend,
     ModelBackend,
@@ -63,6 +64,7 @@ from .backends import (
     estimate_tokens,
     parse_reply,
     prompt_version_of,
+    reply_issue,
 )
 from .policy import SharePolicy
 from .store import (
@@ -94,6 +96,11 @@ DEFAULT_LOOKBACK_DAYS = 30.0
 """Under a new prompt version, unchanged sessions older than this are not re-planned
 (a backfill needs ``conversations.backfill_days`` or ``--backfill-days``)."""
 DEFAULT_REPLAN_LIMIT = 1_000
+#: Share of the token budget kept for sessions that have not started, when both
+#: already-started work and new sessions are waiting. 0.25 means continuation
+#: may spend the first 75 percent; the rest starts a new session. With no new
+#: session waiting, continuation may use the whole budget.
+NEW_SESSION_FLOOR = 0.25
 """Under a new prompt version, only the newest this many sessions may be re-planned
 (the M3d pilot size); ``backfill_days`` lifts the cap, ``replan_limit`` sets it."""
 
@@ -157,6 +164,10 @@ class RunReport:
     """Dream ids staged earlier for apps that are now excluded: review or reject them."""
     stopped: str = ""
     errors: dict[str, int] = field(default_factory=dict)
+    sessions_summarised: int = 0
+    """Sessions whose whole-session summary was stored during this run."""
+    project_unmapped: int = 0
+    """Project tag values that matched no canonical name or alias."""
     replan_held_back: int = 0
     """Already-processed sessions a new prompt version did not re-plan this run (older
     than the lookback, or past the re-plan cap). Reported only when not 0."""
@@ -382,31 +393,111 @@ class WorkState:
                 return []  # an old or damaged state file matches nothing
         return [dict(row) for row in rows]
 
-    def status(self) -> dict[str, Any]:
+    def status(self, *, now: datetime | None = None, runs: int = 20) -> dict[str, Any]:
+        """Job counts plus recent run codes. No summary text.
+
+        ``summaries_24h`` counts rows written in the 24 hours before ``now``,
+        by ``prompt_version``. ``recent_runs`` covers the last ``runs`` runs:
+        how many were degraded or refused, and which reason codes they stored.
+        ``bad_output_share`` is output-issue codes divided by those codes plus
+        chunk and session summaries stored in that same window of runs.
+        """
+
+        moment = now or datetime.now(UTC)
+        limit = max(1, min(100, int(runs)))
+        cutoff = (moment - timedelta(hours=24)).isoformat()
+        activity: dict[str, Any] = {
+            "summaries_24h": {},
+            "recent_runs": {"n": limit, "degraded_or_refused": 0, "reasons": {}},
+            "bad_output_share": 0.0,
+        }
         with self.open_readonly() as connection:
             if connection is None:
-                return {"state": "absent"}
-            jobs = {
-                f"{row['kind']}:{row['status']}": int(row["n"])
-                for row in connection.execute(
-                    "SELECT kind, status, COUNT(*) AS n FROM jobs GROUP BY kind, status"
-                )
-            }
-            episodes = {
-                str(row["status"]): int(row["n"])
-                for row in connection.execute(
-                    "SELECT status, COUNT(*) AS n FROM episodes GROUP BY status"
-                )
-            }
-            last = connection.execute(
-                "SELECT run_id, started_at, finished_at, status FROM runs"
-                " ORDER BY started_at DESC LIMIT 1"
-            ).fetchone()
+                return {"state": "absent", **activity}
+            try:
+                jobs = {
+                    f"{row['kind']}:{row['status']}": int(row["n"])
+                    for row in connection.execute(
+                        "SELECT kind, status, COUNT(*) AS n FROM jobs GROUP BY kind, status"
+                    )
+                }
+                episodes = {
+                    str(row["status"]): int(row["n"])
+                    for row in connection.execute(
+                        "SELECT status, COUNT(*) AS n FROM episodes GROUP BY status"
+                    )
+                }
+                last = connection.execute(
+                    "SELECT run_id, started_at, finished_at, status FROM runs"
+                    " ORDER BY started_at DESC LIMIT 1"
+                ).fetchone()
+                written = connection.execute(
+                    "SELECT prompt_version, COUNT(*) AS n FROM summaries"
+                    " WHERE created_at >= ? GROUP BY prompt_version",
+                    (cutoff,),
+                ).fetchall()
+                recent = connection.execute(
+                    "SELECT status, report FROM runs ORDER BY started_at DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            except sqlite3.Error:
+                return {
+                    "state": "present",
+                    "jobs": {},
+                    "episodes": {},
+                    "last_run": None,
+                    **activity,
+                }
+        summaries_24h = {
+            str(row["prompt_version"]): int(row["n"])
+            for row in written
+            if row["prompt_version"]
+        }
+        degraded = 0
+        reasons: dict[str, int] = {}
+        bad = 0
+        good = 0
+        for row in recent:
+            try:
+                payload = json.loads(row["report"] or "{}")
+            except ValueError:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            errors = payload.get("errors") if isinstance(payload.get("errors"), dict) else {}
+            stopped = str(payload.get("stopped") or "")
+            if row["status"] == "degraded" or stopped in {"backend_refused", "backend_unavailable"}:
+                degraded += 1
+            for key, count in errors.items():
+                if (
+                    not isinstance(key, str)
+                    or not isinstance(count, int)
+                    or isinstance(count, bool)
+                ):
+                    continue
+                code = key[:64]
+                if code in OUTPUT_ISSUE_CODES or code.startswith("unavailable:") or code.startswith(
+                    "backend_"
+                ):
+                    reasons[code] = reasons.get(code, 0) + count
+                if code in OUTPUT_ISSUE_CODES:
+                    bad += count
+            if stopped in {"backend_refused", "backend_unavailable"} and stopped not in reasons:
+                reasons[stopped] = reasons.get(stopped, 0) + 1
+            job_counts = payload.get("jobs") if isinstance(payload.get("jobs"), dict) else {}
+            for name in ("chunk_summary:done", "session_summary:done"):
+                value = job_counts.get(name, 0)
+                if isinstance(value, int) and not isinstance(value, bool):
+                    good += value
+        share = round(bad / (bad + good), 4) if bad + good else 0.0
         return {
             "state": "present",
             "jobs": jobs,
             "episodes": episodes,
             "last_run": dict(last) if last else None,
+            "summaries_24h": summaries_24h,
+            "recent_runs": {"n": limit, "degraded_or_refused": degraded, "reasons": reasons},
+            "bad_output_share": share,
         }
 
 
@@ -593,6 +684,8 @@ class ConversationWorker:
         claims_backend: ModelBackend | None = None,
         backfill_days: float | None = None,
         replan_limit: int | None = None,
+        summary_language: str = "zh",
+        project_vocab: Mapping[str, Sequence[str]] | None = None,
     ) -> None:
         # Claims are verified and staged through ports (memfw.ports.claims); the
         # caller injects them (memfw conversations work: memfw.dream.claims).
@@ -647,6 +740,27 @@ class ConversationWorker:
         self.lock_path = lock_path or state.path.with_name(LOCK_NAME)
         self.now = now or (lambda: datetime.now(UTC))
         self.monotonic = monotonic
+        if (
+            not isinstance(summary_language, str)
+            or not summary_language.strip()
+            or len(summary_language.strip()) > 16
+        ):
+            raise ConversationError("summary_language must be a short string")
+        self.summary_language = summary_language.strip().lower()
+        self.project_vocab: dict[str, tuple[str, ...]] = {}
+        for name, aliases in (project_vocab or {}).items():
+            if not isinstance(name, str) or not name.strip():
+                raise ConversationError("project vocab names must be strings")
+            if isinstance(aliases, str):
+                aliases = (aliases,)
+            if not isinstance(aliases, Sequence) or isinstance(aliases, (str, bytes)):
+                raise ConversationError("project vocab aliases must be a list of strings")
+            self.project_vocab[name.strip()] = tuple(
+                item.strip() for item in aliases if isinstance(item, str) and item.strip()
+            )
+        bind = getattr(self.backend, "bind_labels", None)
+        if callable(bind):
+            bind(language=self.summary_language, projects=tuple(self.project_vocab))
 
     # -- entry point --------------------------------------------------------------
 
@@ -1070,6 +1184,14 @@ class ConversationWorker:
 
     def _execute(self, report: RunReport, started: float) -> None:
         self._started = started
+        if self.prompt_version == PROMPT_VERSION:
+            self._execute_page(report, started)
+            return
+        self._execute_finish_started(report, started)
+
+    def _execute_page(self, report: RunReport, started: float) -> None:
+        """conv-v1 queue order: a page of pending jobs, chunks before summaries."""
+
         sessions_done: set[tuple[str, str]] = set()
         offset = 0
         while True:
@@ -1125,6 +1247,141 @@ class ConversationWorker:
                 progressed = True
             if not progressed:
                 return
+
+    def _execute_finish_started(self, report: RunReport, started: float) -> None:
+        """Spend the budget on a session already started, then on a new one.
+
+        conv-v2 used to run every runnable chunk in a page of 50 before the next
+        query, so a token cap left many sessions with a chunk and almost no
+        whole-session summary. One job is picked at a time. A session touched
+        in this run is finished (remaining chunks, then the session summary)
+        before another session starts. When both leftover sessions and new
+        sessions are waiting, continuation stops once
+        ``NEW_SESSION_FLOOR`` of the token budget is all that remains, and that
+        remainder starts a new session. With nothing new waiting, continuation
+        may use the whole budget.
+        """
+
+        sessions_done: set[tuple[str, str]] = set()
+        focus: tuple[str, str] | None = None
+        opened: set[tuple[str, str]] = set()
+        while True:
+            if self.monotonic() - started > self.budgets.max_seconds:
+                report.stopped = "max_seconds"
+                return
+            picked = self._pick_conv2(report, focus, opened)
+            if picked is None:
+                return
+            if picked == "again":
+                focus = None
+                continue
+            job, focus = picked
+            key = (str(job["app"]), str(job["session_id"]))
+            if key not in sessions_done and len(sessions_done) >= self.budgets.max_sessions:
+                report.stopped = "max_sessions"
+                return
+            if self.monotonic() - started > self.budgets.max_seconds:
+                report.stopped = "max_seconds"
+                return
+            outcome = self._run_job(job, report)
+            if outcome == "budget" or outcome in BACKEND_STOPS:
+                report.stopped = {
+                    "budget": "max_tokens",
+                    "backend_deadline": "max_seconds",
+                }.get(outcome, outcome)
+                if outcome == "backend_unavailable":
+                    report.status = "degraded"
+                return
+            sessions_done.add(key)
+            if outcome != "done":
+                focus = None
+
+    def _pick_conv2(
+        self,
+        report: RunReport,
+        focus: tuple[str, str] | None,
+        opened: set[tuple[str, str]],
+    ) -> tuple[sqlite3.Row, tuple[str, str]] | str | None:
+        """The next conv-v2 job, ``again`` after a skip, or ``None`` when idle."""
+
+        with self.state.open() as connection:
+            rows = connection.execute(
+                "SELECT * FROM jobs WHERE status = 'pending' AND tried_run != ?"
+                " AND prompt_version = ?",
+                (report.run_id, self.prompt_version),
+            ).fetchall()
+            started = {
+                (str(row["app"]), str(row["session_id"]))
+                for row in connection.execute(
+                    "SELECT DISTINCT app, session_id FROM jobs WHERE kind = 'chunk_summary'"
+                    " AND status = 'done' AND prompt_version = ?",
+                    (self.prompt_version,),
+                )
+            }
+        if not rows:
+            return None
+        groups: dict[tuple[str, str], list[sqlite3.Row]] = {}
+        newest: dict[tuple[str, str], str] = {}
+        for row in rows:
+            key = (str(row["app"]), str(row["session_id"]))
+            groups.setdefault(key, []).append(row)
+            stamp = str(row["session_ts"] or "")
+            if stamp > newest.get(key, ""):
+                newest[key] = stamp
+
+        def ordered(jobs: list[sqlite3.Row]) -> list[sqlite3.Row]:
+            return sorted(
+                jobs,
+                key=lambda job: (KIND_ORDER.get(str(job["kind"]), 9), int(job["chunk_start"])),
+            )
+
+        def first_runnable(jobs: list[sqlite3.Row]) -> tuple[sqlite3.Row | None, bool]:
+            skipped = False
+            for job in ordered(jobs):
+                state = "run" if str(job["kind"]) == "chunk_summary" else self._ready(job)
+                if state == "run":
+                    return job, skipped
+                if state == "skipped":
+                    skipped = True
+                if state == "wait":
+                    return None, skipped
+            return None, skipped
+
+        fresh_keys = [key for key in groups if key not in started and key not in opened]
+        old = [key for key in groups if key in started or key in opened]
+        floor = int(self.budgets.max_tokens * NEW_SESSION_FLOOR) if fresh_keys else 0
+        cap = self.budgets.max_tokens - floor
+        # A session opened in this run is finished even into the reserved
+        # slice. A session left over from earlier stops at that slice so a
+        # new session still gets a turn.
+        stick = focus in groups and (focus in opened or report.tokens < cap or not fresh_keys)
+        if stick and focus is not None:
+            job, skipped = first_runnable(groups[focus])
+            if job is not None:
+                return job, focus
+            if skipped and len(groups) == 1:
+                return "again"
+
+        fresh = fresh_keys
+
+        def by_newest(keys: list[tuple[str, str]]) -> list[tuple[str, str]]:
+            return sorted(keys, key=lambda key: (newest.get(key, ""), key[1]), reverse=True)
+
+        if old and report.tokens < cap:
+            order = by_newest(old) + by_newest(fresh)
+        else:
+            order = by_newest(fresh) + by_newest(old)
+        skipped_any = False
+        for key in order:
+            if key == focus:
+                continue
+            job, skipped = first_runnable(groups[key])
+            skipped_any = skipped_any or skipped
+            if job is not None:
+                if key not in started:
+                    opened.add(key)
+                return job, key
+        return "again" if skipped_any else None
 
     def _ready(self, job: sqlite3.Row) -> str:
         """``run``, ``wait`` or ``skipped``: the session summary needs every chunk, the
@@ -1197,6 +1454,8 @@ class ConversationWorker:
                 )
             self._finish(connection, job, status, code)
         report.bump(report.jobs, f"{kind}:{status}")
+        if kind == "session_summary" and status == "done":
+            report.sessions_summarised += 1
         return status
 
     # -- model calls ----------------------------------------------------------------------
@@ -1239,8 +1498,21 @@ class ConversationWorker:
         tokens_in = reply.tokens_in or estimate
         tokens_out = reply.tokens_out or estimate_tokens(reply.text)
         report.tokens += tokens_in + tokens_out
+        finish = str(getattr(reply, "finish_reason", "") or "")
+        issue = reply_issue(task, reply.text, prompt_version=version, finish_reason=finish)
+        if issue:
+            return None, tokens_in, tokens_out, issue
         parsed = parse_reply(task, reply.text, prompt_version=version)
-        return parsed, tokens_in, tokens_out, "" if parsed is not None else "bad_output"
+        if parsed is None:
+            return None, tokens_in, tokens_out, "bad_output"
+        tags = parsed.get("tags")
+        if isinstance(tags, dict) and self.project_vocab:
+            names, missed = map_project_names(list(tags.get("project") or []), self.project_vocab)
+            rewritten = dict(parsed)
+            rewritten["tags"] = {**tags, "project": names}
+            parsed = rewritten
+            report.project_unmapped += missed
+        return parsed, tokens_in, tokens_out, ""
 
     def _store_summary(
         self, job: sqlite3.Row, parsed: dict[str, Any], tokens_in: int, tokens_out: int
