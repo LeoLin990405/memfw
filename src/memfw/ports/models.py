@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final, Protocol
 
@@ -61,6 +61,9 @@ class ModelReply:
     text: str
     tokens_in: int = 0
     tokens_out: int = 0
+    #: Provider stop reason (``stop``, ``length``, ...). Empty when the backend
+    #: does not report one. ``length`` means the reply was cut off.
+    finish_reason: str = ""
 
 
 class ModelBackend(Protocol):
@@ -124,12 +127,47 @@ def render_tag_data(data: Mapping[str, Any]) -> str:
     return f"<data>\n{body}\n</data>\n"
 
 
-def render_tag_prompt(task: str, data: Mapping[str, Any]) -> tuple[str, str]:
-    """``(instructions, data block)`` for a ``conv-v2`` task (system and user message)."""
+_LANGUAGE_NAMES: Final[Mapping[str, str]] = {"zh": "Chinese", "en": "English"}
+
+
+def render_tag_prompt(
+    task: str,
+    data: Mapping[str, Any],
+    *,
+    language: str = "zh",
+    projects: Sequence[str] = (),
+) -> tuple[str, str]:
+    """``(instructions, data block)`` for a ``conv-v2`` task (system and user message).
+
+    ``language`` is the summary and ``intent`` language (default Chinese). Proper
+    nouns stay in the language they already use. ``projects`` is the canonical
+    name list only; alias mapping happens after the reply, in code.
+    """
 
     if task not in TAG_INSTRUCTIONS:
         raise ValueError(f"unknown conv-v2 task {task}")
-    return f"{TAG_PREAMBLE}\n{TAG_INSTRUCTIONS[task]}", render_tag_data(data)
+    if not isinstance(language, str) or not language.strip() or len(language.strip()) > 16:
+        raise ValueError("summary language must be a short string")
+    language = language.strip().lower()
+    spoken = _LANGUAGE_NAMES.get(language, language)
+    lines = [
+        TAG_PREAMBLE,
+        TAG_INSTRUCTIONS[task],
+        f"Write the summary and the intent in {spoken}. Keep proper nouns in their "
+        "original language.",
+    ]
+    names = []
+    for item in projects:
+        if not isinstance(item, str) or not item.strip() or len(item.strip()) > TAG_ITEM_CHARS:
+            raise ValueError("canonical project names must be short strings")
+        names.append(item.strip())
+    if names:
+        lines.append(
+            "When the work belongs to one of these projects, use that canonical name: "
+            + ", ".join(names)
+            + "."
+        )
+    return "\n".join(lines), render_tag_data(data)
 
 
 # -- conv-v2 validation (structure only; the kernel redacts afterwards) -----------------
@@ -146,6 +184,12 @@ def _clean(value: str, limit: int) -> str:
 
 
 def _items(raw: Any) -> list[str] | None:
+    """List items, or ``None`` when a value is the wrong type.
+
+    A URL, a path or a host is not a name. That one item is skipped. The rest
+    of the reply is kept: a temperature-0 retry would repeat the same text.
+    """
+
     if raw is None:
         return []
     if isinstance(raw, str):
@@ -155,25 +199,110 @@ def _items(raw: Any) -> list[str] | None:
     out: list[str] = []
     for item in raw:
         if _LOCATION.search(item.strip()):
-            continue  # not a name: drop this item, keep the rest of the reply
+            continue
         cleaned = _clean(item, TAG_ITEM_CHARS)
         if cleaned and cleaned not in out:
             out.append(cleaned)
     return out[:TAG_MAX_ITEMS]
 
 
+def dropped_location_items(raw: Any) -> int:
+    """How many ``project`` or ``components`` strings look like a location.
+
+    ``raw`` is a tags object. The return value is a count. The strings are
+    not returned. A wrong type counts as zero: that reply is rejected, not trimmed.
+    """
+
+    if not isinstance(raw, Mapping):
+        return 0
+    total = 0
+    for key in ("project", "components"):
+        items = raw.get(key)
+        if isinstance(items, str):
+            items = [items]
+        if not isinstance(items, list):
+            continue
+        total += sum(
+            1
+            for item in items
+            if isinstance(item, str) and _LOCATION.search(item.strip())
+        )
+    return total
+
+
+def omitted_tag_keys(raw: Any) -> tuple[str, ...]:
+    """Tag key names absent from ``raw``, in :data:`TAG_KEYS` order.
+
+    Names only: values are never returned. A key that is present, even with
+    ``None`` or ``""``, is not omitted. ``()`` when ``raw`` is not a mapping.
+    """
+
+    if not isinstance(raw, Mapping):
+        return ()
+    return tuple(key for key in TAG_KEYS if key not in raw)
+
+
+def tag_issue(value: Any) -> str:
+    """A ``conv-v2`` reason code, or ``""`` when ``value`` can be stored.
+
+    Codes only: the return value never contains model text. An omitted tag key
+    is not a reason. :func:`normalize_tags` fills ``task_type`` ``other``,
+    ``outcome`` ``unknown``, ``intent`` ``""`` and empty lists. Tags that are
+    not an object, an unknown key, a value outside the ``task_type`` or
+    ``outcome`` vocabulary, or a wrong type still reject. A list item that
+    looks like a URL or a path is not a reason: :func:`_items` drops that item.
+    """
+
+    if not isinstance(value, Mapping):
+        return "bad_shape"
+    if "summary" not in value:
+        return "missing_summary" if "tags" in value else "bad_shape"
+    summary = value.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        return "missing_summary"
+    if len(summary.strip()) > TAG_SUMMARY_CHARS:
+        return "summary_too_long"
+    if set(value) != {"summary", "tags"}:
+        return "bad_shape"
+    raw = value.get("tags")
+    if not isinstance(raw, Mapping):
+        return "bad_shape"
+    if set(raw) - set(TAG_KEYS):
+        return "bad_shape"
+    task_type = raw.get("task_type", "other")
+    outcome = raw.get("outcome", "unknown")
+    intent = raw.get("intent", "")
+    if not isinstance(task_type, str) or not isinstance(outcome, str):
+        return "bad_enum"
+    if _clean(task_type, 16) not in TASK_TYPES or _clean(outcome, 16) not in TAG_OUTCOMES:
+        return "bad_enum"
+    if not isinstance(intent, str):
+        return "bad_shape"
+    for key in ("project", "components"):
+        if key not in raw:
+            continue
+        items = raw.get(key)
+        if items is None:
+            continue
+        if isinstance(items, str):
+            items = [items]
+        if not isinstance(items, list) or not all(isinstance(item, str) for item in items):
+            return "bad_shape"
+    return ""
+
+
 def normalize_tags(raw: Any) -> dict[str, Any] | None:
     """The tags in canonical form, or ``None`` when they do not match the schema.
 
     Lower-cased, whitespace collapsed, lists de-duplicated and capped, every
-    key present. A ``project`` or ``components`` item that looks like a URL, a
-    path or a host (``/``, ``\\``, ``~``, ``..``, a scheme, ``www.``) is dropped;
-    the rest of the reply is kept (a model at temperature 0 would repeat it, so
-    rejecting the reply would only pay for the same answer again). Secrets are
-    the caller's check and still drop the whole reply. A missing ``task_type``
-    is ``other`` and a missing ``outcome`` is ``unknown``; a value outside the
-    vocabulary, an unknown key or a wrong type rejects the whole reply
-    (dropped, never repaired).
+    key present. A missing ``task_type`` is ``other``, a missing ``outcome``
+    is ``unknown``, a missing ``intent`` is ``""``, and a missing ``project``
+    or ``components`` is ``[]``. An unknown key, a value outside the vocabulary,
+    or a wrong type rejects the whole reply (dropped, never repaired). A
+    ``project`` or ``components`` item that looks like a URL, a path or a host
+    is dropped on its own; the rest of the reply is kept. A present empty
+    ``task_type`` or ``outcome`` is not the missing-key default. Secrets are
+    the caller's check and still drop the whole reply.
     """
 
     if not isinstance(raw, Mapping) or set(raw) - set(TAG_KEYS):
@@ -201,6 +330,55 @@ def normalize_tags(raw: Any) -> dict[str, Any] | None:
     }
 
 
+def map_project_names(
+    values: Sequence[str], vocab: Mapping[str, Sequence[str]]
+) -> tuple[list[str], int]:
+    """Map project strings through ``canonical -> aliases``.
+
+    Matching ignores case and extra spaces. A known alias or canonical name
+    becomes the cleaned canonical name. An unknown value is kept (cleaned) and
+    counted. An empty vocab maps nothing and counts nothing: there is no list
+    to miss.
+    """
+
+    if not vocab:
+        return (
+            [_clean(value, TAG_ITEM_CHARS) for value in values if _clean(value, TAG_ITEM_CHARS)],
+            0,
+        )
+    index: dict[str, str] = {}
+    for canonical in sorted(vocab):
+        if not isinstance(canonical, str):
+            continue
+        can = _clean(canonical, TAG_ITEM_CHARS)
+        if not can:
+            continue
+        index.setdefault(can, can)
+        aliases = vocab[canonical]
+        if isinstance(aliases, str):
+            aliases = [aliases]
+        for alias in aliases:
+            if isinstance(alias, str):
+                cleaned = _clean(alias, TAG_ITEM_CHARS)
+                if cleaned:
+                    index.setdefault(cleaned, can)
+    out: list[str] = []
+    missed = 0
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        cleaned = _clean(value, TAG_ITEM_CHARS)
+        if not cleaned:
+            continue
+        mapped = index.get(cleaned)
+        if mapped is None:
+            missed += 1
+            mapped = cleaned
+        if mapped not in out:
+            out.append(mapped)
+    return out, missed
+
+
 def parse_tagged(value: Any) -> dict[str, Any] | None:
     """``{"summary", "tags"}`` from a decoded ``conv-v2`` reply, or ``None``.
 
@@ -209,14 +387,9 @@ def parse_tagged(value: Any) -> dict[str, Any] | None:
     memfw worker does) and redact the result again.
     """
 
-    if not isinstance(value, Mapping) or set(value) != {"summary", "tags"}:
+    if tag_issue(value):
         return None
-    summary = value.get("summary")
-    if not isinstance(summary, str):
-        return None
-    summary = summary.strip()
-    if not summary or len(summary) > TAG_SUMMARY_CHARS:
-        return None
+    summary = str(value.get("summary")).strip()
     tags = normalize_tags(value.get("tags"))
     if tags is None:
         return None
@@ -240,8 +413,12 @@ __all__ = [
     "BackendUnavailable",
     "ModelBackend",
     "ModelReply",
+    "dropped_location_items",
+    "map_project_names",
     "normalize_tags",
+    "omitted_tag_keys",
     "parse_tagged",
     "render_tag_data",
     "render_tag_prompt",
+    "tag_issue",
 ]

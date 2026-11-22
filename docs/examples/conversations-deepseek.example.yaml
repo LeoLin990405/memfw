@@ -1,0 +1,17 @@
+# Example only. Copy the shape into vault.yaml and replace the names.
+# These project names are fake. Do not put a real vocabulary in the repo.
+# Prices below are placeholders, not a reading of a price page.
+conversations:
+  cloud: false
+  backend: memfw_adapter_deepseek:factory
+  expect_backend: deepseek:deepseek-flash
+  summary_language: zh
+  tag_vocab:
+    project:
+      Northwind: [northwind-app, "north wind"]
+      Lumen: [lumen-notes]
+  options:
+    model: deepseek-flash
+    price_in_per_mtok: 0.28
+    price_out_per_mtok: 0.42
+    max_output_tokens: 2048

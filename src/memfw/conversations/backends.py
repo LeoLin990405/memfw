@@ -48,13 +48,16 @@ from typing import Any
 from ..ports.models import (
     TAG_INTENT_CHARS,
     TAG_ITEM_CHARS,
+    TAG_KEYS,
     TAG_PROMPT_VERSION,
     TAG_SUMMARY_CHARS,
     TAG_TASKS,
     BackendUnavailable,
     ModelBackend,
     ModelReply,
+    dropped_location_items,
     parse_tagged,
+    tag_issue,
 )
 from .store import ConversationError, safe_text
 
@@ -92,12 +95,18 @@ __all__ = [
     "configured_backend",
     "configured_backfill_days",
     "configured_replan_limit",
+    "OUTPUT_ISSUE_CODES",
+    "conversation_labels",
+    "expect_backend",
     "gated_loader",
     "estimate_tokens",
     "load_backend",
+    "defaulted_tag_keys",
+    "dropped_tag_items",
     "parse_reply",
     "prompt_version_of",
     "render_prompt",
+    "reply_issue",
 ]
 
 
@@ -261,6 +270,188 @@ def parse_reply(
             return None
         return {"claims": [item for item in cleaned if item]}
     return None
+
+
+#: Model-output reason codes. A run report stores these and nothing from the reply.
+OUTPUT_ISSUE_CODES = frozenset(
+    {
+        "not_json",
+        "missing_summary",
+        # Rev 31 emitted this when a tag key was absent. Absent keys are now
+        # defaults (see defaulted_tag_keys). The code stays so an old run row
+        # still counts as model output rather than a backend failure.
+        "missing_tag_key",
+        "bad_enum",
+        "summary_too_long",
+        # Rev 31 emitted this when one list item looked like a URL. That item
+        # is now dropped and the reply is kept (see dropped_tag_items). The
+        # code stays so an old run row still counts as model output.
+        "item_looks_like_url",
+        "secret",
+        "truncated",
+        "bad_shape",
+        "bad_output",
+    }
+)
+
+
+def reply_issue(
+    task: str, reply: str, *, prompt_version: str = PROMPT_VERSION, finish_reason: str = ""
+) -> str:
+    """Why ``reply`` cannot be stored, or ``""`` when :func:`parse_reply` accepts it.
+
+    ``finish_reason="length"`` is ``truncated`` even when the text parses. The
+    code never includes the reply text. When the shape is acceptable and a
+    string fails redaction, the code is ``secret``. A location-shaped list
+    item is not a reason: that item is dropped and the reply is kept.
+    """
+
+    if finish_reason == "length":
+        return "truncated"
+    text = reply.strip()
+    fence = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.S)
+    if fence:
+        text = fence.group(1)
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return "not_json"
+    if not isinstance(value, dict):
+        return "bad_shape"
+    if prompt_version == TAG_PROMPT_VERSION and task in TAG_TASKS:
+        code = tag_issue(value)
+        if code:
+            return code
+    elif task == "chunk_summary":
+        summary = value.get("summary")
+        if set(value) != {"summary"}:
+            return "bad_shape"
+        if not isinstance(summary, str) or not summary.strip():
+            return "missing_summary"
+        if len(summary) > SUMMARY_CHARS:
+            return "summary_too_long"
+    elif task == "session_summary":
+        if set(value) - {"summary", "intent", "outcome"}:
+            return "bad_shape"
+        summary = value.get("summary")
+        if not isinstance(summary, str) or not summary.strip():
+            return "missing_summary"
+        if len(summary) > SESSION_CHARS:
+            return "summary_too_long"
+        if value.get("outcome", "unknown") not in OUTCOMES:
+            return "bad_enum"
+    elif task == "memory_claims":
+        claims = value.get("claims")
+        if set(value) != {"claims"} or not isinstance(claims, list) or len(claims) > MAX_CLAIMS:
+            return "bad_shape"
+    else:
+        return "bad_shape"
+    if _redacted_raw(value) is _SECRET:
+        return "secret"
+    if parse_reply(task, reply, prompt_version=prompt_version) is None:
+        return "bad_output"
+    return ""
+
+
+def defaulted_tag_keys(reply: str) -> tuple[str, ...]:
+    """Tag key names a structurally acceptable ``conv-v2`` reply left out.
+
+    Names only, in :data:`TAG_KEYS` order. ``()`` when the reply is not a
+    tagged object :func:`tag_issue` accepts. A present key is not listed, even
+    when its value is empty. This does not decide redaction: the worker counts
+    the names only after :func:`parse_reply` has kept the reply.
+    """
+
+    text = reply.strip()
+    fence = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.S)
+    if fence:
+        text = fence.group(1)
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return ()
+    if not isinstance(value, dict) or tag_issue(value):
+        return ()
+    raw = value.get("tags")
+    if not isinstance(raw, Mapping):
+        return ()
+    return tuple(key for key in TAG_KEYS if key not in raw)
+
+
+def dropped_tag_items(reply: str) -> int:
+    """Location-shaped list items a structurally acceptable conv-v2 reply drops.
+
+    A count only: the item text is not returned. ``0`` when the reply is not a
+    tagged object :func:`tag_issue` accepts, or when redaction withholds it.
+    The worker adds this only after :func:`parse_reply` has kept the reply.
+    """
+
+    text = reply.strip()
+    fence = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.S)
+    if fence:
+        text = fence.group(1)
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return 0
+    if not isinstance(value, dict) or tag_issue(value) or _redacted_raw(value) is _SECRET:
+        return 0
+    return dropped_location_items(value.get("tags"))
+
+
+def conversation_labels(
+    config: Mapping[str, Any] | None,
+) -> tuple[str, dict[str, tuple[str, ...]]]:
+    """``(summary_language, project vocab)`` from ``conversations``.
+
+    The vocab is canonical name to aliases. The repo does not ship a real
+    vocabulary; operators put names in ``vault.yaml``. Default language is ``zh``.
+    """
+
+    section = _section(config)
+    if section is None:
+        return "zh", {}
+    language = section.get("summary_language", "zh")
+    if not isinstance(language, str) or not language.strip() or len(language.strip()) > 16:
+        raise ConversationError("conversations.summary_language must be a short string")
+    raw_vocab = section.get("tag_vocab", {})
+    if raw_vocab is None:
+        raw_vocab = {}
+    if not isinstance(raw_vocab, Mapping):
+        raise ConversationError("conversations.tag_vocab must be a mapping")
+    project = raw_vocab.get("project", {})
+    if project is None:
+        project = {}
+    if not isinstance(project, Mapping):
+        raise ConversationError("conversations.tag_vocab.project must be a mapping")
+    vocab: dict[str, tuple[str, ...]] = {}
+    for name, aliases in project.items():
+        if not isinstance(name, str) or not name.strip() or len(name.strip()) > 48:
+            raise ConversationError("conversations.tag_vocab.project names must be short strings")
+        if isinstance(aliases, str):
+            aliases = [aliases]
+        if not isinstance(aliases, list) or not all(
+            isinstance(item, str) and len(item) <= 48 for item in aliases
+        ):
+            raise ConversationError(
+                "conversations.tag_vocab.project aliases must be a list of short strings"
+            )
+        vocab[name.strip()] = tuple(item.strip() for item in aliases if item.strip())
+    return language.strip().lower(), vocab
+
+
+def expect_backend(config: Mapping[str, Any] | None) -> str | None:
+    """``conversations.expect_backend``, or ``None`` when it is unset."""
+
+    section = _section(config)
+    if section is None or "expect_backend" not in section:
+        return None
+    raw = section.get("expect_backend")
+    if raw is None or raw == "":
+        return None
+    if not isinstance(raw, str) or len(raw) > 200:
+        raise ConversationError("conversations.expect_backend must be a short string")
+    return raw
 
 
 # -- built-in backends -------------------------------------------------------------
@@ -435,10 +626,18 @@ def gated_loader(config: Mapping[str, Any] | None) -> Callable[..., ModelBackend
     """
 
     cloud = cloud_enabled(config)
+    section = _section(config)
+    options = None if section is None else section.get("options")
+    if options is not None and not isinstance(options, Mapping):
+        raise ConversationError("conversations.options must be a mapping")
 
     def load(spec: str | None, *, allow_cloud: bool = False) -> ModelBackend:
         try:
-            return load_backend(spec, allow_cloud=allow_cloud and cloud)
+            return load_backend(
+                spec,
+                allow_cloud=allow_cloud and cloud,
+                options=None if options is None else dict(options),
+            )
         except BackendRefused as exc:
             if exc.code != "cloud_not_allowed":
                 raise
@@ -518,6 +717,7 @@ def backend_status(config: Mapping[str, Any] | None) -> dict[str, Any] | None:
     refused = getattr(backend, "refused", "")
     return {
         "spec": str(section.get("backend"))[:200],
+        "name": str(getattr(backend, "name", ""))[:200],
         "cloud": section.get("cloud", False) is True,
         "state": "degraded" if refused else "ready",
         "reason": refused,

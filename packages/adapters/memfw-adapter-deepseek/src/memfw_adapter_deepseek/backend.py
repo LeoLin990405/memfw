@@ -71,7 +71,13 @@ DEFAULT_BASE_URL = "https://api.deepseek.com"
 #: The only remote endpoints the key may be sent to (anything else is refused, so
 #: editing vault.yaml cannot redirect the key to another host).
 ALLOWED_BASE_URLS = frozenset({DEFAULT_BASE_URL})
-DEFAULT_MODEL = "deepseek-chat"
+# Model id. On 2026-11-21 the provider's price page no longer lists
+# "deepseek-chat". The names on that page are "deepseek-flash"
+# (DeepSeek-V4.1-Flash-1017) and "deepseek-v4-pro".
+# price_in_per_mtok and price_out_per_mtok below are placeholders kept from
+# before that date. They are not a reading of the 2026-11-21 page. Set both
+# from the operator's own copy of the page.
+DEFAULT_MODEL = "deepseek-flash"
 USER_AGENT = f"memfw-adapter-deepseek/{__version__}"
 RESPONSE_BYTES = 1 << 20
 #: Options that would put a credential in configuration: always refused.
@@ -101,6 +107,8 @@ class Settings:
     max_output_tokens: int = 512
     max_run_tokens: int = 400_000
     max_run_cost_usd: float = 0.50
+    # Placeholder USD per million tokens, kept from before 2026-11-21.
+    # Not a reading of the provider's price page on that date. Set both.
     price_in_per_mtok: float = 0.28
     price_out_per_mtok: float = 0.42
 
@@ -233,6 +241,22 @@ class DeepSeekBackend:
         self.tokens_out = 0
         self.cost_usd = 0.0
         self.stopped = ""
+        self.summary_language = "zh"
+        self.project_names: tuple[str, ...] = ()
+
+    def bind_labels(self, *, language: str, projects: tuple[str, ...]) -> None:
+        """Summary language and canonical project names for the next prompts.
+
+        The alias map stays in the worker. This method receives canonical names
+        only, and it never reads a key.
+        """
+
+        if not isinstance(language, str) or not language.strip() or len(language.strip()) > 16:
+            raise BackendUnavailable("bad_option")
+        if not isinstance(projects, tuple) or any(not isinstance(name, str) for name in projects):
+            raise BackendUnavailable("bad_option")
+        self.summary_language = language.strip().lower()
+        self.project_names = projects
 
     def __repr__(self) -> str:
         settings = self.settings
@@ -289,7 +313,9 @@ class DeepSeekBackend:
 
         if task not in TAG_TASKS:
             raise ValueError(f"deepseek backend does not take task {task}")
-        system, user = render_tag_prompt(task, data)
+        system, user = render_tag_prompt(
+            task, data, language=self.summary_language, projects=self.project_names
+        )
         return {
             "model": self.settings.model,
             "messages": [
@@ -309,20 +335,28 @@ class DeepSeekBackend:
         payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
         reply = self._post(payload, worst)
         try:
-            content = reply["choices"][0]["message"]["content"]
+            choice = reply["choices"][0]
+            content = choice["message"]["content"]
             usage = reply.get("usage") or {}
             tokens_in = int(usage.get("prompt_tokens") or 0)
             tokens_out = int(usage.get("completion_tokens") or 0)
+            finish = choice.get("finish_reason")
         except (KeyError, IndexError, TypeError, ValueError, AttributeError, OverflowError):
             raise DeepSeekError("bad_response") from None
         if not isinstance(content, str):
             raise DeepSeekError("bad_response")
+        finish_reason = finish.strip()[:32] if isinstance(finish, str) else ""
         tokens_in = max(0, tokens_in) or estimate_tokens(prompt_text)
         tokens_out = max(0, tokens_out) or estimate_tokens(content)
         self.tokens_in += tokens_in
         self.tokens_out += tokens_out
         self.cost_usd += self._cost(tokens_in, tokens_out)
-        return ModelReply(text=content, tokens_in=tokens_in, tokens_out=tokens_out)
+        return ModelReply(
+            text=content,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            finish_reason=finish_reason,
+        )
 
     def _charge(self, tokens_in: int, tokens_out: int) -> None:
         self.tokens_in += tokens_in

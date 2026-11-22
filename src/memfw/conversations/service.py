@@ -15,6 +15,7 @@ from .backends import (
     configured_backend,
     configured_backfill_days,
     configured_replan_limit,
+    conversation_labels,
 )
 from .policy import SharePolicy
 from .share import ConversationShare
@@ -104,6 +105,7 @@ def open_worker(
 
     config, vault = read_config(root)
     policy = SharePolicy.from_config(config)
+    language, vocab = conversation_labels(config)
     db = checked_location(store, config, vault=vault) if store else store_path(config, vault=vault)
     work = WorkState(
         checked_location(state, config, vault=vault) if state else state_path(config, vault=vault)
@@ -126,4 +128,6 @@ def open_worker(
             configured_backfill_days(config) if backfill_days is None else backfill_days
         ),
         replan_limit=configured_replan_limit(config),
+        summary_language=language,
+        project_vocab=vocab,
     )

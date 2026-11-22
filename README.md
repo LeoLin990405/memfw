@@ -17,11 +17,19 @@ Markdown is the source of truth · hash-linked JSONL events · rebuildable FTS5 
 <a href="#-conversation-store-every-agent-one-place"><img src="https://img.shields.io/badge/agent_readers-15-10B981?style=flat-square" alt="15 agent readers"></a>
 <a href="#-architecture-layers-and-ports"><img src="https://img.shields.io/badge/ports-13-0EA5E9?style=flat-square" alt="13 ports"></a>
 <a href="#-optional-adapters"><img src="https://img.shields.io/badge/adapters-11_(off_by_default)-64748B?style=flat-square" alt="11 adapters (off by default)"></a>
-<a href="#-evaluation-summary"><img src="https://img.shields.io/badge/evaluation-bounded-D97706?style=flat-square" alt="Bounded evaluation"></a>
+<a href="#evaluation"><img src="https://img.shields.io/badge/evaluation-bounded-D97706?style=flat-square" alt="Bounded evaluation"></a>
 
 <sub>Counts reflect <code>main</code>; the release badge is the latest tagged release (v0.5.0).</sub>
 
 </div>
+
+## 📑 Contents
+
+- **Start:** [What is memfw](#what-is-memfw) · [Design principles](#-design-principles) · [Install and quick start](#-install-and-quick-start) · [Vault layout](#-vault-layout)
+- **Use:** [Memory commands](#-memory-commands) · [Attachments: evidence beyond text](#-attachments-evidence-beyond-text) · [Conversation store: every agent, one place](#-conversation-store-every-agent-one-place) · [Handoff: continue in another agent](#-handoff-continue-in-another-agent) · [Dream: verify-first consolidation](#-dream-verify-first-consolidation) · [MCP tools](#-mcp-tools)
+- **Safety and operations:** [Privacy and permissions](#-privacy-and-permissions) · [Reader-upgrade order](#-reader-upgrade-order) · [Integration and federation](#-integration-and-federation)
+- **Inside:** [Architecture: layers and ports](#-architecture-layers-and-ports) · [Optional adapters](#-optional-adapters)
+- **Project:** [Iterations](#-iterations) · [Testing](#-testing) · [Status and boundaries](#-status-and-boundaries) · [References and related projects](#-references-and-related-projects) · [Docs map](#-docs-map) · [Development](#-development) · [Contributing](#-contributing) · [License](#-license)
 
 ## What is memfw?
 
@@ -817,7 +825,100 @@ adapter that is down or slow is reported degraded and FTS still answers. Per-ada
 [`docs/adapter-wikigen.md`](docs/adapter-wikigen.md),
 [`docs/qmd-projection.md`](docs/qmd-projection.md) and each package's `README.md`.
 
-## 📊 Evaluation summary
+## 🗓️ Iterations
+
+memfw moves in small pull requests (119 merged into `main` as of 2026-11-20), each with one purpose, and
+cuts a numbered release when a set of them belongs together. Every release entry in
+[`CHANGELOG.md`](CHANGELOG.md) starts with a summary and upgrade notes.
+
+| Version | Date | What it brought |
+|---|---|---|
+| 0.1.0 | 2026-11-04 | The first standalone core, extracted from the earlier Conductor tree: the Markdown vault, the hash-linked event log, retention, the disposable FTS5 index, the CLI and the local MCP server. |
+| 0.1.1 | 2026-11-04 | A CI reproducibility fix and an experiment-output fix (a tag only, never published as a numbered package). |
+| 0.2.0 | 2026-11-15 | Notes, concepts, the transcript index, the conversation store, handoff packs, dream and OKF export, plus the fixes found by running the branch against a copy of a real vault. |
+| 0.3.0 | 2026-11-17 | A layered core behind swappable ports, recall and context packs v2, epistemic types and reviewed experience points, uncertainty as a record, a concept taxonomy, per-memory privacy levels with opt-in clearance, and a settled conversation store. |
+| 0.4.0 | 2026-11-18 | Attachments and their text proxies, a typed-edge knowledge graph, `memfw-http/3` (`/context`, reviewed `/forget`), and recall and deriver adapters, all off by default. |
+| **0.5.0** | **2026-11-20** | The Stage pipeline and LLM Wiki contracts and their first packages, a Tailscale host-inventory ingestor, a Qdrant sync that survives a slow embedder, and `retrieval_health` on every search and context reply. |
+
+**New in v0.5.0:** the LLM Wiki contracts in ports 0.4.0 (`Citation.ref`, the
+`memfw-wiki-page/1` and `memfw-wiki-job/1` formats, the `EntailmentChecker` port and their
+contract checks), `retrieval_health` on every `memory_search`, `memory_context` v=2 and
+`conversations_search` reply, the `memfw-pipeline` Stage runner (example stage only), the
+`memfw-wiki-gate` page checks and two adapters, `memfw-adapter-tailnet` (`Ingestor`) and
+`memfw-adapter-wikigen` (`Deriver`), all off by default; the Qdrant adapter's sync survives
+slow or failing embedders (0.1.3).
+
+**Added in v0.4.0:** the opt-in `current` context slot,
+two-stage conversation search with tag filters, attachments (embedded and referenced originals,
+detach, relink, purge, scan, text proxies in the `memfw.proxy` v1 format, attachments as
+observation evidence in the write gate, proxy search with the opt-in MCP tools
+`attachment_search` / `attachment_get`), the typed-edge projection and bounded path patterns
+behind the `ProjectionStore` port, the C4 context pack evaluation, `memfw-http/3` with
+`/context`, `/forget` requests and `forget residue`, event log forward compatibility, vault
+identity for out-of-vault projections (corroboration moved out of the vault), the lifecycle
+meta-index and `kh:` note resolver in recall, `runtime.recall.adapters`, the Qwen Code reader
+and eight new adapters beside the DeepSeek one (bm25s, Qdrant, QMD, PageIndex, OCR, LangExtract,
+LightRAG, GraphRAG), all off by default. Known limitations of v0.4.0 recall are listed in
+[`docs/ports-and-recall.md`](docs/ports-and-recall.md) §4.1c-bis.
+
+### On `main`, not yet released
+
+- **Redaction gaps closed** (#118): IPv4 addresses inside host names, `sslip.io`-style names,
+  tailnet labels and phone numbers are masked, and masking repeats until the text is stable.
+- **`memfw conversations reredact`** (#119) applies the current rules to text already stored in
+  the conversation store. It is a dry run by default; `--apply` takes the store lock and the worker lock (exit 3 if either is held), writes a
+  verified backup, rewrites in guarded batches, then rescans (zero further changes) and checks
+  integrity. Rows that would need a key change are reported, never rewritten.
+
+### In progress: 0.5.1
+
+These are on review branches and may still change:
+
+- Conversation search hits carry a **session card** (summary, tags, where to start reading).
+- **Handoff packs** get a fixed set of keys.
+- **`conversations get --around`** reads a window of turns around a hit.
+- Every conversations reply states its **`redaction_policy`** and lists **`omitted_fields`**
+  (names only, never values).
+
+### Planned: 0.6.0
+
+This is the direction; it is not a commitment:
+
+- **Metacognition.** Each agent's working rules live in the vault as reviewed memory and are
+  delivered to the agent from there, plus write norms for small task-level facts.
+- **An editable memory view.** A guarded, editable Obsidian view of the vault. Every edit still
+  becomes an event and goes through review.
+- **More ingest sources**, such as a dictation tool's custom vocabulary.
+
+## 🧪 Testing
+
+By convention, every change passes these gates before it is merged.
+
+| Gate | What it checks | Where |
+|---|---|---|
+| Test suite | 6,789 pytest tests (at v0.5.0 plus #118–#119) over the vault, event log, index, readers, redaction, conversations, handoff, dream, MCP, HTTP and each adapter's contract | [`tests/`](tests), `pytest -q` |
+| Architecture guards | the package layer map, the shrinking import allowlist, the swap drills and the byte-identical harness | [`tests/architecture/`](tests/architecture), [`tests/harness/`](tests/harness), `tests/test_architecture_layers.py`, `tests/test_swap_drills.py` |
+| Static checks | `ruff`, and `mypy` on `src` and the typed packages | the `checks` job in CI |
+| Standalone wheels | builds every package as its own wheel, then installs and smoke-tests them in a clean environment without the memfw source tree | the `standalone-wheels` job, [`tests/standalone/wheel_smoke.py`](tests/standalone/wheel_smoke.py) |
+| CI | GitHub Actions runs `checks` and `standalone-wheels` on every push and pull request | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
+
+**How changes are tested**
+
+- A pull request is merged only after every CI check is green (the `checks` job is also a required status check on `main`).
+- Maintainers also run the same suite on a self-hosted pre-check (Linux shards, macOS and a
+  Windows smoke test) before pushing a branch. That only catches failures early: GitHub CI
+  stays the final gate.
+- Run the suite **serially**. Parallel runs with `pytest-xdist` give false failures in
+  timing-sensitive tests.
+- Tests use synthetic data only. The repository holds no real transcripts, memories or
+  personal data.
+- Fixtures should look like real data where it matters. For example, conversation store offsets
+  are sparse byte positions, not 0, 1, 2. Data that is too tidy can hide a mismatch between two
+  components.
+- Migrations that touch stored data are dry-run first. `--apply` writes a verified backup, and
+  the result is rescanned afterwards.
+
+### Evaluation
 
 | Signal | Result |
 |---|---|
@@ -829,13 +930,16 @@ adapter that is down or slow is reported degraded and FTS still answers. Per-ada
 | Local Mem0 baseline (n=18) | memfw 66.7% vs. Mem0 62.5% evidence recall @100%; no significant difference |
 | Multimodal causal gate (`eval causal --multimodal`, synthetic) | 59 cases: **0** spurious promotions, **0** fact upgrades, **37 / 37** bypass attempts blocked |
 
-These are **bounded negative results**, not quality claims: small samples, single-repeat runs, and
-a logical retention projection rather than a physical-vault capacity test. Dream curate is scored
-on synthetic duplicate, conflict and stale cases with `python -m eval.dreams`
-([`eval/dreams/`](eval/dreams)). `memfw eval context SNAPSHOT` measures the context pack (coverage,
-waste, P50/P95 latency and token cost per slot, swept over slot and resident-prefix caps) on a
-private copy of a read-only vault snapshot; it reports counts, ratios and timings only and
-changes no default. Full evidence and limits: [`docs/evaluation.md`](docs/evaluation.md).
+These are **bounded negative results**, not quality claims: small samples, single-repeat runs,
+and a logical retention projection rather than a physical-vault capacity test.
+
+- **Dream curate** is scored on synthetic duplicate, conflict and stale cases with
+  `python -m eval.dreams` ([`eval/dreams/`](eval/dreams)).
+- **`memfw eval context SNAPSHOT`** measures the context pack on a private copy of a read-only
+  vault snapshot: coverage, waste, P50/P95 latency and token cost per slot, swept over slot and
+  resident-prefix caps. It reports only counts, ratios and timings, and changes no default.
+
+Full evidence and limits: [`docs/evaluation.md`](docs/evaluation.md).
 
 ## 📚 Docs map
 
@@ -881,26 +985,7 @@ tagging adapter), handoff packs, dream (verify, curate, distill, budget, skills,
 candidates), OKF v0.2 export and import, the Obsidian projection and the read-only HTTP service
 (`memfw-http/2`). Changes are listed in [`CHANGELOG.md`](CHANGELOG.md).
 
-**New in v0.5.0:** the LLM Wiki contracts in ports 0.4.0 (`Citation.ref`, the
-`memfw-wiki-page/1` and `memfw-wiki-job/1` formats, the `EntailmentChecker` port and their
-contract checks), `retrieval_health` on every `memory_search`, `memory_context` v=2 and
-`conversations_search` reply, the `memfw-pipeline` Stage runner (example stage only), the
-`memfw-wiki-gate` page checks and two adapters, `memfw-adapter-tailnet` (`Ingestor`) and
-`memfw-adapter-wikigen` (`Deriver`), all off by default; the Qdrant adapter's sync survives
-slow or failing embedders (0.1.3).
-
-**Added in v0.4.0:** the opt-in `current` context slot,
-two-stage conversation search with tag filters, attachments (embedded and referenced originals,
-detach, relink, purge, scan, text proxies in the `memfw.proxy` v1 format, attachments as
-observation evidence in the write gate, proxy search with the opt-in MCP tools
-`attachment_search` / `attachment_get`), the typed-edge projection and bounded path patterns
-behind the `ProjectionStore` port, the C4 context pack evaluation, `memfw-http/3` with
-`/context`, `/forget` requests and `forget residue`, event log forward compatibility, vault
-identity for out-of-vault projections (corroboration moved out of the vault), the lifecycle
-meta-index and `kh:` note resolver in recall, `runtime.recall.adapters`, the Qwen Code reader
-and eight new adapters beside the DeepSeek one (bm25s, Qdrant, QMD, PageIndex, OCR, LangExtract,
-LightRAG, GraphRAG), all off by default. Known limitations of v0.4.0 recall are listed in
-[`docs/ports-and-recall.md`](docs/ports-and-recall.md) §4.1c-bis.
+What each release added, what is on `main` and what comes next: [Iterations](#-iterations).
 
 **Upgrade boundary.** `vault.yaml` stays at `schema_version: 1`, and a file without the new
 keys keeps its bytes through parse → render. New frontmatter (`epistemic`, `causal`,
@@ -922,7 +1007,52 @@ authenticated by read/write tokens and refuses an unconfigured write path; sched
 [`docs/dream.md`](docs/dream.md#limitations) and
 [`docs/RELEASE-READINESS.md`](docs/RELEASE-READINESS.md).
 
+## 🔗 References and related projects
+
+These are the projects memfw builds on, plugs into or compares against. An adapter is a
+separate wheel that memfw never imports, off until an operator configures it; the version shown
+is the one its contract tests were recorded against.
+
+**Core dependencies**
+
+| Project | Role in memfw |
+|---|---|
+| [SQLite FTS5](https://www.sqlite.org/fts5.html) | the disposable full-text index and the conversation store |
+| [Model Context Protocol](https://modelcontextprotocol.io/) | the agent interface (`memfw-mcp`) |
+| [pydantic](https://github.com/pydantic/pydantic), [PyYAML](https://github.com/yaml/pyyaml), [Typer](https://github.com/fastapi/typer), [zstandard](https://github.com/indygreg/python-zstandard), [filelock](https://github.com/tox-dev/filelock) | models, frontmatter, the CLI, cold archives, cross-process locks |
+| [jieba](https://github.com/fxsjy/jieba) | Chinese word segmentation for search |
+| [sqlite-vec](https://github.com/asg017/sqlite-vec) | the optional vector index (the `notes` and `dev` extras) |
+
+**Adapters (separate wheels, off by default)**
+
+| Project | Adapter | Role |
+|---|---|---|
+| [bm25s](https://github.com/xhluca/bm25s) 0.3.16 | `memfw-adapter-bm25s` | in-process BM25 recall |
+| [Qdrant](https://github.com/qdrant/qdrant) v1.20.x | `memfw-adapter-qdrant` | semantic recall |
+| [QMD](https://github.com/tobi/qmd) 2.5.3 | `memfw-adapter-qmd` | recall over memory projections and notes |
+| [PageIndex](https://github.com/VectifyAI/PageIndex) | `memfw-adapter-pageindex` | tree search over long documents |
+| [LangExtract](https://github.com/google/langextract) 1.7.2 | `memfw-adapter-langextract` | grounded entity and relation extraction |
+| [LightRAG](https://github.com/HKUDS/LightRAG) 1.5.7 | `memfw-adapter-lightrag` | graph derivation through an operator-run server |
+| [GraphRAG](https://github.com/microsoft/graphrag) 3.3.0 | `memfw-adapter-graphrag` | an offline graph and report batch |
+| [Ollama](https://github.com/ollama/ollama) | LangExtract, wikigen | a loopback model backend |
+| [DeepSeek API](https://api-docs.deepseek.com/) | `memfw-adapter-deepseek` | conversation summaries and tags (cloud; needs an explicit opt-in) |
+| [Tailscale](https://tailscale.com/) | `memfw-adapter-tailnet` | host inventory from `tailscale status --json` |
+| an OCR engine (MCP stdio server, `pdftotext` or a module) | `memfw-adapter-ocr` | text proxies for PDF and image attachments |
+
+**Formats, data and baselines**
+
+| Project | Use |
+|---|---|
+| [Open Knowledge Format v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format) | the `memfw okf export` / `import` bundle format (format only, no OKF code) |
+| [OpenCC](https://github.com/BYVoid/OpenCC) | the Traditional-to-Simplified map in `src/memfw/ontology/t2s.py` (Apache-2.0, see `NOTICE`) |
+| [LoCoMo](https://github.com/snap-research/locomo) | the long-conversation benchmark used in the evaluation (not included in this repository) |
+| [Mem0](https://github.com/mem0ai/mem0) | a comparison baseline only (memfw uses no Mem0 code) |
+| [Obsidian](https://obsidian.md/) | the target of the read-only vault projection |
+| [llama.cpp server](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md), [bge-m3](https://huggingface.co/BAAI/bge-m3), Qwen3 embedding and reranker | local embedding and reranking endpoints considered in [`docs/retrieval-architecture.md`](docs/retrieval-architecture.md) |
+
 ## 🛠️ Development
+
+The gates every change passes are listed under [Testing](#-testing).
 
 `dev` installs the runtime, the test tools and `sqlite-vec` (there is no `test` extra):
 

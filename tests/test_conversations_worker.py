@@ -240,7 +240,7 @@ def test_time_budget(tmp_path: Path) -> None:
 def test_bad_model_output_is_dropped_after_retries(tmp_path: Path) -> None:
     backend = FakeBackend(reply="not json at all")
     first = _worker(tmp_path, backend).run()
-    assert first.errors == {"bad_output": 3}  # one attempt per chunk job per run
+    assert first.errors == {"not_json": 3}  # one attempt per chunk job per run
     assert _jobs(tmp_path)["chunk_summary:s-alpha"] == "pending"
     for _ in range(2):
         _worker(tmp_path, backend).run()
@@ -589,3 +589,204 @@ def test_old_state_file_gains_new_columns(tmp_path: Path) -> None:
         )
     os.chmod(path, 0o600)
     assert _worker(tmp_path).run().episodes_queued == 3
+
+
+def _line(marker: str, index: int) -> str:
+    return (f"{marker}-{index}-加retry" + ("x" * 40))[:40]
+
+
+def _session(session: str, marker: str, turns_n: int, hour: int) -> list[dict[str, Any]]:
+    rows = []
+    for index in range(turns_n):
+        role = "user" if index % 2 == 0 else "assistant"
+        rows.append(
+            turn(
+                "codex",
+                session,
+                index,
+                role,
+                _line(marker, index),
+                f"2026-01-05T{hour:02d}:{index:02d}:00Z",
+            )
+        )
+    return rows
+
+
+class _Tagged:
+    """Local conv-v2 backend. Token charges are the reply's, so a test budget is exact."""
+
+    name = "tagged"
+    local = True
+    prompt_version = "conv-v2"
+    tasks = ("chunk_summary", "session_summary")
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def run(self, task: str, data: dict[str, Any], *, max_tokens: int) -> ModelReply:
+        self.calls.append((task, json.dumps(data, ensure_ascii=False)))
+        body = {
+            "summary": "加了 retry。Tests pass.",
+            "tags": {
+                "project": ["uploader"],
+                "task_type": "dev",
+                "components": ["retry"],
+                "intent": "给 uploader 加重试",
+                "outcome": "done",
+            },
+        }
+        return ModelReply(json.dumps(body, ensure_ascii=False), 5000, 1)
+
+
+def _page_summaries(chunks_each: int, sessions: int, budget: int) -> int:
+    """How many session summaries the old page-of-50 loop finishes.
+
+    The page runs every runnable job before it asks again. A session summary
+    is not runnable until that session's chunks are done, so the first page is
+    chunks only. ``budget`` model calls therefore finish a summary only when
+    they cover every chunk of a session and a later page still has a call left.
+    """
+
+    pending = [(index, "chunk", chunk) for index in range(sessions) for chunk in range(chunks_each)]
+    pending += [(index, "summary", -1) for index in range(sessions)]
+    done = [0] * sessions
+    summarised = 0
+    calls = 0
+    while calls < budget and pending:
+        runnable = [
+            item
+            for item in pending
+            if item[1] == "chunk" or done[item[0]] == chunks_each
+        ]
+        if not runnable:
+            break
+        for item in runnable:
+            if calls >= budget:
+                return summarised
+            pending.remove(item)
+            calls += 1
+            if item[1] == "chunk":
+                done[item[0]] += 1
+            else:
+                summarised += 1
+    return summarised
+
+
+def test_finish_started_beats_the_page_of_chunks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(worker_module, "CHUNK_CHARS", 40)
+    rows = [
+        *_session("s-old", "sess-old", 2, 10),
+        *_session("s-mid", "sess-mid", 2, 11),
+        *_session("s-new", "sess-new", 2, 12),
+    ]
+    backend = _Tagged()
+    report = _worker(tmp_path, backend, rows=rows, max_tokens=12000, idle_minutes=0).run()
+    tasks = [task for task, _blob in backend.calls]
+    assert tasks == ["chunk_summary", "chunk_summary", "session_summary"]
+    assert all("sess-new" in blob for _task, blob in backend.calls)
+    assert all("sess-old" not in blob and "sess-mid" not in blob for _task, blob in backend.calls)
+    page = _page_summaries(2, 3, budget=3)
+    assert page == 0
+    assert report.sessions_summarised >= page
+    assert report.sessions_summarised == 1
+    assert report.stopped == "max_tokens"
+    assert _jobs(tmp_path)["session_summary:s-new"] == "done"
+    assert _jobs(tmp_path)["session_summary:s-old"] == "pending"
+
+
+def test_new_session_floor_starts_a_fresh_session_before_the_reserve_is_spent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(worker_module, "CHUNK_CHARS", 40)
+    backend = _Tagged()
+    first = _worker(
+        tmp_path,
+        backend,
+        rows=_session("s-old", "old-harbor", 4, 10),
+        max_tokens=1000,
+        idle_minutes=0,
+    ).run()
+    assert len(backend.calls) == 1 and "old-harbor" in backend.calls[0][1]
+    assert first.stopped == "max_tokens"
+
+    backend.calls.clear()
+    second = _worker(
+        tmp_path,
+        backend,
+        rows=[*_session("s-old", "old-harbor", 4, 10), *_session("s-new", "new-lumen", 2, 14)],
+        max_tokens=16000,
+        idle_minutes=0,
+    ).run()
+    assert len(backend.calls) == 4, (len(backend.calls), second.tokens, second.stopped)
+    assert all(
+        "old-harbor" in blob and "new-lumen" not in blob for _task, blob in backend.calls[:3]
+    )
+    assert "new-lumen" in backend.calls[3][1]
+    assert second.sessions_summarised == 0
+    assert second.stopped == "max_tokens"
+
+
+def test_nothing_new_waiting_may_spend_the_reserved_slice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(worker_module, "CHUNK_CHARS", 40)
+    rows = _session("s-only", "only-harbor", 4, 10)
+    backend = _Tagged()
+    _worker(tmp_path, backend, rows=rows, max_tokens=1000, idle_minutes=0).run()
+    backend.calls.clear()
+    report = _worker(tmp_path, backend, rows=rows, max_tokens=16000, idle_minutes=0).run()
+    assert report.sessions_summarised == 1
+    assert report.tokens > int(16000 * 0.75)
+    assert _jobs(tmp_path)["session_summary:s-only"] == "done"
+
+
+def test_status_expect_backend_gates_the_exit_code(tmp_path: Path) -> None:
+    vault = make_vault(tmp_path / "vault")
+    store = write_store(tmp_path / "data" / "conversations.sqlite", standard_rows())
+    state = tmp_path / "data" / "work.sqlite"
+    set_config(
+        vault,
+        {"conversation_worker": {"idle_minutes": 0, "state_path": str(state)}},
+    )
+    runner = CliRunner()
+    worker_args = [
+        "conversations",
+        "worker",
+        "--root",
+        str(vault),
+        "--store",
+        str(store),
+        "--state",
+        str(state),
+        "--no-ingest",
+    ]
+    assert runner.invoke(cli_app, worker_args).exit_code == 0
+    status_args = ["conversations", "status", "--root", str(vault), "--runs", "5"]
+    plain = runner.invoke(cli_app, status_args)
+    assert plain.exit_code == 0, plain.output
+    shown = json.loads(plain.output)
+    assert shown["recent_runs"]["n"] == 5
+    assert shown["summaries_24h"].get("conv-v1", 0) > 0
+    assert shown["bad_output_share"] == 0.0
+    assert "backend_not_in_use" not in plain.output
+
+    set_config(vault, {"conversations": {"expect_backend": "deepseek:deepseek-flash"}})
+    mismatch = runner.invoke(cli_app, status_args)
+    assert mismatch.exit_code == 1
+    assert json.loads(mismatch.output)["degraded"] == "backend_not_in_use"
+
+    set_config(vault, {"conversations": {"expect_backend": "extractive"}})
+    # The name matches, and the worker just wrote conv-v1 summaries.
+    matched = runner.invoke(cli_app, status_args)
+    assert matched.exit_code == 0, matched.output
+    assert "backend_not_in_use" not in matched.output
+
+
+def test_expect_backend_with_no_recent_summary_exits_nonzero(tmp_path: Path) -> None:
+    vault = make_vault(tmp_path / "vault")
+    set_config(vault, {"conversations": {"expect_backend": "extractive"}})
+    status = CliRunner().invoke(cli_app, ["conversations", "status", "--root", str(vault)])
+    assert status.exit_code == 1
+    assert json.loads(status.output)["degraded"] == "backend_not_in_use"
