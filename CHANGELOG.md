@@ -19,6 +19,21 @@ projections out of the vault; see the 0.4.0
 
 ### Fixed
 
+- Handoff fitting reserved every `omitted_fields` name while measuring, so a
+  pack that already fit after the model-field copies were dropped could lose
+  one more `recent_turns` entry. The real list is written after the cut, and
+  those turns are put back from newest to oldest while the rendered pack stays
+  within `max_bytes`. The copies are still removed before any turn.
+- Withheld conversation turns keep the row and set `withheld` true, but
+  `text` is an empty string. It is not a `[withheld: ...]` marker. Readers
+  must use the `withheld` flag and must not expect a marker string in `text`.
+- `memfw conversations get --around` takes a store offset (the number after
+  `@` in a turn ref, and `session_card.suggested_start`), not a turn index.
+  Offsets are not contiguous. The command finds that turn, then returns it
+  plus `--radius` turns on each side in session order. The reply names the
+  center turn's `center_offset` and its 0-based `center_index`. An offset
+  that is not in the session exits 2 instead of an empty window. `--start`
+  and `--end` stay turn indexes and are ignored when `--around` is set.
 - Redaction (`memfw.history.redact`): an IPv4 address inside a host name
   (`git.<ip>.sslip.io`) or at the end of a sentence is now masked; the dash
   and hex IP forms of `sslip.io` / `nip.io` / `xip.io` (any case), the tailnet
@@ -39,6 +54,10 @@ projections out of the vault; see the 0.4.0
 
 ### Added
 
+- Conversations `search`, `get` and `handoff` responses add `redaction_policy`
+  (a fixed short sentence) and `omitted_fields` (the names of fields this
+  response emptied or truncated, never the values). This is a contract
+  change, not a silent extra key.
 - `memfw conversations reredact`: re-redacts text already at rest in the
   conversation store under the current rules. Dry run by default (read-only,
   counts only: rows and columns that would change, new `[REDACTED:kind]`

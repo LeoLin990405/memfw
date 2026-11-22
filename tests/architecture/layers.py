@@ -28,6 +28,14 @@ because they sit in a different layer from their package:
   import (allowlisted until A5 makes the root lazy).
 * ``memfw.recall.builtin`` is the one recall module that may reach memfw
   internals; the rest of ``memfw.recall`` may import only ``memfw.ports``.
+* ``memfw.handoff.schema`` is the stdlib-only response contract
+  (``redaction_policy``, ``omitted_fields``, pack schema). ``conversations``
+  and the rest of ``handoff`` both import it, so it sits below L3.
+  Importing that module still runs ``memfw/handoff/__init__.py`` first, and
+  the package init imports ``memfw.handoff.pack`` (and therefore the rest of
+  L3 ``memfw.handoff``). The L2 rank is this file's own imports only. That
+  transitive load is accepted and recorded in ``TRANSITIVE_PACKAGE_INIT``;
+  the schema module was not moved out of the package.
 
 Relation to ``memfw-architecture`` section 2 (L0 ports, L1 index/projections,
 L2 core, L3 capabilities, L4 runtime, L5 interfaces): every projection is
@@ -39,6 +47,13 @@ layer name.
 from __future__ import annotations
 
 from typing import Final
+
+#: ``import child`` still executes the package ``__init__`` first.
+#: ``memfw.handoff.schema`` is L2 by its own imports, but loading it pulls
+#: L3 ``memfw.handoff`` (``__init__`` imports ``pack``). Accepted; not moved.
+TRANSITIVE_PACKAGE_INIT: Final[tuple[tuple[str, str], ...]] = (
+    ("memfw.handoff.schema", "memfw.handoff"),
+)
 
 #: Ordered bottom to top; the index is the rank.
 LAYERS: Final[tuple[str, ...]] = (
@@ -65,6 +80,10 @@ UNITS: Final[dict[str, str]] = {
     "memfw.core": "L2-kernel-model",
     # Byte/record budget accounting; no memfw imports.
     "memfw.budget": "L2-kernel-model",
+    # Pure response contract. Below L3 so conversations and handoff can both
+    # import it without a same-layer capability edge. See TRANSITIVE_PACKAGE_INIT:
+    # a cold import still loads memfw.handoff (L3) via the package __init__.
+    "memfw.handoff.schema": "L2-kernel-model",
     # Pure budget selectors over the budget model.
     "memfw.policies": "L2-kernel-model",
     # --- L2 kernel parts: pieces the vault facade is assembled from.

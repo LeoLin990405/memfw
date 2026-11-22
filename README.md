@@ -338,6 +338,7 @@ store, filtered by the visibility rules in `vault.yaml`. Sharing is **off** unti
 memfw conversations list --limit 20
 memfw conversations search "migration rollback" --app codex
 memfw conversations get SESSION_ID --start 0 --max-bytes 16384
+memfw conversations get SESSION_ID --around OFFSET --radius 2
 memfw conversations handoff SESSION_ID --for kimi
 ```
 
@@ -354,6 +355,14 @@ conversation_optout:
 Every output is redacted again on the way out, size-capped and labelled as data, not
 instructions. A hidden session answers exactly like a missing one. This is a visibility setting
 between cooperating local apps, not authentication.
+
+`conversations get --around OFFSET` centers on a **store offset** (the number after `@` in a
+turn ref, and `session_card.suggested_start`), not on a turn index. Offsets are not contiguous.
+It finds that turn, then returns it plus `--radius` turns on each side in session order (default
+2, both ends included). The reply names that center turn as `center_offset` and its 0-based
+`center_index` (the same value as that turn's `index`). An offset that is not in the session
+exits 2; it does not return an empty window. `--start` and `--end` stay turn indexes and are
+ignored when `--around` is set. MCP `conversations_get` still pages by turn index only.
 
 **Two-stage search and tag filters.** `conversations search` (and MCP `conversations_search`)
 filters on the worker's `conv-v2` tags with `--task-type`, `--outcome`, `--project`,

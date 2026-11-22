@@ -119,7 +119,7 @@ existing vault) and writes nothing.
 |---|---|---|---|---|
 | List sessions | `conversations list` | `conversations_list` | — | none |
 | Search turns | `conversations search` | `conversations_search` | — | none |
-| Read a range | `conversations get` | `conversations_get` | — | none |
+| Read a range | `conversations get` (`--around` is a store offset) | `conversations_get` (turn indexes only; no `--around`) | — | `--around` is CLI-only |
 | Continuation pack | `conversations handoff`, `handoff` | `conversations_handoff` | — | none |
 | Worker run / status / schedule | `conversations worker`, `conversations status`, `conversations schedule` | — | — | by design (ops) |
 | Re-redact the stored text | `conversations reredact` | — | — | by design (ops, writes the store) |

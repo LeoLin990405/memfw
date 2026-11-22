@@ -12,12 +12,13 @@ The layer map is [`tests/architecture/layers.py`](../tests/architecture/layers.p
 `memfw` subpackage and top-level module is a key there (a *unit*). A few modules get their
 own key because they sit in another layer than their package: `memfw.core.repository` (the
 vault facade, assembled from `storage`, `log`, `knowledge` and `attachments` mixins), `memfw.core.policies`,
-`memfw.recall.builtin`, every `cli.py` and `notes/mcp.py`.
+`memfw.recall.builtin`, `memfw.handoff.schema` (stdlib-only response contract, below the L3
+capabilities that import it), every `cli.py` and `notes/mcp.py`.
 
 | Rank | Layer | Units (summary) |
 |---|---|---|
 | 0 | `L0-ports` | `memfw.ports`; the `memfw` root `__init__` (it runs before every submodule) |
-| 1 | `L2-kernel-model` | `memfw.core` (models, errors, epistemic, context), `budget`, `policies` |
+| 1 | `L2-kernel-model` | `memfw.core` (models, errors, epistemic, context), `budget`, `policies`, `handoff.schema` |
 | 2 | `L2-kernel-parts` | `storage`, `log`, `knowledge`, `attachments`, `permissions`, `core.policies`, `agents`, `layers`, `ontology`, `tiers` |
 | 3 | `L2-vault` | `memfw.core.repository` |
 | 4 | `L1-projection` | `index`, `stats`, `entities`, `related`, `related_annotation`, `projection`, `projections`, `notes`, `history` |

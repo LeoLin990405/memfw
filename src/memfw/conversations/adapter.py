@@ -43,7 +43,6 @@ from memfw.history.store_location import (
 )
 
 from .store import (
-    WITHHELD,
     ConversationError,
     SessionInfo,
     Turn,
@@ -267,7 +266,7 @@ class SqliteStoreSource:
                 turn=int(row["turn"]),
                 role=str(row["role"] or ""),
                 ts=ts_display(ts_key(str(row["ts"] or ""))),
-                text=WITHHELD,
+                text="",
                 withheld=True,
             )
         try:

@@ -155,6 +155,15 @@ def test_every_unit_exists_and_has_a_known_layer() -> None:
     assert not unknown, unknown
 
 
+def test_handoff_schema_package_init_is_a_recorded_transitive_load() -> None:
+    """L2 schema still loads L3 handoff via the package init. Recorded, not moved."""
+
+    assert ("memfw.handoff.schema", "memfw.handoff") in layers.TRANSITIVE_PACKAGE_INIT
+    assert layers.UNITS["memfw.handoff.schema"] == "L2-kernel-model"
+    init = (Path("src/memfw/handoff/__init__.py")).read_text(encoding="utf-8")
+    assert "from .pack import" in init
+
+
 def test_cli_modules_are_interface_layer() -> None:
     """Every Typer sub-app module sits in L5, so a new one cannot hide in L3."""
 

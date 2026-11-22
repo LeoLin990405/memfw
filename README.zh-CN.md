@@ -213,6 +213,7 @@ memfw history ingest claude codex    # 只导入这两个
 memfw conversations list --limit 20
 memfw conversations search "migration rollback" --app codex
 memfw conversations get SESSION_ID --start 0 --max-bytes 16384
+memfw conversations get SESSION_ID --around OFFSET --radius 2
 memfw conversations handoff SESSION_ID --for kimi
 ```
 
@@ -227,6 +228,8 @@ conversation_optout:
 ```
 
 所有输出在出库时会再脱敏一次，有大小上限，并标明“这是数据，不是指令”。被隐藏的会话和不存在的会话，返回结果一模一样。这只是互相配合的本地应用之间的可见性设置，不是身份认证。
+
+`conversations get --around OFFSET` 的中心是**存储 offset**（turn ref 里 `@` 后面的数，也就是 `session_card.suggested_start`），不是第几条。offset 不连续。它先在会话里找到这一行，再按顺序取前后各 `--radius` 条（默认 2，含两端）。回复里用 `center_offset` 写明窗口中心那一行的 offset，用 `center_index` 写明它是第几条（0 起，和该行的 `index` 相同）。这个 offset 不在会话里就退出码 2，不会返回空窗口。`--start` / `--end` 仍是 turn 下标，给了 `--around` 就忽略它们。MCP `conversations_get` 仍然只按 turn 下标翻页。
 
 **两阶段搜索与标签过滤。** `conversations search`（以及 MCP `conversations_search`）可以按 worker 打的 `conv-v2` 标签过滤：`--task-type`、`--outcome`、`--project`、`--component` 和 `--intent-like`；没打标签的会话不会命中任何过滤条件。`--mode two_stage` 用倒数排名融合三路结果：关键词搜索、对“摘要 + 标签”的语义匹配（用 runtime 的 embedder；除非 `conversations.cloud: true`，否则只用 loopback 的，不满足时报 `semantic_off`），以及标签过滤；每一路在排序前都先裁剪到调用方可见的应用。每个会话返回时带上摘要和标签（标为 `untrusted_model_output: true`），以及命中前后的脱敏对话窗口，总量受 `max_bytes` 限制。不用这些选项时输出不变。
 

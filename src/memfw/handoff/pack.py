@@ -9,9 +9,13 @@ model part (:mod:`.summarize`) is built only when a spec is given.
 
 Every text is redacted again on the way out (a value that still looks like a
 secret is withheld). The pack is cut to ``max_bytes`` of its rendered form,
-dropping the oldest recent turns first, then files touched (and git state),
-then the model part, then the goal's tail, the lineage and the source cwd
-and project; a pack that still does not fit is refused (``pack_too_large``).
+first dropping the system fields that only repeat ``model_summarized`` (that
+part still holds them), then the oldest recent turns, then files touched
+(and git state), then the model part, then the goal's tail, the lineage and
+the source cwd and project; a pack that still does not fit is refused
+(``pack_too_large``). The cut reserves every ``omitted_fields`` name. The
+real list is written afterwards, and recent turns removed in this pass are
+put back, newest first, while the rendered pack still fits.
 
 The goal is the first user message that is the person's own words: turns
 holding only harness-injected text (a ``<system-reminder>`` block) are skipped
@@ -43,10 +47,13 @@ from .schema import (
     MIN_BYTES,
     MODEL_KEYS,
     NOTICE,
+    OMITTED_FIELD_NAMES,
     REASONS,
+    REDACTION_POLICY,
     SCHEMA,
     SYSTEM_LABEL,
     TURN_BYTES,
+    listed_omissions,
     validate_pack,
 )
 from .source import StoredSession, load_session
@@ -93,19 +100,29 @@ def _goal(session: StoredSession, task_text: str | None) -> tuple[str, str]:
     return "", "none"
 
 
-def _calls(calls: list[dict[str, str]]) -> list[dict[str, str]]:
+def _calls(calls: list[dict[str, str]]) -> tuple[list[dict[str, str]], bool]:
+    """``(calls, blanked)``. A secret-shaped name is dropped; a secret summary is emptied."""
+
     out = []
+    blanked = False
     for call in calls[:MAX_CALLS_PER_TURN]:
         name, name_withheld = safe_text(call.get("name", ""), 64)
         summary, summary_withheld = safe_text(call.get("summary", ""), CALL_SUMMARY_CHARS)
         if name_withheld:
+            blanked = True
             continue
-        out.append({"name": name, "summary": "" if summary_withheld else summary})
-    return out
+        if summary_withheld:
+            blanked = True
+            summary = ""
+        out.append({"name": name, "summary": summary})
+    return out, blanked
 
 
-def _recent(session: StoredSession, count: int) -> list[dict[str, Any]]:
-    """The last ``count`` user/assistant turns; tool turns in that window keep only calls."""
+def _recent(session: StoredSession, count: int, omitted: set[str]) -> list[dict[str, Any]]:
+    """The last ``count`` user/assistant turns; tool turns in that window keep only calls.
+
+    A withheld turn is kept with ``text`` empty (the marker is not returned).
+    """
 
     talk = [index for index, turn in enumerate(session.tail) if turn.role in TALK_ROLES]
     if not talk:
@@ -114,12 +131,26 @@ def _recent(session: StoredSession, count: int) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for turn in session.tail[start:]:
         if turn.role in TALK_ROLES:
-            text, withheld = _safe(turn.text, TURN_BYTES) if turn.text else ("", False)
-            withheld = withheld or turn.withheld
-            calls = [] if withheld else _calls(turn.tool_calls)
-            text = WITHHELD if turn.withheld else text
+            cleaned, secret = safe_text(turn.text) if turn.text else ("", False)
+            withheld = secret or turn.withheld
+            if withheld:
+                text = ""
+                calls: list[dict[str, str]] = []
+                omitted.add("text")
+                if turn.tool_calls:
+                    omitted.add("tool_calls")
+            else:
+                text = trim_bytes(cleaned, TURN_BYTES)
+                if text != cleaned:
+                    omitted.add("text")
+                calls, blanked = _calls(turn.tool_calls)
+                if blanked:
+                    omitted.add("tool_calls")
         elif turn.tool_calls and not turn.withheld:
-            text, withheld, calls = "", False, _calls(turn.tool_calls)
+            calls, blanked = _calls(turn.tool_calls)
+            if blanked:
+                omitted.add("tool_calls")
+            text, withheld = "", False
         else:
             continue  # tool output and other roles: no text in the pack
         out.append(
@@ -133,6 +164,21 @@ def _recent(session: StoredSession, count: int) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def _mirror_derived(pack: dict[str, Any]) -> None:
+    """``files`` and ``evidence_refs`` stay equal to what the pack still holds.
+
+    Refs are ``agent:session@offset`` for turns still in ``recent_turns``. No turn text.
+    """
+
+    system = pack["system"]
+    source = pack["source"]
+    system["files"] = list(system["files_touched"])
+    system["evidence_refs"] = [
+        f"{source['agent']}:{source['session_id']}@{turn['offset']}"
+        for turn in system["recent_turns"]
+    ]
 
 
 def _source(session: StoredSession) -> dict[str, Any]:
@@ -205,7 +251,8 @@ def build_pack(
             snapshot = gitinfo.git_snapshot(work_tree)
         if snapshot is None:
             notes.append(NOTE_GIT_UNAVAILABLE)
-    recent_turns = _recent(session, int(recent))
+    omitted: set[str] = set()
+    recent_turns = _recent(session, int(recent), omitted)
     pack: dict[str, Any] = {
         "schema": SCHEMA,
         "notice": NOTICE,
@@ -216,6 +263,12 @@ def build_pack(
             "goal": goal,
             "goal_source": goal_source,
             "files_touched": tools_map.files_from_calls(name, session.calls, limit=MAX_FILES),
+            "decisions": [],
+            "open_questions": [],
+            "constraints": [],
+            "files": [],
+            "next_step": "",
+            "evidence_refs": [],
             "git": snapshot,
             "recent_turns": recent_turns,
             "lineage": {
@@ -228,7 +281,12 @@ def build_pack(
         "truncated_parts": [],
         "max_bytes": cap,
         "saved_as": saved_as,
+        "redaction_policy": REDACTION_POLICY,
+        # Widest list while cutting. fit() then writes the real list and puts
+        # back any recent turn that only this reserve pushed out.
+        "omitted_fields": list(OMITTED_FIELD_NAMES),
     }
+    _mirror_derived(pack)
     if notes:
         pack["system"]["notes"] = notes  # optional field: present only when non-empty
     if summarize_spec is not None:
@@ -244,21 +302,109 @@ def build_pack(
             allow_cloud=allow_cloud,
             loader=loader,
         )
-    fit(pack, cap, measure or json_size)
+        model = pack["model_summarized"]
+        if model.get("status") == "ok":
+            # Copies of lists already on the pack. Cleared again if fit drops the model part.
+            pack["system"]["decisions"] = list(model.get("decisions") or [])
+            pack["system"]["open_questions"] = list(model.get("open_questions") or [])
+            nxt = [item for item in (model.get("next") or []) if item]
+            pack["system"]["next_step"] = nxt[0] if nxt else ""
+    fit(pack, cap, measure or json_size, omitted)
+    pack["omitted_fields"] = listed_omissions(omitted)
     validate_pack(pack)
     return pack
 
 
-def fit(pack: dict[str, Any], cap: int, measure: Callable[[dict[str, Any]], int]) -> None:
+def _put_back_recent_turns(
+    pack: dict[str, Any],
+    cap: int,
+    measure: Callable[[dict[str, Any]], int],
+    system: dict[str, Any],
+    parts: list[str],
+    dropped: set[str],
+    evicted: list[dict[str, Any]],
+) -> None:
+    """Write the real omitted list, then restore newest evicted turns that fit.
+
+    ``evicted`` is oldest-first, the order :func:`fit` popped them. Model-copy
+    removal and every later cut stay. A fully restored turn list is no longer
+    recorded as omitted.
+    """
+
+    def publish() -> None:
+        pack["omitted_fields"] = listed_omissions(dropped)
+        pack["truncated"] = bool(parts)
+
+    publish()
+    while evicted:
+        system["recent_turns"].insert(0, evicted[-1])
+        _mirror_derived(pack)
+        undone = False
+        index = 0
+        if len(evicted) == 1 and "recent_turns" in parts:
+            index = parts.index("recent_turns")
+            del parts[index]
+            dropped.discard("recent_turns")
+            undone = True
+        publish()
+        if measure(pack) > cap:
+            system["recent_turns"].pop(0)
+            _mirror_derived(pack)
+            if undone:
+                parts.insert(index, "recent_turns")
+                dropped.add("recent_turns")
+            publish()
+            break
+        evicted.pop()
+
+
+def _drop_model_copies(pack: dict[str, Any]) -> None:
+    """Clear system fields that only repeat an ok model part. The model part stays.
+
+    No truncated mark: the values are still on ``model_summarized``. A mismatch
+    is left alone (those fields are not a copy).
+    """
+
+    model = pack.get("model_summarized")
+    system = pack.get("system")
+    if not isinstance(model, dict) or model.get("status") != "ok" or not isinstance(system, dict):
+        return
+    decisions = list(model.get("decisions") or [])
+    questions = list(model.get("open_questions") or [])
+    nxt = [item for item in (model.get("next") or []) if item]
+    next_step = nxt[0] if nxt else ""
+    if (
+        system.get("decisions") != decisions
+        or system.get("open_questions") != questions
+        or system.get("next_step") != next_step
+    ):
+        return
+    system["decisions"] = []
+    system["open_questions"] = []
+    system["next_step"] = ""
+
+
+def fit(
+    pack: dict[str, Any],
+    cap: int,
+    measure: Callable[[dict[str, Any]], int],
+    omitted: set[str] | None = None,
+) -> None:
     """Cut ``pack`` in place until ``measure(pack) <= cap``, recording what was cut.
 
-    Order: oldest recent turns, files touched, git state, model part, goal,
-    lineage, then the source cwd and project. :class:`HandoffError`
-    (``pack_too_large``) when even that is not enough.
+    Order: system fields that only repeat an ok ``model_summarized`` (removed
+    without a truncated mark; the model part still has them), oldest recent
+    turns, files touched, git state, model part, goal, lineage, then the
+    source cwd and project. The loop measures the widest ``omitted_fields``.
+    After it stops, the real list is written and evicted recent turns are
+    put back from newest to oldest until one more would exceed ``cap``.
+    :class:`HandoffError` (``pack_too_large``) when even that is not enough.
+    ``files`` and ``evidence_refs`` stay mirrored to whatever remains.
     """
 
     system = pack["system"]
     parts: list[str] = pack["truncated_parts"]
+    dropped: set[str] = set() if omitted is None else omitted
 
     def over() -> bool:
         pack["truncated"] = True  # measured with the flag set, so clearing it never grows
@@ -270,19 +416,39 @@ def fit(pack: dict[str, Any], cap: int, measure: Callable[[dict[str, Any]], int]
         if part not in parts:
             parts.append(part)
         pack["truncated"] = True
+        dropped.add(part)
 
+    if over():
+        # These three are copies of the model part. Dropping turns first would
+        # lose recent_turns while the duplicate was still on the pack.
+        _drop_model_copies(pack)
+
+    evicted: list[dict[str, Any]] = []
     while over() and system["recent_turns"]:
-        system["recent_turns"].pop(0)
+        evicted.append(system["recent_turns"].pop(0))
+        _mirror_derived(pack)
         mark("recent_turns")
     while over() and system["files_touched"]:
         system["files_touched"].pop()
+        _mirror_derived(pack)
         mark("files_touched")
+        dropped.add("files")
     if over() and system.get("git"):
         system["git"] = None
         mark("git")
     if over() and "model_summarized" in pack:
         del pack["model_summarized"]
         mark("model_summarized")
+        # Those lists were copies of the model part; dropping it drops the copies too.
+        if system.get("decisions"):
+            system["decisions"] = []
+            dropped.add("decisions")
+        if system.get("open_questions"):
+            system["open_questions"] = []
+            dropped.add("open_questions")
+        if system.get("next_step"):
+            system["next_step"] = ""
+            dropped.add("next_step")
 
     def shorten(holder: dict[str, Any], key: str, part: str) -> None:
         while over() and holder[key]:
@@ -297,7 +463,8 @@ def fit(pack: dict[str, Any], cap: int, measure: Callable[[dict[str, Any]], int]
         mark("lineage")
     shorten(pack["source"], "cwd", "cwd")
     shorten(pack["source"], "project", "project")
-    if over():
+    _put_back_recent_turns(pack, cap, measure, system, parts, dropped, evicted)
+    if measure(pack) > cap:
         # Only fixed fields are left (ids, labels, file name): the cap is too small.
         raise HandoffError(EXIT_USAGE, "pack_too_large", f"the pack does not fit in {cap} bytes")
 
