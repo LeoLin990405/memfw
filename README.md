@@ -941,6 +941,26 @@ and a logical retention projection rather than a physical-vault capacity test.
 
 Full evidence and limits: [`docs/evaluation.md`](docs/evaluation.md).
 
+### 🧪 Test and acceptance data (2026-11-22)
+
+Every number below is an aggregate. Private evaluation questions and per-question results are never published.
+
+**On `main`** (v0.5.1 changes, PRs #121 and #122): CI on Python 3.11, `checks` and `standalone-wheels` both green. Full suite: 6,831 passed, 46 skipped (GitHub Actions, Python 3.11, on the merge of PR #122).
+
+**In progress for v0.6.0–v0.8.0 (on branches, not on `main` yet).** Each milestone gets an independent black-box acceptance suite, written from its contract by a tester who does not read the implementation, frozen by SHA-256, run first on the pre-feature baseline (where it must fail) and then unchanged on the final commit.
+
+| Area | Contracts | Independent acceptance | Status |
+|---|---|---|---|
+| Bounded recall kernel, note chunking, fusion weights, rerank pipeline | 4 | 66 / 66 after fixes (initially 58 / 66; the 8 gaps were fixed in code, not in the tests) | code complete; gate pending |
+| Conversations v3, links, retrieval experience, worker scan, backfill tool | 5 | 40 / 44 (4 link-parsing gaps, one of them a safety boundary, being fixed) | code complete; fixes in progress |
+| Memory writing: write gate, meta rules, Typeless source, Obsidian IDE gate | 4 | 86 / 87 (one missing `rules` field on a hard rejection; the rejection itself works) | code complete; fix in progress |
+| Optional components (QMD `query`, SQLite `simple`, ranx, datasketch) | — | 15 / 16 with the real `simple` 0.7.1 library loaded (pure Chinese, mixed, pinyin); real datasketch not installed (1 skipped, not counted as a pass) | adapters verified; QMD not yet connected to a live server |
+| Fallback switch (`MEMFW_FORCE_FALLBACK`) | 1 | acceptance in progress | code complete |
+
+Developer full suites on those branches run on Python 3.14: 7,004 passed, 23 skipped on the recall branch. The recall kernel on a 28-question synthetic bank: strict recall 0.84 vs. 0.52 for the baseline (Holm-adjusted p = 0.016). This is synthetic and small; the private bank run comes after integration.
+
+**Gate.** The local pre-push gate (6 jobs on a self-hosted CI) is the merge requirement. It is currently red for an infrastructure reason (two jobs sharing one runner's tool cache after a concurrency change), not for any of the branches above; nothing merges until it is green.
+
 ## 📚 Docs map
 
 | Document | Covers |
