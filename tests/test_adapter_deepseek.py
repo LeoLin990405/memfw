@@ -31,11 +31,16 @@ from memfw.conversations.backends import (
     configured_backend,
     load_backend,
     parse_reply,
+    reply_issue,
 )
 from memfw.conversations.worker import Budgets, ConversationWorker, WorkState
 from memfw.dream.claims import DreamClaimStager, DreamClaimVerifier
 from memfw.ports.models import (
+    TAG_INTENT_CHARS,
+    TAG_ITEM_CHARS,
+    TAG_MAX_ITEMS,
     TAG_PROMPT_VERSION,
+    TAG_SUMMARY_CHARS,
     BackendBudgetExhausted,
     BackendUnavailable,
     ModelReply,
@@ -153,6 +158,7 @@ def _worker(
     now: datetime = NOW,
     backfill_days: float | None = None,
     replan_limit: int | None = None,
+    project_vocab: dict[str, tuple[str, ...]] | None = None,
     **budgets: Any,
 ) -> ConversationWorker:
     store = tmp_path / "data" / "conversations.sqlite"
@@ -170,6 +176,7 @@ def _worker(
         now=lambda: now,
         backfill_days=backfill_days,
         replan_limit=replan_limit,
+        project_vocab=project_vocab,
     )
 
 
@@ -212,7 +219,7 @@ def test_request_shape_is_exactly_what_is_documented(fake: FakeDeepSeek) -> None
     system, user = render_tag_prompt("chunk_summary", data)
     assert request["path"] == "/chat/completions"
     assert request["body"] == {
-        "model": "deepseek-chat",
+        "model": "deepseek-flash",
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
         "response_format": {"type": "json_object"},
         "max_tokens": 512,
@@ -383,8 +390,24 @@ def test_parse_conv_v2_normalises_and_redacts() -> None:
         "intent": "fix the worker",
         "outcome": "success",
     }
-    chunk = parse_reply("chunk_summary", _v2(), prompt_version=TAG_PROMPT_VERSION)
-    assert chunk == {
+    # An empty tags object omits every key. Rev 32 fills the defaults and keeps
+    # the summary. Rev 31 rejected it (missing_tag_key).
+    assert parse_reply("chunk_summary", _v2(), prompt_version=TAG_PROMPT_VERSION) == {
+        "summary": "Fixed it.",
+        "tags": {
+            "project": [],
+            "task_type": "other",
+            "components": [],
+            "intent": "",
+            "outcome": "unknown",
+        },
+    }
+    filled = parse_reply(
+        "chunk_summary",
+        _v2(project=[], task_type="other", components=[], intent="", outcome="unknown"),
+        prompt_version=TAG_PROMPT_VERSION,
+    )
+    assert filled == {
         "summary": "Fixed it.",
         "tags": {
             "project": [],
@@ -395,7 +418,16 @@ def test_parse_conv_v2_normalises_and_redacts() -> None:
         },
     }
     redacted = parse_reply(
-        "chunk_summary", _v2(f"Mailed {EMAIL}.", components=[EMAIL]), prompt_version="conv-v2"
+        "chunk_summary",
+        _v2(
+            f"Mailed {EMAIL}.",
+            project=["uploader"],
+            task_type="dev",
+            components=[EMAIL],
+            intent="mail the result",
+            outcome="done",
+        ),
+        prompt_version="conv-v2",
     )
     assert redacted is not None and EMAIL not in json.dumps(redacted)
 
@@ -446,7 +478,16 @@ def test_secrets_are_caught_before_tags_are_lowercased(secret: str, where: str) 
 def test_home_paths_are_redacted_before_lowercasing() -> None:
     path = "/Users/" + "someone/proj/x.py"
     parsed = parse_reply(
-        "session_summary", _v2(f"Edited {path}.", intent=f"edit {path}"), prompt_version="conv-v2"
+        "session_summary",
+        _v2(
+            f"Edited {path}.",
+            project=["uploader"],
+            task_type="dev",
+            components=["worker"],
+            intent=f"edit {path}",
+            outcome="done",
+        ),
+        prompt_version="conv-v2",
     )
     assert parsed is not None and "someone" not in json.dumps(parsed)
 
@@ -472,33 +513,66 @@ def test_home_paths_are_redacted_before_lowercasing() -> None:
         "go to https://e.example now",
     ],
 )
-def test_urls_and_paths_are_dropped_as_tag_names_but_the_reply_is_kept(item: str) -> None:
+def test_urls_and_paths_are_dropped_and_the_reply_is_kept(item: str) -> None:
+    base = {
+        "project": ["uploader"],
+        "task_type": "dev",
+        "components": ["retry"],
+        "intent": "fix it",
+        "outcome": "done",
+    }
     for key in ("project", "components"):
-        reply = _v2("Fixed it.", **{key: ["memfw", item, "Retry"]})
-        parsed = parse_reply("chunk_summary", reply, prompt_version="conv-v2")
+        tags = dict(base)
+        tags[key] = ["uploader", item, "retry"]
+        parsed = parse_reply("chunk_summary", _v2("Fixed it.", **tags), prompt_version="conv-v2")
         assert parsed is not None, (key, item)
-        assert parsed["summary"] == "Fixed it." and parsed["tags"][key] == ["memfw", "retry"]
-    names = ["memfw", "next.js", "c++", "retry worker"]
-    ok = parse_reply("chunk_summary", _v2(components=names), prompt_version="conv-v2")
+        assert parsed["summary"] == "Fixed it."
+        assert item.lower() not in json.dumps(parsed["tags"])
+        assert parsed["tags"][key] == ["uploader", "retry"]
+    names = ["uploader", "next.js", "c++", "retry worker"]
+    ok = parse_reply(
+        "chunk_summary",
+        _v2(
+            "Fixed it.",
+            project=["uploader"],
+            task_type="dev",
+            components=names,
+            intent="fix it",
+            outcome="done",
+        ),
+        prompt_version="conv-v2",
+    )
     assert ok is not None and ok["tags"]["components"] == names
 
 
-def test_a_path_like_name_never_costs_a_retry(tmp_path: Path, fake: FakeDeepSeek) -> None:
+def test_a_path_like_name_is_dropped_and_counted(tmp_path: Path, fake: FakeDeepSeek) -> None:
     fake.default = tag_reply(
-        tags={"project": ["src/memfw", "some-user/memfw"], "components": ["Worker"]}
+        tags={
+            "project": ["src/memfw", "some-user/memfw"],
+            "task_type": "dev",
+            "components": ["Worker"],
+            "intent": "rename a module",
+            "outcome": "done",
+        }
     )
     report = _worker(tmp_path, _backend(fake)).run()
-    assert report.errors == {} and report.jobs["session_summary:done"] == 3
-    assert len(fake.requests) == 6  # each job paid once
-    (row,) = _rows_of(
-        tmp_path, "SELECT tags FROM summaries WHERE app = 'codex' AND chunk_start = -1"
-    )
-    assert json.loads(row["tags"])["project"] == [] and "src/memfw" not in row["tags"]
+    assert report.errors == {}
+    assert report.tag_item_dropped == 12  # two path items on each of six kept calls
+    assert report.as_dict()["tag_item_dropped"] == 12
+    rows = _rows_of(tmp_path, "SELECT tags FROM summaries")
+    assert rows
+    stored = json.dumps(rows)
+    assert "src/memfw" not in stored and "some-user" not in stored
+    assert all(json.loads(row["tags"])["project"] == [] for row in rows)
+    assert all(json.loads(row["tags"])["components"] == ["worker"] for row in rows)
 
 
 def test_a_secret_in_a_tag_still_drops_the_whole_reply() -> None:
     reply = _v2(project=["memfw", f"key {AWS}"], components=["/Users/" + "someone/x"])
     assert parse_reply("session_summary", reply, prompt_version="conv-v2") is None
+    code = reply_issue("session_summary", reply, prompt_version="conv-v2")
+    assert code == "secret"
+    assert AWS not in code and SECRET not in code
 
 
 def test_conv_v1_parsing_is_unchanged() -> None:
@@ -516,7 +590,7 @@ def test_worker_sends_only_redacted_text_of_processable_apps(
     tmp_path: Path, fake: FakeDeepSeek
 ) -> None:
     report = _worker(tmp_path, _backend(fake)).run()
-    assert report.status == "ok" and report.backend == "deepseek:deepseek-chat"
+    assert report.status == "ok" and report.backend == "deepseek:deepseek-flash"
     bodies = fake.bodies()
     assert bodies and "uploader" in bodies.lower()
     for raw in (EMAIL, SECRET, "correct-horse", HIDDEN, OPTED, TEST_KEY):
@@ -554,7 +628,7 @@ def test_worker_writes_conv_v2_tags_and_episodes(tmp_path: Path, fake: FakeDeepS
     )
     assert [row["prompt_version"] for row in rows] == ["conv-v2", "conv-v2"]
     assert rows[0]["chunk_start"] == -1 and rows[0]["intent"] == "add a retry wrapper"
-    assert rows[0]["outcome"] == "success" and rows[0]["model"] == "deepseek:deepseek-chat"
+    assert rows[0]["outcome"] == "success" and rows[0]["model"] == "deepseek:deepseek-flash"
     assert json.loads(rows[0]["tags"]) == {
         "components": ["retry"],
         "intent": "add a retry wrapper",
@@ -573,7 +647,7 @@ def test_invalid_output_is_not_written_and_retried_next_run(
 ) -> None:
     fake.default = tag_reply(content="{not json")
     report = _worker(tmp_path, _backend(fake)).run()
-    assert report.errors == {"bad_output": 3}
+    assert report.errors == {"not_json": 3}
     assert _rows_of(tmp_path, "SELECT * FROM summaries") == []
     pending = _rows_of(tmp_path, "SELECT * FROM jobs WHERE kind = 'chunk_summary'")
     assert {row["status"] for row in pending} == {"pending"}
@@ -585,7 +659,12 @@ def test_invalid_output_is_not_written_and_retried_next_run(
 def test_a_secret_in_model_output_drops_the_reply(tmp_path: Path, fake: FakeDeepSeek) -> None:
     fake.default = tag_reply(f"Saved {SECRET}.")
     report = _worker(tmp_path, _backend(fake)).run()
-    assert report.errors == {"bad_output": 3}
+    assert report.errors == {"secret": 3}
+    assert report.tag_key_defaulted == {}
+    assert report.tag_item_dropped == 0
+    jobs = _rows_of(tmp_path, "SELECT error FROM jobs")
+    blob = json.dumps({"errors": report.errors, "jobs": jobs})
+    assert SECRET not in blob
     assert _rows_of(tmp_path, "SELECT * FROM summaries") == []
 
 
@@ -598,8 +677,15 @@ def test_backend_budget_stops_the_run_and_is_recorded(tmp_path: Path, fake: Fake
     assert json.loads(recorded[0]["report"])["stopped"] == "backend_budget"
     waiting = _rows_of(tmp_path, "SELECT attempts FROM jobs WHERE status = 'pending'")
     assert waiting and all(row["attempts"] == 0 for row in waiting)  # no attempt spent
-    report = _worker(tmp_path, _backend(fake)).run()  # next run, fresh budget, finishes
-    assert report.stopped == "" and report.jobs["session_summary:done"] == 3
+    # The stopped run already stored the newest session's summary (finish-started).
+    # This run must drain the other two. The old page loop stored none on the
+    # stopped run, so its counter here was 3.
+    report = _worker(tmp_path, _backend(fake)).run()
+    assert report.stopped == "" and report.jobs["session_summary:done"] == 2
+    done = _rows_of(
+        tmp_path, "SELECT status FROM jobs WHERE kind = 'session_summary'"
+    )
+    assert len(done) == 3 and {row["status"] for row in done} == {"done"}
 
 
 def test_rejected_key_degrades_the_run(tmp_path: Path, fake: FakeDeepSeek) -> None:
@@ -945,6 +1031,7 @@ def test_gate_needs_config_cloud_and_key(monkeypatch: pytest.MonkeyPatch, fake: 
     assert isinstance(ready, DeepSeekBackend) and ready.settings.base_url == fake.url
     assert backend_status(_section(cloud=True)) == {
         "spec": SPEC,
+        "name": "deepseek:deepseek-flash",
         "cloud": True,
         "state": "ready",
         "reason": "",
@@ -980,7 +1067,7 @@ def test_cli_allow_cloud_cannot_widen_vault_cloud(
     assert result.exit_code == 2 and "--allow-cloud" in result.output
     result = _cli(vault, tmp_path, *flags, "--allow-cloud")
     assert result.exit_code == 0, result.output
-    assert json.loads(result.output)["backend"] == "deepseek:deepseek-chat"
+    assert json.loads(result.output)["backend"] == "deepseek:deepseek-flash"
     assert TEST_KEY not in result.output and fake.requests == []
 
 
@@ -1047,7 +1134,7 @@ def test_cli_worker_and_status_with_the_configured_adapter(
     result = _cli(vault, tmp_path)
     assert result.exit_code == 0, result.output
     report = json.loads(result.output)
-    assert report["status"] == "ok" and report["backend"] == "deepseek:deepseek-chat"
+    assert report["status"] == "ok" and report["backend"] == "deepseek:deepseek-flash"
     assert report["jobs"]["session_summary:done"] == 3 and len(fake.requests) == 6
     assert TEST_KEY not in result.output and HIDDEN not in fake.bodies()
     status = CliRunner().invoke(cli_app, ["conversations", "status", "--root", str(vault)])
@@ -1109,3 +1196,234 @@ def test_unconfigured_worker_is_byte_identical_to_base_ref() -> None:
     probe = json.loads(results[0].new)  # the probe really ran the worker
     assert json.loads(probe["cli"][0]["output"])["sessions_queued"] == 3
     assert len(probe["summaries"]) == 6 and len(probe["episodes"]) == 3
+
+
+# -- reason codes, vocab, options, schema size (rev 31) --------------------------------------
+
+
+def _valid_tags() -> dict[str, Any]:
+    return {
+        "project": ["Uploader"],
+        "task_type": "dev",
+        "components": ["Retry"],
+        "intent": "Add a retry wrapper",
+        "outcome": "done",
+    }
+
+
+def _harbor_rows() -> list[dict[str, Any]]:
+    return [
+        turn(
+            "codex",
+            "s-harbor",
+            0,
+            "user",
+            "给 Uploader 加一个 retry，中英都要测。",
+            "2026-01-05T09:00:00Z",
+        ),
+        turn(
+            "codex",
+            "s-harbor",
+            1,
+            "assistant",
+            "Use exponential backoff with jitter.",
+            "2026-01-05T09:01:00Z",
+        ),
+    ]
+
+
+def _output_cases() -> list[tuple[str, str, str, str]]:
+    """(code, reply body, finish_reason, a snippet that must not be stored)."""
+
+    tags = _valid_tags()
+    return [
+        ("not_json", "{not json", "stop", "not json"),
+        ("missing_summary", json.dumps({"tags": tags}), "stop", "Uploader"),
+        (
+            "bad_enum",
+            json.dumps({"summary": "harbor-note", "tags": {**tags, "task_type": "coding"}}),
+            "stop",
+            "coding",
+        ),
+        (
+            "summary_too_long",
+            json.dumps({"summary": "长" * (TAG_SUMMARY_CHARS + 1), "tags": tags}),
+            "stop",
+            "长长长",
+        ),
+        (
+            "truncated",
+            json.dumps({"summary": "Added a retry wrapper. Tests pass.", "tags": tags}),
+            "length",
+            "retry wrapper",
+        ),
+        (
+            "bad_shape",
+            json.dumps({"summary": "harbor-note", "extra": "shape-marker"}),
+            "stop",
+            "shape-marker",
+        ),
+    ]
+
+
+@pytest.mark.parametrize(("code", "content", "finish_reason", "forbidden"), _output_cases())
+def test_fake_backend_records_one_reason_code(
+    tmp_path: Path,
+    fake: FakeDeepSeek,
+    code: str,
+    content: str,
+    finish_reason: str,
+    forbidden: str,
+) -> None:
+    fake.script.append((200, tag_reply(content=content, finish_reason=finish_reason)))
+    write_store(tmp_path / "data" / "conversations.sqlite", _harbor_rows())
+    report = _worker(tmp_path, _backend(fake)).run()
+    assert report.errors == {code: 1}
+    jobs = _rows_of(tmp_path, "SELECT kind, status, error FROM jobs")
+    chunk = next(row for row in jobs if row["kind"] == "chunk_summary")
+    assert chunk["status"] == "pending" and chunk["error"] == code
+    blob = json.dumps({"errors": report.errors, "jobs": jobs}, ensure_ascii=False)
+    assert forbidden not in blob
+    assert _rows_of(tmp_path, "SELECT summary FROM summaries") == []
+    shown = WorkState(tmp_path / "data" / "work.sqlite").status(now=NOW)
+    assert shown["recent_runs"]["reasons"][code] == 1
+    assert shown["bad_output_share"] == 1.0
+
+
+def test_omitted_tag_key_is_stored_and_counted_by_name(
+    tmp_path: Path, fake: FakeDeepSeek
+) -> None:
+    """A legal summary with intent omitted is kept. The report names the key only."""
+
+    tags = _valid_tags()
+    del tags["intent"]
+    note = "harbor-kept-summary"
+    fake.default = tag_reply(content=json.dumps({"summary": note, "tags": tags}))
+    write_store(tmp_path / "data" / "conversations.sqlite", _harbor_rows())
+    report = _worker(tmp_path, _backend(fake)).run()
+    assert report.errors == {}
+    assert report.tag_key_defaulted == {"intent": 2}
+    assert report.as_dict()["tag_key_defaulted"] == {"intent": 2}
+    assert report.as_dict()["tag_key_defaulted_total"] == 2
+    assert "tag_item_dropped" not in report.as_dict()
+    assert note not in json.dumps(report.as_dict())
+    stored = [json.loads(row["tags"]) for row in _rows_of(tmp_path, "SELECT tags FROM summaries")]
+    assert len(stored) == 2
+    assert all(row["intent"] == "" and row["task_type"] == "dev" for row in stored)
+    assert all(row["outcome"] == "done" for row in stored)
+
+
+def test_present_empty_task_type_is_not_the_missing_key_default() -> None:
+    tags = _valid_tags()
+    tags["task_type"] = ""
+    reply = json.dumps({"summary": "kept", "tags": tags})
+    assert parse_reply("chunk_summary", reply, prompt_version="conv-v2") is None
+    assert reply_issue("chunk_summary", reply, prompt_version="conv-v2") == "bad_enum"
+
+
+def test_worker_maps_project_aliases_and_prompts_canonical_names(
+    tmp_path: Path, fake: FakeDeepSeek
+) -> None:
+    vocab = {"Northwind": ("northwind-app", "north wind"), "Lumen": ("lumen-notes",)}
+    body = {
+        "summary": "给 Northwind 加了 retry。Tests pass.",
+        "tags": {
+            "project": ["North Wind", "lumen-notes", "other-tool"],
+            "task_type": "dev",
+            "components": ["Retry"],
+            "intent": "给 Northwind 加重试",
+            "outcome": "done",
+        },
+    }
+    fake.default = tag_reply(content=json.dumps(body, ensure_ascii=False))
+    write_store(tmp_path / "data" / "conversations.sqlite", _harbor_rows())
+    report = _worker(tmp_path, _backend(fake), project_vocab=vocab).run()
+    assert report.status == "ok"
+    assert report.project_unmapped == 2  # chunk and session summary each keep other-tool
+    system = fake.requests[0]["body"]["messages"][0]["content"]
+    assert "Northwind" in system and "Lumen" in system
+    assert "Chinese" in system and "proper nouns" in system
+    assert "northwind-app" not in system and "lumen-notes" not in system
+    assert "north wind" not in system
+    stored = [
+        json.loads(row["tags"])
+        for row in _rows_of(tmp_path, "SELECT tags FROM summaries ORDER BY chunk_start")
+    ]
+    assert stored and all(row["project"] == ["northwind", "lumen", "other-tool"] for row in stored)
+
+
+def test_empty_project_vocab_counts_nothing(tmp_path: Path, fake: FakeDeepSeek) -> None:
+    body = {
+        "summary": "Notes on the uploader.",
+        "tags": {**_valid_tags(), "project": ["other-tool"]},
+    }
+    fake.default = tag_reply(content=json.dumps(body, ensure_ascii=False))
+    write_store(tmp_path / "data" / "conversations.sqlite", _harbor_rows())
+    report = _worker(tmp_path, _backend(fake)).run()
+    assert report.project_unmapped == 0
+    stored = [json.loads(row["tags"]) for row in _rows_of(tmp_path, "SELECT tags FROM summaries")]
+    assert stored and all(row["project"] == ["other-tool"] for row in stored)
+    system = fake.requests[0]["body"]["messages"][0]["content"]
+    assert "Chinese" in system and "canonical name" not in system
+
+
+def test_cli_backend_flag_applies_options_and_refuses_an_api_key(
+    tmp_path: Path, fake: FakeDeepSeek, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = make_vault(tmp_path / "vault")
+    write_store(tmp_path / "data" / "conversations.sqlite", _harbor_rows())
+    set_config(
+        vault,
+        {
+            "conversation_worker": {"idle_minutes": 0},
+            "conversations": {
+                "cloud": True,
+                "options": {"model": "deepseek-v4-pro", "base_url": fake.url},
+            },
+        },
+    )
+    monkeypatch.setenv(KEY_ENV, TEST_KEY)
+    result = _cli(vault, tmp_path, "--backend", SPEC, "--allow-cloud")
+    assert result.exit_code == 0, result.output
+    assert fake.requests
+    assert {item["body"]["model"] for item in fake.requests} == {"deepseek-v4-pro"}
+    assert TEST_KEY not in result.output
+    sent = len(fake.requests)
+
+    set_config(
+        vault,
+        {
+            "conversations": {
+                "cloud": True,
+                "options": {"api_key": TEST_KEY, "base_url": fake.url},
+            },
+        },
+    )
+    refused = _cli(vault, tmp_path, "--backend", SPEC, "--allow-cloud")
+    assert refused.exit_code == 2
+    assert "key_in_config" in refused.output
+    assert TEST_KEY not in refused.output
+    assert len(fake.requests) == sent
+
+
+def test_schema_max_reply_exceeds_the_512_output_cap() -> None:
+    """Measured with the adapter's estimator on 2026-11-21: 1826 tokens.
+
+    The payload is the schema maximum (CJK), not a live model reply. 512 is
+    still the code default; the example vault raises the cap in options.
+    """
+
+    item = "名" * TAG_ITEM_CHARS
+    payload = {
+        "summary": "测" * TAG_SUMMARY_CHARS,
+        "tags": {
+            "project": [item] * TAG_MAX_ITEMS,
+            "task_type": "dev",
+            "components": [item] * TAG_MAX_ITEMS,
+            "intent": "图" * TAG_INTENT_CHARS,
+            "outcome": "done",
+        },
+    }
+    measured = estimate_tokens(json.dumps(payload, ensure_ascii=False))
+    assert measured > 512
+    assert measured == 1826

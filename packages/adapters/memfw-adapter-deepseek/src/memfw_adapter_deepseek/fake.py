@@ -34,6 +34,7 @@ def tag_reply(
     content: str | None = None,
     tokens_in: int = 120,
     tokens_out: int = 40,
+    finish_reason: str = "stop",
 ) -> dict[str, Any]:
     """A chat-completions response whose message content is a ``conv-v2`` reply."""
 
@@ -46,7 +47,7 @@ def tag_reply(
             {
                 "index": 0,
                 "message": {"role": "assistant", "content": content},
-                "finish_reason": "stop",
+                "finish_reason": finish_reason,
             }
         ],
         "usage": {

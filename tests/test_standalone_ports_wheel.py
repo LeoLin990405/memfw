@@ -73,6 +73,25 @@ def test_recall_has_no_subpackage_the_wheel_could_miss() -> None:
     assert nested == [], "add the subpackage to packages/memfw-recall/pyproject.toml"
 
 
+def test_model_reply_finish_reason_is_optional_at_ports_0_4_0() -> None:
+    """``finish_reason`` is on ``ModelReply`` and defaults to empty.
+
+    Positional ``ModelReply(text, tokens_in, tokens_out)`` still builds.
+    ``PORTS_API_VERSION`` stays ``0.4.0`` and ``MODELS_PORT_VERSION`` stays 1:
+    the field does not break that call, and the standalone wheel copies this
+    module as it is. A bump would move every adapter pin.
+    """
+
+    from memfw.ports import PORTS_API_VERSION
+    from memfw.ports.models import MODELS_PORT_VERSION, ModelReply
+
+    assert PORTS_API_VERSION == "0.4.0"
+    assert MODELS_PORT_VERSION == 1
+    reply = ModelReply("ok", 3, 4)
+    assert reply.finish_reason == ""
+    assert reply == ModelReply("ok", 3, 4, "")
+
+
 def test_wheel_versions_follow_the_ports_api_version() -> None:
     from memfw.ports import PORTS_API_VERSION
 
